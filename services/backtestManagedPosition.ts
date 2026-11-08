@@ -118,6 +118,14 @@ export const managedPositionBoxes = (
   });
 };
 
+/** A small waiting box follows the latest candle of each displayed timeframe. */
+export const PENDING_POSITION_BOX_BARS = 3;
+export interface PendingPositionBoxPresentation {
+  cursorTime?: number;
+  dimPercent?: number;
+  anchor?: 'current' | 'previous' | 'next';
+}
+
 export const managedPositionDrawing = (
   box: BacktestManagedPositionBox,
   rightTime: number,
@@ -130,11 +138,27 @@ export const managedPositionDrawing = (
    */
   intervalSeconds?: number,
   showPriceLabels = true,
+  pending: PendingPositionBoxPresentation = {},
 ): PositionDrawing => {
-  const pendingEndTime = box.initialEndTime ?? box.startTime + 5 * 60;
+  const interval = Number.isFinite(intervalSeconds) && intervalSeconds! > 0 ? intervalSeconds!
+    : box.style.position?.intervalSeconds || 60;
+  const pendingCursor = Number.isFinite(pending.cursorTime) ? pending.cursorTime! : rightTime;
+  const pendingStart = pendingCursor + (pending.anchor === 'next' ? interval : pending.anchor === 'current' ? 0 : -interval);
+  const startTime = box.state === 'pending' ? pendingStart : box.startTime;
   const endTime = box.terminalTime
-    ?? (box.state === 'pending' ? pendingEndTime : rightTime);
+    ?? (box.state === 'pending' ? pendingStart + PENDING_POSITION_BOX_BARS * interval : rightTime);
   const style = clone(box.style);
+  style.executionState = box.state;
+  if (box.state === 'pending') {
+    const dim = Number.isFinite(pending.dimPercent) ? Math.min(90, Math.max(0, pending.dimPercent!)) : 65;
+    const alpha = (opacity: number) => Math.round(opacity * (1 - dim / 100) * 255).toString(16).padStart(2, '0');
+    const lineColor = `#94a3b8${alpha(1)}`;
+    const fillColor = `#94a3b8${alpha(0.5)}`;
+    style.dashed = true;
+    style.color = lineColor;
+    style.position = { ...style.position, lineColor, stopColor: fillColor, targetColor: fillColor, showOpenPnl: false };
+  }
+
   // Presentation only: never overwrite the saved plan or its original preference.
   style.position = { ...style.position, priceLabels: showPriceLabels && style.position?.priceLabels !== false };
   if (Number.isFinite(intervalSeconds as number) && (intervalSeconds as number) > 0) {
@@ -144,7 +168,7 @@ export const managedPositionDrawing = (
     id: `auto-${box.id}`,
     tool: box.tool,
     points: [
-      { time: box.startTime, price: box.entryPrice },
+      { time: startTime, price: box.entryPrice },
       { time: endTime, price: box.targetPrice },
       { time: endTime, price: box.stopPrice },
     ],

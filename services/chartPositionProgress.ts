@@ -42,7 +42,7 @@ export const calculatePositionProgress = (
   drawing: PositionDrawing,
   candles: MarketCandle[],
 ): PositionProgress | null => {
-  if (!isPositionDrawing(drawing) || drawing.points.length < 3 || candles.length === 0) return null;
+  if (!isPositionDrawing(drawing) || drawing.style.executionState === 'pending' || drawing.points.length < 3 || candles.length === 0) return null;
   const [entryPoint, targetPoint, stopPoint] = drawing.points;
   const boxEndTime = Math.max(targetPoint.time, stopPoint.time);
   // Úsek [rangeStart, rangeEnd) místo odfiltrovaného pole — stejné svíčky,

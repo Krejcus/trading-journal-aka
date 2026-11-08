@@ -87,14 +87,16 @@ const Check: React.FC<{ checked: boolean; onChange: (checked: boolean) => void; 
   </label>
 );
 
-const Select = <T extends string | number>({ value, options, onChange, width = 'w-[168px]' }: {
+const Select = <T extends string | number>({ value, options, onChange, width = 'w-[168px]', ariaLabel }: {
   value: T;
   options: { value: T; label: string }[];
+  ariaLabel?: string;
   onChange: (value: T) => void;
   width?: string;
 }) => (
   <select
     value={String(value)}
+    aria-label={ariaLabel}
     onChange={event => {
       const next = options.find(option => String(option.value) === event.target.value);
       if (next) onChange(next.value);
@@ -612,10 +614,31 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
             {tab === 'trading' && journalProfile && (
               <Section title="Obchod na grafu">
                 <Check
+                  checked={trading.removePositionBoxAfterOrder}
+                  onChange={removePositionBoxAfterOrder => update('trading', { removePositionBoxAfterOrder })}
+                  label="Po přijetí objednávky odstranit původní position box"
+                />
+                <Check
                   checked={trading.orderPriceLabels}
                   onChange={orderPriceLabels => update('trading', { orderPriceLabels })}
                   label="Zobrazit ceny obchodů na cenové ose"
                 />
+              </Section>
+            )}
+
+            {tab === 'trading' && !journalProfile && (
+              <Section title="Čekající limit box">
+                <Row label="Utlumení před vyplněním">
+                  <input type="range" min="0" max="90" step="5" aria-label="Utlumení čekajícího limitu" value={trading.pendingBoxDimPercent}
+                    onChange={event => update('trading', { pendingBoxDimPercent: Number(event.target.value) })}
+                    className="w-[115px] accent-[#2962ff]" />
+                  <output className="w-9 text-right text-[12px] tabular-nums">{trading.pendingBoxDimPercent} %</output>
+                </Row>
+                <Row label="Začátek boxu">
+                  <Select ariaLabel="Začátek čekajícího boxu" value={trading.pendingBoxAnchor} options={[{value:'previous',label:'1 svíčka před aktuální'},{value:'current',label:'Aktuální svíčka'},{value:'next',label:'1 svíčka po aktuální'}]}
+                    onChange={pendingBoxAnchor => update('trading', { pendingBoxAnchor })} />
+                </Row>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Vyšší procento = méně výrazný box. Do vyplnění má šířku tří svíček a posouvá se s aktuální svíčkou. Po fillu začíná od skutečného vstupu.</p>
               </Section>
             )}
 
@@ -626,6 +649,11 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                     checked={trading.quickOrderButton}
                     onChange={quickOrderButton => update('trading', { quickOrderButton })}
                     label="Zobrazit blesk Quick Order u position boxu"
+                  />
+                  <Check
+                    checked={trading.removePositionBoxAfterOrder}
+                    onChange={removePositionBoxAfterOrder => update('trading', { removePositionBoxAfterOrder })}
+                    label="Po přijetí objednávky odstranit původní position box"
                   />
                   <Check
                     checked={trading.positionBoxes}

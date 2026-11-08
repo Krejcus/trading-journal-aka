@@ -33,6 +33,7 @@ import {
 import { normalizeTradeTags, type BacktestTagSuggestions } from '../services/backtestTagCatalog';
 
 interface Props {
+  enhanced?: boolean;
   trade: Trade;
   isDark: boolean;
   tagSuggestions?: BacktestTagSuggestions;
@@ -208,6 +209,7 @@ export const buildBacktestTradeReviewUpdates = ({
 });
 
 const BacktestTradeReviewContent: React.FC<Props> = ({
+  enhanced = true,
   trade,
   isDark,
   tagSuggestions,
@@ -236,6 +238,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
   const [ltfConfluence, setLtfConfluence] = useState(joinTags(trade.ltfConfluence));
   const [snapshot, setSnapshot] = useState<string>();
   const [snapshotZoomOpen, setSnapshotZoomOpen] = useState(false);
+  const [reviewTab, setReviewTab] = useState<'notes'|'context'>('notes');
   const [capturing, setCapturing] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -406,7 +409,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
         // Šířka roste s obrazovkou, ale jen tak, aby se snímek (16:9) i popis
         // vešly na výšku a karta nescrollovala.
         style={glassVars}
-        className={`td-modal relative flex max-h-[94vh] w-full max-w-[min(1700px,94vw,calc((94vh_-_360px)*3.05))] flex-col overflow-hidden rounded-[14px] border ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
+        data-bt-review="" className={`td-modal ${enhanced ? 'bt-review-focus' : ''} relative flex max-h-[94vh] w-full max-w-[min(1700px,94vw,calc((94vh_-_360px)*3.05))] flex-col overflow-hidden rounded-[14px] border ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
       >
         <header className={`td-head-glow flex items-center gap-3 border-b px-5 py-3.5 ${line}`}>
           <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
@@ -426,7 +429,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
           <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
         </header>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1.4fr_1fr]">
+        <div className={`grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1.4fr_1fr] ${enhanced ? 'bt-review-layout' : ''}`}>
           {/* Vlevo: snímek celého obchodu, čísla, detail z indikátoru. */}
           <div className={`td-side space-y-3 p-4 lg:border-r ${line}`}>
             <div className={`relative overflow-hidden rounded-lg border ${line} bg-[#0b0f15]`}>
@@ -448,14 +451,31 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
             </div>
             <TradeStats trade={displayTrade} isDark={isDark} />
             {displayTrade.outcomeAmbiguous && <p className="text-[11px] text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
+            {!enhanced && (<section>
+              <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Popis obchodu</label>
+              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Co jsem viděl, proč jsem vstoupil, jak jsem obchod vedl, co bych příště změnil…" className={`mt-2 w-full resize-y rounded-lg border px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-blue-500 ${field}`} />
+            </section>)}
+          </div>
+
+          {/* Vpravo: skutečné editory, stejné hodnoty i ukládání. */}
+          <div className={enhanced ? 'bt-review-rail min-w-0' : 'min-w-0'}>
+            {enhanced && <div className="bt-review-tabs" role="tablist" aria-label="Část review" onKeyDown={event=>{
+              if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+              event.preventDefault();
+              const next=event.key==='Home'?'notes':event.key==='End'?'context':reviewTab==='notes'?'context':'notes';
+              setReviewTab(next);event.currentTarget.querySelector<HTMLButtonElement>(`[data-review-tab="${next}"]`)?.focus();
+            }}>
+              <button id="bt-review-tab-notes" data-review-tab="notes" type="button" role="tab" tabIndex={reviewTab==='notes'?0:-1} aria-selected={reviewTab==='notes'} aria-controls="bt-review-panel" onClick={()=>setReviewTab('notes')}><FileText size={14}/>Hodnocení</button>
+              <button id="bt-review-tab-context" data-review-tab="context" type="button" role="tab" tabIndex={reviewTab==='context'?0:-1} aria-selected={reviewTab==='context'} aria-controls="bt-review-panel" onClick={()=>setReviewTab('context')}><Layers3 size={14}/>Konfluence<span>{splitTags(ltfConfluence).length+splitTags(htfConfluence).length}</span></button>
+            </div>}
+            <div role={enhanced?'tabpanel':undefined} id={enhanced?'bt-review-panel':undefined} aria-labelledby={enhanced?`bt-review-tab-${reviewTab}`:undefined}>
+              {enhanced && <div hidden={reviewTab !== 'notes'} className="bt-review-write"><span className="bt-overline">ROZHODNUTÍ A EXEKUCE</span><h3>Co si z obchodu odnášíš?</h3><p>Kontext, vstup a jedna věc pro příště.</p>
             <section>
               <label htmlFor="backtest-review-notes" className={sectionTitle}><FileText size={14} className="text-slate-400" /> Popis obchodu</label>
               <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Co jsem viděl, proč jsem vstoupil, jak jsem obchod vedl, co bych příště změnil…" className={`mt-2 w-full resize-y rounded-lg border px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-blue-500 ${field}`} />
             </section>
-          </div>
-
-          {/* Vpravo: jen to, co má smysl psát. */}
-          <div className="min-w-0">
+              </div>}
+              <div hidden={enhanced && reviewTab !== 'context'}>
             <section className={`border-b px-4 py-3.5 ${line}`}>
               <div className="flex items-center gap-2">
                 <h3 className={sectionTitle}><Zap size={14} className="text-violet-500" /> Confluence</h3>
@@ -491,6 +511,9 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               ) : null}
             </section>
 
+              </div>
+              <div hidden={enhanced && reviewTab !== 'notes'}>
+
             <section className={`border-b px-4 py-3.5 ${line}`}>
               <h3 className={sectionTitle}><Check size={14} className="text-emerald-500" /> Disciplína</h3>
               <div className="mt-2.5 flex flex-wrap gap-1.5" data-backtest-discipline>
@@ -500,7 +523,8 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               </div>
               <div className="mt-1"><ConfluenceCapsuleEditor disabled={saving || recalculating} value={joinTags(customTags)} onChange={value => setTags(joinTags([...tagList.filter(tag => disciplineSet.has(tag)), ...splitTags(value)]))} isDark={isDark} addLabel="Vlastní tag" suggestions={(tagSuggestions?.tags ?? []).filter(tag => !disciplineSet.has(tag))} /></div>
             </section>
-
+              </div>
+            </div>
           </div>
         </div>
 

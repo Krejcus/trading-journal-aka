@@ -251,7 +251,7 @@ import {
   visibleHighLow,
   type ManagedPriceLine,
 } from '../services/chartSettingsApply';
-import { managedPositionDrawing, type BacktestManagedPositionBox } from '../services/backtestManagedPosition';
+import { managedPositionDrawing, PENDING_POSITION_BOX_BARS, type BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import { chartClickOrderOptions, type ChartClickOrderOption } from '../services/backtestQuickOrder';
 import type { BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
 import {
@@ -3154,8 +3154,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
     let hit: typeof managedPositionHover = null;
     for (const box of [...managedPositionBoxes].reverse()) {
-      const startX = timeScale.timeToCoordinate(box.startTime as UTCTimestamp);
-      const terminalX = box.terminalTime === null
+      const pendingOffset = chartSettings.trading.pendingBoxAnchor === 'next' ? -1 : chartSettings.trading.pendingBoxAnchor === 'current' ? 0 : 1;
+      const startX = box.state === 'pending'
+        ? timeScale.logicalToCoordinate((latestLogical - pendingOffset) as Logical)
+        : timeScale.timeToCoordinate(box.startTime as UTCTimestamp);
+      const terminalX = box.state === 'pending'
+        ? timeScale.logicalToCoordinate((latestLogical + PENDING_POSITION_BOX_BARS - pendingOffset) as Logical)
+        : box.terminalTime === null
         ? timeScale.logicalToCoordinate((latestLogical + 5) as Logical)
         : timeScale.timeToCoordinate(box.terminalTime as UTCTimestamp);
       const entryY = series.priceToCoordinate(box.entryPrice);
@@ -3196,7 +3201,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       && Math.abs(current.stopY - hit.stopY) < 1
       ? current
       : hit);
-  }, [managedPositionBoxes, replayActive, replaySelecting, visibleCandles]);
+  }, [chartSettings.trading.pendingBoxAnchor, managedPositionBoxes, replayActive, replaySelecting, visibleCandles]);
   // Levely jsou jediný indikátor bez inkrementálního akumulátoru — jeden
   // výpočet projde až 12 000 barů (~3–10 ms). Za přehrávání se proto počítají
   // nejvýš 4× za sekundu: úrovně se mění jen průlomem extrému nebo novou
@@ -5556,6 +5561,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           Number(latestTime) + timeframeMinutes(timeframe) * 60 * 5,
           timeframeMinutes(timeframe) * 60,
           chartSettings.trading.orderPriceLabels,
+          { cursorTime: Number(latestTime), dimPercent: chartSettings.trading.pendingBoxDimPercent, anchor: chartSettings.trading.pendingBoxAnchor },
         ))
       : [];
     const desiredIds = new Set(desired.map(drawing => drawing.id));
@@ -5569,19 +5575,21 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           || point.price !== drawing.points[index].price);
       const labelsChanged = (current && isPositionDrawing(current) ? current.style.position?.priceLabels : undefined)
         !== drawing.style.position?.priceLabels;
-      return pointsChanged || labelsChanged ? [{ drawing, pointsChanged, labelsChanged }] : [];
+      const stateChanged = current && isPositionDrawing(current) ? current.style.executionState !== drawing.style.executionState : true;
+      const pendingStyleChanged = drawing.style.executionState === 'pending' && current?.style.color !== drawing.style.color;
+      return pointsChanged || labelsChanged || stateChanged || pendingStyleChanged ? [{ drawing, pointsChanged, labelsChanged, stateChanged, pendingStyleChanged }] : [];
     });
     // An unchanged HTF timestamp (or no open position) needs no mutation and
     // no new snapshot/listener over every protected drawing in the workspace.
     if (!obsolete.length && !changed.length) return;
     protectedDrawingsUnsubscribeRef.current?.();
     obsolete.forEach(drawing => engine.remove(drawing.id));
-    changed.forEach(({ drawing, pointsChanged, labelsChanged }) => {
+    changed.forEach(({ drawing, pointsChanged, labelsChanged, stateChanged, pendingStyleChanged }) => {
       if (!engine.getById(drawing.id)) engine.commit(drawing);
       else {
         if (pointsChanged) engine.setPoints(drawing.id, drawing.points);
         // setStyle repaints the existing primitive, including while replay is paused.
-        if (labelsChanged) engine.setStyle(drawing.id, { position: drawing.style.position });
+        if (labelsChanged || stateChanged || pendingStyleChanged) engine.setStyle(drawing.id, drawing.style);
       }
     });
     protectedDrawingsUnsubscribeRef.current = protectGeneratedDrawings(engine);
@@ -5592,7 +5600,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const selectedId = engine.getSelectedId();
     if (selectedId && selectedId.startsWith(prefix)) engine.select(null);
     positionProgressPrimitiveRequestUpdateRef.current?.();
-  }, [chartApiEpoch, chartSettings.trading.orderPriceLabels, managedPositionBoxes, replayActive, replayCursorTime, timeframe, trade, visibleCandles]);
+  }, [chartApiEpoch, chartSettings.trading.orderPriceLabels, chartSettings.trading.pendingBoxDimPercent, chartSettings.trading.pendingBoxAnchor, managedPositionBoxes, replayActive, replayCursorTime, timeframe, trade, visibleCandles]);
 
   useEffect(() => {
     if (!replayActive) return;
@@ -6264,7 +6272,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           settings.showTargetPnl ? `PnL: ${metrics.targetPnl.toFixed(2)}` : null,
         ].filter(Boolean);
         const entryParts = [
-          settings.showOpenPnl ? 'Open PnL: 0.00' : null,
+          box.state === 'pending' ? 'Čeká na vyplnění' : settings.showOpenPnl ? 'Open PnL: 0.00' : null,
           settings.showQuantity ? `Qty: ${quantity}` : null,
           settings.showRiskReward ? `Risk/reward ratio: ${metrics.riskReward.toFixed(2)}` : null,
         ].filter(Boolean);

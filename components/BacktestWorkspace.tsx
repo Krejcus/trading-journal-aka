@@ -1214,7 +1214,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     // Zavřený panel zůstává připojený (bez šířky, inert) kvůli plynulé animaci — jako LIVE.
     renderTradingDock: () => (
       <div className={`live-chart-ticket-dock ${ticketOpen ? 'is-open' : ''}`} inert={!ticketOpen} aria-hidden={!ticketOpen || undefined}>
-        <aside className="live-chart-ticket h-full w-[304px]">
+        <aside data-bt-ticket="" className="live-chart-ticket h-full w-[304px]">
           <BacktestOrderTicket
             isDark={isDark}
             instrument={instrument}
@@ -1454,7 +1454,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
   const priceText = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pnlTone = (value: number) => value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : '';
   const stat = (label: string, value: string, tone = '') => (
-    <div className="flex shrink-0 flex-col justify-center leading-none">
+    <div data-bt-metric="" className="flex shrink-0 flex-col justify-center leading-none">
       <span className="text-[8.5px] font-bold uppercase tracking-[0.08em] text-slate-500">{label}</span>
       <b className={`mt-[3px] font-mono text-[11.5px] font-semibold tabular-nums ${tone}`}>{value}</b>
     </div>
@@ -1462,7 +1462,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
   const typeLabels: Record<BacktestOrderType, string> = { market: 'Mkt', limit: 'Lmt', stop: 'Stp' };
   return (
     // Jeden řádek (44 px) — víc místa pro graf. Pořadí: Objednávka → účet → pozice → čekající příkazy.
-    <div className="relative flex h-full items-center gap-3 px-3 text-[11px]">
+    <div data-bt-metrics="" className="relative flex h-full items-center gap-3 px-3 text-[11px]">
       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:thin]">
       <button
         type="button"

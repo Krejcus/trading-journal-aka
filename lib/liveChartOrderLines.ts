@@ -141,13 +141,13 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   const displayEntry = pendingEntry ?? entry;
   const entryLabel = position
     ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${openPnl != null ? ` · ${signedUsd(openPnl)}` : ''}`
-    : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${displayEntry.toFixed(2)}`;
+    : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${displayEntry.toFixed(2)} · čeká na vyplnění`;
   // Holá pozice (C8): × jen s nabídkou workeru, id cíle v id čáry (klíč × i Shift+X).
   const bare = position && controls.bareClose ? controls.bareClose : null;
   const lines: BacktestChartOrderLine[] = [{
     id: bare ? liveBareLineId(bare.entryOperationId) : `${LIVE_POSITION_OWNER}:entry`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind: 'entry',
     price: displayEntry,
-    color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : (long ? LONG_COLOR : SHORT_COLOR),
+    color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : MUTED_COLOR,
     label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
     draggable: controls.manageable && !position && pendingEntry == null && (controls.moveBareEntry === true && summary.stop == null && summary.target == null
       // Stop až po ověření na DEMO (worker `BARE_STOP_MOVE_VERIFIED`).

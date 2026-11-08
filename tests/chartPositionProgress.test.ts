@@ -17,6 +17,11 @@ const position = (tool: PositionDrawing['tool'] = 'LongPosition'): PositionDrawi
 });
 
 describe('position replay progress', () => {
+  it('never simulates a fill for a confirmed pending order, even when chart candles touch entry and TP', () => {
+    const pending = position(); pending.style.executionState = 'pending';
+    expect(calculatePositionProgress(pending, [candle(120, 100, 112, 98, 111)])).toBeNull();
+  });
+
   it('stays hidden until a replay candle touches entry', () => {
     expect(calculatePositionProgress(position(), [
       candle(120, 98, 99, 97, 98),

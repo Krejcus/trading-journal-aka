@@ -49,17 +49,69 @@ describe('managed position box', () => {
     expect(managedPositionDrawing(box, 900, 60, true).style.position?.priceLabels).toBe(false);
   });
 
-  it('keeps the armed position box visible at its original width while entry is pending', () => {
+  it('shows a compact pending box beside the current candle without changing its saved plan', () => {
     const runtime = createBacktestRuntime(50_000);
     runtime.orders = [{ ...order }];
     runtime.managedPositionPlans = [createManagedPositionPlan(drawing, order)];
     const [box] = managedPositionBoxes(runtime);
     expect(box).toMatchObject({ state: 'pending', startTime: 100, initialEndTime: 400 });
-    expect(managedPositionDrawing(box, 900).points).toEqual([
-      { time: 100, price: 100 },
-      { time: 400, price: 110 },
-      { time: 400, price: 95 },
+    expect(managedPositionDrawing(box, 900, 60, true, { cursorTime: 600 }).points).toEqual([
+      { time: 540, price: 100 },
+      { time: 720, price: 110 },
+      { time: 720, price: 95 },
     ]);
+  });
+
+  it('shows an unfilled limit as muted and restores its saved style only after fill', () => {
+    const plan = createManagedPositionPlan(drawing, order);
+    const original = structuredClone(plan);
+    const pending = managedPositionDrawing({ ...plan, state: 'pending', terminalTime: null }, 900);
+    const active = managedPositionDrawing({ ...plan, state: 'active', startTime: 300, terminalTime: null }, 900);
+    expect(pending.style).toMatchObject({ executionState: 'pending', dashed: true, position: { lineColor: '#94a3b859', showOpenPnl: false } });
+    expect(active.style).toMatchObject({ executionState: 'active', dashed: false, position: { targetColor: '#00aa0080' } });
+    expect(active.points[0].time).toBe(300);
+    expect(plan).toEqual(original);
+  });
+
+  it.each([60, 300, 900])('moves a pending box by one candle and keeps its width at three bars on %s-second panels', interval => {
+    const plan = createManagedPositionPlan(drawing, order);
+    const box = { ...plan, terminalTime: null, state: 'pending' as const };
+    const before = managedPositionDrawing(box, 3000, interval, true, {cursorTime:1800});
+    const after = managedPositionDrawing(box, 3000, interval, true, {cursorTime:1800+interval});
+    expect(before.points[0].time).toBe(1800-interval);
+    expect(before.points[1].time-before.points[0].time).toBe(3*interval);
+    expect(after.points.map((p,i)=>p.time-before.points[i].time)).toEqual([interval,interval,interval]);
+    expect(box.startTime).toBe(drawing.points[0].time);
+  });
+  it.each([60, 300, 900])('can keep the pending box one candle ahead on %s-second panels without moving the actual fill', interval => {
+    const plan=createManagedPositionPlan(drawing,order);
+    const pending={...plan,state:'pending' as const,terminalTime:null};
+    const rendered=managedPositionDrawing(pending,3000,interval,true,{cursorTime:1800,anchor:'next'});
+    expect(rendered.points.map(p=>p.time)).toEqual([1800+interval,1800+4*interval,1800+4*interval]);
+    const moved=managedPositionDrawing(pending,3000,interval,true,{cursorTime:1800+interval,anchor:'next'});
+    expect(moved.points.map((p,i)=>p.time-rendered.points[i].time)).toEqual([interval,interval,interval]);
+    expect(plan.startTime).toBe(drawing.points[0].time);
+    const active=managedPositionDrawing({...plan,state:'active',startTime:660,terminalTime:null},3000,interval,true,{cursorTime:1800,anchor:'next'});
+    expect(active.points.map(p=>p.time)).toEqual([660,3000,3000]);
+  });
+
+  it('can anchor a waiting box at the current candle and ignores waiting preferences after a real fill', () => {
+    const plan = createManagedPositionPlan(drawing, order);
+    const pending = managedPositionDrawing({...plan,state:'pending',terminalTime:null},900,60,true,{cursorTime:600,anchor:'current',dimPercent:90});
+    expect(pending.points.map(p=>p.time)).toEqual([600,780,780]);
+    const filled={...plan,state:'active' as const,startTime:660,terminalTime:null};
+    expect(managedPositionDrawing(filled,1200,60,true,{cursorTime:900,anchor:'current',dimPercent:90}))
+      .toEqual(managedPositionDrawing(filled,1200,60,true,{cursorTime:600,anchor:'previous',dimPercent:0}));
+  });
+  it('changes the pending opacity without mutating order geometry, saved style or prices', () => {
+    const plan=createManagedPositionPlan(drawing,order);
+    const box={...plan,state:'pending' as const,terminalTime:null}; const original=structuredClone(box);
+    const clear=managedPositionDrawing(box,900,60,true,{cursorTime:600,dimPercent:0});
+    const faint=managedPositionDrawing(box,900,60,true,{cursorTime:600,dimPercent:90});
+    expect(clear.points).toEqual(faint.points);
+    expect(clear.style.color).toBe('#94a3b8ff'); expect(faint.style.color).toBe('#94a3b819');
+    expect(clear.style.position?.targetColor).toBe('#94a3b880'); expect(faint.style.position?.targetColor).toBe('#94a3b80d');
+    expect(box).toEqual(original);
   });
 
   it('extends an active filled setup to the supplied replay edge', () => {

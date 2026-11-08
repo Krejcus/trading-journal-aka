@@ -58,6 +58,15 @@ describe('živé P&L na lince vstupu (jen zobrazení)', () => {
 });
 
 describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
+  it('uses a muted waiting entry without open P&L until the broker reports a position', () => {
+    const [pending] = livePositionChartLines(summary({kind:'pending', entryType:'Limit', openPnl:null}), controls);
+    expect(pending.label).toContain('čeká na vyplnění');
+    expect(pending.ownerType).toBe('order');
+    const [active] = livePositionChartLines(summary(), controls);
+    expect(active.ownerType).toBe('position');
+    expect(active.label).not.toContain('čeká');
+    expect(active.color).not.toBe(pending.color);
+  });
   it('pozice: vstup se štítkem a BE, SL/TP táhnutelné jen u spravovatelného obchodu', () => {
     const lines = livePositionChartLines(summary(), controls);
     expect(lines.map(line => line.kind)).toEqual(['entry', 'stopLoss', 'takeProfit']);

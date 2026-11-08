@@ -1,3 +1,4 @@
+import { animateChartGoTo } from '../lib/chartGoToMotion';
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import TradeProgress from './TradeProgress';
 import ChartWorkspaceMenu from './ChartWorkspaceMenu';
@@ -6,6 +7,7 @@ import { historyAt, replayRevealKey, tradeTimelineEvents } from '../lib/tradeRep
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { formingReplayBar, formingReplayBase } from '../services/chartReplayForming';
 import { adoptJournalAppearance } from '../services/backtestAppearanceAdopt';
+import { positionBoxAcknowledgement } from '../services/positionBoxHandoff';
 import { crossfadeChart } from '../lib/chartCrossfade';
 import { captureTradeChartSnapshot } from '../lib/tradeChartSnapshot';
 import { announceChartProfileChange } from '../services/chartProfileToast';
@@ -308,8 +310,8 @@ export interface LiveOrderEntryBridge {
   executionInstrument: MarketRoot;
   /** Upozornění na cenu (rychlý alert z pravého kliku, čáry). Nic neobchoduje. */
   priceAlerts?: LivePcAlertBridge;
-  /** ⚡ z vybraného position boxu → návrh v panelu; box v grafu zůstává. */
-  onQuickOrder: (context: { drawing: PositionDrawing; instrument: MarketRoot }) => { ok: boolean; message: string };
+  /** ⚡ vyplní návrh; původní box se převezme až po potvrzeném přijetí objednávky. */
+  onQuickOrder: (context: { drawing: PositionDrawing; instrument: MarketRoot; onAcknowledged?: () => void }) => { ok: boolean; message: string };
   /** Počet kontraktů pro pravý klik do grafu (stejné číslo jako v panelu). */
   chartOrderQuantity?: number;
   /** Pravý klik do grafu na ceně → návrh v panelu. */
@@ -1732,11 +1734,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       if (!replayInteractionPausedRef.current && replayRef.current.phase === 'active' && replayRef.current.cursorTime === current.cursorTime) {
         // Skok záběru se prolne (posun ve směru skoku) místo probliknutí.
         const forward = (result.value.cursorTime ?? 0) >= (current.cursorTime ?? 0);
-        panelControlsRef.current.forEach((control, panelId) => crossfadeChart(
-          workspaceShellRef.current?.querySelector<HTMLElement>(`[data-panel-id="${panelId}"] [data-chart-area]`) ?? null,
-          control.chartApi,
-          { slideX: forward ? -36 : 36, holdMs: 60 },
-        ));
+        animateChartGoTo(workspaceShellRef.current, [...panelControlsRef.current.entries()].map(([panelId, control]) => ({
+          area: workspaceShellRef.current?.querySelector<HTMLElement>(`[data-panel-id="${panelId}"] [data-chart-area]`) ?? null,
+          api: control.chartApi,
+        })), { forward, fromLabel: goToTimeLabel(current.cursorTime ?? result.value.targetTime, chartTimeZone), toLabel: goToTimeLabel(result.value.targetTime, chartTimeZone), isDark });
       }
       setReplay(value => !replayInteractionPausedRef.current && value.phase === 'active' && value.cursorTime === current.cursorTime
         ? { ...value, cursorTime: result.value.cursorTime, playing: false }
@@ -1764,7 +1765,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       reason => setStatus(reason instanceof Error ? `Go To: ${reason.message}` : 'Data pro Go To se nepodařilo načíst. Zkus skok znovu.'),
       () => setReplayDataLoading(false),
     );
-  }, [activePanelId, chartTimeZone, goToSettings]);
+  }, [activePanelId, chartTimeZone, goToSettings, isDark]);
   /**
    * Start z menu panelu (datum, první, náhodná svíčka). Jen mimo backtest:
    * session hlídá zpracované obchody a data dotahuje po kouscích, takže tam
@@ -2214,9 +2215,13 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       setStatus('Tenhle čas graf nemá načtený — data jsou jen kolem obchodu');
       return;
     }
+    animateChartGoTo(workspaceShellRef.current, [{
+      area: workspaceShellRef.current?.querySelector<HTMLElement>(`[data-panel-id="${activePanelId}"] [data-chart-area]`) ?? null,
+      api: control.chartApi,
+    }], { forward: !current || target.from >= current.from, fromLabel: '', toLabel: goToTimeLabel(unixSeconds, chartTimeZone), isDark, animateOriginal: false });
     chart.timeScale().setVisibleLogicalRange(target);
     setStatus(`Graf na ${goToTimeLabel(unixSeconds, chartTimeZone)}`);
-  }, [activePanelId, chartTimeZone]);
+  }, [activePanelId, chartTimeZone, isDark]);
   const activeLatestTime = useCallback(
     () => panelControlsRef.current.get(activePanelId)?.getCandles().at(-1)?.time ?? null,
     [activePanelId],
@@ -3247,11 +3252,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         ? `Quick Order lze zadat jen z ${backtestSession.executionInstrument} grafu`
         : null;
   const submitSelectedPositionQuickOrder = () => {
+    const consumeSource = selectedPosition && chartTradingSettings.removePositionBoxAfterOrder
+      ? positionBoxAcknowledgement(selectedPosition.engine, selectedPosition.drawing, () =>
+        syncSettings.drawings || (!backtestSession && drawingLayerOn)
+          ? [...panelControlsRef.current.values()].flatMap(control => control.drawingEngine ? [control.drawingEngine] : []) : [])
+      : undefined;
     if (liveQuickOrder) {
       if (quickOrderDisabledReason) { setStatus(quickOrderDisabledReason); return; }
       if (!selectedPosition) { setStatus('Objednávka z boxu potřebuje vybraný position box'); return; }
       // Jen návrh do panelu — box v grafu zůstává (Filip 29. 10.).
-      const result = liveQuickOrder.onQuickOrder({ drawing: selectedPosition.drawing, instrument: selectedPositionInstrument });
+      const result = liveQuickOrder.onQuickOrder({ drawing: selectedPosition.drawing, instrument: selectedPositionInstrument, onAcknowledged: consumeSource });
       setQuickOrderFeedback(result);
       setStatus(result.message);
       return;
@@ -3272,14 +3282,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       candle: replayCandle,
       instrument: selectedPositionInstrument,
     });
-    if (result.ok) selectedPosition.engine.remove(selectedPosition.drawing.id);
+    if (result.ok) consumeSource?.();
     setQuickOrderFeedback(result);
     setStatus(result.message);
   };
   positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
     <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
-    <div onPointerDownCapture={() => backtestCandleSettleRef.current?.()} className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
+    <div data-bt-workspace={backtestSession ? '' : undefined} onPointerDownCapture={() => backtestCandleSettleRef.current?.()} className={`${embedded ? 'relative isolate h-full w-full overflow-hidden' : 'fixed inset-0 z-[300]'} flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       {/* Review: řádek týdne a statistik nahoře, lišta grafu přímo nad grafem. */}
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className={`relative z-[660] h-10 shrink-0 flex items-center gap-1 border-b ${toolbarSurface}`}>
@@ -3500,7 +3510,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onClose={() => setPositionSettingsOpen(false)}
             onOpenSettings={() => setPositionSettingsOpen(true)}
             isDark={isDark}
-            onQuickOrder={chartTradingSettings.quickOrderButton && backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
+            onQuickOrder={chartTradingSettings.quickOrderButton && (backtestSession?.onQuickOrder || liveQuickOrder) ? submitSelectedPositionQuickOrder : undefined}
             quickOrderDisabled={Boolean(quickOrderDisabledReason)}
             quickOrderTitle={quickOrderDisabledReason ?? (liveQuickOrder
               ? 'Propsat box do objednávky — vstup, SL, TP a kontrakty z rizika (nic se neodesílá)'

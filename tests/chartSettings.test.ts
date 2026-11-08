@@ -33,6 +33,7 @@ describe('model nastavení grafu', () => {
     expect(merged.trading.executionMarkers).toBe(false);
     expect(merged.trading.executionMarkerSize).toBe('large');
     expect(merged.trading.quickOrderButton).toBe(true);
+    expect(merged.trading.removePositionBoxAfterOrder).toBe(true);
     expect(merged.trading.positionBoxes).toBe(true);
     expect(merged.trading.orderPriceLabels).toBe(true);
   });
@@ -43,6 +44,23 @@ describe('model nastavení grafu', () => {
     saved.trading.orderPriceLabels = false;
     const restored = mergeChartSettings(JSON.parse(JSON.stringify(saved)), false);
     expect(restored.trading).toMatchObject({ positionBoxes, orderPriceLabels: false, orderLines: true });
+  });
+
+  it('persists opting out of source box removal independently from position overlays', () => {
+    const saved = defaultChartSettings(false);
+    saved.trading.removePositionBoxAfterOrder = false;
+    expect(mergeChartSettings(JSON.parse(JSON.stringify(serializeChartSettings(saved, false, null))), false).trading.removePositionBoxAfterOrder).toBe(false);
+  });
+
+  it.each(['previous','current','next'] as const)('defaults and round-trips the waiting box appearance with anchor %s', anchor => {
+    expect(defaultChartSettings(false).trading).toMatchObject({pendingBoxDimPercent:65,pendingBoxAnchor:'previous'});
+    const saved=defaultChartSettings(false); saved.trading.pendingBoxDimPercent=85; saved.trading.pendingBoxAnchor=anchor;
+    const restored=mergeChartSettings(JSON.parse(JSON.stringify(serializeChartSettings(saved,false,null))),false);
+    expect(restored.trading).toMatchObject({pendingBoxDimPercent:85,pendingBoxAnchor:anchor,removePositionBoxAfterOrder:true});
+  });
+  it.each([[NaN,65],[-10,0],[500,90],['bad',65]])('normalizes invalid waiting opacity %s', (value,expected) => {
+    const merged=mergeChartSettings({trading:{pendingBoxDimPercent:value,pendingBoxAnchor:'invalid'}},false);
+    expect(merged.trading).toMatchObject({pendingBoxDimPercent:expected,pendingBoxAnchor:'previous'});
   });
 
   it('poškozené nebo chybějící nastavení vrátí výchozí', () => {

@@ -1,3 +1,4 @@
+import { withPositionBoxAcknowledgement } from '../services/positionBoxHandoff';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AudioLines, SlidersHorizontal, PanelRightClose, PanelRightOpen, Power, Volume2, VolumeX, X } from 'lucide-react';
@@ -409,6 +410,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   const [ticketOpen, setTicketOpen] = useState(false);
   const [draft, setDraft] = useState<TicketDraft | null>(null);
   const [fromBox, setFromBox] = useState(false);
+  const sourceBoxAcknowledgementRef = useRef<(() => void) | null>(null);
   // Jednotky SL/TP z předvoleb zařízení (U4) — jen zobrazení panelu.
   const [units, setUnits] = useState<TicketBracketUnits>(() => readLiveTicketPrefs(liveTicketPrefsStorage()).units);
   const [scope, setScope] = useState<TicketScope>('account');
@@ -526,9 +528,14 @@ const LiveTradingScreen: React.FC<Props> = ({
     } : current));
   }, [draft?.side, draft?.type, quote, entryScaleIn?.side, entryScaleIn?.stopLoss, entryScaleIn?.targetPrice]);
 
+  const placeFromTicket = useCallback((input: LiveEntryPreviewDraft, operationId: string) => {
+    const source = sourceBoxAcknowledgementRef.current;
+    return withPositionBoxAcknowledgement(() => onPlaceEntry!(input, operationId), source);
+  }, [onPlaceEntry]);
+
   const updateDraft = useCallback((next: TicketDraft | null) => {
     setDraft(next);
-    if (!next) setFromBox(false);
+    if (!next) { setFromBox(false); sourceBoxAcknowledgementRef.current = null; }
   }, []);
 
   // Stránka pod vrstvou neroluje.
@@ -749,12 +756,13 @@ const LiveTradingScreen: React.FC<Props> = ({
     onReplayActiveChange: setChartReplay,
     liveFills: shownFills,
     liveDisplayOrders: shownWorking,
-    onQuickOrder: ({ drawing }) => {
+    onQuickOrder: ({ drawing, onAcknowledged }) => {
       if (chartReplay) return { ok: false, message: LIVE_HOTKEY_REPLAY_TEXT };
       if (!quote) return { ok: false, message: 'Čekám na cenu z grafu.' };
       try {
         const next = draftFromPositionBox(drawing, INSTRUMENT, quote);
         setDraft(next.draft);
+        sourceBoxAcknowledgementRef.current = onAcknowledged ?? null;
         setFromBox(true);
         setTicketOpen(true);
         const kind = next.draft.type === 'market' ? 'MKT' : next.draft.type === 'limit' ? 'LMT' : 'STP';
@@ -779,7 +787,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       const next = newDraft(input.side, type, input.price ?? quote.ask, { sizing: draft?.sizing, quantity: input.quantity, riskUsd: draft?.riskUsd });
       if (!next) return;
       setDraft(next);
-      setFromBox(false);
+      setFromBox(false); sourceBoxAcknowledgementRef.current = null;
       setTicketOpen(true);
     },
     livePositionOwnerId: LIVE_POSITION_OWNER,
@@ -906,6 +914,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     // Fokus pryč z panelu (hlavně z tlačítka Odeslat po kliku, který nic neodeslal):
     // Enter / mezerník by jinak nový návrh odeslal bez myši (oponentura vlny B).
     liveReleaseTicketFocus(typeof document === 'undefined' ? null : document);
+    sourceBoxAcknowledgementRef.current = null;
     setDraft(result.draft);
     setFromBox(false);
     setTicketOpen(true);
@@ -1120,7 +1129,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             quoteInfo={quoteInfo}
             position={position}
             onPreviewEntry={onPreviewEntry}
-            {...(onPlaceEntry ? { onPlaceEntry } : {})}
+            {...(onPlaceEntry ? { onPlaceEntry: placeFromTicket } : {})}
             {...(onManageEntry ? { onManageEntry } : {})}
             manageEntryAvgPrice={manageEntryAvgPrice ?? null}
             entryMarketSupported={entryMarketSupported}
@@ -1152,7 +1161,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             onNewDraft={side => {
               if (!quote) return;
               const next = newDraft(side, 'limit', side === 'buy' ? quote.ask - 10 : quote.bid + 10);
-              if (next) { setDraft(next); setFromBox(false); }
+              if (next) { setDraft(next); setFromBox(false); sourceBoxAcknowledgementRef.current = null; }
             }}
             onClose={() => setTicketOpen(false)}
           />

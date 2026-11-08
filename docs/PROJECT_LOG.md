@@ -288,6 +288,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-08 — Backtesting: nasazení změn z dnešního preview
+Na Filipův pokyn je webový release založený na produkčním `27649a6e`. Obsahuje
+nové sessions s metrikami celých uzavřených pozic, formulář a review, Go To
+s posunem 560 ms a nastavení kompaktního čekajícího boxu. V LIVE se zdrojová
+kresba může odstranit až po potvrzení objednávky. Patří sem také regrese pro
+předání pozice, čekající box a statistiky. Produkční web používá skutečné
+session a stávající služby. Testovací data a přepínače preview jsou lokální.
+
 ### 2026-11-07 — Strop kontraktů z grafu podle propky (Claude, NASAZENO 8. 11. z `463b26b1`: web a worker; iPhone ne, Mac ho neviděl)
 
 - **Proč:** Filip chce posílat z grafu tolik, kolik dovolí propka, i ve skupině s followery. Limit z Tradovate nejde přečíst, proto ho zadává v kartě Pravidla dne („Max kontraktů z grafu“). U Lucidu podle velikosti účtu (50K = 4 mini / 40 mikro podle veřejných přehledů), u funded podle škálovacího plánu.

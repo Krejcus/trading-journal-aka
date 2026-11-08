@@ -39,7 +39,7 @@ export interface PositionDrawingSettings {
   qtyPrecision: number | null;
 }
 
-export type PositionDrawingStyle = DrawingStyle & { position?: Partial<PositionDrawingSettings> };
+export type PositionDrawingStyle = DrawingStyle & { position?: Partial<PositionDrawingSettings>; executionState?: 'pending' | 'active' | 'closed' | 'cancelled' };
 export type PositionDrawing = Drawing & {
   tool: PositionToolId;
   style: PositionDrawingStyle;

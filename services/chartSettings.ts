@@ -201,6 +201,10 @@ export type ChartOrderLineLabels = 'points-pnl' | 'pnl';
 export interface ChartTradingSettings {
   /** Zobrazit blesk, který z vybraného position boxu okamžitě odešle objednávku. */
   quickOrderButton: boolean;
+  removePositionBoxAfterOrder: boolean;
+  /** Presentation only: how much less prominent an unfilled position box is. */
+  pendingBoxDimPercent: number;
+  pendingBoxAnchor: 'current' | 'previous' | 'next';
   /** Automatický position box vytvořený rychlou objednávkou. */
   positionBoxes: boolean;
   /** Ceny automatických position boxů a SL/TP na cenové ose. */
@@ -332,6 +336,9 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
   },
   trading: {
     quickOrderButton: true,
+    removePositionBoxAfterOrder: true,
+    pendingBoxDimPercent: 65,
+    pendingBoxAnchor: 'previous',
     positionBoxes: true,
     orderPriceLabels: true,
     orderLines: true,
@@ -385,7 +392,12 @@ export const mergeChartSettings = (
       sessionBreak: { ...defaults.canvas.sessionBreak, ...parsed.canvas?.sessionBreak },
       crosshair: { ...defaults.canvas.crosshair, ...parsed.canvas?.crosshair },
     },
-    trading: { ...defaults.trading, ...parsed.trading },
+    trading: {
+      ...defaults.trading, ...parsed.trading,
+      pendingBoxDimPercent: typeof parsed.trading?.pendingBoxDimPercent === 'number' && Number.isFinite(parsed.trading.pendingBoxDimPercent)
+        ? Math.min(90, Math.max(0, parsed.trading.pendingBoxDimPercent)) : defaults.trading.pendingBoxDimPercent,
+      pendingBoxAnchor: parsed.trading?.pendingBoxAnchor === 'current' || parsed.trading?.pendingBoxAnchor === 'next' ? parsed.trading.pendingBoxAnchor : 'previous',
+    },
     replay: {
       candleMode: parsed.replay?.candleMode === 'whole' ? 'whole' : defaults.replay.candleMode,
     },
