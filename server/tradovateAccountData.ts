@@ -591,10 +591,20 @@ export async function loadTradovateAccountData(options: {
   // observed, queued accounts and contract reads do not start more HTTP work.
   // A 403 on optional risk/history scopes is expected and must not stop other reads.
   let stopped: Probe<unknown> | null = null;
+  // Zamítnutí kontroly dotazů (rozpočet, chybějící identita) ukončí celé
+  // čtení: další dotazy se už nespouští a chyba se nese dál beze změny.
+  let controlStop: TradovateRequestControlError | null = null;
   const currentStop = () => stopped;
   const read = async <T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<Probe<T>> => {
+    if (controlStop) throw controlStop;
     if (stopped) return { ...stopped, value: null };
-    const probe = await request<T>({ ...options, ...init, path, fetchImpl });
+    let probe: Probe<T>;
+    try {
+      probe = await request<T>({ ...options, ...init, path, fetchImpl });
+    } catch (error) {
+      if (error instanceof TradovateRequestControlError) controlStop ??= error;
+      throw error;
+    }
     if (probe.status === 429) {
       stopped = { ok: false, value: null, status: 429,
         retryAfterMs: Math.max(currentStop()?.retryAfterMs ?? 0, probe.retryAfterMs ?? 300_000),
@@ -633,6 +643,10 @@ export async function loadTradovateAccountData(options: {
     }));
     return results;
   });
+  // Čtení obohacení běží souběžně s globálními seznamy. Když ty selžou dřív,
+  // jeho pozdější odmítnutí nesmí zůstat neodchycené (shodí funkci na Vercelu);
+  // výsledek se dál čte přes `await enrichmentPromise` níže.
+  enrichmentPromise.catch(() => undefined);
   const [accountsProbe, positionsProbe, ordersProbe, orderVersionsProbe, fillsProbe, fillPairsProbe, fillFeesProbe, cashBalancesProbe] = await Promise.all([
     accountsPromise,
     call<PositionEntity[]>('/position/list'),

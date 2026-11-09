@@ -459,9 +459,12 @@ export function createNativeBrokerSnapshotLoader(options: {
         const connectionIds = loadOptions?.allAccounts
           ? [runtime.connection_id]
           : await liveActivityConnectionIds({ db: options.db, config: options.config, runtime });
-        // Fail-closed: chybějící token kteréhokoli připojení znamená neúplný
-        // obraz skupiny, a ten se nesmí tvářit jako celkové P&L.
-        const tokens = await Promise.all(connectionIds.map(connectionId => getValidTradovateAccessToken({
+        // Fail-closed: chybějící token připojení, které drží účet skupiny,
+        // znamená neúplný obraz skupiny, a ten se nesmí tvářit jako celkové
+        // P&L. Nepoužitelné připojení bez účtů skupiny (9. 11. 2026: login bez
+        // uložené identity, který už nejde obnovit) ale snímek shodit nesmí —
+        // zbylá připojení pak musí prokázat, že vidí všechny účty skupiny.
+        const settled = await Promise.allSettled(connectionIds.map(connectionId => getValidTradovateAccessToken({
           db: options.db,
           config: options.config,
           userId: runtime.user_id,
@@ -469,7 +472,11 @@ export function createNativeBrokerSnapshotLoader(options: {
           minimumValidityMs: 180_000,
           fetchImpl: options.fetchImpl,
         })));
+        const tokens = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+        const failed = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed && (tokens.length === 0 || accountIds == null)) throw failed.reason;
         return loadNativeLiveActivityBrokerSnapshot({
+          requireAllAccountsVisible: failed != null,
           baseUrl: tradovateApiBaseUrl(options.config.environment),
           connections: tokens.map(token => ({ accessToken: token.accessToken, fetchImpl: token.fetchImpl, baseUrl: tradovateApiBaseUrl(options.config.environment, token.apiHosts) })),
           accountIds,

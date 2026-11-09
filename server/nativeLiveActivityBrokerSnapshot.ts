@@ -360,6 +360,12 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   leaderAccountId?: number | null;
   fetchImpl?: typeof fetch;
   now?: number;
+  /**
+   * Když část připojení nešla načíst, smí snímek vzniknout jen tehdy, když
+   * zbylá připojení vidí všechny účty z `accountIds` (jinak by chybějící účty
+   * tiše přispěly nulou do P&L skupiny).
+   */
+  requireAllAccountsVisible?: boolean;
 }): Promise<NativeLiveActivityBrokerSnapshot> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const accessTokens = [...new Set([
@@ -393,6 +399,15 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     const current = latestBalance.get(accountId);
     if (!current || Date.parse(balance.timestamp ?? '') > Date.parse(current.timestamp ?? '')) {
       latestBalance.set(accountId, balance);
+    }
+  }
+  if (options.requireAllAccountsVisible) {
+    const visible = new Set([
+      ...latestBalance.keys(),
+      ...raw.accounts.values.map(account => finite(account.id)).filter((id): id is number => id != null),
+    ]);
+    if (options.accountIds == null || [...allowedAccounts].some(accountId => !visible.has(accountId))) {
+      throw new Error('tradovate-live-activity-incomplete-group');
     }
   }
   const realizedPnl = [...latestBalance.values()]

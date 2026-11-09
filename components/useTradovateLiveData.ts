@@ -875,7 +875,13 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (!enabled) return;
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
     if (ids.length === 0) return;
-    const interval = window.setInterval(() => void refreshData(ids, true), FULL_REFRESH_INTERVAL_MS);
+    // Skrytý tab / appka na pozadí plné čtení (25–40 dotazů u Tradovate na
+    // login) nedělá: návrat do popředí ho dožene přes refreshIfNeeded podle
+    // stáří dat. Rozpočet dotazů je sdílený s kopírkou (9. 11. 2026).
+    const interval = window.setInterval(() => {
+      if (!isAppForeground()) return;
+      void refreshData(ids, true);
+    }, FULL_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [enabled, refreshData, status?.connections]);
 
