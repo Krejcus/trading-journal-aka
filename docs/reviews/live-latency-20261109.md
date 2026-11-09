@@ -151,3 +151,18 @@ serverový cron, klienti až druzí.
   ACK, výsledek použije jen první rámec `order` téhož id stejnou cestou jako dosud. Po oponentuře: jen
   v lokálním přídělu a s vyhasínající třídou, prázdný nebo cizí seznam se zahodí a rámec čte sám.
   INV-TRAD-ACK-01 (pořadí) beze změny.
+
+### Varianty transportu (DEMO, jen vstupy, n=5, worker 125d40c4)
+
+| | Výchozí fetch (f34d0b4c, n=4) | Držené spojení | Zápisy po WebSocketu + držené spojení |
+|---|---|---|---|
+| Vstup — provedení ve workeru | 334 ms (296–429) | 248 ms (234–300) | 268 ms (235–339) |
+| Zápis u brokera | 216–262 ms | 149–174 ms | 143–200 ms |
+| Pozice ve stavu workeru od odeslání | 1469 ms (1179–1672) | 1223 ms (828–1333) | 1176 ms (871–1328) |
+
+Držené spojení dává stejný zisk jako WS zápisy (~80 ms na příkaz) a funguje i pro skupinu; WS zápisy navíc
+nic nepřinesly. Stav po měření: DEMO worker z `125d40c4`, REST zápisy, `--tradovate-keepalive on`, vypnutý, flat.
+
+Zbývá (neuděláno): rámec se stejnou verzí příkazu přesto čeká na REST dotažení (~150–200 ms, pořadí entit
+v `stageOrderVersions`); odmítnutí hydratace rozpočtem shazuje socket (jen vyšší práh); živý test skupiny
+s followery (na DEMO není druhý účet); účinek zpomalení cronu až po nasazení webu.
