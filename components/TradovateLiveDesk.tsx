@@ -150,7 +150,8 @@ import {
 } from '../lib/tradovateLiveTab';
 import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
-import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit } from '../lib/copierWorkerCapabilities';
+import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
+import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
@@ -942,6 +943,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const draft = withScaleInIntent(rawDraft, status);
     const command = buildLeaderEntryPreviewCommand(draft, {
       group: executionGroup,
+      ...(supportsCopierGroupLimitBare(status) && draft.orderType === 'Limit' && !draft.position
+        && draft.stopLoss == null && draft.takeProfit == null ? { groupLimitContract: 1 as const } : {}),
       armedAt: status.controller.armedAt ?? 0,
       excludedFollowers: new Set(status.controller.excludedForeignFollowers ?? []),
       participation: status.controller.followerParticipation ?? [],
@@ -973,6 +976,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const draft = withScaleInIntent(rawDraft, status);
     const preview = buildLeaderEntryPreviewCommand(draft, {
       group: executionGroup,
+      ...(supportsCopierGroupLimitBare(status) && draft.orderType === 'Limit' && !draft.position
+        && draft.stopLoss == null && draft.takeProfit == null ? { groupLimitContract: 1 as const } : {}),
       armedAt: status.controller.armedAt ?? 0,
       excludedFollowers: new Set(status.controller.excludedForeignFollowers ?? []),
       participation: status.controller.followerParticipation ?? [],
@@ -1153,8 +1158,26 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       chartPositionSymbol != null && trade.symbol === chartPositionSymbol
       && chartPositionSide === (trade.side === 'Buy' ? 'long' : 'short')
     ));
+    if (trades.length === 1 && trades[0].source === 'own') return trades[0];
+    // Original OSO legs may have been removed/replaced. Exact group provenance remains own,
+    // independent of the legacy tracked-OSO selector and its historical protective IDs.
+    const groupEntry = groupLimitOwnManageEntry(agentStatus, chartPositionSymbol, chartPositionSide);
+    if (groupEntry) return groupEntry;
     return trades.length === 1 ? trades[0] : null;
-  }, [agentStatus?.controller.manageableLeaderTrades, chartPositionSymbol, chartPositionSide, chartLeaderBasis, scaleInPosition]);
+  }, [agentStatus, chartPositionSymbol, chartPositionSide, chartLeaderBasis, scaleInPosition]);
+  const groupLimitMoveTrade = useMemo(() => (ownManualEntry?.source === 'own'
+    ? groupLimitPendingMoveTrade(agentStatus, ownManualEntry.entryOperationId, ownManualEntry.symbol) : null), [agentStatus, ownManualEntry]);
+  const groupLimitPositionTrade = useMemo(() => {
+    if (!chartLeaderBasis || !chartPositionSymbol) return null;
+    const candidates = (agentStatus?.controller.groupLimitTrades ?? []).map(trade => (
+      groupLimitPositionManageTrade(agentStatus, trade.entryOperationId, chartPositionSymbol)
+    )).filter((trade): trade is NonNullable<typeof trade> => trade != null);
+    return candidates.length === 1 ? candidates[0] : null;
+  }, [agentStatus, chartLeaderBasis, chartPositionSymbol]);
+  const groupLimitLegDisplay = useMemo(() => groupLimitLegTrade(groupLimitPositionTrade), [groupLimitPositionTrade]);
+  const groupLimitCancelView = ownManualEntry?.source === 'own'
+    ? groupLimitCancelTrade(agentStatus, ownManualEntry.entryOperationId, ownManualEntry.symbol) : null;
+  const chartLegTrade = groupLimitLegDisplay ?? (supportsCopierManualOrderSingleLeg(agentStatus) ? agentStatus?.controller.bareLegTrade ?? null : null);
   // Jen měření (INV-UI-01): kdy status poprvé nabídne obchod ke správě. Nic to neodemyká.
   useEffect(() => {
     const controller = agentStatus?.controller;
@@ -1181,7 +1204,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     newOperationId: () => `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
   }), []);
   const sendLeaderManage = deskCommands.sendLeaderManage;
-  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
+  const manageGroupLimitPosition = deskCommands.manageGroupLimitPosition;
+  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string): Promise<LeaderOrderManageResult> => {
     const current = armStatusRef.current;
     const executionGroup = copierWorkerExecutionGroup(current.status);
     const entry = ownManualEntryRef.current;
@@ -1207,7 +1231,27 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (entry.source === 'position' && action !== 'move-stop' && action !== 'move-target' && action !== 'close-position') {
       throw new Error('U pozice s přikoupením jde z čar jen posun SL/TP, zavření a zrušení čekajícího přikoupení.');
     }
-    if (action === 'move-limit' && (entry.source !== 'own' || !supportsCopierManualOrderMoveLimit(current.status))) throw new Error('Worker posun limitu nepodporuje — nic se neodeslalo.');
+    const groupPath = executionGroup.manualOnly !== true && (supportsCopierGroupLimitMove(current.status) || supportsCopierGroupLimitManage(current.status));
+    const ownOperationId = entry.source === 'own' ? entry.entryOperationId : null;
+    const groupTrade = groupPath ? action === 'move-limit'
+      ? groupLimitPendingMoveTrade(current.status, ownOperationId, entry.symbol)
+      : action === 'cancel-entry'
+        ? groupLimitCancelTrade(current.status, ownOperationId, entry.symbol)
+        : groupLimitPositionManageTrade(current.status, ownOperationId, entry.symbol) : null;
+    const seenGroup = action === 'move-limit' ? groupLimitMoveTrade
+      : action === 'cancel-entry' ? groupLimitCancelView : groupLimitPositionTrade;
+    if ((seenGroup && !groupPath) || (groupPath && (!groupTrade || groupTrade.stateHash !== (seenGroupLimitStateHash ?? seenGroup?.stateHash)))) {
+      throw new Error('Stav příkazu není čerstvě ověřený pro všechny účty — nic se neodeslalo.');
+    }
+    if (action === 'move-limit' && (entry.source !== 'own' || (!groupPath && !supportsCopierManualOrderMoveLimit(current.status)))) {
+      throw new Error('Worker posun limitu nepodporuje — nic se neodeslalo.');
+    }
+    if (groupTrade && action === 'close-position') {
+      return manageGroupLimitPosition({ entryOperationId: groupTrade.entryOperationId, symbol: groupTrade.symbol,
+        groupLimitStateHash: groupTrade.stateHash, action });
+    }
+    const groupLeader = groupTrade?.accounts.find(row => row.role === 'leader');
+    const groupQuantity = action === 'move-limit' ? groupLeader?.entry?.quantity : groupLeader?.openQuantity;
     const command = buildLeaderOrderManageCommand({
       groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
       leaderAccountId: executionGroup.leaderAccountId,
@@ -1215,30 +1259,41 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       symbol: entry.symbol,
       action,
       // Zbytek holého Limit/Stop: počet příkazu a kolik uživatel viděl vyplněné (worker porovná s čerstvým stavem).
-      expect: barePartial && action === 'cancel-entry'
+      expect: groupTrade && action === 'cancel-entry'
+        ? groupLimitCancelExpect(groupTrade, expectPrice)
+        : barePartial && action === 'cancel-entry'
         ? { price: expectPrice, quantity: barePartial.quantity, filledQuantity: barePartial.filledQuantity }
-        : { price: expectPrice, quantity },
+        : { price: expectPrice, quantity: groupQuantity ?? quantity },
       ...(newPrice != null ? { newPrice } : {}),
       ...(entry.source === 'position' ? { scope: 'position' as const } : {}),
       ...(action === 'move-limit' ? { moveLimitContract: LEADER_ORDER_MOVE_LIMIT_CONTRACT } : {}),
+      ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
     });
     return sendLeaderManage(command, 'Výsledek změny chybí — zkontroluj leadera v Tradovate.');
-  }, [chartData.position?.summary, sendLeaderManage]);
+  }, [chartData.position?.summary, groupLimitMoveTrade?.stateHash, groupLimitPositionTrade?.stateHash, groupLimitCancelView?.stateHash, sendLeaderManage, manageGroupLimitPosition]);
 
   // Telefon (2. 11. 2026): stejné odeslání a správa jako PC graf, žádná druhá execution cesta.
-  const attachBrackets = useCallback(async (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number }): Promise<LeaderOrderManageResult> => {
+  const attachBrackets = useCallback(async (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number; groupLimitStateHash?: string | null }): Promise<LeaderOrderManageResult> => {
     const executionGroup = copierWorkerExecutionGroup(armStatusRef.current.status);
     if (!armStatusRef.current.fresh || !executionGroup || executionGroup.leaderAccountId == null) {
       throw new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
     }
     if (!previewRouteRef.current.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
+    const requiredGroupPath = input.groupLimitStateHash !== undefined || groupLimitPositionTrade != null
+      || executionGroup.manualOnly !== true && supportsCopierGroupLimitManage(armStatusRef.current.status);
+    const groupTrade = requiredGroupPath ? groupLimitPositionManageTrade(armStatusRef.current.status, input.entryOperationId, input.symbol) : null;
+    if (requiredGroupPath && (!supportsCopierGroupLimitManage(armStatusRef.current.status) || !groupTrade
+      || groupTrade.stateHash !== (input.groupLimitStateHash !== undefined ? input.groupLimitStateHash : groupLimitPositionTrade?.stateHash))) throw new Error('Stav všech účtů se změnil — nic se neodeslalo.');
+    if (groupTrade) return manageGroupLimitPosition({ entryOperationId: input.entryOperationId, symbol: input.symbol,
+      groupLimitStateHash: groupTrade.stateHash, action: 'attach-brackets', stopLoss: input.stopLoss, takeProfit: input.takeProfit });
     const command = buildLeaderOrderManageCommand({
       groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
       leaderAccountId: executionGroup.leaderAccountId, entryOperationId: input.entryOperationId, symbol: input.symbol,
+      ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
       action: 'attach-brackets', expect: { price: input.expectPrice, quantity: input.quantity }, stopLoss: input.stopLoss, takeProfit: input.takeProfit,
     });
     return sendLeaderManage(command, 'Výsledek chybí — zkontroluj pozici v Tradovate.');
-  }, [sendLeaderManage]);
+  }, [groupLimitPositionTrade?.stateHash, sendLeaderManage, manageGroupLimitPosition]);
   // C8 (4. 11. 2026): × zavřít vlastní holý Market bez SL/TP a C7 „Zrušit čekající“ / Dashboard
   // „Zrušit“ — tatáž cesta správy leadera (`sendLeaderManage`). Odejde JEN obchod / sada, kterou
   // uživatel viděl, a jen když ji čerstvý status hlásí beze změny; C7 drží jednu trasu relaye pro
@@ -1280,14 +1335,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // C8: nabídka × u vlastní holé pozice (PC čára + panel, telefon) — jen zobrazení a záměr
   // (INV-UI-01/03); bez capability, mimo pohled leadera nebo s neověřenou pozicí nic (unknown ≠ flat).
   const bareCloseOffer = useMemo(() => liveBareCloseOffer({
-    capability: supportsCopierManualOrderCloseBare(agentStatus),
-    trade: agentStatus?.controller.bareLeaderTrade,
+    capability: supportsCopierManualOrderCloseBare(agentStatus) || groupLimitLegDisplay != null,
+    trade: groupLimitLegDisplay ?? agentStatus?.controller.bareLeaderTrade,
     managedTrade: ownManualEntry != null,
     statusFresh: agentStatusFresh, restored: agentStatusRestored, relayConnected: Boolean(relayConnectionId),
     armed: agentStatus?.controller.armed === true, shadowMode: agentStatus?.controller.shadowMode === true,
     killSwitch: agentStatus?.controller.killSwitch === true,
     position: chartLeaderPosition,
-  }), [agentStatus, ownManualEntry, agentStatusFresh, agentStatusRestored, relayConnectionId, chartLeaderPosition]);
+  }), [agentStatus, ownManualEntry, groupLimitLegDisplay, agentStatusFresh, agentStatusRestored, relayConnectionId, chartLeaderPosition]);
   // C7: „Zrušit čekající“ jen když availability jádra říká ano (capability, vlastní čekající vstupy);
   // PC lišta navíc neaktivní během přehrávání v grafu (bez ovládání), telefon si to hlídá sám.
   const cancelPendingInput = {
@@ -1321,6 +1376,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       marketSupported: supportsCopierManualEntryMarket(agentStatus),
       bareSupported: supportsCopierManualEntryBare(agentStatus),
       barePendingSupported: supportsCopierManualEntryBarePending(agentStatus),
+      bareLimitSupported: supportsCopierGroupLimitBare(agentStatus),
       barePartial: barePartialLine,
       maxContracts: manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null),
       frontContract: entryFrontContract,
@@ -1336,17 +1392,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       // i Dashboard drží TENTÝŽ ref — přechod graf → Dashboard nepustí druhý příkaz souběžně.
       commandLockRef: liveCommandLockRef,
       // C8/C7 (4. 11. 2026): × holé pozice a „Zrušit čekající“ = deskové callbacky, jen s capability.
-      ...(supportsCopierManualOrderCloseBare(agentStatus) ? { bareClose: bareCloseOffer, closeBare: closeBareLeader } : {}),
-      ...(supportsCopierManualOrderSingleLeg(agentStatus) ? { bareLegTrade: agentStatus?.controller.bareLegTrade ?? null, bareLeg: manageBareLeg } : {}),
+      ...(supportsCopierManualOrderCloseBare(agentStatus) || groupLimitLegDisplay != null ? { bareClose: bareCloseOffer, closeBare: closeBareLeader } : {}),
+      ...(chartLegTrade ? { bareLegTrade: chartLegTrade, bareLeg: manageBareLeg } : {}),
       ...(supportsCopierManualOrderCancelPending(agentStatus) ? { cancelPending: cancelPendingView, cancelPendingEntries } : {}),
       // Správa z čar = PŘESNĚ deskový `manageLeaderEntry` a za stejné podmínky jako PC graf
       // (`onManageEntry`); × u pozice jako PC `canClose`; BE průměr jen ze stavu pollu (jako PC).
       pendingLegs: supportsCopierManualOrderPendingLegs(agentStatus),
       moveLimit: supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true,
-      moveBareEntry: supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true,
+      groupLimitMove: groupLimitMoveTrade != null,
+      groupLimitStateHash: groupLimitMoveTrade?.stateHash ?? groupLimitPositionTrade?.stateHash ?? groupLimitCancelView?.stateHash ?? null,
+      moveBareEntry: (supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) || groupLimitMoveTrade != null) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true,
       ...livePhoneManageFields({
         // Dílčí fill holého Limit/Stop: × je na zbytku, pozici jde zavřít až po jeho konci (nebo Flatten).
-        manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true,
+        manageSupported: supportsCopierManualOrderManage(agentStatus), closeCapability: groupLimitPositionTrade != null || supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true,
         ownEntry: ownManualEntry, manage: manageLeaderEntry, runtimeAvailable,
         armed: controller?.armed === true, shadowMode: controller?.shadowMode === true, chartShowsPoll: chartLive.status === agentStatus,
       }),
@@ -1356,7 +1414,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         accountIds: [workerGroup.leaderAccountId, ...workerGroup.followers.map(follower => follower.accountId)],
         observedAt: agentStatusObservedAt, verified: agentStatusFresh && !agentStatusRestored }),
     };
-  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, entryBlockedReason, chartLeaderPosition, chartBareEntry, placeLeaderEntry, previewLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction, entryFrontContract, ownManualEntry, manageLeaderEntry, runtimeAvailable, chartLive.status, scaleInPosition, bareCloseOffer, closeBareLeader, cancelPendingView, cancelPendingEntries]);
+  }, [phoneChartAvailable, workerGroup, agentStatus, agentStatusFresh, agentStatusRestored, entryBlockedReason, chartLeaderPosition, chartBareEntry, placeLeaderEntry, previewLeaderEntry, attachBrackets, agentStatusObservedAt, runStaticSafetyAction, entryFrontContract, ownManualEntry, groupLimitMoveTrade, groupLimitPositionTrade, groupLimitCancelView?.stateHash, groupLimitLegDisplay, chartLegTrade, manageLeaderEntry, runtimeAvailable, chartLive.status, scaleInPosition, bareCloseOffer, closeBareLeader, cancelPendingView, cancelPendingEntries]);
 
   // Šipky plnění v grafu telefonu (2. 11. 2026) i PC (U4, 3. 11.): jen zobrazení, z čerstvého stavu a expozice ≤ 8 s.
   const phoneFills = useMemo(() => (phoneChartAvailable || chartAvailable
@@ -2050,10 +2108,12 @@ acceptAgentStatus((await executeAgent({
           // BE jen když graf ukazuje stav pollu: když expozice z kanálu (F2a) předbíhá, průměr
           // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
-          manageCloseSupported={supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true}
+          manageCloseSupported={groupLimitPositionTrade != null || supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true}
           managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
           manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true}
-          manageMoveBareEntrySupported={supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true}
+          manageGroupLimitMoveSupported={groupLimitMoveTrade != null}
+          manageGroupLimitStateHash={groupLimitMoveTrade?.stateHash ?? groupLimitPositionTrade?.stateHash ?? groupLimitCancelView?.stateHash ?? null}
+          manageMoveBareEntrySupported={(supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) || groupLimitMoveTrade != null) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true}
           entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}
@@ -2062,16 +2122,17 @@ acceptAgentStatus((await executeAgent({
           // příkazy dál jen přes callbacky desku (worker vše ověří znovu, INV-UI-01).
           entryBareSupported={supportsCopierManualEntryBare(agentStatus)}
           entryBarePendingSupported={supportsCopierManualEntryBarePending(agentStatus)}
+          entryBareLimitSupported={supportsCopierGroupLimitBare(agentStatus)}
           entryBarePartial={barePartialLine}
           entryBareEntry={chartBareEntry}
           entryLeaderPosition={chartLeaderPosition}
           {...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}
-          {...(supportsCopierManualOrderSingleLeg(agentStatus) ? { bareLegTrade: agentStatus?.controller.bareLegTrade ?? null, onBareLeg: manageBareLeg } : {})}
+          {...(chartLegTrade ? { bareLegTrade: chartLegTrade, onBareLeg: manageBareLeg } : {})}
           entryBlockedReason={entryBlockedReason}
           manageLeaderAccountId={workerGroup?.leaderAccountId ?? null}
           // C8: × holé pozice (čára, Shift+X, panel) — jen s capability; jeden zámek s lištou a Dashboardem.
           bareClose={bareCloseOffer}
-          {...(supportsCopierManualOrderCloseBare(agentStatus) ? { onBareClose: closeBareLeader } : {})}
+          {...(supportsCopierManualOrderCloseBare(agentStatus) || groupLimitLegDisplay != null ? { onBareClose: closeBareLeader } : {})}
           manageLockRef={liveCommandLockRef}
           onReplayChange={setChartReplayActive}
           workingOrders={chartWorkingOrders}

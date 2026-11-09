@@ -22,7 +22,8 @@ describe('backtest chart order lines', () => {
     expect(source).toContain("const showPoints = kind === 'entry' || labelMode === 'points-pnl'");
     // Tažení commitne do enginu až při puštění (jinak se celý workspace
     // překresloval na každý pixel); během tahu žije cena jen v overlay.
-    expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice)');
+    expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice, dragging.startLine)');
+    expect(source).toContain('bracketKind: kind, moved: false, startLine: line');
     expect(source).toContain('setDragOverride({ lineId: line.id, top: Math.round(top * 2) / 2, price: snapped })');
     expect(source).toContain('data-backtest-bracket-drag-preview');
     expect(source).toContain("'rgba(16, 185, 129, 0.10)'");

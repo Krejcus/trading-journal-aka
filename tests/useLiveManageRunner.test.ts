@@ -59,6 +59,13 @@ describe('sdílený runner správy: jeden příkaz naráz, bez opakování (U10)
     expect(h.busy).toEqual([true, false]);
   });
 
+  it('neměnný group hash projde jako čtvrtý argument právě jedním manage voláním', async () => {
+    const manage = vi.fn<LiveManageCallback>(async () => result());
+    const h = harness(manage);
+    await h.run('move-stop', 24_990, 24_995, 'stopLoss', 'immutablegroup123');
+    expect(manage).toHaveBeenCalledExactlyOnceWith('move-stop', 24_990, 24_995, 'immutablegroup123');
+  });
+
   it('druhý příkaz během běžícího se NEODEŠLE (sdílený zámek)', async () => {
     const gate = deferred<LeaderOrderManageResult>();
     const manage = vi.fn<LiveManageCallback>(() => gate.promise);
@@ -209,13 +216,18 @@ describe('jeden klik = jeden příkaz (Filip 5. 11. 2026, bez „Opravdu?“)', 
 
 describe('statika: runner posílá jen přes předaný onManageEntry (INV-UI-01)', () => {
   const source = readFileSync('hooks/useLiveManageRunner.ts', 'utf8');
-  it('žádný relay, fetch ani služby; jediné volání je manage(action, expectPrice, newPrice)', () => {
+  it('žádný relay, fetch ani služby; jediný send je solo/group varianta předaného manage', () => {
     const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-    expect(imports).toEqual(['../lib/leaderOrderManage', '../lib/liveClickGate', '../lib/liveManagePrices', 'react', 'react']);
+    expect(imports).toEqual(['../lib/groupLimitUiNotice', '../lib/leaderOrderManage', '../lib/liveClickGate', '../lib/liveManagePrices', 'react', 'react']);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/leaderOrderManage'/);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/liveManagePrices'/);
     expect(source).not.toMatch(/fetch\(|executeTradovate|services\/|buildLeaderOrderManageCommand|crypto\./);
-    expect(source.match(/await manage\(/g)).toEqual(['await manage(']);
+    expect(source.match(/await manage\(/g)).toEqual(['await manage(', 'await manage(']);
+    expect(source).toMatch(/seenGroupLimitStateHash \? await manage\(action, expectPrice, newPrice, seenGroupLimitStateHash\) : await manage\(action, expectPrice, newPrice\)/);
+    const formatter = readFileSync('lib/groupLimitUiNotice.ts', 'utf8');
+    expect([...formatter.matchAll(/from '([^']+)'/g)].map(match => match[1])).toEqual(['./leaderOrderManage']);
+    expect(formatter).toMatch(/import type \{[^}]+\} from '\.\/leaderOrderManage'/);
+    expect(formatter).not.toMatch(/fetch\(|executeTradovate|services\/|buildLeaderOrderManageCommand|crypto\./);
     expect(source).toMatch(/await manage\(action, expectPrice, newPrice\)/);
   });
   it('žádné opakování: volání není ve smyčce ani v catch', () => {

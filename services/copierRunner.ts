@@ -1497,8 +1497,32 @@ export async function processLeaderEvent(
   const syncPausedAccounts = new Set([...context.ineligibleAccounts]
     .filter(([, reason]) => reason === 'account-sync-paused')
     .map(([accountId]) => accountId));
-  const cancels = planCancel(event, planningState, group)
+  let cancels = planCancel(event, planningState, group)
     .filter(item => !syncPausedAccounts.has(item.accountId));
+  // An explicit group remainder cancel must not cancel a follower entry already fully filled.
+  // Exact member WAL + authoritative terminal proof makes it a no-op; ordinary cancels retain
+  // their existing Filled=incident semantics. No new broker write or protective heuristic here.
+  const groupRemainder = (state.safety.manualOrderActions ?? []).find(action => action.groupLimit?.contract === 1
+    && action.action === 'cancel-entry' && action.targetBrokerOrderId === event.orderId
+    && (action.status === 'sending' || action.status === 'unknown' || action.status === 'acknowledged'));
+  if (groupRemainder?.groupLimit) {
+    const retained = [] as typeof cancels;
+    for (const command of cancels) {
+      const member = groupRemainder.groupLimit.members.find(member => member.accountId === command.accountId && member.entryId === command.brokerOrderId);
+      if (member && (member.filledQuantity ?? 0) > 0) {
+        const lookup = await broker.findOrderById(command.accountId, command.brokerOrderId);
+        const row = lookup.completeness === 'authoritative' ? lookup.order : null;
+        if (row && row.accountId === member.accountId && row.brokerOrderId === member.entryId && row.symbol === event.symbol
+          && row.quantity === member.quantity && row.filledQuantity === member.filledQuantity && !isOpenOrderStatus(row.status)) {
+          audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: member.accountId,
+            brokerOrderId: member.entryId, reason: 'group-limit-remainder-already-terminal' });
+          continue;
+        }
+      }
+      retained.push(command);
+    }
+    cancels = retained;
+  }
   const modifications = planModify(event, planningState, group)
     .filter(item => !syncPausedAccounts.has(item.accountId));
   if (event.kind === 'replaced' && event.executionShapeChanged === true && group.enabled) {

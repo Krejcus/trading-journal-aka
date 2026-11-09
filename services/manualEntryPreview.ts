@@ -199,6 +199,7 @@ export interface ManualEntryAccountInputs {
 }
 
 export interface ManualEntryPreviewInputs {
+  groupLimitsEnabled?: boolean;
   now: number;
   /** Limit pohybu trhu proti viděné ceně; výchozí `MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS`. */
   marketMaxDriftTicks?: number;
@@ -387,7 +388,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
       ? 'Market bez SL/TP — pozice je bez ochrany, dokud nohy nedoplníš.'
       : `${command.orderType} bez SL/TP — po vyplnění je pozice bez ochrany, dokud nohy nedoplníš.`));
     if (!market) {
-      if (!(group.manualOnly === true && group.localOnly === true && group.followers.length === 0 && input.riskGate.brokerEnvironment === 'demo')) {
+      if (!(input.groupLimitsEnabled === true && command.groupLimitContract === 1 && command.orderType === 'Limit') && !(group.manualOnly === true && group.localOnly === true && group.followers.length === 0 && input.riskGate.brokerEnvironment === 'demo')) {
         blockers.push(blocker('bare-pending-manual-only', 'Limit a Stop bez SL/TP jsou zatím jen pro ruční DEMO účet bez followerů.'));
       }
       blockers.push(...manualEntryBarePendingBlockers(command, input.workerQuote, now));
@@ -455,6 +456,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     const headroom = existing ? realizedLossHeadroom(risk, configuredCutUsd) : remainingLossHeadroom(risk, configuredCutUsd);
     const known = [headroom.dailyUsd, headroom.drawdownUsd, headroom.cutUsd].filter((value): value is number => value != null);
     if (!known.length) { blockers.push(blocker('risk-unknown', `${label}: žádný limit účtu není známý.`)); return; }
+    if (bare && input.groupLimitsEnabled && known.some(left => !Number.isFinite(left) || left <= 0)) blockers.push(blocker('risk-exhausted', `${label}: rezerva limitu je vyčerpaná nebo neověřená.`));
     if (lossPerContract == null || swingPerContract == null) return;
     if (existing && existing.lossPoints == null) {
       blockers.push(blocker('risk-unverified', `${label}: průměrná cena pozice není známá — riziko přikoupení nejde spočítat.`));
@@ -494,12 +496,12 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
     const label = `Follower ${follower.accountId}`;
     if (follower.enabled === false || follower.mode === 'off' || input.excludedFollowers.has(follower.accountId)) continue;
     const ineligible = input.entryIneligible.get(follower.accountId);
-    if (ineligible) { notes.push(blocker('follower-skipped', `${label} nedostane kopii: ${ineligible}.`)); continue; }
+    if (ineligible) { (bare && command.groupLimitContract === 1 ? blockers : notes).push(blocker('follower-skipped', `${label} nedostane kopii: ${ineligible}.`)); continue; }
     if (follower.mode !== 'on-submit') { blockers.push(blocker('oso-on-fill-not-supported', `${label}: režim „po vyplnění“ OSO nekopíruje.`)); continue; }
     const quantity = followerQuantity(command.quantity, follower.multiplier);
     if (quantity <= 0) { blockers.push(blocker('scaled-quantity-zero', `${label}: po násobku vychází 0 kontraktů.`)); continue; }
     const account = input.accounts.get(follower.accountId);
-    if (account?.syncPaused) { notes.push(blocker('follower-sync-paused', `${label} nedostane kopii: účet je mimo synchron.`)); continue; }
+    if (account?.syncPaused) { (bare && command.groupLimitContract === 1 ? blockers : notes).push(blocker('follower-sync-paused', `${label} nedostane kopii: účet je mimo synchron.`)); continue; }
     // Follower bez vlastního stropu přebírá strop leadera z pravidel (stejná propka); bez něj platí jen jeho vlastní.
     const followerCap = follower.maxContracts ?? leaderEntryContractCap(group);
     if (followerCap != null && account && exceedsMaxContracts(account, command.symbol, command.side, quantity, followerCap)) {
@@ -514,7 +516,7 @@ export function evaluateManualEntryPreview(input: ManualEntryPreviewInputs): Lea
       { tag: 'previews', accountId: follower.accountId, symbol: command.symbol, side: exit, quantity, orderType: 'Stop', stopPrice: command.stopLoss },
       { tag: 'previewt', accountId: follower.accountId, symbol: command.symbol, side: exit, quantity, orderType: 'Limit', limitPrice: command.takeProfit },
     ];
-    const decision = evaluateRiskGate(gateRequests, input.riskGate);
+    const decision = evaluateRiskGate(bare ? gateRequests.slice(0, 1) : gateRequests, input.riskGate);
     const reasons = [...new Set(decision.blocked.map(entry => entry.reason))];
     if (decision.haltReason) continue; // halt hlásí leader výš
     if (reasons.length) { blockers.push(blocker('follower-gate', `${label}: kopírka by odmítla (${reasons.join(', ')}).`)); continue; }

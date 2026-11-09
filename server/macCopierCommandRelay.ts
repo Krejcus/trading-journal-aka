@@ -4,7 +4,7 @@ import type { TvBarsCapture } from '../lib/tradingViewBars.js';
 import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery, type PushedCopierDelivery } from './recoverableCopierDelivery.js';
 import { verifyCopierCommandPush } from './copierCommandPush.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
-import { COPIER_LIVE_EXPOSURE_EVENT, COPIER_LIVE_EXPOSURE_EVENTS, encryptCopierLiveExposure } from '../lib/copierLiveExposure.js';
+import { COPIER_LIVE_EXPOSURE_EVENT, COPIER_LIVE_EXPOSURE_EVENTS, boundCopierLiveExposureGroupProjection, encryptCopierLiveExposure } from '../lib/copierLiveExposure.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
   localCopierAgentErrorDetails,
@@ -343,7 +343,7 @@ export function startMacCopierCommandRelay(options: {
       if (typeof status.displaySeq !== 'number' || typeof status.displayBuiltAt !== 'number') return;
       seq = status.displaySeq;
       const encryptStartedAt = performance.now();
-      const envelope = await encryptCopierLiveExposure({
+      const envelope = await encryptCopierLiveExposure(boundCopierLiveExposureGroupProjection({
         v: 1, startedAt: status.startedAt, seq: status.displaySeq, builtAt: status.displayBuiltAt,
         exposure: status.controller.exposure ?? null,
         events: (status.controller.recentCopyEvents ?? []).slice(-COPIER_LIVE_EXPOSURE_EVENTS),
@@ -351,7 +351,8 @@ export function startMacCopierCommandRelay(options: {
         // s brokerovým fill/position časem a následným paintem grafu.
         manualEntries: (status.controller.manualEntries ?? []).slice(-10),
         manualOrderActions: (status.controller.manualOrderActions ?? []).slice(-10),
-      }, config.key, config.topic);
+        groupLimitTrades: (status.controller.groupLimitTrades ?? []).slice(-10),
+      }), config.key, config.topic);
       if (!envelope || stopped) return;
       const encryptMs = performance.now() - encryptStartedAt;
       const body = JSON.stringify({ messages: [{ topic: config.topic, event: COPIER_LIVE_EXPOSURE_EVENT, payload: envelope }] });

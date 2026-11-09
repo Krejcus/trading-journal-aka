@@ -23,6 +23,7 @@ interface Props {
     line: BacktestChartOrderLine,
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
+    startLine?: BacktestChartOrderLine,
   ) => void;
   /**
    * Telefon: čára se nejdřív klepnutím vybere (jemné zvýraznění), táhnout jde až
@@ -420,7 +421,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
           label: line.bracketLabelAt?.(dragging.bracketKind, dragging.lastPrice) ?? `${dragging.bracketKind === 'stopLoss' ? 'SL' : 'TP'}  ${dragging.lastPrice.toFixed(2)}`,
           color: dragging.bracketKind === 'stopLoss' ? '#ef4444' : '#0f9f8f', until: Date.now() + 1_500,
         });
-        onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice);
+        onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice, dragging.startLine);
       } else {
         onChange(line, line.kind, dragging.lastPrice, dragging.startLine);
       }
@@ -605,7 +606,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                     const chipBox = event.currentTarget.getBoundingClientRect();
                     chipOriginRef.current = { left: chipBox.left, top: chipBox.top, width: chipBox.width, height: chipBox.height };
                     suppressBracketClickRef.current = null;
-                    dragRef.current = { id: line.id, bracketKind: kind, moved: false };
+                    dragRef.current = { id: line.id, bracketKind: kind, moved: false, startLine: line };
                     setBracketDragPreview({ anchorLineId: line.id, kind, top });
                   }}
                   onClick={event => {

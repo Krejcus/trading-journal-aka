@@ -277,6 +277,19 @@ describe('U10 list správy: záměry (číslo, BE, BE + n, BE s poplatky)', () =
   });
 });
 
+describe('skupinový holý Limit v telefonním listu', () => {
+  it('povolí více kontraktů do stropu pouze u Limitu; Market a Stop bez nohou zůstanou blokované', () => {
+    const groupTrade = trade({ bareSupported: false, barePendingSupported: false, bareLimitSupported: true, marketSupported: false });
+    const bare = draft({ quantity: 2, stopLoss: null, takeProfit: null });
+    expect(livePhoneSheetProblems(bare, instrument, quote, groupTrade).filter(item => item.level === 'error')).toEqual([]);
+    for (const type of ['market', 'stop'] as const) {
+      expect(livePhoneSheetProblems({ ...bare, type }, instrument, quote, groupTrade).some(item => item.level === 'error')).toBe(true);
+    }
+    expect(livePhoneSheetProblems({ ...bare, quantity: 3 }, instrument, quote, groupTrade).some(item => /Strop/.test(item.text))).toBe(true);
+    expect(livePhoneSheetProblems(bare, instrument, quote, { ...groupTrade, bareLimitSupported: false }).some(item => item.level === 'error')).toBe(true);
+  });
+});
+
 describe('statika: listy a lišty nemají vlastní cestu k brokerovi (INV-UI-01)', () => {
   const source = (file: string) => readFileSync(`components/day/${file}`, 'utf8');
   const broker = /from ['"][^'"]*(tradovate|copier|relay|broker|LiveDesk|liveChartOrder|chartOrderEntry)[^'"]*['"]|fetch\(|supabase|invoke\(/i;
@@ -296,7 +309,7 @@ describe('statika: listy a lišty nemají vlastní cestu k brokerovi (INV-UI-01)
     expect(sheet.match(/onSubmit\(/g)).toHaveLength(1);
     expect(sheet).toMatch(/onSubmit\(submitDraft\)/);
     expect(sheet.match(/\.preview\(/g)).toHaveLength(1);
-    expect(sheet).toMatch(/'blockedReason' \| 'marketSupported' \| 'bareSupported' \| 'barePendingSupported' \| 'maxContracts' \| 'frontContract' \| 'scaleIn' \| 'preview'/);
+    expect(sheet).toMatch(/'blockedReason' \| 'marketSupported' \| 'bareSupported' \| 'barePendingSupported' \| 'bareLimitSupported' \| 'maxContracts' \| 'frontContract' \| 'scaleIn' \| 'preview'/);
   });
 
   it('list správy: jen sdílený runner (request = dvoukrok), nikdy přímé manage() ani run()', () => {

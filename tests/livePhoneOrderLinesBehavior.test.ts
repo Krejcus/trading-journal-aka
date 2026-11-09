@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { LiveChartPositionSummary } from '../lib/liveChartPosition';
+import { createLiveDeskCommands } from '../lib/liveDeskCommands';
+import { validateLeaderOrderManage } from '../lib/leaderOrderManage';
+import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import type { LeaderOrderManageResult } from '../lib/leaderOrderManage';
 
 // Overlay (DOM, souřadnice grafu) nahradí zachytávač: test volá jeho callbacky jako tah/klepnutí.
@@ -18,13 +22,13 @@ const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositi
 });
 const ack = (): LeaderOrderManageResult => ({ type: 'leader-order-managed', operationId: 'manage:x', action: 'move-stop', status: 'acknowledged', checkedAt: 1, blockers: [] });
 
-const render = (opts: { moveLimit?: boolean; summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
+const render = (opts: { moveLimit?: boolean; groupLimitMove?: boolean; groupLimitStateHash?: string; summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
   captured.props = null;
   const notices: string[] = [];
   const state = { pendingMove: null, setPendingMove: vi.fn(), busyRef: { current: opts.busy === true } };
   renderToStaticMarkup(React.createElement(LivePhoneOrderLines, {
     api: {} as never, state, summary: opts.summary ?? summary(), manage: (opts.manage ?? null) as never,
-    moveLimit: opts.moveLimit, canClose: opts.canClose ?? true, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
+    moveLimit: opts.moveLimit, groupLimitMove: opts.groupLimitMove, groupLimitStateHash: opts.groupLimitStateHash, canClose: opts.canClose ?? true, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
     ...(opts.guardAt ? { guardAt: opts.guardAt } : {}),
   }));
   return { props: captured.props!, notices, state };
@@ -90,6 +94,28 @@ describe('LIVE telefon: čáry obchodu a správa (napojení 2. 11.)', () => {
     expect(manage).toHaveBeenLastCalledWith('cancel-entry', 28975.5, undefined);
   });
 
+  it.each(['protected', 'target-only', 'bare'] as const)('group %s × -> actual shared desk bridge -> validator sends leader entry price, never SL or aggregate qty', async mode => {
+    const hash = 'groupclose12345678';
+    const accounts = [2, 4].map((qty, index) => ({ accountId: index + 1, role: index === 0 ? 'leader' : 'follower', expectedQuantity: qty, openQuantity: qty,
+      state: 'position', verifiedAt: 100, entry: { brokerOrderId: `entry-${index}`, quantity: qty, filledQuantity: qty, price: 28975.5, state: 'filled' },
+      stop: mode === 'protected' ? { brokerOrderId: `sl-${index}`, quantity: qty, filledQuantity: 0, price: 28984.25, state: 'working' } : null,
+      target: mode === 'bare' ? null : { brokerOrderId: `tp-${index}`, quantity: qty, filledQuantity: 0, price: 28958, state: 'working' } }));
+    const status = { capabilities: ['manual-group-limit-manage-v1'], group: { id: 'group-phone', leaderAccountId: 1, followers: [{ accountId: 2, mode: 'on-submit', multiplier: 2 }] },
+      controller: { groupLimitTrades: [{ groupId: 'group-phone', entryOperationId: 'entry:phoneclose001', symbol: 'MNQZ6', side: 'Sell', stateHash: hash, state: 'position', accounts }] } } as unknown as LocalCopierAgentStatus;
+    const relay = vi.fn(async (_route: string, _command: LeaderOrderManageCommand) => ({ result: ack() }));
+    const desk = createLiveDeskCommands({ status: () => ({ status, fresh: true }), relayId: () => 'relay-phone', relay,
+      newOperationId: () => 'manage:phoneclose001' });
+    const manage = vi.fn((action: string, _legacyStop: number, _newPrice?: number, seenHash?: string) => desk.manageGroupLimitPosition({
+      entryOperationId: 'entry:phoneclose001', symbol: 'MNQZ6', action: action as 'close-position', groupLimitStateHash: seenHash! }));
+    const rendered = render({ summary: summary({ quantity: 6, leader: { accountId: 1, quantity: 2, entry: 28975.5 }, accounts: 2, stop: mode === 'protected' ? 28984.25 : null, target: mode === 'bare' ? null : 28958 }),
+      groupLimitStateHash: hash, manage });
+    rendered.props.onCancel(lineOf(rendered.props, 'entry'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(manage).toHaveBeenCalledWith('close-position', 28975.5, undefined, hash);
+    const command = validateLeaderOrderManage(relay.mock.calls[0][1]);
+    expect(command.expect).toEqual({ price: 28975.5, quantity: 2 }); expect(command.groupLimitStateHash).toBe(hash);
+  });
+
   it('pojistky utažení/BE berou souhrn s kotací IBKR (guardAt), jako PC', async () => {
     const manage = vi.fn(async () => ack());
     // Bez ceny trhu z P&L brokera BE nejde; s čerstvou kotací IBKR 10 ticků v zisku ano.
@@ -129,6 +155,34 @@ describe('telefon: posun čekajícího limitu', () => {
     await Promise.resolve();
     expect(manage).toHaveBeenCalledExactlyOnceWith('move-limit', 28975.5, 28976);
     expect(state.setPendingMove).toHaveBeenCalledWith({ kind: 'entry', price: 28976, until: Infinity });
+  });
+  it('skupinový Limit s více kontrakty použije stejný phone bridge; samotná solo capability jej nepovolí', async () => {
+    const manage = vi.fn().mockResolvedValue({ ...ack(), action: 'move-limit' });
+    const group = { ...pending(), quantity: 6, accounts: 2, leader: { accountId: 1, quantity: 2, entry: 28975.5 } };
+    const solo = render({ summary: group, moveLimit: true, manage });
+    expect(lineOf(solo.props, 'entry').draggable).toBe(false);
+    solo.props.onChange(lineOf(solo.props, 'entry'), 'entry', 28976, lineOf(solo.props, 'entry'));
+    expect(manage).not.toHaveBeenCalled();
+    const ready = render({ summary: group, groupLimitMove: true, manage });
+    const line = lineOf(ready.props, 'entry');
+    expect(line.draggable).toBe(true);
+    ready.props.onChange(line, 'entry', 28976, line);
+    await Promise.resolve();
+    expect(manage).toHaveBeenCalledExactlyOnceWith('move-limit', 28975.5, 28976);
+  });
+  it('stejná cena leadera nepřebázuje skupinu během tahu: změna follower hash po rerenderu nic neodešle', async () => {
+    const manage = vi.fn().mockResolvedValue({ ...ack(), action: 'move-limit' });
+    const first = render({ summary: pending(), groupLimitMove: true, groupLimitStateHash: 'hashfirst12345678', manage });
+    const grabbed = lineOf(first.props, 'entry');
+    const second = render({ summary: pending(), groupLimitMove: true, groupLimitStateHash: 'hashnext12345678', manage });
+    second.props.onChange(lineOf(second.props, 'entry'), 'entry', 28976, grabbed);
+    await Promise.resolve();
+    expect(manage).not.toHaveBeenCalled();
+    expect(second.notices.join(' ')).toMatch(/během tažení změnil/);
+    const unchanged = render({ summary: pending(), groupLimitMove: true, groupLimitStateHash: 'hashfirst12345678', manage });
+    unchanged.props.onChange(lineOf(unchanged.props, 'entry'), 'entry', 28976, grabbed);
+    await Promise.resolve();
+    expect(manage).toHaveBeenCalledExactlyOnceWith('move-limit', 28975.5, 28976, 'hashfirst12345678');
   });
   it.each([false, true])('starý worker nebo vyplněná pozice nedovolí posun vstupu (%s)', async position => {
     const manage = vi.fn();

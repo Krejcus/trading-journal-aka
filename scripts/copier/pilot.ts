@@ -1426,6 +1426,7 @@ async function runLocalAgent(
       manualEntryScaleIn: process.env.ALPHATRADE_SCALE_IN?.trim().toLowerCase() === 'on',
       // Posun SL/TP nevyplněného vstupu a TP blíž k trhu: stejná pravidla jako přikoupení.
       manualPendingLegs: process.env.ALPHATRADE_PENDING_LEGS?.trim().toLowerCase() === 'on',
+      manualGroupLimits: process.env.ALPHATRADE_GROUP_LIMITS?.trim().toLowerCase() === 'on',
       bindPendingLegsGate: gate => { pendingLegsGate.current = gate; },
       store: {
         load: () => runtimeStore.load(),

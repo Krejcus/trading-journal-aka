@@ -192,12 +192,16 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
       ? { seenTerminalRejects: base.seenTerminalRejects.map(entry => ({ ...entry })) }
       : {}),
     ...(base.manualOrderActions
-      ? { manualOrderActions: base.manualOrderActions.map(entry => ({ ...entry, ...(entry.waiver ? { waiver: { ...entry.waiver } } : {}) })) }
+      ? { manualOrderActions: base.manualOrderActions.map(entry => ({ ...entry,
+        ...(entry.groupLimit ? { groupLimit: { ...entry.groupLimit, members: entry.groupLimit.members.map(member => ({ ...member })) } } : {}),
+        ...(entry.moveLimitLegs ? { moveLimitLegs: { ...entry.moveLimitLegs, ...(entry.moveLimitLegs.heldLegIds ? { heldLegIds: [...entry.moveLimitLegs.heldLegIds] } : {}) } } : {}), ...(entry.waiver ? { waiver: { ...entry.waiver } } : {}) })) }
       : {}),
     ...(base.manualEntries
       ? {
         manualEntries: base.manualEntries.map(entry => ({
           ...entry,
+          ...(entry.groupLimitMembers ? { groupLimitMembers: entry.groupLimitMembers.map(member => ({ ...member })) } : {}),
+          ...(entry.groupLimitParticipants ? { groupLimitParticipants: entry.groupLimitParticipants.map(member => ({ ...member })) } : {}),
           request: { ...entry.request },
           ...(entry.timing ? { timing: { ...entry.timing } } : {}),
           ...(entry.lateResult ? { lateResult: { ...entry.lateResult } } : {}),

@@ -26,6 +26,8 @@ export interface LivePhoneTradeBridge {
   marketSupported: boolean;
   bareSupported: boolean;
   /** Limit a Stop bez SL/TP (capability `manual-entry-bare-pending-v1`). */
+  /** Separate group capability grants bare LIMIT only. */
+  bareLimitSupported?: boolean;
   barePendingSupported?: boolean;
   /** Dílčí fill holého Limit/Stop: zbytek pracuje, má vlastní čáru s ×. */
   barePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
@@ -35,7 +37,7 @@ export interface LivePhoneTradeBridge {
   place: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   /** Pozice leadera na MNQ (z workeru); `bareEntryOperationId` = vlastní holý Market bez nohou. */
   position: LivePhonePosition | null;
-  attach: (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number }) => Promise<LeaderOrderManageResult>;
+  attach: (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number; groupLimitStateHash?: string | null }) => Promise<LeaderOrderManageResult>;
   /** Flatten celé manual-only skupiny (jediný DEMO účet) safety cestou; vrací text výsledku. */
   flatten: () => Promise<string>;
   /**
@@ -45,9 +47,12 @@ export interface LivePhoneTradeBridge {
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  /** Pending protected LIMIT group evidence is complete; separate from solo support. */
+  groupLimitMove?: boolean;
+  groupLimitStateHash?: string | null;
   /** Čekající Limit/Stop bez SL/TP jde táhnout. */
   moveBareEntry?: boolean;
-  manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
   /** × u pozice: worker umí zavřít a kopírka je čerstvě zapnutá (ne shadow) — jako PC. */
   closeSupported?: boolean;
   /** Průměrný vstup leadera od workeru (BE). */

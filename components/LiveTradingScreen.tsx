@@ -84,7 +84,7 @@ import {
 } from '../lib/liveTradeTarget';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
-import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
+import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveGroupLineSnapshotChanged, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { liveDisplayOpenPnl, liveShownOpenPnl, withIbkrTightenMark } from '../lib/liveChartPosition';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
@@ -176,7 +176,7 @@ interface Props {
   onTargetChange?: (target: LiveTradeTarget) => void;
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
-  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
   /** Průměrný vstup spravovaného obchodu leadera od workeru (SL na BE). */
   manageEntryAvgPrice?: number | null;
   /** Worker umí zavřít obchod z grafu (× u pozice). */
@@ -184,6 +184,8 @@ interface Props {
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu (`manual-order-pending-legs-v1`). */
   managePendingLegsSupported?: boolean;
   manageMoveLimitSupported?: boolean;
+  manageGroupLimitMoveSupported?: boolean;
+  manageGroupLimitStateHash?: string | null;
   /** Čekající Limit/Stop bez SL/TP jde táhnout (capability `manual-order-move-bare-entry-v1`). */
   manageMoveBareEntrySupported?: boolean;
   /** Worker umí nativní Market ručního vstupu (`manual-entry-market-v1`). */
@@ -198,6 +200,7 @@ interface Props {
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); výchozí false. */
   entryBareSupported?: boolean;
   entryBarePendingSupported?: boolean;
+  entryBareLimitSupported?: boolean;
   /** Dílčí fill holého Limit/Stop: zbytek pracuje a kreslí se čarou s × jako čekající přikoupení. */
   entryBarePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null. */
@@ -294,8 +297,8 @@ function useMinuteNow() {
 
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
-  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBarePendingSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
+  group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
   bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
 }) => {
@@ -445,6 +448,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   const liveBusyRef = manageState.busyRef;
   const manageRunner = useLiveManageRunner({
     manage: onManageEntry,
+    groupLimitStateHash: manageGroupLimitStateHash,
     state: manageState,
     onNotice: notice => setLineNotice(notice),
     landed: { entry: summary?.entry, stopLoss: summary?.stop, takeProfit: summary?.target },
@@ -603,7 +607,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   sendBareLegRef.current = legTrade && onBareLeg ? intent => {
     if (intent.kind === 'move') manageState.setPendingMove({ kind: intent.leg, price: intent.price, until: Number.POSITIVE_INFINITY });
     void runLiveBareLeg({
-      busyRef: manageState.busyRef, send: () => onBareLeg(legTrade, intent), intent, busyText: LIVE_COMMAND_BUSY_TEXT,
+      busyRef: manageState.busyRef, send: () => onBareLeg(legTrade, intent), intent, groupLimitStateHash: manageGroupLimitStateHash, busyText: LIVE_COMMAND_BUSY_TEXT,
       report: notice => {
         if (intent.kind === 'move') manageState.setPendingMove(current => (notice.tone === 'ok' && current ? { ...current, until: Date.now() + 5_000 } : null));
         setLineNotice({ at: Date.now(), ...notice });
@@ -657,6 +661,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     manageable: Boolean(onManageEntry),
     pendingLegs: managePendingLegsSupported === true,
     moveLimit: manageMoveLimitSupported === true,
+    groupLimitMove: manageGroupLimitMoveSupported === true,
+    groupLimitStateHash: manageGroupLimitStateHash,
     moveBareEntry: manageMoveBareEntrySupported === true,
     attachChips,
     bareLegs: legTrade != null,
@@ -668,7 +674,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
@@ -800,15 +806,15 @@ const LiveTradingScreen: React.FC<Props> = ({
         const snapped = snapToTick(price, INSTRUMENT.tickSize);
         const current = kind === 'entry' ? summary.entry : kind === 'stopLoss' ? summary.stop : summary.target;
         // „Co jsem viděl“ = cena při chycení čáry; změnila-li se během tahu, nic neposílat.
-        if (startLine && startLine.price !== current) {
+        if ((startLine && startLine.price !== current) || liveGroupLineSnapshotChanged(startLine, manageGroupLimitStateHash)) {
           setLineNotice({ at: Date.now(), tone: 'bad', text: `${kind === 'entry' ? 'Limit' : kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.` });
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true, moveBareEntry: manageMoveBareEntrySupported === true });
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true, groupLimitMove: manageGroupLimitMoveSupported === true, moveBareEntry: manageMoveBareEntrySupported === true });
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
-        if (kind !== 'entry' && sendBareLegRef.current && current != null) { sendBareLegRef.current({ kind: 'move', leg: kind, price: snapped, current }); return; }
-        void runLiveManage(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
+        if (kind !== 'entry' && sendBareLegRef.current && current != null) { sendBareLegRef.current({ kind: 'move', leg: kind, price: snapped, current, ...(startLine?.groupLimitStateHash ? { groupLimitStateHash: startLine.groupLimitStateHash } : {}) }); return; }
+        void runLiveManage(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind, startLine?.groupLimitStateHash);
         return;
       }
       if (line.ownerId === LIVE_ATTACH_OWNER) {
@@ -850,7 +856,8 @@ const LiveTradingScreen: React.FC<Props> = ({
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
         // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
         // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (worker ho porovná znovu).
-        if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', summary.stop ?? entryScaleIn?.stopLoss);
+        const closeReference = line.groupLimitStateHash ? summary?.leader?.entry ?? summary?.entry : summary?.stop ?? entryScaleIn?.stopLoss;
+        if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', closeReference, undefined, undefined, line.groupLimitStateHash);
         return;
       }
       // × u „· přidat“ vyhodí jen rozpracovanou nohu z návrhu; u brokera nic.
@@ -873,19 +880,20 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (sendBareLegRef.current && summary.stop != null) { sendBareLegRef.current({ kind: 'move', leg: 'stopLoss', price: be.price, current: summary.stop }); return; }
       void runLiveManage('move-stop', summary.stop, be.price, 'stopLoss');
     },
-    onOrderLineAddBracket: (line, kind, price) => {
+    onOrderLineAddBracket: (line, kind, price, startLine) => {
       // „+ SL“ / „+ TP“ u holé pozice: jen návrh nohy, odchází až tlačítkem na čáře.
       if (line.ownerId === LIVE_POSITION_OWNER && sendBareLegRef.current) {
         // Odchází jen puštění čipu na cenu; samotný klik nic neposílá.
         if (price == null || !summary) { setLineNotice({ at: Date.now(), tone: 'warn', text: 'Čip táhni na cenu, kde chceš mít nohu.' }); return; }
-        sendBareLegRef.current({ kind: 'add', leg: kind, price: snapToTick(price, INSTRUMENT.tickSize), stop: summary.stop, target: summary.target });
+        if (liveGroupLineSnapshotChanged(startLine ?? line, manageGroupLimitStateHash)) { setLineNotice({ at: Date.now(), tone: 'bad', text: 'Stav účtů se během tažení změnil — nic se neodeslalo.' }); return; }
+        sendBareLegRef.current({ ...(startLine?.groupLimitStateHash ? { groupLimitStateHash: startLine.groupLimitStateHash } : {}), kind: 'add', leg: kind, price: snapToTick(price, INSTRUMENT.tickSize), stop: summary.stop, target: summary.target });
         return;
       }
       if (line.ownerId === LIVE_POSITION_OWNER) { addChartAttachLegRef.current(kind, price); return; }
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [manageMoveBareEntrySupported, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [manageMoveBareEntrySupported, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít
@@ -1139,6 +1147,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             // U4/U8/U10 (3. 11. 2026): jen podklady panelu; příkazy dál jen přes callbacky desku.
             entryBareSupported={entryBareSupported}
             entryBarePendingSupported={entryBarePendingSupported}
+            entryBareLimitSupported={entryBareLimitSupported}
             entryBareEntry={entryBareEntry}
             entryLeaderPosition={entryLeaderPosition}
             {...(onAttachBrackets ? { onAttachBrackets } : {})}

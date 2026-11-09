@@ -1,9 +1,10 @@
 import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
+import { groupLimitOutcomeNotice } from '../../lib/groupLimitUiNotice';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import BacktestOrderLinesOverlay from '../BacktestOrderLinesOverlay';
 import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../../services/backtestOrderLines';
-import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
+import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveGroupLineSnapshotChanged, liveLineMoveBlockReason, livePositionChartLines } from '../../lib/liveChartOrderLines';
 import type { LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib/leaderOrderManage';
 import { LIVE_ATTACH_OWNER, LIVE_DRAFT_ID, liveAttachChartLines, liveDraftChartLines, snapToTick, type LiveAttachLegs, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
@@ -17,7 +18,7 @@ const TICK = 0.25;
 const POINT_VALUE = 2;
 
 /** Správa obchodu leadera z telefonu — stejná cesta jako PC (`onManageEntry`); dodá ji datová vrstva. */
-export type LivePhoneManage = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+export type LivePhoneManage = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
 
 type PendingMove = { kind: 'entry' | 'stopLoss' | 'takeProfit'; price: number; until: number };
 /**
@@ -132,7 +133,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, groupLimitMove = false, groupLimitStateHash = null, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -150,6 +151,8 @@ export function LivePhoneOrderLines({
   /** Worker umí SL/TP nevyplněného vstupu a TP blíž k trhu. */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  groupLimitMove?: boolean;
+  groupLimitStateHash?: string | null;
   moveBareEntry?: boolean;
   /** Holá pozice: × na čáře (jen s nabídkou workeru); id cíle je v id čáry, klíč jde rodiči. */
   bareClose?: { entryOperationId: string; key: string } | null;
@@ -210,6 +213,8 @@ export function LivePhoneOrderLines({
     pendingLegs: pendingLegs === true,
     bareClose: bareEntryId ? { entryOperationId: bareEntryId } : null,
     moveLimit,
+    groupLimitMove,
+    groupLimitStateHash,
     moveBareEntry,
     bareLegs: bareLegOn,
     attachChips: attachOn && guardSummary.kind === 'position' ? {
@@ -222,7 +227,7 @@ export function LivePhoneOrderLines({
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd,
-  }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
+  }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
@@ -234,17 +239,18 @@ export function LivePhoneOrderLines({
     ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
   ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, onManage, positionLines, guardSummary?.kind]);
 
-  const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'entry' | 'stopLoss' | 'takeProfit') => {
+  const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'entry' | 'stopLoss' | 'takeProfit', seenGroupLimitStateHash?: string) => {
     if (!manage) return;
+    const groupToken = seenGroupLimitStateHash ?? groupLimitStateHash;
     if (expect == null) { onNotice('Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.'); return; }
     if (busyRef.current) { onNotice(LIVE_MANAGE_BUSY_TEXT); return; }
     busyRef.current = true;
     if (move && newPrice != null) setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
     try {
-      const result = await manage(action, expect, newPrice);
+      const result = seenGroupLimitStateHash ? await manage(action, expect, newPrice, seenGroupLimitStateHash) : await manage(action, expect, newPrice);
       if (result.status !== 'acknowledged') setPendingMove(null);
       else setPendingMove(current => (current ? { ...current, until: Date.now() + 5_000 } : current));
-      onNotice(result.status === 'acknowledged'
+      onNotice(groupToken ? groupLimitOutcomeNotice(action, result, Date.now()).text : result.status === 'acknowledged'
         ? (result.reason && /zastavila|spustil|vyplnil|skončil|ne tímto|Flatten/.test(result.reason) ? result.reason
           : action === 'move-limit' ? 'Limit posunut; SL a TP ukazuje graf podle brokera.'
           : action === 'cancel-entry' ? 'Vstup zrušen; kopírka zruší kopie.'
@@ -260,19 +266,19 @@ export function LivePhoneOrderLines({
     } finally {
       busyRef.current = false;
     }
-  }, [busyRef, manage, onNotice, setPendingMove]);
+  }, [busyRef, manage, groupLimitStateHash, onNotice, setPendingMove]);
 
   const sendLeg = useCallback((intent: LiveBareLegIntent) => {
     if (!bareLeg) return;
     if (intent.kind === 'move') setPendingMove({ kind: intent.leg, price: intent.price, until: Number.POSITIVE_INFINITY });
     void runLiveBareLeg({
-      busyRef, send: () => bareLeg(intent), intent, busyText: LIVE_MANAGE_BUSY_TEXT,
+      busyRef, send: () => bareLeg(intent), intent, groupLimitStateHash, busyText: LIVE_MANAGE_BUSY_TEXT,
       report: notice => {
         if (intent.kind === 'move') setPendingMove(current => (notice.tone === 'ok' && current ? { ...current, until: Date.now() + 5_000 } : null));
         onNotice(notice.text);
       },
     });
-  }, [bareLeg, busyRef, onNotice, setPendingMove]);
+  }, [bareLeg, busyRef, groupLimitStateHash, onNotice, setPendingMove]);
 
   // Připojený i bez čar: pojistka změny nabídky musí přežít stav bez čáry (čekající → nic → pozice).
   return (
@@ -291,12 +297,12 @@ export function LivePhoneOrderLines({
         if (line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
         const snapped = snapToTick(price, TICK);
         const current = kind === 'entry' ? summary.entry : kind === 'stopLoss' ? summary.stop : summary.target;
-        if (startLine && startLine.price !== current) { onNotice(`${kind === 'entry' ? 'Limit' : kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.`); return; }
+        if ((startLine && startLine.price !== current) || liveGroupLineSnapshotChanged(startLine, groupLimitStateHash)) { onNotice(`${kind === 'entry' ? 'Limit' : kind === 'stopLoss' ? 'SL' : 'TP'} se během tažení změnil — nic se neodeslalo.`); return; }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardAt?.(Date.now()) ?? summary, kind, snapped, { pendingLegs: pendingLegs === true || bareLeg != null, moveLimit, moveBareEntry });
+        const blocked = liveLineMoveBlockReason(guardAt?.(Date.now()) ?? summary, kind, snapped, { pendingLegs: pendingLegs === true || bareLeg != null, moveLimit, groupLimitMove, moveBareEntry });
         if (blocked) { onNotice(blocked); return; }
-        if (bareLeg && kind !== 'entry' && current != null) { sendLeg({ kind: 'move', leg: kind, price: snapped, current }); return; }
-        void run(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind);
+        if (bareLeg && kind !== 'entry' && current != null) { sendLeg({ kind: 'move', leg: kind, price: snapped, current, ...(startLine?.groupLimitStateHash ? { groupLimitStateHash: startLine.groupLimitStateHash } : {}) }); return; }
+        void run(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind, startLine?.groupLimitStateHash);
       }}
       onCancel={line => {
         if (isLiveDisplayOnlyLine(line)) return;
@@ -316,7 +322,7 @@ export function LivePhoneOrderLines({
         }
         if (line.ownerId !== LIVE_POSITION_OWNER || line.kind !== 'entry' || !summary) return;
         if (summary.kind === 'pending') void run('cancel-entry', summary.leader?.entry);
-        else void run('close-position', summary.stop ?? closeExpect);
+        else void run('close-position', line.groupLimitStateHash ? summary.leader?.entry ?? summary.entry : summary.stop ?? closeExpect, undefined, undefined, line.groupLimitStateHash);
       }}
       onAction={(line, actionId) => {
         if (isLiveDisplayOnlyLine(line) || line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
@@ -329,11 +335,12 @@ export function LivePhoneOrderLines({
         if (bareLeg && summary.stop != null) { sendLeg({ kind: 'move', leg: 'stopLoss', price: be.price, current: summary.stop }); return; }
         void run('move-stop', summary.stop, be.price, 'stopLoss');
       }}
-      onAddBracket={(line, kind, price) => {
+      onAddBracket={(line, kind, price, startLine) => {
         if (line.ownerId === LIVE_POSITION_OWNER && bareLeg) {
           // Odchází jen puštění čipu na cenu; samotné klepnutí nic neposílá.
           if (price == null || !summary) { onNotice('Čip táhni na cenu, kde chceš mít nohu.'); return; }
-          sendLeg({ kind: 'add', leg: kind, price: snapToTick(price, TICK), stop: summary.stop, target: summary.target });
+          if (liveGroupLineSnapshotChanged(startLine ?? line, groupLimitStateHash)) { onNotice('Stav účtů se během tažení změnil — nic se neodeslalo.'); return; }
+          sendLeg({ ...(startLine?.groupLimitStateHash ? { groupLimitStateHash: startLine.groupLimitStateHash } : {}), kind: 'add', leg: kind, price: snapToTick(price, TICK), stop: summary.stop, target: summary.target });
           return;
         }
         if (line.ownerId === LIVE_POSITION_OWNER) { attach?.onLeg(kind, price); return; }

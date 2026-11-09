@@ -288,6 +288,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-09 — Codex: skupinový Limit dokončený lokálně, release čeká
+
+- Dokončen vlastní skupinový Limit: více kontraktů do stávajících capů, posun pending chráněného i holého Limitu, bare Limit přes jedinou ordinary copy cestu, cancel remainderů, add/remove/move SL/TP, nativní OCO promotion a exact-symbol native group close. PC a telefon sdílejí bridge, immutable seen hash a skutečné množství leadera. Market/Stop/scale-in se novým group opt-inem neotevírají.
+- Per-account durable WAL a ownership/closed tombstones, přesné původní OSO i nové leg bindingy, monolitický sync prewrite fence po async čteních, ochrana tag/untagged pre-ACK eventů před duplicitním mirror, phase-aware promotion a konzervativní restart/unknown. P7 unknown/fill/read failure/ingress nevyvolají automatickou kompenzaci. Legacy own/tracked/aggregate příkaz neobejde nový kontrakt ani po vypnutí flagu.
+- Závěrečná celá sada **8 233 passed, 1 todo; 765 passed souborů, 1 skipped**, bez selhání. TypeScript s 4GB heapem čistý, standardní web i native bundle/verify čisté, tři worker bundly prošly. Cílené nové jádro 40/40, UI 351/351. Nezávislý copier-design-critic prošel všech 26 bodů: **OK S VÝHRADAMI pro lokální commit**, žádný otevřený P0/P1.
+- Větev `codex/group-limit-complete-20261109`, základ `c936c450`. Vývoj a testy v `/private/tmp/alphatrade-group-limit-20261109`; cílem trvalého uložení hotového checkoutu je `~/alphatrade-worktrees/group-limit-complete-20261109`. Podrobnosti a rollout v `docs/reviews/group-limit-complete-20261109.md`.
+- **Tento balík nebyl pushnut, nasazen ani nainstalován.** Beze změny DB/Vercel env/workeru/iPhonu/Lucid účtů. Žádný ARM ani brokerový zápis. `--group-limits on` je samostatný opt-in, výchozí off; skutečná skupinová broker conformance a nová živá latence zatím neověřeny. Pro nasazení je nutný explicitní souhlas podle AGENTS.md, předem záloha a čerstvá OFF/flat/no-working/fronta/reconcile kontrola. Není souhlas s automatickým testováním na Lucidu.
+
+### 2026-11-09 — Codex: kompletní skupinový Limit — lokální rozpracování
+
+- Filip požádal dokončit více kontraktů, posun čekajícího Limitu, holý Limit a následnou správu SL/TP pro kopírku na PC/iPhonu. Kvůli starému a rozpracovanému Documents checkoutu izolovaný čistý clone `/private/tmp/alphatrade-group-limit-20261109`, větev `codex/group-limit-complete-20261109`, základ GitHub main `c936c450`. `origin` tohoto clone míří na lokální zdroj; GitHub remote se jmenuje `github`. Zdroj Documents ani provozní Lucid runtime se nemění.
+- Návrh a podmínky oponentury v `docs/reviews/group-limit-complete-20261109.md`. Nové group capabilities/contract a opt-in jsou oddělené od sólo DEMO Market/Stop/scale-in. Capy účtů se nezvedají. Implementace a regresní testy probíhají; první build a cílené testy prošly, zatím to NENÍ finální release ani broker conformance.
+- Oponentura odhalila a průběžně opravuje zejména ztrátu původního hash při tahu, cancel0 wire validaci, fallback při ztrátě capability, OCO pre-ACK child tag/linkage, per-await brzdové fence a vlastnictví follower pozice po ověřeném flat. Před commitem nutná závěrečná oponentura a plné kontroly.
+- Nic nepushnuto, nenasazeno, neinstalováno; žádný ARM ani brokerový zápis. Dosavadní provozní Lucid skupina nesmí být dotčena lokálními testy. Schválené automatické obchodní testy z minulosti byly jen na bezplatném DEMO61038658, nikoli Lucid prop účtech.
+
 ### 2026-11-08 — Backtesting: nasazení změn z dnešního preview
 Na Filipův pokyn je webový release založený na produkčním `27649a6e`. Obsahuje
 nové sessions s metrikami celých uzavřených pozic, formulář a review, Go To

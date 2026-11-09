@@ -1,4 +1,8 @@
 import { isRetiredDurableGroup } from './copierRetiredGroup';
+import type { GroupLimitTradeState } from '../lib/groupLimitProtocol';
+import { groupLimitsEnabled, groupProtectedLimitMoveProblem, projectGroupLimitTrade, mergeGroupLimitMembers, type GroupLimitMemberRecord } from './groupLimitLifecycle';
+import { executeGroupLimitManagement, type GroupLimitMemberSnapshot } from './groupLimitLifecycleExecution';
+import { stableHash64 } from './copierKeys';
 import {
   brokerRiskEquity,
   isOpenOrderStatus,
@@ -27,7 +31,7 @@ import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS, MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS, evaluateManualEntryPreview, manualEntryContractCap, MANUAL_ENTRY_END_RESERVE_MS, MANUAL_ENTRY_MARKET_SLIPPAGE_TICKS, MANUAL_ENTRY_RISK_MAX_AGE_MS, manualEntryBarePendingBlockers,
   manualEntryMarketQuoteBlockers, workerMarketPrice, manualStopLossUsd, realizedLossHeadroom, remainingLossHeadroom, type ManualEntryAccountInputs, type ManualEntryWorkerQuote } from './manualEntryPreview';
 import { runnerUnmappedReplaceAccounts } from './copierRunner';
-import { type LeaderEntryPreviewCommand, type LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
+import { copyGroupConfigHash, type LeaderEntryPreviewCommand, type LeaderEntryPreviewResult } from '../lib/leaderEntryPreview';
 import { moveLimitLegsVerdict, moveLimitRiskEntry, pendingLegSideProblem, type LeaderOrderManageCommand, type LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import {
   bareCloseLotBlockers,
@@ -270,6 +274,7 @@ export interface CopierStuckOperation {
 }
 
 export interface CopierControllerStatus {
+  groupLimitTrades?: GroupLimitTradeState[];
   /**
    * Obchody leadera, které teď jde z grafu spravovat (fáze 2a/2b): vlastní
    * vstup nebo kopírkou sledované OSO/bracket s živými nohami. Jen pro výběr
@@ -972,6 +977,9 @@ export interface CopierRuntimeController {
   manualEntryScaleInEnabled?(): boolean;
   /** Controller povoluje posun nohou nevyplněného vstupu a TP blíž k trhu. */
   manualPendingLegsEnabled?(): boolean;
+  manualGroupLimitMoveEnabled?(): boolean;
+  manualGroupBareLimitEnabled?(): boolean;
+  manualGroupLimitManageEnabled?(): boolean;
   /** C8: × zavřít holý Market bez SL/TP umí tahle skupina (sólo: manual-only local-only DEMO bez followerů). */
   manualBareCloseEnabled?(): boolean;
   /**
@@ -1016,6 +1024,7 @@ export interface BootstrapCopierOptions {
    * Platí jen pro stejnou sólo skupinu jako přikoupení (`scaleInEnabled`).
    */
   manualPendingLegs?: boolean;
+  manualGroupLimits?: boolean;
   /** Předá adaptéru dynamickou bránu držených Modify (`promoteHeldModify`): jen leader zapnuté sólo skupiny. */
   bindPendingLegsGate?: (gate: (accountId: number) => boolean) => void;
   /**
@@ -3828,9 +3837,73 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const pendingLegsOn = () => scaleInEnabled({
     optIn: options.manualPendingLegs === true, group: retiredGroup ? null : group, brokerEnvironment: gate.brokerEnvironment,
   });
-  options.bindPendingLegsGate?.(accountId => pendingLegsOn() && accountId === group.leaderAccountId);
+  options.bindPendingLegsGate?.(accountId => (pendingLegsOn() && accountId === group.leaderAccountId)
+    || (groupLimitsOn() && (accountId === group.leaderAccountId || group.followers.some(follower => follower.accountId === accountId && follower.enabled !== false && follower.mode === 'on-submit'))));
   /** Sólo skupina (C8, návrh §0.2): manual-only local-only DEMO bez followerů; smazaná skupina nikdy. */
   const soloGroupOn = () => soloManualGroup({ group: retiredGroup ? null : group, brokerEnvironment: gate.brokerEnvironment });
+  // A failed durable veto write must still prevent this process's later C12 heartbeat cleanup.
+  // Restart with an incomplete sealed fan-out is conservative until explicit reconciliation.
+  const groupLimitCleanupVeto = new Set((currentRuntime().state.safety.manualEntries ?? []).filter(entry => entry.groupLimitCleanupBlocked
+    || entry.groupLimitContract === 1 && entry.bare && [...currentRuntime().outbox.values()].some(copy => copy.leaderOrderId === entry.entryBrokerOrderId && copy.status !== 'acknowledged')).map(entry => entry.operationId));
+  const groupCloseOwnsSymbol = (symbol: string) => (currentRuntime().state.safety.manualOrderActions ?? []).some(action => action.groupLimit && action.action === 'close-position' && action.symbol === symbol && (action.status === 'sending' || action.status === 'unknown'));
+  const groupLimitsOn = () => groupLimitsEnabled(options.manualGroupLimits === true, retiredGroup ? null : group);
+  const groupLimitRoute = (accountId: number): number | undefined => { try { return broker.routeEpoch?.(accountId) ?? connectionSyncGeneration; } catch { return undefined; } };
+  const groupLimitTrade = (entryOperationId: string): GroupLimitTradeState | null => {
+    if (!groupLimitsOn()) return null;
+    const entry = manualEntryRecords().find(record => record.operationId === entryOperationId);
+    if (!entry) return null;
+    return projectGroupLimitTrade({ group, entry, state: currentRuntime().state, oso: currentRuntime().osoOutbox.values(), outbox: currentRuntime().outbox.values(),
+      orders: accountId => liveOrdersByAccount.get(accountId),
+      ownsPosition: (accountId, entryId, net) => groupMemberOwnsPosition(entry, accountId, entryId, net, [...(liveOrdersByAccount.get(accountId)?.values() ?? [])]),
+      net: (accountId, symbol) => positionsByAccount.has(accountId) ? positionsByAccount.get(accountId)?.get(symbol) ?? 0 : null,
+      observed: (accountId, id) => observedOrderStatusesByAccount.get(accountId)?.get(id),
+      filled: (accountId, id) => observedOrderFilledByAccount.get(accountId)?.get(id) ?? 0,
+      route: accountId => groupLimitRoute(accountId),
+      verifiedAt: lastAuthoritativeReadAt, externalFence: `${safetyGeneration}:${configurationControlVersion}:${connectionSyncGeneration}`,
+      pendingOperationId: (currentRuntime().state.safety.manualOrderActions ?? []).find(action => action.entryOperationId === entryOperationId && UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status))?.operationId,
+    });
+  };
+  const groupMemberOwnsPosition = (entry: CopierManualEntryRecord, accountId: number, entryId: string, net: number, orders: readonly BrokerOrder[]): boolean => {
+    if (net === 0) return true;
+    const saved = entry.groupLimitMembers?.find(member => member.accountId === accountId && member.entryId === entryId);
+    if (saved?.closedAt != null || entry.closedAt != null || Math.sign(net) !== (entry.request.side === 'Buy' ? 1 : -1)) return false;
+    const runtime = currentRuntime();
+    const settled = new Set(runtime.state.safety.settledCopierEntries ?? []);
+    const copies = [...runtime.outbox.values()].filter(copy => copy.brokerOrderId === entryId && copy.request.accountId === accountId);
+    const oso = [...runtime.osoOutbox.values()].filter(copy => copy.entryBrokerOrderId === entryId && copy.request.accountId === accountId);
+    if (copies.some(copy => settled.has(`o:${copy.key}`)) || oso.some(copy => settled.has(`s:${copy.key}`))) return false;
+    const epoch = (runtime.state.safety.leaderExposureEpochs ?? []).find(epoch => epoch.groupId === group.id && epoch.leaderAccountId === group.leaderAccountId
+      && epoch.symbol === entry.request.symbol && epoch.leaderEntryOrderIds.includes(entry.entryBrokerOrderId!) && unfinishedLeaderFlatPhase(epoch.phase));
+    const participant = epoch?.followers.find(member => member.accountId === accountId && member.copyLineage === 'confirmed' && member.confirmedNetQuantity === net);
+    const liveExact = accountId === group.leaderAccountId ? entryFillAverage(entry.request.symbol, entryId) != null : (copierEntryFillTotals.get(entryId) ?? 0) >= Math.abs(net);
+    const durableExact = saved?.openedAt != null && (saved.filledQuantity ?? 0) >= Math.abs(net);
+    if (!participant && !liveExact && !durableExact) return false;
+    const ids = new Set([entryId, ...(saved ? [saved.stopId, saved.targetId, saved.oldLegId, saved.newStopId, saved.newTargetId] : [])].filter((id): id is string => !!id));
+    for (const action of runtime.state.safety.manualOrderActions ?? []) if (action.entryOperationId === entry.operationId) for (const member of action.groupLimit?.members ?? []) if (member.accountId === accountId) {
+      for (const id of [member.entryId, member.stopId, member.targetId, member.oldLegId, member.newStopId, member.newTargetId]) if (id) ids.add(id);
+    }
+    for (const copy of oso) for (const id of [copy.firstBrokerOrderId, copy.secondBrokerOrderId]) if (id) ids.add(id);
+    if (accountId === group.leaderAccountId) for (const id of [entry.stopBrokerOrderId, entry.targetBrokerOrderId]) if (id) ids.add(id);
+    // A historical ACK with the same net is not evidence: any unowned fill since this episode
+    // (including an unknown timestamp) invalidates ownership of the current position.
+    return !orders.some(order => order.symbol === entry.request.symbol && (order.filledQuantity > 0 || order.status === 'filled') && !ids.has(order.brokerOrderId)
+      && (!Number.isFinite(order.updatedAt) || order.updatedAt <= 0 || order.updatedAt >= entry.createdAt));
+  };
+  const groupBarePendingOwned = (accountId: number, symbol: string, net: number): boolean => {
+    if (!groupLimitsOn() || net === 0) return false;
+    return manualEntryRecords().some(entry => {
+      if (entry.groupLimitContract !== 1 || entry.groupLimitConfigHash !== copyGroupConfigHash(group) || !entry.bare || entry.request.symbol !== symbol || entry.closedAt != null || !entry.entryBrokerOrderId) return false;
+      const leader = liveOrdersByAccount.get(entry.request.accountId)?.get(entry.entryBrokerOrderId);
+      const member = entry.groupLimitMembers?.find(member => member.accountId === accountId);
+      const copy = member ? [...currentRuntime().outbox.values()].find(copy => copy.leaderOrderId === entry.entryBrokerOrderId && copy.request.accountId === accountId && copy.brokerOrderId === member.entryId && copy.status === 'acknowledged') : null;
+      return !!leader && isOpenOrderStatus(leader.status) && !!member && member.closedAt == null && !!copy
+        && member.routeEpoch === groupLimitRoute(accountId)
+        && entry.groupLimitParticipants?.some(saved => saved.accountId === accountId && saved.quantity === copy.request.quantity && saved.quantity === member.quantity)
+        && (currentRuntime().state.links.get(entry.entryBrokerOrderId) ?? []).some(link => link.accountId === accountId && link.brokerOrderId === member.entryId)
+        && Math.max(member.filledQuantity ?? 0, observedOrderFilledByAccount.get(accountId)?.get(member.entryId) ?? 0) === Math.abs(net)
+        && Math.sign(net) === (entry.request.side === 'Buy' ? 1 : -1);
+    });
+  };
   /** Limit pohybu trhu proti viděné ceně u Marketu: sólo DEMO má širší, ostatní skupiny beze změny. */
   const manualMarketDriftTicks = () => (soloGroupOn() ? MANUAL_ENTRY_SOLO_MARKET_MAX_QUOTE_DRIFT_TICKS : MANUAL_ENTRY_MARKET_MAX_QUOTE_DRIFT_TICKS);
   const scaleInRecords = (): ScaleInRecord[] => manualEntryRecords().map(record => ({
@@ -4884,6 +4957,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     for (const record of manualEntryRecords()) {
       // Holý Market je vyplněný hned. Holý Limit/Stop čeká jako každý čekající vstup a platí pro něj stejné zrušení (C12).
       if (record.request.accountId !== leader || (record.bare === true && !isBarePendingEntry(record))) continue;
+      if (record.groupLimitCleanupBlocked || groupLimitCleanupVeto.has(record.operationId)) continue;
       const entryId = record.entryBrokerOrderId ?? record.lateResult?.entryBrokerOrderId;
       if (!entryId) continue;
       const kind = record.scaleIn === true ? 'add' as const : 'from-flat' as const;
@@ -5241,8 +5315,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...(leader.stopLoss != null && leader.takeProfit != null ? { stopLoss: leader.stopLoss, takeProfit: leader.takeProfit } : {}),
     };
     const bare = request.stopLoss == null && request.takeProfit == null;
+    if (command.groupLimitContract === 1 && (!groupLimitsOn() || request.orderType !== 'Limit' || command.position)) return blocked([{ code: 'group-limit-unsupported', text: 'Skupinový kontrakt vyžaduje povolený Limit bez přikupování.' }]);
     // Holý Limit/Stop jen v sólo DEMO skupině. Kopie followerům by šla bez ochrany.
-    if (bare && request.orderType !== 'Market' && !soloGroupOn()) {
+    if (bare && request.orderType !== 'Market' && !soloGroupOn() && !(groupLimitsOn() && command.groupLimitContract === 1 && request.orderType === 'Limit')) {
       return blocked([{ code: 'bare-not-market', text: 'Limit a Stop bez SL/TP jdou jen na ručním DEMO účtu bez followerů.' }]);
     }
     // Přikoupení: epizoda deníku pozice, do které se přikupuje (fill v jiné = nový obchod = incident).
@@ -5252,6 +5327,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await persistManualEntry(operationId, () => ({
       operationId, payloadHash: command.payloadHash, tag, status: 'sending', createdAt, updatedAt: createdAt, request,
       ...(bare ? { bare: true as const } : {}),
+      ...(command.groupLimitContract === 1 && groupLimitsOn() ? { groupLimitContract: 1 as const, groupLimitConfigHash: copyGroupConfigHash(group),
+        groupLimitParticipants: [{ accountId: leader.accountId, quantity: leader.quantity }, ...(preview.wouldPlace?.followers ?? []).map(follower => ({ accountId: follower.accountId, quantity: follower.quantity }))] } : {}),
       ...(command.position ? { scaleIn: true as const, ...(scaleInBase?.episodeId ? { baseEpisodeId: scaleInBase.episodeId } : {}) } : {}),
       timing: { ...(timing.queuedAt != null ? { queuedAt: timing.queuedAt } : {}), startedAt: timing.startedAt },
     }));
@@ -5985,6 +6062,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (hint.brokerRejection && !cancelEntryRejections.has(operationId)) cancelEntryRejections.set(operationId, hint.brokerRejection.slice(0, 200));
     const record = manualOrderActionRecords().find(item => item.operationId === operationId && item.status === 'unknown');
     // Doplnění nohou (2. 11.) se automaticky nedořešuje: incident + auditovaný waiver.
+    if (record?.groupLimit) {
+      if (record.action === 'move-limit' && await verifyGroupLimitMove(record)) await persistManualOrderAction(operationId, current => ({ ...current!, status: 'acknowledged', updatedAt: clock() }));
+      return;
+    }
     if (!record || group.leaderAccountId == null || record.action === 'attach-brackets' || record.action === 'add-leg' || record.action === 'remove-leg') return;
     if (record.action === 'close-position') {
       // P4: zavření se dořeší jen stavem pozice leadera (flat a nic nepracuje), nikdy koncem nohy.
@@ -6165,6 +6246,405 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     } finally {
       if (timer) clearTimeout(timer);
     }
+  };
+  /** Complete group proof; no broker writes and no promotion from leader ACK alone. */
+  const verifyGroupLimitMove = async (record: CopierManualOrderActionRecord): Promise<boolean> => {
+    if (!record.groupLimit || record.action !== 'move-limit' || record.toPrice == null || record.fromPrice == null || !record.symbol) return false;
+    const delta = record.toPrice - record.fromPrice;
+    const checks = await Promise.all(record.groupLimit.members.map(async member => {
+      const [entryRead, stopRead, targetRead, position] = await Promise.all([
+        boundedManagedOrderLookup(member.accountId, member.entryId),
+        member.stopId ? boundedManagedOrderLookup(member.accountId, member.stopId) : null,
+        member.targetId ? boundedManagedOrderLookup(member.accountId, member.targetId) : null,
+        readLeaderSymbolState(member.accountId, record.symbol!),
+      ]);
+      const entry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
+      const stop = stopRead?.completeness === 'authoritative' ? stopRead.order : null;
+      const target = targetRead?.completeness === 'authoritative' ? targetRead.order : null;
+      const matches = !!entry && !!stop && !!target && position?.net === 0
+        && entry.status === 'working' && entry.orderType === 'Limit' && entry.limitPrice === member.entryFrom + delta
+        && stop.status === 'pending' && stop.orderType === 'Stop' && stop.stopPrice === member.stopFrom! + delta
+        && target.status === 'pending' && target.orderType === 'Limit' && target.limitPrice === member.targetFrom! + delta
+        && stop.parentOrderId === member.entryId && target.parentOrderId === member.entryId
+        && stop.side === (entry.side === 'Buy' ? 'Sell' : 'Buy') && target.side === stop.side
+        && [entry, stop, target].every(row => row.accountId === member.accountId && row.symbol === record.symbol && row.quantity === member.quantity && row.filledQuantity === 0);
+      return { ...member, status: matches ? 'acknowledged' as const : 'unknown' as const };
+    }));
+    await persistManualOrderAction(record.operationId, current => current ? { ...current,
+      groupLimit: { ...current.groupLimit!, members: checks }, updatedAt: clock() } : record);
+    return checks.every(member => member.status === 'acknowledged');
+  };
+  const prepareGroupProtectedLimitMove = async (command: LeaderOrderManageCommand, deadlineAt: number, queuedFence: string): Promise<LeaderOrderManageResult | (() => Promise<LeaderOrderManageResult>)> => {
+    if (!groupLimitsOn() || command.action !== 'move-limit' || !command.entryOperationId || command.scope) return manageBlocked(command, 'group-limit-unsupported', 'Tato instalace nepovoluje tuto skupinovou operaci.');
+    const trade = groupLimitTrade(command.entryOperationId);
+    if (!trade || trade.groupId !== command.groupId || group.leaderAccountId !== command.leaderAccountId || trade.symbol !== command.symbol
+      || trade.stateHash !== command.groupLimitStateHash) return manageBlocked(command, 'group-state-changed', 'Stav skupiny se od zobrazení změnil — obnov panel.');
+    if (unresolvedManualOrderAction(command.entryOperationId) || unresolvedManualEntry()) return manageBlocked(command, 'manage-unresolved', 'Skupina má nevyřešený příkaz.');
+    const leader = trade.accounts.find(account => account.role === 'leader')!;
+    if (!leader.entry || command.expect.price !== leader.entry.price || command.expect.quantity !== leader.expectedQuantity) return manageBlocked(command, 'order-changed', 'Vstup se od zobrazení změnil.');
+    if (command.newPrice === leader.entry.price) return manageBlocked(command, 'no-change', 'Nová cena je stejná.');
+    const check = (): string | null => {
+      const current = groupLimitTrade(command.entryOperationId!);
+      if (!current || current.stateHash !== command.groupLimitStateHash || manualEntryQueueFence() !== queuedFence) return 'Změnil se stav skupiny.';
+      if (!gate.armed || gate.shadowMode || gate.killSwitch || !gate.connected || gate.sequenceBroken || source.needsReconciliation()
+        || gate.divergentAccounts.size > 0 || gate.stuckOutbox || hasDispatchBlockingStuckOutbox() || currentRuntime().state.safety.managementOnly
+        || runningEmergencyFlattens > 0 || followerCutBackgroundJobs.size > 0 || awaitingCopiedEntries.size > 0) return 'Skupina není připravená k posunu.';
+      const problem = groupProtectedLimitMoveProblem(current, accountId => liveOrdersByAccount.get(accountId));
+      if (problem) return problem;
+      for (const account of current.accounts) {
+        if ((pendingTradeIngressByAccount.get(account.accountId) ?? 0) > 0 || activeAccountSyncPause(account.accountId, current.symbol)
+          || currentExitIneligibleAccounts().has(account.accountId)) return 'Účet skupiny dokončuje změnu nebo není dostupný.';
+        if ([account.entry, account.stop, account.target].some(row => row && liveOrderGenerationsByAccount.get(account.accountId)?.get(row.brokerOrderId) !== connectionSyncGeneration)) return 'Příkazy skupiny pocházejí ze starého spojení.';
+      }
+      let quote: ManualEntryWorkerQuote | null = null;
+      try { quote = options.manualEntryQuote?.('MNQ') ?? null; } catch { /* fail closed */ }
+      const long = trade.side === 'Buy';
+      const market = quote?.contract === trade.symbol ? workerMarketPrice(quote, trade.side, clock()) : null;
+      if (market == null || (long ? market - command.newPrice! : command.newPrice! - market) < MANUAL_TIGHTEN_MIN_TICKS * 0.25) return 'Limit musí zůstat nejméně 8 ticků od čerstvé ceny trhu.';
+      for (const account of current.accounts) {
+        const side = pendingLegSideProblem('stopLoss', long ? 'long' : 'short', command.newPrice!, 'Limit', account.stop!.price!)
+          ?? pendingLegSideProblem('takeProfit', long ? 'long' : 'short', command.newPrice!, 'Limit', account.target!.price!);
+        if (side) return side;
+      }
+      const risk = moveStopRiskBlocked(command, command.leaderAccountId, trade.symbol, leader.stop!.brokerOrderId, leader.expectedQuantity,
+        moveLimitRiskEntry(long ? 'long' : 'short', leader.entry!.price!, command.newPrice!, leader.stop!.price!), leader.stop!.price!);
+      return risk?.blockers[0]?.text ?? null;
+    };
+    const problem = check();
+    if (problem) return manageBlocked(command, 'group-shape', problem);
+    // Exact fresh broker state for every member; never assume cached leader state proves followers.
+    for (const account of trade.accounts) {
+      const read = await readLeaderSymbolState(account.accountId, trade.symbol);
+      if (!read || read.net !== 0 || read.working !== 3) return manageBlocked(command, 'group-shape', `Účet ${account.accountId}: čerstvá kontrola nepotvrdila čekající OSO.`);
+      for (const expected of [account.entry!, account.stop!, account.target!]) {
+        const lookup = await boundedManagedOrderLookup(account.accountId, expected.brokerOrderId);
+        const row = lookup?.completeness === 'authoritative' ? lookup.order : null;
+        const price = row?.orderType === 'Stop' ? row.stopPrice : row?.limitPrice;
+        if (!row || row.quantity !== expected.quantity || row.filledQuantity !== 0 || row.status !== expected.state || price !== expected.price) return manageBlocked(command, 'group-state-changed', `Účet ${account.accountId}: příkaz se změnil.`);
+      }
+    }
+    if (check()) return manageBlocked(command, 'group-state-changed', 'Skupina se během ověření změnila.');
+    const members: GroupLimitMemberRecord[] = trade.accounts.map(account => ({ accountId: account.accountId, entryId: account.entry!.brokerOrderId,
+      stopId: account.stop!.brokerOrderId, targetId: account.target!.brokerOrderId, quantity: account.expectedQuantity,
+      entryFrom: account.entry!.price!, stopFrom: account.stop!.price!, targetFrom: account.target!.price!,
+      routeEpoch: groupLimitRoute(account.accountId), status: 'planned' }));
+    const createdAt = clock();
+    await persistManualOrderAction(command.operationId, () => ({ operationId: command.operationId, payloadHash: command.payloadHash,
+      entryOperationId: command.entryOperationId!, action: 'move-limit', status: 'sending', symbol: trade.symbol,
+      targetBrokerOrderId: leader.entry!.brokerOrderId, fromPrice: command.expect.price, toPrice: command.newPrice!, quantity: leader.expectedQuantity,
+      createdAt, updatedAt: createdAt, groupLimit: { contract: 1, stateHash: trade.stateHash, members } }));
+    const generation = safetyGeneration;
+    return async () => {
+      const finish = async (status: CopierManualOrderActionRecord['status'], reason?: string) => {
+        await persistManualOrderAction(command.operationId, current => ({ ...current!, status, ...(reason ? { reason } : {}), updatedAt: clock() }));
+        return manageResult(command, status === 'acknowledged' ? 'acknowledged' : status === 'not-sent' ? 'blocked' : status === 'rejected' ? 'rejected' : 'unknown', { brokerOrderId: leader.entry!.brokerOrderId, ...(reason ? { reason } : {}) });
+      };
+      const late = check();
+      if (late || generation !== safetyGeneration || clock() >= deadlineAt) return finish('not-sent', late ?? 'Platnost nebo stav se změnil.');
+      try {
+        await persistManualOrderAction(command.operationId, current => ({ ...current!, groupLimit: { ...current!.groupLimit!, members: current!.groupLimit!.members.map(member => ({ ...member, status: 'sending' })) } }));
+        if (check() || generation !== safetyGeneration) return finish('not-sent', 'Skupina se před zápisem změnila.');
+        const write = dispatchBroker(generation).modifyOrder(command.leaderAccountId, leader.entry!.brokerOrderId, { orderType: 'Limit', quantity: leader.expectedQuantity, limitPrice: command.newPrice! });
+        trackManageWrite(command.operationId, write);
+        await Promise.race([write, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Group Limit Modify timeout')), MANUAL_ORDER_MANAGE_TIMEOUT_MS))]);
+        const until = Date.now() + MANUAL_ORDER_VERIFY_TIMEOUT_MS;
+        do {
+          const record = manualOrderActionRecords().find(action => action.operationId === command.operationId)!;
+          if (await verifyGroupLimitMove(record)) return finish('acknowledged');
+          if (Date.now() + 25 >= until || stopped) break;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        } while (true);
+        scheduleManualOrderActionLookup(command.operationId);
+        failClosed(new Error('Posun chráněného Limitu nebo jeho pending nohy nejsou potvrzené na všech účtech.'), { autoClose: false, recordWhenDisarmed: true });
+        return finish('unknown', 'Posun celé skupiny zatím není potvrzený. Nic se neopakuje; ověřuji pouze čtením.');
+      } catch (error) {
+        return finish(error instanceof CopierDispatchRevokedError ? 'not-sent' : definitiveBrokerRejection(error) ? 'rejected' : 'unknown', errorOf(error).message.slice(0, 200));
+      }
+    };
+  };
+  const prepareGroupPositionManagement = async (command: LeaderOrderManageCommand, deadlineAt: number, queuedFence: string): Promise<LeaderOrderManageResult | (() => Promise<LeaderOrderManageResult>)> => {
+    const trade = command.entryOperationId ? groupLimitTrade(command.entryOperationId) : null;
+    if (!groupLimitsOn() || !trade || command.groupId !== group.id || command.leaderAccountId !== group.leaderAccountId || trade.symbol !== command.symbol
+      || command.groupLimitStateHash !== trade.stateHash) return manageBlocked(command, 'group-state-changed', 'Stav skupiny se změnil — obnov panel.');
+    if (trade.state !== 'position' && !(trade.state === 'mixed' && trade.accounts.every(member => member.state === 'position' || member.state === 'flat'))) return manageBlocked(command, 'group-shape', 'Nejprve zruš a ověř zbývající vstupy všech účtů.');
+    if (unresolvedManualOrderAction(trade.entryOperationId) || unresolvedManualEntry() || manualOrderActionJobs.size > 0 || runningEmergencyFlattens > 0) return manageBlocked(command, 'manage-unresolved', 'Skupina dokončuje jinou operaci.');
+    const leader = trade.accounts.find(member => member.role === 'leader')!;
+    const own = manualEntryRecords().find(record => record.operationId === trade.entryOperationId)!;
+    const leg: ManualLeg | undefined = command.action === 'move-stop' ? 'stopLoss' : command.action === 'move-target' ? 'takeProfit' : command.leg;
+    const expectedPrice = command.action === 'move-stop' ? leader.stop?.price : command.action === 'move-target' ? leader.target?.price : leader.entry?.price;
+    if (leader.openQuantity !== command.expect.quantity || expectedPrice !== command.expect.price
+      || command.expect.stop !== undefined && command.expect.stop !== (leader.stop?.price ?? null)
+      || command.expect.target !== undefined && command.expect.target !== (leader.target?.price ?? null)) return manageBlocked(command, 'order-changed', 'Pozice nebo nohy se od zobrazení změnily.');
+    const underBrake = command.action === 'attach-brackets' && trade.accounts.every(member => !member.stop && !member.target)
+      || command.action === 'add-leg' && leg === 'stopLoss' && trade.accounts.every(member => !member.stop && !member.target);
+    const configFence = () => [configurationControlVersion, connectionSyncGeneration, ...trade.accounts.map(member => `${member.accountId}:${groupLimitRoute(member.accountId)}`)].join(':');
+    const configAtAdmission = configFence();
+    if (trade.accounts.some(member => groupLimitRoute(member.accountId) == null)) return manageBlocked(command, 'group-route', 'Člen skupiny nemá platnou route.');
+    const generation = safetyGeneration;
+    const snapshots = new Map<number, GroupLimitMemberSnapshot>();
+    const entryBaseline = new Map<number, BrokerOrder>();
+    for (const member of trade.accounts) {
+      if (member.state === 'unknown' || !member.entry || member.openQuantity == null || member.entry.state === 'pending' || member.entry.state === 'working') return manageBlocked(command, 'group-shape', 'Čekající remainder musí být před správou zrušený a ověřený.');
+      const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(member.accountId, { fresh: true }), options.broker.listPositions(member.accountId), boundedManagedOrderLookup(member.accountId, member.entry.brokerOrderId)]);
+      const entry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
+      const net = positions.filter(row => row.symbol === trade.symbol).reduce((sum, row) => sum + row.netQuantity, 0);
+      if (net !== 0 && !groupMemberOwnsPosition(own, member.accountId, member.entry.brokerOrderId, net, orders)) return manageBlocked(command, 'group-lineage', `Účet ${member.accountId}: aktuální pozice není prokázaná jako tento vlastní obchod.`);
+      const expectedNet = (trade.side === 'Buy' ? 1 : -1) * member.openQuantity;
+      if (!entry || isOpenOrderStatus(entry.status) || entry.filledQuantity < member.openQuantity || net !== expectedNet
+        || positions.some(position => position.symbol !== trade.symbol && position.netQuantity !== 0)) return manageBlocked(command, 'group-shape', `Účet ${member.accountId}: pozice nebo vlastní fill není potvrzený.`);
+      // Leader's durable lot proves this is still the original episode, not a later foreign position of the same size.
+      if (member.role === 'leader' && net !== 0 && bareCloseLotBlockers({ lots: currentDailyStats(clock()).openLots ?? [], symbol: trade.symbol, entryBrokerOrderId: member.entry.brokerOrderId, expectedNet: net }).length) return manageBlocked(command, 'group-lineage', 'Aktuální pozice není potvrzená jako tento vlastní vstup.');
+      const open = orders.filter(row => isOpenOrderStatus(row.status));
+      const ids = new Set([member.stop?.brokerOrderId, member.target?.brokerOrderId].filter(Boolean));
+      if (open.some(row => !ids.has(row.brokerOrderId)) || net === 0 && open.length) return manageBlocked(command, 'group-foreign-orders', `Účet ${member.accountId}: pracuje cizí nebo osiřelý příkaz.`);
+      for (const row of open) if (row.symbol !== trade.symbol || row.side !== (trade.side === 'Buy' ? 'Sell' : 'Buy') || row.quantity !== Math.abs(net) || row.filledQuantity !== 0 || row.status !== 'working') return manageBlocked(command, 'group-shape', `Účet ${member.accountId}: noha nesedí na vlastní pozici.`);
+      if (member.stop && !open.some(row => row.brokerOrderId === member.stop!.brokerOrderId && row.orderType === 'Stop' && row.stopPrice === member.stop!.price)
+        || member.target && !open.some(row => row.brokerOrderId === member.target!.brokerOrderId && row.orderType === 'Limit' && row.limitPrice === member.target!.price)) return manageBlocked(command, 'group-shape', 'Ochranné nohy nejsou potvrzené u brokera.');
+      if (command.action === 'attach-brackets' && (member.stop || member.target)
+        || command.action === 'add-leg' && (leg === 'stopLoss' ? member.stop : member.target)
+        || (command.action === 'remove-leg' || command.action === 'move-stop' || command.action === 'move-target') && !(leg === 'stopLoss' ? member.stop : member.target)) return manageBlocked(command, 'group-shape', 'Požadovaná noha už existuje nebo chybí.');
+      snapshots.set(member.accountId, { orders: open.map(row => ({ ...row })), net }); entryBaseline.set(member.accountId, { ...entry });
+    }
+    const priceProblem = (): string | null => {
+      if (command.action === 'remove-leg' || command.action === 'close-position') return null;
+      let quote: ManualEntryWorkerQuote | null = null;
+      try { quote = options.manualEntryQuote?.('MNQ') ?? null; } catch { /* fail closed */ }
+      const market = quote?.contract === trade.symbol ? workerMarketPrice(quote, trade.side === 'Buy' ? 'Sell' : 'Buy', clock()) : null;
+      if (market == null) return 'Worker nemá čerstvou kotaci stejného MNQ kontraktu.';
+      for (const member of trade.accounts) {
+        const stopPrice = command.action === 'attach-brackets' ? command.stopLoss : leg === 'stopLoss' ? command.newPrice : member.stop?.price;
+        const targetPrice = command.action === 'attach-brackets' ? command.takeProfit : leg === 'takeProfit' ? command.newPrice : member.target?.price;
+        if (stopPrice != null && (command.action === 'attach-brackets' || leg === 'stopLoss' || command.action === 'add-leg')) {
+          const problem = singleLegPriceProblem({ side: trade.side, leg: 'stopLoss', price: stopPrice, market, minTicks: MANUAL_ATTACH_MIN_TICKS }); if (problem) return problem;
+        }
+        if (targetPrice != null && (command.action === 'attach-brackets' || leg === 'takeProfit')) {
+          const problem = singleLegPriceProblem({ side: trade.side, leg: 'takeProfit', price: targetPrice, market, minTicks: MANUAL_ATTACH_MIN_TICKS }); if (problem) return problem;
+        }
+        if (stopPrice != null && targetPrice != null && !(trade.side === 'Buy' ? stopPrice < targetPrice : stopPrice > targetPrice)) return 'SL a TP jsou na nesprávných stranách.';
+        if (command.action === 'move-stop' && member.stop?.price != null && (trade.side === 'Buy' ? command.newPrice! < member.stop.price : command.newPrice! > member.stop.price)) {
+          const fillPrice = member.role === 'leader' ? entryFillAverage(trade.symbol, member.entry!.brokerOrderId) : followerRiskLots.get(`${member.accountId}:${trade.symbol}`)?.avgPrice;
+          const risk = accountRisk.get(member.accountId);
+          if (fillPrice == null || !risk || risk.error || !sameTradovateSession(risk.verifiedAt, clock()) || clock() - risk.verifiedAt > MANUAL_ENTRY_RISK_MAX_AGE_MS) return 'Cena fillu nebo riziko účtu nejsou čerstvě ověřené.';
+          const loss = manualStopLossUsd(trade.symbol, fillPrice, command.newPrice!, member.openQuantity!);
+          const cut = group.followers.find(follower => follower.accountId === member.accountId)?.dailyLossCutUsd ?? null;
+          const limits = realizedLossHeadroom({ verifiedAt: risk.verifiedAt, realizedPnlUsd: risk.realizedPnlUsd ?? null, openPnlUsd: risk.openPnlUsd ?? null, netLiq: risk.netLiq ?? null, cashBalanceUsd: risk.cashBalanceUsd ?? null, minNetLiq: risk.minNetLiq ?? null, dailyLossAutoLiq: risk.dailyLossAutoLiq ?? null, effectiveDailyLossCutUsd: risk.effectiveDailyLossCutUsd ?? null, sameSession: true, error: null }, cut);
+          const available = [limits.dailyUsd, limits.cutUsd, limits.drawdownUsd].filter((value): value is number => value != null);
+          if (loss == null || !Number.isFinite(loss) || available.length === 0 || available.some(left => !Number.isFinite(left))) return `Účet ${member.accountId}: žádný konečný limit rizika není ověřený.`;
+          if (available.some(left => loss > left)) return `Účet ${member.accountId}: nový SL přesahuje rezervu rizika.`;
+        }
+      }
+      return null;
+    };
+    if (priceProblem()) return manageBlocked(command, 'group-price', priceProblem()!);
+    const guard = async (expected: Map<number, GroupLimitMemberSnapshot>, cleanup = false): Promise<string | null> => {
+      if (stopped || runningEmergencyFlattens > 0 || configFence() !== configAtAdmission || clock() >= deadlineAt || (!cleanup && (generation !== safetyGeneration || !underBrake && (!gate.armed || gate.killSwitch || gate.shadowMode)))) return 'Změnil se stav, konfigurace nebo spojení skupiny.';
+      if (!gate.connected || gate.sequenceBroken || source.needsReconciliation()) return 'Spojení nebo pořadí dat není ověřené.';
+      if (!cleanup) { const problem = priceProblem(); if (problem) return problem; }
+      for (const [accountId, wanted] of expected) {
+        const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(accountId, { fresh: true }), options.broker.listPositions(accountId), boundedManagedOrderLookup(accountId, entryBaseline.get(accountId)!.brokerOrderId)]);
+        const currentEntry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
+        const baseline = entryBaseline.get(accountId)!;
+        const currentOwn = manualEntryRecords().find(record => record.operationId === own.operationId)!;
+        if (wanted.net !== 0 && !groupMemberOwnsPosition(currentOwn, accountId, baseline.brokerOrderId, wanted.net, orders)) return 'Zaniklo vlastnictví pozice člena skupiny.';
+        const liveNet = positionsByAccount.has(accountId) ? positionsByAccount.get(accountId)?.get(trade.symbol) ?? 0 : null;
+        if (!currentEntry || currentEntry.status !== baseline.status || currentEntry.filledQuantity !== baseline.filledQuantity || liveNet !== wanted.net
+          || positions.filter(row => row.symbol === trade.symbol).reduce((sum, row) => sum + row.netQuantity, 0) !== wanted.net) return `Účet ${accountId}: změnila se vlastní expozice.`;
+        const open = orders.filter(row => isOpenOrderStatus(row.status));
+        if (open.length !== wanted.orders.length || open.some(row => !wanted.orders.some(old => row.brokerOrderId === old.brokerOrderId && row.symbol === old.symbol && row.side === old.side && row.orderType === old.orderType && row.quantity === old.quantity && row.filledQuantity === 0 && row.limitPrice === old.limitPrice && row.stopPrice === old.stopPrice && row.status === 'working'))) return `Účet ${accountId}: změnily se vlastní nohy nebo pracuje cizí příkaz.`;
+      }
+      // Awaited broker reads are not a fence: OFF/Kill/reconnect may have arrived during the last read.
+      if (stopped || configFence() !== configAtAdmission || !gate.connected || (!cleanup && (generation !== safetyGeneration || !underBrake && (!gate.armed || gate.killSwitch || gate.shadowMode)))) return 'Stav se změnil během kontroly brokera.';
+      for (const [accountId, wanted] of expected) {
+        const liveNet = positionsByAccount.has(accountId) ? positionsByAccount.get(accountId)?.get(trade.symbol) ?? 0 : null;
+        if (liveNet !== wanted.net || (pendingTradeIngressByAccount.get(accountId) ?? 0) > 0) return 'Nová událost přišla během ověřování.';
+      }
+      return null;
+    };
+    const initialProblem = await guard(snapshots);
+    if (initialProblem || groupLimitTrade(trade.entryOperationId)?.stateHash !== command.groupLimitStateHash || manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'group-state-changed', initialProblem ?? 'Skupina se během ověřování změnila.');
+    const members: GroupLimitMemberRecord[] = trade.accounts.map(member => ({ ...(own.groupLimitMembers?.find(saved => saved.accountId === member.accountId) ?? {}), accountId: member.accountId, entryId: member.entry!.brokerOrderId,
+      stopId: member.stop?.brokerOrderId, targetId: member.target?.brokerOrderId, quantity: member.openQuantity!, entryFrom: member.entry!.price!,
+      stopFrom: member.stop?.price ?? undefined, targetFrom: member.target?.price ?? undefined, routeEpoch: groupLimitRoute(member.accountId),
+      tag: `gm${stableHash64(`${command.operationId}:${member.accountId}`)}`, status: 'planned' }));
+    const createdAt = clock();
+    await persistManualOrderAction(command.operationId, () => ({ operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: trade.entryOperationId,
+      action: command.action, leg, status: 'sending', targetBrokerOrderId: leader.entry!.brokerOrderId, fromPrice: command.expect.price, toPrice: command.newPrice ?? null, symbol: trade.symbol,
+      quantity: leader.openQuantity!, createdAt, updatedAt: createdAt, groupLimit: { contract: 1, stateHash: trade.stateHash, members } }));
+    return async () => {
+      const save = (updates: GroupLimitMemberRecord[]) => persistManualOrderAction(command.operationId, current => ({ ...current!, groupLimit: { ...current!.groupLimit!, members: updates }, updatedAt: clock() })).then(() => undefined);
+      const bind = (updates: GroupLimitMemberRecord[]) => persistManualEntry(own.operationId, current => ({ ...current!, groupLimitContract: 1,
+        groupLimitMembers: mergeGroupLimitMembers(current!.groupLimitMembers, updates), groupLimitConfigHash: current!.groupLimitConfigHash ?? copyGroupConfigHash(group),
+        groupLimitParticipants: current!.groupLimitParticipants ?? trade.accounts.map(member => ({ accountId: member.accountId, quantity: member.expectedQuantity })),
+        ...(updates.find(member => member.accountId === command.leaderAccountId) ? { stopBrokerOrderId: updates.find(member => member.accountId === command.leaderAccountId)!.stopId,
+          targetBrokerOrderId: updates.find(member => member.accountId === command.leaderAccountId)!.targetId } : {}), updatedAt: clock() })).then(() => undefined);
+      const raw = async <T,>(accountId: number, run: () => Promise<T>, cleanup = false): Promise<T> => {
+        // Final synchronous dispatch barrier. Only cleanup of the exact old duplicate SL may
+        // finish after a brake; no Place/OCO/Modify uses that exception.
+        if (stopped || configFence() !== configAtAdmission || !gate.connected || runningEmergencyFlattens > 0
+          || !cleanup && (generation !== safetyGeneration || !underBrake && (!gate.armed || gate.killSwitch || gate.shadowMode))
+          || trade.accounts.some(member => (pendingTradeIngressByAccount.get(member.accountId) ?? 0) > 0 || !positionsByAccount.has(member.accountId) || (positionsByAccount.get(member.accountId)?.get(trade.symbol) ?? 0) !== snapshots.get(member.accountId)!.net)) throw new Error('Pojistka zastavila skupinový zápis těsně před odesláním.');
+        const latest = manualEntryRecords().find(record => record.operationId === own.operationId)!;
+        if (trade.accounts.some(member => !groupMemberOwnsPosition(latest, member.accountId, member.entry!.brokerOrderId, snapshots.get(member.accountId)!.net, [...(liveOrdersByAccount.get(member.accountId)?.values() ?? [])]))) throw new Error('Vlastnictví pozice zaniklo před odesláním.');
+        const write = run(); registerInFlightBrokerWrite(accountId, write.then(() => undefined, () => undefined)); trackManageWrite(`${command.operationId}:${accountId}`, write);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { return await Promise.race([write, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Broker timeout; výsledek se neopakuje.')), MANUAL_ORDER_MANAGE_TIMEOUT_MS); })]); }
+        finally { if (timer) clearTimeout(timer); }
+      };
+      if (command.action === 'close-position') {
+        if (!options.broker.liquidatePosition) return manageBlocked(command, 'native-close-required', 'Broker neumí nativní zavření.');
+        const accountIds = members.map(member => member.accountId);
+        try {
+          // The existing durable native liquidation pipeline is the sole writer. It is invoked
+          // outside eventTail; its own processor mutation owns commits, never a nested mutation.
+          const closeStore = createBackgroundFlattenStore(command.operationId);
+          const closeRuntime = runtimeFromSnapshot(await closeStore.load());
+          const processed = await processManualFlatten({ runtime: closeRuntime, broker, store: closeStore, groupId: group.id,
+            accountIds, operationId: command.operationId, clock, deadlineAt, nativeOnly: true, liquidateAttempts: 1,
+            confirmationAttempts: options.flattenConfirmationAttempts, confirmationPollMs: options.flattenConfirmationPollMs, accountConcurrency: 1,
+            targets: accountIds.map(accountId => ({ accountId, symbol: trade.symbol })), cleanupScope: 'target-symbol',
+            onWrite: (accountId, write) => { registerInFlightBrokerWrite(accountId, write.then(() => undefined, () => undefined)); trackManageWrite(`${command.operationId}:${accountId}`, write); },
+            assertWriteAllowed: () => {
+              if (clock() >= deadlineAt || generation !== safetyGeneration || configFence() !== configAtAdmission || runningEmergencyFlattens > 0 || stopped || !gate.connected || !gate.armed || gate.killSwitch || gate.shadowMode || members.some(member => (pendingTradeIngressByAccount.get(member.accountId) ?? 0) > 0)) throw new Error('Brzda nebo spojení zastavilo další skupinové zavření.');
+              for (const member of members) {
+                const net = positionsByAccount.has(member.accountId) ? positionsByAccount.get(member.accountId)?.get(trade.symbol) ?? 0 : null;
+                if (net !== 0 && (net !== snapshots.get(member.accountId)!.net || manualEntryRecords().find(record => record.operationId === own.operationId)?.groupLimitMembers?.find(saved => saved.accountId === member.accountId)?.closedAt != null)) throw new Error('Nová nebo již nevlastněná expozice zastavila skupinové zavření.');
+              }
+            },
+            beforeWrite: async ({ accountId, symbol, kind, brokerOrderId }) => {
+              if (symbol !== trade.symbol || !accountIds.includes(accountId) || configFence() !== configAtAdmission || stopped || clock() >= deadlineAt) throw new Error('Změnil se scope nebo spojení skupinového zavření.');
+              for (const member of members) {
+                const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(member.accountId, { fresh: true }), options.broker.listPositions(member.accountId), boundedManagedOrderLookup(member.accountId, member.entryId)]);
+                const net = positions.filter(position => position.symbol === trade.symbol).reduce((sum, position) => sum + position.netQuantity, 0);
+                const original = snapshots.get(member.accountId)!;
+                const entry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
+                const baseline = entryBaseline.get(member.accountId)!;
+                const currentOwn = manualEntryRecords().find(record => record.operationId === own.operationId)!;
+                // This close may already have confirmed the leader flat. That own transition does
+                // not end the remaining members' ownership, but their own tombstones and any
+                // foreign Filled history still veto a write even when the net size is unchanged.
+                const phaseOwn = { ...currentOwn, closedAt: undefined };
+                if (net !== 0 && !groupMemberOwnsPosition(phaseOwn, member.accountId, member.entryId, net, orders)) throw new Error('Broker historie vyvrátila vlastnictví pozice během zavření.');
+                if (!entry || entry.filledQuantity !== baseline.filledQuantity || entry.status !== baseline.status || (net !== 0 && net !== original.net)
+                  || positions.some(position => position.symbol !== trade.symbol && position.netQuantity !== 0)
+                  || orders.some(order => isOpenOrderStatus(order.status) && !original.orders.some(ownOrder => ownOrder.brokerOrderId === order.brokerOrderId && ownOrder.quantity === order.quantity && ownOrder.side === order.side && ownOrder.symbol === order.symbol))) throw new Error('Změnila se vlastní expozice nebo přibyl cizí příkaz během zavření.');
+                if (member.accountId === accountId && kind === 'cancel' && !original.orders.some(order => order.brokerOrderId === brokerOrderId)) throw new Error('Zavření se pokusilo zrušit nevlastní příkaz.');
+              }
+            } });
+          const result = processed.result;
+          const ok = result.flat === true && result.failedAccounts.length === 0 && result.accounts.length === accountIds.length
+            && result.accounts.every(account => accountIds.includes(account.accountId) && account.ok && account.remainingPositions === 0 && account.workingOrders === 0);
+          await save(members.map(member => ({ ...member, status: ok ? 'acknowledged' : 'unknown' })));
+          await persistManualOrderAction(command.operationId, current => ({ ...current!, status: ok ? 'acknowledged' : 'unknown', updatedAt: clock() }));
+          if (!ok) failClosed(new Error('Skupinové zavření není potvrzené na všech účtech.'), { autoClose: false, recordWhenDisarmed: true });
+          return manageResult(command, ok ? 'acknowledged' : 'unknown');
+        } catch (error) {
+          await persistManualOrderAction(command.operationId, current => ({ ...current!, status: 'unknown', reason: errorOf(error).message, updatedAt: clock() }));
+          failClosed(errorOf(error), { autoClose: false, recordWhenDisarmed: true });
+          return manageResult(command, 'unknown', { reason: errorOf(error).message });
+        }
+      }
+      const result = await executeGroupLimitManagement({ command, symbol: trade.symbol, side: trade.side, members, snapshots, guard, save, bind,
+        place: async request => { const ack = await raw(request.accountId, () => options.broker.placeOrder(request)); if (!ack.accepted || !ack.definitive || !ack.brokerOrderId) throw new Error(ack.rejectReason ?? 'Nová noha není potvrzená.'); return ack.brokerOrderId; },
+        oco: async request => { if (!options.broker.placeOco) throw new Error('Broker neumí OCO.'); const ack = await raw(request.accountId, () => options.broker.placeOco!(request)); if (!ack.accepted || !ack.definitive || !ack.firstBrokerOrderId || !ack.secondBrokerOrderId) throw new Error(ack.rejectReason ?? 'Nové OCO není potvrzené.'); return { stopId: ack.firstBrokerOrderId, targetId: ack.secondBrokerOrderId }; },
+        modify: async (accountId, id, quantity, orderType, price) => { await raw(accountId, () => options.broker.modifyOrder(accountId, id, { quantity, orderType, ...(orderType === 'Stop' ? { stopPrice: price } : { limitPrice: price }) })); },
+        cancel: async (accountId, id, cleanup) => { const exactCleanup = cleanup === true && manualOrderActionRecords().some(action => action.operationId === command.operationId && action.groupLimit?.members.some(member => member.accountId === accountId && member.phase === 'oco-acked' && member.oldLegId === id));
+          await raw(accountId, () => options.broker.cancelOrder(accountId, id), exactCleanup); },
+        lookup: async (accountId, id) => { const read = await boundedManagedOrderLookup(accountId, id); return read?.completeness === 'authoritative' ? read.order : null; },
+      });
+      await persistManualOrderAction(command.operationId, current => ({ ...current!, status: result.status, reason: result.reason, updatedAt: clock() }));
+      if (result.status === 'unknown') failClosed(new Error(`Skupinová správa: ${result.reason}`), { autoClose: false, recordWhenDisarmed: true });
+      return manageResult(command, result.status === 'not-sent' ? 'blocked' : result.status, { ...(result.reason ? { reason: result.reason } : {}) });
+    };
+  };
+  /** Pending entry lifecycle shares the existing runner ownership; never a second follower fan-out. */
+  const prepareGroupPendingAction = async (command: LeaderOrderManageCommand, deadlineAt: number, queuedFence: string): Promise<LeaderOrderManageResult | (() => Promise<LeaderOrderManageResult>)> => {
+    const trade = command.entryOperationId ? groupLimitTrade(command.entryOperationId) : null;
+    const own = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
+    if (!groupLimitsOn() || !trade || !own || group.id !== command.groupId || group.leaderAccountId !== command.leaderAccountId || trade.symbol !== command.symbol
+      || command.groupLimitStateHash !== trade.stateHash) return manageBlocked(command, 'group-state-changed', 'Stav skupiny se změnil — obnov panel.');
+    const cancel = command.action === 'cancel-entry';
+    const leader = trade.accounts.find(member => member.role === 'leader')!;
+    if (!leader.entry || command.expect.price !== leader.entry.price || command.expect.quantity !== leader.entry.quantity
+      || cancel && (leader.entry.filledQuantity > 0 && command.expect.filledQuantity !== leader.entry.filledQuantity)) return manageBlocked(command, 'order-changed', 'Vstup nebo počet fillů se změnil.');
+    if (!cancel && (own.bare !== true || trade.state !== 'pending' || trade.accounts.some(member => member.stop || member.target))) return manageBlocked(command, 'group-shape', 'Posun holého Limitu vyžaduje nulové filly a flat účty celé skupiny.');
+    const unresolved = manualOrderActionRecords().filter(action => action.entryOperationId === trade.entryOperationId && UNRESOLVED_MANUAL_ORDER_ACTION.has(action.status));
+    if (unresolved.length && (!cancel || unresolved.some(action => action.action !== 'move-limit' && action.action !== 'move-stop' && action.action !== 'move-target'))) return manageBlocked(command, 'manage-unresolved', 'Předchozí změna má neověřený výsledek.');
+    const configFence = () => [configurationControlVersion, connectionSyncGeneration, ...trade.accounts.map(member => `${member.accountId}:${groupLimitRoute(member.accountId)}`)].join(':');
+    const admissionConfig = configFence(), generation = safetyGeneration;
+    const members: GroupLimitMemberRecord[] = [];
+    for (const member of trade.accounts) {
+      if (!member.entry) return manageBlocked(command, 'group-binding', 'Kopie vstupu nemá potvrzené ID.');
+      const lookup = await boundedManagedOrderLookup(member.accountId, member.entry.brokerOrderId);
+      const row = lookup?.completeness === 'authoritative' ? lookup.order : null;
+      if (!row || row.accountId !== member.accountId || row.symbol !== trade.symbol || row.side !== trade.side || row.orderType !== 'Limit'
+        || row.quantity !== member.expectedQuantity || row.limitPrice !== member.entry.price || row.filledQuantity !== member.entry.filledQuantity
+        || (!cancel && !isOpenOrderStatus(row.status))) return manageBlocked(command, 'group-shape', `Účet ${member.accountId}: čekající vlastní vstup se změnil.`);
+      if (!cancel && (row.filledQuantity !== 0 || member.openQuantity !== 0)) return manageBlocked(command, 'group-shape', 'Část skupiny už má fill.');
+      members.push({ accountId: member.accountId, entryId: row.brokerOrderId, quantity: row.quantity, filledQuantity: row.filledQuantity, entryFrom: row.limitPrice!, status: 'planned', routeEpoch: groupLimitRoute(member.accountId) });
+    }
+    const late = (): string | null => {
+      if (stopped || configFence() !== admissionConfig || clock() >= deadlineAt) return 'Změnilo se spojení nebo platnost skupiny.';
+      if (manualEntryCancelRunning.has(own.operationId)) return 'Vstup už ruší kopírka.';
+      if (!cancel) {
+        if (!gate.armed || gate.shadowMode || gate.killSwitch || generation !== safetyGeneration || manualEntryQueueFence() !== queuedFence
+          || gate.divergentAccounts.size || gate.stuckOutbox || source.needsReconciliation() || currentRuntime().state.safety.managementOnly) return 'Skupina není připravená k posunu.';
+        let quote: ManualEntryWorkerQuote | null = null;
+        try { quote = options.manualEntryQuote?.('MNQ') ?? null; } catch { /* fail closed */ }
+        const problem = manualEntryBarePendingBlockers({ side: own.request.side, orderType: 'Limit', price: command.newPrice!, symbol: trade.symbol }, quote, clock())[0];
+        if (problem) return problem.text;
+        for (const member of trade.accounts) {
+          const risk = accountRisk.get(member.accountId);
+          if (!risk || risk.error || clock() - risk.verifiedAt > MANUAL_ENTRY_RISK_MAX_AGE_MS || !sameTradovateSession(risk.verifiedAt, clock())) return 'Riziko účtu není ověřené.';
+          const reserve = remainingLossHeadroom({ verifiedAt: risk.verifiedAt, realizedPnlUsd: risk.realizedPnlUsd ?? null, openPnlUsd: risk.openPnlUsd ?? null, netLiq: risk.netLiq ?? null, cashBalanceUsd: risk.cashBalanceUsd ?? null, minNetLiq: risk.minNetLiq ?? null, dailyLossAutoLiq: risk.dailyLossAutoLiq ?? null, effectiveDailyLossCutUsd: risk.effectiveDailyLossCutUsd ?? null, sameSession: true, error: null }, group.followers.find(follower => follower.accountId === member.accountId)?.dailyLossCutUsd ?? null);
+          const limits = [reserve.dailyUsd, reserve.cutUsd, reserve.drawdownUsd].filter(value => value != null);
+          if (!limits.length || limits.some(left => !Number.isFinite(left) || left! <= 0)) return 'Rezerva rizika účtu není kladná a ověřená.';
+          if ([...(positionsByAccount.get(member.accountId)?.values() ?? [])].some(net => net !== 0)
+            || [...(liveOrdersByAccount.get(member.accountId)?.values() ?? [])].some(row => isOpenOrderStatus(row.status) && row.brokerOrderId !== member.entry!.brokerOrderId)) return 'Účet má další pozici nebo cizí příkaz.';
+          const current = liveOrdersByAccount.get(member.accountId)?.get(member.entry!.brokerOrderId);
+          if (!current || current.filledQuantity !== 0 || current.limitPrice !== member.entry!.price || current.quantity !== member.expectedQuantity
+            || !positionsByAccount.has(member.accountId) || (positionsByAccount.get(member.accountId)?.get(trade.symbol) ?? 0) !== 0
+            || (pendingTradeIngressByAccount.get(member.accountId) ?? 0) > 0) return 'Vstup nebo expozice skupiny se změnily.';
+        }
+      }
+      return null;
+    };
+    if (late() || groupLimitTrade(trade.entryOperationId)?.stateHash !== command.groupLimitStateHash) return manageBlocked(command, 'group-state-changed', late() ?? 'Skupina se během ověření změnila.');
+    const createdAt = clock();
+    await persistManualOrderAction(command.operationId, () => ({ operationId: command.operationId, payloadHash: command.payloadHash, entryOperationId: own.operationId,
+      action: command.action, status: 'sending', targetBrokerOrderId: leader.entry!.brokerOrderId, fromPrice: leader.entry!.price, toPrice: command.newPrice ?? null, symbol: trade.symbol,
+      quantity: leader.entry!.quantity, createdAt, updatedAt: createdAt, groupLimit: { contract: 1, stateHash: trade.stateHash, members } }));
+    return async () => {
+      const finish = async (status: CopierManualOrderActionRecord['status'], reason?: string) => {
+        await persistManualOrderAction(command.operationId, current => ({ ...current!, status, reason, updatedAt: clock() }));
+        return manageResult(command, status === 'not-sent' ? 'blocked' : status === 'rejected' ? 'rejected' : status === 'acknowledged' ? 'acknowledged' : 'unknown', { ...(reason ? { reason } : {}) });
+      };
+      const problem = late(); if (problem || !cancel && groupLimitTrade(trade.entryOperationId)?.stateHash !== command.groupLimitStateHash) return finish('not-sent', problem ?? 'Skupina se změnila.');
+      if (cancel) manualCancelEntryInFlight.add(own.operationId);
+      try {
+        const write = cancel ? options.broker.cancelOrder(command.leaderAccountId, leader.entry!.brokerOrderId)
+          : dispatchBroker(generation).modifyOrder(command.leaderAccountId, leader.entry!.brokerOrderId, { orderType: 'Limit', quantity: leader.entry!.quantity, limitPrice: command.newPrice! });
+        trackManageWrite(command.operationId, write);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([write, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Broker nepotvrdil změnu včas.')), MANUAL_ORDER_MANAGE_TIMEOUT_MS); })]); }
+        finally { if (timer) clearTimeout(timer); }
+        const until = Date.now() + MANUAL_ORDER_VERIFY_TIMEOUT_MS;
+        do {
+          const checks = await Promise.all(members.map(async member => {
+            const lookup = await boundedManagedOrderLookup(member.accountId, member.entryId);
+            const row = lookup?.completeness === 'authoritative' ? lookup.order : null;
+            const before = trade.accounts.find(account => account.accountId === member.accountId)!.entry!;
+            const ok = row && row.accountId === member.accountId && row.symbol === trade.symbol && row.quantity === member.quantity
+              && row.filledQuantity === before.filledQuantity && (cancel ? !isOpenOrderStatus(row.status) : row.status === 'working' && row.limitPrice === command.newPrice && row.filledQuantity === 0);
+            return { ...member, status: ok ? 'acknowledged' as const : 'unknown' as const };
+          }));
+          await persistManualOrderAction(command.operationId, current => ({ ...current!, groupLimit: { ...current!.groupLimit!, members: checks }, updatedAt: clock() }));
+          if (checks.every(member => member.status === 'acknowledged')) return finish('acknowledged', cancel && trade.accounts.some(account => account.entry!.filledQuantity > 0) ? 'Zbytky vstupů zrušené; již vyplněné vlastní pozice zůstávají otevřené.' : undefined);
+          if (Date.now() + 25 >= until || stopped) break; await new Promise(resolve => setTimeout(resolve, 25));
+        } while (true);
+        return finish('unknown', 'Změna není potvrzená na všech účtech; nic se automaticky neopakuje.');
+      } catch (error) { return finish(error instanceof CopierDispatchRevokedError ? 'not-sent' : 'unknown', errorOf(error).message.slice(0, 200)); }
+      finally { manualCancelEntryInFlight.delete(own.operationId); }
+    };
   };
   /** Po `unknown`: dvě čtení (hned po ustálení a později), bez zápisu k brokerovi. */
   const scheduleManualOrderActionLookup = (operationId: string) => {
@@ -6508,7 +6988,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const action = manualOrderActionRecords().find(record => record.status === 'unknown' && record.targetBrokerOrderId === order.brokerOrderId);
     // Zavření obchodu (2d) se dořeší jen stavem pozice čtením, ne koncem příkazu (P4).
     // SL a TP po jedné: konec staré nohy nic neříká o novém OCO, řeší se jen auditovaným waiverem.
-    if (!action || action.action === 'close-position' || action.action === 'attach-brackets' || action.action === 'add-leg' || action.action === 'remove-leg') return;
+    if (!action || action.groupLimit || action.action === 'close-position' || action.action === 'attach-brackets' || action.action === 'add-leg' || action.action === 'remove-leg') return;
     if (action.action === 'cancel-entry') {
       // C7: konec vstupu ve streamu jen spustí autoritativní čtení (fill může dorazit až po
       // Order(Canceled), INV-TRAD-02) — mimo frontu událostí, nic se neposílá.
@@ -7658,6 +8138,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (clock() + MANUAL_ENTRY_DEADLINE_RESERVE_MS >= deadlineAt) return manageBlocked(command, 'expired', 'Platnost příkazu vypršela — nic se neodeslalo.');
     if (manualEntryQueueFence() !== queuedFence) return manageBlocked(command, 'state-changed', 'Mezitím přišla změna spojení nebo účtů — zkus to znovu.');
+    const addressedOwnEntries = manualEntryRecords().filter(entry =>
+      entry.operationId === command.entryOperationId || entry.entryBrokerOrderId != null && entry.entryBrokerOrderId === command.leaderEntryOrderId
+      || command.scope === 'position' && entry.request.accountId === command.leaderAccountId && entry.request.symbol === command.symbol && entry.closedAt == null
+        && (entry.groupLimitMembers?.find(member => member.accountId === command.leaderAccountId)?.closedAt == null)
+        && ((currentDailyStats(clock()).openLots ?? []).some(lot => (lot.entryOrderIds ?? []).includes(entry.entryBrokerOrderId ?? ''))
+          || [entry.entryBrokerOrderId, entry.stopBrokerOrderId, entry.targetBrokerOrderId].some(id => id && liveOrdersByAccount.get(command.leaderAccountId)?.has(id))));
+    if (command.groupLimitContract !== 1 && addressedOwnEntries.some(entry => entry.groupLimitContract === 1
+      || manualOrderActionRecords().some(action => action.entryOperationId === entry.operationId && action.groupLimit))) {
+      return manageBlocked(command, 'group-contract-required', 'Tento skupinový obchod vyžaduje aktuální aplikaci a potvrzený stav celé skupiny.');
+    }
+    if (command.groupLimitContract === 1) {
+      if (command.action === 'move-limit') {
+        const entry = manualEntryRecords().find(record => record.operationId === command.entryOperationId);
+        return entry?.bare ? prepareGroupPendingAction(command, deadlineAt, queuedFence) : prepareGroupProtectedLimitMove(command, deadlineAt, queuedFence);
+      }
+      if (command.action === 'cancel-entry') return prepareGroupPendingAction(command, deadlineAt, queuedFence);
+      return prepareGroupPositionManagement(command, deadlineAt, queuedFence);
+    }
     if (command.action === 'attach-brackets') return prepareAttachBrackets(command, deadlineAt, queuedFence);
     // C8 (3. 11. 2026): × u vlastního holého Marketu bez SL/TP — vlastní příprava (resolveManagedTrade
     // chce obě nohy). Holý záznam s doplněnými nohami je běžný spravovaný obchod (fáze 2d níže).
@@ -10091,7 +10589,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (activeFollowerCut(pending.accountId)) return;
 
     const localFollowerNet = positionsByAccount.get(pending.accountId)?.get(pending.symbol) ?? 0;
-    if (localFollowerNet === 0) return;
+    if (localFollowerNet === 0 || groupBarePendingOwned(pending.accountId, pending.symbol, localFollowerNet)) return;
 
     const localLeaderNet = leaderPositions.get(pending.symbol) ?? 0;
     if (localLeaderNet !== 0 && Math.sign(localLeaderNet) === Math.sign(localFollowerNet)) return;
@@ -10128,7 +10626,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Přepis z REST na místě: průměr ze streamu k těmto kusům už nemusí patřit (zobrazení).
       brokerDisplayAverages.delete(`${pending.accountId}:${pending.symbol}`);
 
-      if (brokerFollowerNet === 0) return;
+      if (brokerFollowerNet === 0 || groupBarePendingOwned(pending.accountId, pending.symbol, brokerFollowerNet)) return;
       if (brokerLeaderNet !== 0 && Math.sign(brokerLeaderNet) === Math.sign(brokerFollowerNet)) return;
 
       // Bez přesného fill orderId nevíme, zda jde o cizí pozici, opožděný
@@ -10689,7 +11187,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Přepis z REST na místě: průměr ze streamu k těmto kusům už nemusí patřit (zobrazení).
       brokerDisplayAverages.delete(`${accountId}:${symbol}`);
 
-      if (followerNet === expectedFollowerNet) {
+      if (followerNet === expectedFollowerNet || groupBarePendingOwned(accountId, symbol, followerNet)) {
         awaitingCopiedEntries.delete(key);
         if (followerNet !== 0) convertedOsoFollowers.delete(key);
         return;
@@ -13449,7 +13947,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && storedEpoch.leaderAccountId === group.leaderAccountId
       ? storedEpoch
       : null;
-    if (!isLeaderFlatGuardTokenCurrent(epoch, token) || !gate.connected) return;
+    if (!isLeaderFlatGuardTokenCurrent(epoch, token) || !gate.connected || groupCloseOwnsSymbol(epoch.symbol)) return;
     if (safetyGeneration !== expectedSafetyGeneration) {
       await rescheduleLeaderFlatEpochAfterGenerationChange(epoch, token, allowWrites);
       return;
@@ -13554,7 +14052,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }));
 
     const current = leaderExposureEpoch(epoch.symbol);
-    if (!isLeaderFlatGuardTokenCurrent(current, token) || !gate.connected) return;
+    if (!isLeaderFlatGuardTokenCurrent(current, token) || !gate.connected || groupCloseOwnsSymbol(epoch.symbol)) return;
     if (safetyGeneration !== expectedSafetyGeneration) {
       await rescheduleLeaderFlatEpochAfterGenerationChange(current, token, allowWrites);
       return;
@@ -15451,6 +15949,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && terminalLeaderOrdersOnIngress.has(`${group.leaderAccountId}:${entryOrderId}`);
     // Holý Limit/Stop (id z ACK, záznam `bare`) nohy nemá a mít nebude: nečeká se a nic se nekopíruje (jen sólo skupina).
     // Před ACK nebo s neznámým výsledkem zůstává `maybe`: nic se nepřiřazuje podle účtu, symbolu ani počtu.
+    const groupBare = manualOwnership === 'own' && groupLimitsOn() && manualEntryRecords().some(record => record.operationId === ownManualEntryOrderIds.get(entryOrderId) && record.groupLimitContract === 1 && record.bare === true && record.request.orderType === 'Limit');
     const ownBarePending = manualOwnership === 'own'
       && isBarePendingEntry(manualEntryRecords().find(record => record.operationId === ownManualEntryOrderIds.get(entryOrderId)));
     if (manualOwnership && !manualEntryTerminal && !ownBarePending) {
@@ -15483,7 +15982,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       settleOsoFlush(entryOrderId);
       return;
     }
-    if (ownBarePending && !manualEntryTerminal) {
+    if (ownBarePending && !manualEntryTerminal && !groupBare) {
       options.onAudit?.([{ at: clock(), leaderEventId: pending.id, kind: 'skipped', reason: `ruční vstup ${entryOrderId} je vědomě bez SL/TP — nic se nekopíruje` }]);
       settleOsoFlush(entryOrderId);
       return;
@@ -15496,7 +15995,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       settleOsoFlush(entryOrderId);
       return;
     }
-    if (manualOwnership) {
+    if (manualOwnership && !groupBare) {
       const operationId = ownManualEntryOrderIds.get(entryOrderId);
       const reason = manualOwnership === 'own'
         ? `Ruční vstup ${entryOrderId}: ochranné nohy nedorazily do ${MANUAL_ENTRY_LEG_WAIT_MS / 1000} s — vstup se nekopíruje a ruší se`
@@ -15584,7 +16083,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         result.plan,
         result.audit,
       );
-      await failClosedOnCriticalAudit(result.audit);
+      if (groupBare) {
+        const owner = manualEntryRecords().find(record => record.operationId === ownManualEntryOrderIds.get(entryOrderId));
+        const trade = owner ? groupLimitTrade(owner.operationId) : null;
+        const allMapped = trade?.accounts.every(member => member.entry != null && !member.issue);
+        if (owner && trade && allMapped) {
+          await persistManualEntry(owner.operationId, current => ({ ...current!, groupLimitMembers: trade.accounts.map(member => ({
+            ...(current!.groupLimitMembers?.find(saved => saved.accountId === member.accountId) ?? {}), accountId: member.accountId,
+            entryId: member.entry!.brokerOrderId, quantity: member.expectedQuantity, entryFrom: member.entry!.price!,
+            routeEpoch: broker.routeEpoch?.(member.accountId) ?? connectionSyncGeneration, status: 'acknowledged' as const,
+          })), updatedAt: clock() }));
+        } else if (owner) {
+          const copies = [...currentRuntime().outbox.values()].filter(copy => copy.leaderOrderId === entryOrderId);
+          const uncertain = copies.some(copy => copy.status === 'sending' || copy.status === 'unknown' || copy.status === 'planned');
+          let allFlat = !uncertain;
+          let cleanupBlocked = uncertain;
+          for (const member of owner.groupLimitParticipants ?? []) {
+            const positions = await broker.listPositions(member.accountId);
+            const rows = await broker.listOrders(member.accountId, { fresh: true });
+            if (positions.some(position => position.netQuantity !== 0) || rows.some(row => row.symbol === owner.request.symbol && row.filledQuantity > 0)) { allFlat = false; cleanupBlocked = true; }
+            if ((pendingTradeIngressByAccount.get(member.accountId) ?? 0) > 0) { allFlat = false; cleanupBlocked = true; }
+          }
+          if (cleanupBlocked) { groupLimitCleanupVeto.add(owner.operationId); await persistManualEntry(owner.operationId, current => ({ ...current!, groupLimitCleanupBlocked: true, updatedAt: clock() })); }
+          if (allFlat && (owner.groupLimitParticipants ?? []).every(member => (pendingTradeIngressByAccount.get(member.accountId) ?? 0) === 0)) cancelOwnManualEntry(owner.operationId, 'kopie Limitu nebyla přijata; celá skupina ověřeně bez fillu');
+          failClosed(new Error('Skupinový Limit nemá potvrzené všechny kopie; fill nebo neznámý člen se automaticky neuklízí.'), { autoClose: false });
+        }
+      } else await failClosedOnCriticalAudit(result.audit);
       if (pending.kind === 'submitted'
         && (pending.orderType === 'Limit' || pending.orderType === 'Stop' || pending.orderType === 'StopLimit')
         && auditCleanDispatch(result.audit, 'dispatched')) {
@@ -15598,7 +16122,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           });
       }
     } catch (error) {
-      failClosed(error);
+      if (groupBare) {
+        const operationId = ownManualEntryOrderIds.get(entryOrderId);
+        if (operationId) {
+          groupLimitCleanupVeto.add(operationId);
+          try { await persistManualEntry(operationId, current => ({ ...current!, groupLimitCleanupBlocked: true, updatedAt: clock() })); }
+          catch (persistError) { failClosed(errorOf(persistError), { autoClose: false, recordWhenDisarmed: true }); }
+        }
+        failClosed(errorOf(error), { autoClose: false, recordWhenDisarmed: true });
+      } else failClosed(error);
     } finally {
       settleOsoFlush(entryOrderId);
     }
@@ -19505,6 +20037,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
     }
+    if (event.type === 'fill') {
+      for (const entry of manualEntryRecords().filter(record => record.groupLimitContract === 1)) {
+        const member = entry.groupLimitMembers?.find(member => member.accountId === event.fill.accountId && member.entryId === event.fill.brokerOrderId);
+        if (!member) {
+          const participant = entry.groupLimitMembers?.find(member => member.accountId === event.fill.accountId);
+          if (participant && entry.request.symbol === event.fill.symbol) {
+            const ownIds = new Set([participant.entryId, participant.stopId, participant.targetId]);
+            for (const action of manualOrderActionRecords()) if (action.entryOperationId === entry.operationId) for (const saved of action.groupLimit?.members ?? []) if (saved.accountId === event.fill.accountId) for (const id of [saved.entryId, saved.stopId, saved.targetId, saved.oldLegId, saved.newStopId, saved.newTargetId]) if (id) ownIds.add(id);
+            if (!ownIds.has(event.fill.brokerOrderId)) await persistManualEntry(entry.operationId, current => ({ ...current!, groupLimitMembers: current!.groupLimitMembers!.map(saved => saved.accountId === participant.accountId ? { ...saved, closedAt: saved.closedAt ?? clock() } : saved), updatedAt: clock() }));
+          }
+          continue;
+        }
+        const known = Math.max(member.filledQuantity ?? 0, observedOrderFilledByAccount.get(member.accountId)?.get(member.entryId) ?? 0);
+        await persistManualEntry(entry.operationId, current => ({ ...current!, groupLimitMembers: current!.groupLimitMembers!.map(saved => saved.accountId === member.accountId ? { ...saved, openedAt: saved.openedAt ?? clock(), filledQuantity: known } : saved), updatedAt: clock() }));
+      }
+    }
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       await evaluateConditionalMirrorSource(event.fill.brokerOrderId, { fill: event.fill });
     }
@@ -19835,6 +20383,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         brokerDisplayAverages.delete(displayKey);
       }
       lastBrokerPositionAt = clock();
+      if (event.position.netQuantity === 0 && previousAccountNet !== 0) {
+        for (const entry of manualEntryRecords().filter(record => record.groupLimitContract === 1 && record.request.symbol === event.position.symbol)) {
+          if (!entry.groupLimitMembers?.some(member => member.accountId === event.position.accountId && member.closedAt == null)) continue;
+          await persistManualEntry(entry.operationId, current => ({ ...current!, groupLimitMembers: current!.groupLimitMembers!.map(member => member.accountId === event.position.accountId ? { ...member, closedAt: clock() } : member), updatedAt: clock() }));
+        }
+      }
+
       // Incident 24. 8.: follower byl flat v 19.198, ale jeho stop u brokera
       // dál pracoval (venue ho přeasertoval na vyšší total) a o 980 ms
       // později ho otočil do protipozice. Jakmile follower dosáhne flat,
@@ -19899,6 +20454,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && (leaderPositions.get(event.position.symbol) ?? 0) === 0
         && !leaderFillAheadOfPosition.has(event.position.symbol)
         && !activeFollowerCut(event.position.accountId)
+        && !groupBarePendingOwned(event.position.accountId, event.position.symbol, event.position.netQuantity)
       ) {
         const transitionKey = followerTransitionKey(event.position.accountId, event.position.symbol);
         const cause = recentFollowerFillCauses.get(transitionKey);
@@ -20136,6 +20692,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
+    // These exact leg IDs/tags belong to the member-WAL coordinator, including event-before-ACK.
+    // Recording preserves source sequence; a second generic bracket/standalone fan-out would duplicate risk.
+    const groupManagedEvent = groupCloseOwnsSymbol(leaderEvent.symbol) || manualOrderActionRecords().some(action => action.groupLimit?.members.some(member => member.accountId === leaderEvent.accountId && (
+      [member.stopId, member.targetId, member.oldLegId, member.newStopId, member.newTargetId].includes(leaderEvent.orderId)
+      || ((event.type === 'order' || event.type === 'fill') && !!member.tag && [member.tag, `${member.tag}s`, `${member.tag}t`, `${member.tag}b`].includes(event.type === 'order' ? event.order.tag : event.fill.tag ?? '')))));
+    const ambiguousGroupWrite = !groupManagedEvent && manualOrderActionRecords().some(action => action.groupLimit && action.symbol === leaderEvent.symbol
+      && (action.action === 'add-leg' || action.action === 'attach-brackets') && (action.status === 'sending' || action.status === 'unknown')
+      && action.groupLimit.members.some(member => member.accountId === leaderEvent.accountId && member.status === 'sending' && (member.phase === 'write-sending' || member.phase === 'target-canceled')));
+    if (ambiguousGroupWrite) {
+      // Missing clOrdId before REST ACK is ambiguous ownership, never permission to fan out.
+      // Record sequence, stop without automatic cleanup, and leave exact reconciliation to WAL/ACK.
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore }); runtime = recorded.runtime;
+      failClosed(new Error('Příkaz během skupinového zápisu nemá potvrzené vlastní ID/tag; nic se dále nekopíruje.'), { autoClose: false, recordWhenDisarmed: true });
+      return;
+    }
+    if (groupManagedEvent) {
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore }); runtime = recorded.runtime;
+      if (recorded.audit.length) options.onAudit?.(recorded.audit);
+      return;
+    }
+
     // INV-TRAD-07 (3. 11. 2026): typ příkazu, který adaptér nezná (TrailingStop, MIT, …), se nikdy
     // nekopíruje ani nemodifikuje. Nový nebo změněný takový příkaz leadera = se followery za ARMED
     // incident bez auto-close (followeři ho nemají, případně drží starou kopii), za DISARMED
@@ -22985,6 +23562,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     manualPendingLegsEnabled() {
       return pendingLegsOn();
     },
+    manualGroupLimitMoveEnabled() { return groupLimitsOn(); },
+    manualGroupBareLimitEnabled() { return groupLimitsOn(); },
+    manualGroupLimitManageEnabled() { return groupLimitsOn(); },
     manualEntryScaleInEnabled() {
       return scaleInOn();
     },
@@ -23049,6 +23629,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const rollSoon = quarterlyContractsAround(command.symbol.startsWith('NQ') ? 'NQ' : 'MNQ', now + 10 * 86_400_000)[0] !== front;
       return evaluateManualEntryPreview({
         now,
+        groupLimitsEnabled: groupLimitsOn(),
         marketMaxDriftTicks: manualMarketDriftTicks(),
         command,
         group: retiredGroup ? null : group,
@@ -24199,6 +24780,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? 0
         : sessionArmedAt;
       return {
+        groupLimitTrades: groupLimitsOn() ? manualEntryRecords().flatMap(record => { const trade = groupLimitTrade(record.operationId); return trade ? [trade] : []; }).slice(-10) : [],
         manageableLeaderTrades: (() => {
           if (group.leaderAccountId == null) return [];
           const leaderOrders = liveOrdersByAccount.get(group.leaderAccountId);

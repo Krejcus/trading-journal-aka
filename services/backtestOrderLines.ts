@@ -16,6 +16,8 @@ export interface BacktestChartOrderLine {
   color: string;
   label: string;
   draggable: boolean;
+  /** Immutable group LIMIT evidence captured with the line at pointer-down (display only). */
+  groupLimitStateHash?: string;
   cancellable?: boolean;
   cancelAction?: 'cancel-order' | 'close-position' | 'remove-bracket';
   /** Tah se počítá až po tolika px (chvění při kliknutí nic nepošle); default 0. */

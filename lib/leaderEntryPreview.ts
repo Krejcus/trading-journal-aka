@@ -1,3 +1,4 @@
+import { GROUP_LIMIT_CONTRACT } from './groupLimitProtocol.js';
 import { stableHash64 } from '../services/copierKeys.js';
 
 /**
@@ -24,6 +25,8 @@ const OPERATION_ID_PATTERN = /^preview:[a-zA-Z0-9_-]{8,100}$/;
 
 export interface LeaderEntryPreviewCommand {
   type: 'preview-leader-entry';
+  /** Explicit group LIMIT contract; never enables Market, Stop or scale-in. */
+  groupLimitContract?: typeof GROUP_LIMIT_CONTRACT;
   groupId: string;
   operationId: string;
   leaderAccountId: number;
@@ -106,7 +109,7 @@ const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 
 const price = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
 const accountId = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const quantity = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= LEADER_ENTRY_MAX_QUANTITY;
-const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'position', 'intent'];
+const COMMAND_KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'symbol', 'side', 'quantity', 'orderType', 'price', 'referencePrice', 'quoteReceivedAt', 'stopLoss', 'takeProfit', 'position', 'intent', 'groupLimitContract'];
 const POSITION_KEYS = ['mode', 'side', 'quantity', 'ticketEntryIds'];
 const BROKER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const epochMs = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 1_500_000_000_000 && value < 4_000_000_000_000;
@@ -119,6 +122,8 @@ export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCo
   const command = value as Record<string, unknown>;
   if (Object.keys(command).some(key => !COMMAND_KEYS.includes(key))) fail();
   if (command.type !== 'preview-leader-entry') fail();
+  if (command.groupLimitContract !== undefined && (command.groupLimitContract !== GROUP_LIMIT_CONTRACT
+    || command.orderType !== 'Limit' || command.position !== undefined)) fail();
   if (typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200) fail();
   if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId)) fail();
   if (!accountId(command.leaderAccountId)) fail();
@@ -221,6 +226,7 @@ export function buildLeaderEntryPreviewCommand(draft: LiveEntryPreviewDraft, con
   excludedFollowers: ReadonlySet<number>;
   participation: ReadonlyArray<{ accountId: number; effectiveEnabled: boolean }>;
   operationId: string;
+  groupLimitContract?: typeof GROUP_LIMIT_CONTRACT;
 }): LeaderEntryPreviewCommand {
   const active = new Map(context.participation.map(entry => [entry.accountId, entry.effectiveEnabled]));
   const followerQuantities = context.group.followers
@@ -233,6 +239,7 @@ export function buildLeaderEntryPreviewCommand(draft: LiveEntryPreviewDraft, con
     operationId: context.operationId,
     leaderAccountId: context.group.leaderAccountId,
     ...draft,
+    ...(context.groupLimitContract !== undefined ? { groupLimitContract: context.groupLimitContract } : {}),
     intent: { armedAt: context.armedAt, groupConfigHash: copyGroupConfigHash(context.group), followerQuantities },
   };
 }

@@ -98,6 +98,24 @@ describe('local copier execution agent', () => {
     running = null;
   });
 
+  it('advertises independent group LIMIT capabilities only when the controller enables each lifecycle', async () => {
+    const ready = { move: true, bare: false, manage: false };
+    const runtime = Object.assign(controller(), {
+      manualGroupLimitMoveEnabled: () => ready.move,
+      manualGroupBareLimitEnabled: () => ready.bare,
+      manualGroupLimitManageEnabled: () => ready.manage,
+    });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const capabilities = () => running!.status().capabilities;
+    expect(capabilities()).toContain('manual-group-limit-move-v1');
+    expect(capabilities()).not.toContain('manual-group-limit-bare-v1');
+    expect(capabilities()).not.toContain('manual-group-limit-manage-v1');
+    ready.bare = ready.manage = true;
+    expect(capabilities()).toEqual(expect.arrayContaining(['manual-group-limit-move-v1', 'manual-group-limit-bare-v1', 'manual-group-limit-manage-v1']));
+    ready.move = ready.bare = ready.manage = false;
+    expect(capabilities().filter(value => value.startsWith('manual-group-limit-'))).toEqual([]);
+  });
+
   it('relay wake pouze probudí poll; neumí spustit command a cizí origin ho nedostane', async () => {
     const runtime = controller();
     const onRelayWake = vi.fn();

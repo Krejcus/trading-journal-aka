@@ -152,6 +152,11 @@ INSTALLED_PRICE_ALERTS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariable
 if [[ "${COPIER_PRICE_ALERTS:-$INSTALLED_PRICE_ALERTS}" == "on" ]]; then
   TV_STREAM_ARGS+=(--price-alerts on)
 fi
+# Skupinový Limit je samostatný opt-in, oddělený od sólo DEMO funkcí.
+INSTALLED_GROUP_LIMITS="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_GROUP_LIMITS' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_GROUP_LIMITS:-$INSTALLED_GROUP_LIMITS}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--group-limits on)
+fi
 # Přikoupení do pozice (jen manual-only) přežije reinstall stejně;
 # přepsat jde COPIER_SCALE_IN=on|off scripts/copier/mac-reinstall-safe.sh
 INSTALLED_SCALE_IN="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_SCALE_IN' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"

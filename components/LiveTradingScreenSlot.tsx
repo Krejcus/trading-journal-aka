@@ -111,11 +111,13 @@ interface Props {
   onTargetChange?: (target: LiveTradeTarget) => void;
   onPreviewEntry?: (draft: LiveEntryPreviewDraft) => Promise<LeaderEntryPreviewResult>;
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
-  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
   manageEntryAvgPrice?: number | null;
   manageCloseSupported?: boolean;
   managePendingLegsSupported?: boolean;
   manageMoveLimitSupported?: boolean;
+  manageGroupLimitMoveSupported?: boolean;
+  manageGroupLimitStateHash?: string | null;
   manageMoveBareEntrySupported?: boolean;
   /** Worker umí nativní Market ručního vstupu. */
   entryMarketSupported?: boolean;
@@ -129,6 +131,7 @@ interface Props {
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); chybí = false. */
   entryBareSupported?: boolean;
   entryBarePendingSupported?: boolean;
+  entryBareLimitSupported?: boolean;
   entryBarePartial?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /** Vlastní přijatý holý Market bez nohou (jen v pohledu leadera skupiny workeru); chybí = null. */
   entryBareEntry?: LiveBareEntryRecord | null;
@@ -241,6 +244,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && Boolean(left.manageCloseSupported) === Boolean(right.manageCloseSupported)
   && Boolean(left.managePendingLegsSupported) === Boolean(right.managePendingLegsSupported)
   && Boolean(left.manageMoveLimitSupported) === Boolean(right.manageMoveLimitSupported)
+  && Boolean(left.manageGroupLimitMoveSupported) === Boolean(right.manageGroupLimitMoveSupported)
+  && (left.manageGroupLimitStateHash ?? null) === (right.manageGroupLimitStateHash ?? null)
   && Boolean(left.manageMoveBareEntrySupported) === Boolean(right.manageMoveBareEntrySupported)
   && Boolean(left.entryMarketSupported) === Boolean(right.entryMarketSupported)
   && (left.entryMaxContracts ?? 1) === (right.entryMaxContracts ?? 1)
@@ -248,6 +253,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && JSON.stringify(left.entryScaleIn ?? null) === JSON.stringify(right.entryScaleIn ?? null)
   && Boolean(left.entryBareSupported) === Boolean(right.entryBareSupported)
   && Boolean(left.entryBarePendingSupported) === Boolean(right.entryBarePendingSupported)
+  && Boolean(left.entryBareLimitSupported) === Boolean(right.entryBareLimitSupported)
   && left.entryBarePartial === right.entryBarePartial
   && JSON.stringify(left.entryBareEntry ?? null) === JSON.stringify(right.entryBareEntry ?? null)
   && JSON.stringify(left.entryLeaderPosition ?? null) === JSON.stringify(right.entryLeaderPosition ?? null)

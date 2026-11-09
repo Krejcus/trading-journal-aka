@@ -43,7 +43,7 @@ const UNITS: readonly TicketBracketUnits[] = ['price', 'pts', 'ticks', 'usd'];
  * a náhled. Odesílací cesty (`place`, `attach`, `flatten`, `manage`) list nikdy nedostane:
  * odeslání jde dál jen přes `onSubmit` rodiče (INV-UI-01, „⚡ jen vyplní“).
  */
-export type LivePhoneSheetTrade = Pick<LivePhoneTradeBridge, 'blockedReason' | 'marketSupported' | 'bareSupported' | 'barePendingSupported' | 'maxContracts' | 'frontContract' | 'scaleIn' | 'preview'>;
+export type LivePhoneSheetTrade = Pick<LivePhoneTradeBridge, 'blockedReason' | 'marketSupported' | 'bareSupported' | 'barePendingSupported' | 'bareLimitSupported' | 'maxContracts' | 'frontContract' | 'scaleIn' | 'preview'>;
 
 type PrefsStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -119,7 +119,7 @@ export function livePhoneSheetProblems(
   if (tooClose) problems.push(tooClose);
   if (!trade) return problems;
   const quantity = ticketQuantity(draft, instrument, quote);
-  const legs = liveTicketLegsProblem(draft, trade.bareSupported, trade.barePendingSupported === true);
+  const legs = liveTicketLegsProblem(draft, trade.bareSupported, trade.barePendingSupported === true, trade.bareLimitSupported === true);
   if (legs) problems.push({ level: 'error', text: legs });
   if (draft.type === 'market' && !trade.marketSupported) problems.push({ level: 'error', text: 'Worker zatím neumí Market — použij Limit.' });
   const scale = livePhoneScaleInBlocked({ ...draft, sizing: 'qty', quantity }, quantity, trade.scaleIn, trade.maxContracts);

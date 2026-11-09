@@ -1,3 +1,4 @@
+import { groupLimitOutcomeNotice } from './groupLimitUiNotice';
 import { runWithCommandLock } from '../hooks/liveCommandRuns';
 import { liveManageErrorNotice } from '../hooks/useLiveManageRunner';
 import type { LeaderOrderManageCommand, LeaderOrderManageResult } from './leaderOrderManage';
@@ -8,10 +9,11 @@ import type { ManualLeg } from './manualSingleLeg';
  * SL a TP po jedné v UI (6. 11. 2026): záměr uživatele z čáry nebo čipu. Rozhoduje worker
  * (INV-UI-01), UI posílá jen to, co uživatel viděl.
  */
-export type LiveBareLegIntent =
+export type LiveBareLegIntent = (
   | { kind: 'add'; leg: ManualLeg; price: number; stop: number | null; target: number | null }
   | { kind: 'remove'; leg: ManualLeg; stop: number | null; target: number | null }
-  | { kind: 'move'; leg: ManualLeg; price: number; current: number };
+  | { kind: 'move'; leg: ManualLeg; price: number; current: number }
+) & { groupLimitStateHash?: string };
 
 export function liveBareLegFields(trade: BareLeaderTrade, intent: LiveBareLegIntent): Pick<LeaderOrderManageCommand, 'action' | 'expect'> & Partial<LeaderOrderManageCommand> {
   if (intent.kind === 'move') {
@@ -26,7 +28,8 @@ export function liveBareLegFields(trade: BareLeaderTrade, intent: LiveBareLegInt
 const NAME = (leg: ManualLeg) => (leg === 'stopLoss' ? 'SL' : 'TP');
 
 /** Text výsledku pro hlášku nad grafem. */
-export function liveBareLegNotice(intent: LiveBareLegIntent, result: LeaderOrderManageResult): { tone: 'ok' | 'bad' | 'warn'; text: string } {
+export function liveBareLegNotice(intent: LiveBareLegIntent, result: LeaderOrderManageResult, group = false): { tone: 'ok' | 'bad' | 'warn'; text: string } {
+  if (group) return groupLimitOutcomeNotice(intent.kind === 'add' ? 'add-leg' : intent.kind === 'remove' ? 'remove-leg' : intent.leg === 'stopLoss' ? 'move-stop' : 'move-target', result, Date.now());
   if (result.status === 'acknowledged') {
     return { tone: 'ok', text: intent.kind === 'add' ? `${NAME(intent.leg)} je u brokera.` : intent.kind === 'remove' ? `${NAME(intent.leg)} zrušen.` : `${NAME(intent.leg)} posunut.` };
   }
@@ -37,6 +40,7 @@ export function liveBareLegNotice(intent: LiveBareLegIntent, result: LeaderOrder
 
 /** Odeslání jedním zámkem s ostatními příkazy. Výjimka neříká, že nic neodešlo. */
 export async function runLiveBareLeg(input: {
+  groupLimitStateHash?: string | null;
   busyRef: { current: boolean };
   send: () => Promise<LeaderOrderManageResult>;
   intent: LiveBareLegIntent;
@@ -46,7 +50,7 @@ export async function runLiveBareLeg(input: {
   if (input.busyRef.current) { input.report({ tone: 'warn', text: input.busyText }); return; }
   try {
     const result = await runWithCommandLock(input.busyRef, input.send);
-    input.report(liveBareLegNotice(input.intent, result));
+    input.report(liveBareLegNotice(input.intent, result, (input.intent.groupLimitStateHash ?? input.groupLimitStateHash) != null));
   } catch (reason) {
     const notice = liveManageErrorNotice(reason, Date.now());
     input.report({ tone: notice.tone, text: notice.text });

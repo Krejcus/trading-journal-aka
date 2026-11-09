@@ -15,6 +15,7 @@ import LivePhoneDraftBar from './LivePhoneDraftBar';
 import LivePhoneManageSheet from './LivePhoneManageSheet';
 import LivePhoneReplayLiveChip from './LivePhoneReplayLiveChip';
 import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar, livePhonePositionBarShown, createLivePhoneBarClose, useLivePhoneBarGuard } from './LivePhoneLiveActions';
+import { groupLimitOutcomeNotice } from '../../lib/groupLimitUiNotice';
 import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
 import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
@@ -23,7 +24,7 @@ import { useLivePositionBoxFollow } from '../../hooks/useLivePositionBoxFollow';
 import LiveChartAutomationSettings, { LiveBoxFollowPane } from '../LiveChartAutomationSettings';
 import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { useLiveNoPriceNotice, useLiveResumeState } from '../../hooks/useLiveResumeState';
-import { LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
+import { liveTicketLegsProblem, LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
 import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
@@ -241,6 +242,10 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     void send(scaleIn ? livePhonePillScaleIn(side, pill.qty, quote!, scaleIn, trade!.maxContracts) : livePhoneBareMarket(side, pill.qty, quote!));
   };
   const [attachOpen, setAttachOpen] = useState(false);
+  const attachSeenGroupHash = useRef<string | null>(null);
+  const chipSeenGroupHash = useRef<string | null>(null);
+  const attachSeenGroupRequired = useRef(false);
+  const chipSeenGroupRequired = useRef(false);
   const position = trade?.position ?? null;
   const marketNow = quote ? (position?.side === 'short' ? quote.ask : quote.bid) : null;
   // Nohy holé pozice vytažené ze štítků „+ SL“ / „+ TP“ na čáře; odcházejí až tlačítkem na čáře.
@@ -254,7 +259,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     const timer = window.setTimeout(() => setChipSentFor(null), LIVE_ATTACH_SENT_HOLD_MS);
     return () => window.clearTimeout(timer);
   }, [chipSentFor]);
-  const sendAttach = (stopLoss: number, takeProfit: number) => {
+  const sendAttach = (stopLoss: number, takeProfit: number, seenGroupHash = attachSeenGroupHash.current, requiredGroup = attachSeenGroupRequired.current) => {
     if (!trade || !position || !position.bareEntryOperationId) return;
     const operationId = position.bareEntryOperationId;
     if (chipSent) { say('SL a TP už odešly — výsledek ověř na pozici, nic neopakuj.'); return; }
@@ -268,9 +273,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     busyRef.current = true;
     setBusy(true);
     const sent = () => { setChipSentFor(operationId); setChipLegs(null); };
-    void trade.attach(intent.attach)
+    void trade.attach({ ...intent.attach, ...(requiredGroup || seenGroupHash ? { groupLimitStateHash: seenGroupHash } : {}) })
       .then(result => {
-        say(result.status === 'acknowledged' ? result.reason ?? 'SL a TP přijaty brokerem.'
+        say(requiredGroup || seenGroupHash ? groupLimitOutcomeNotice('attach-brackets', result, Date.now()).text : result.status === 'acknowledged' ? result.reason ?? 'SL a TP přijaty brokerem.'
           : result.status === 'blocked' ? `Neodesláno: ${result.blockers[0]?.text ?? ''}` : result.reason ?? 'Výsledek neznámý — zkontroluj pozici.');
         if (result.status === 'acknowledged' || result.status === 'unknown') sent();
       })
@@ -283,6 +288,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     quantity: position.quantity,
     reference: trade.entryAvg ?? null,
     onLeg: (kind: 'stopLoss' | 'takeProfit', price: number | null | undefined) => {
+      if (!shownChipLegs) { chipSeenGroupHash.current = trade.groupLimitStateHash ?? null; chipSeenGroupRequired.current = trade.bareLimitSupported === true || trade.groupLimitStateHash != null; }
       const at = price === null ? null : price !== undefined ? price
         : marketNow != null && quote != null && Date.now() - quote.at <= LIVE_BARE_QUOTE_MAX_AGE_MS ? liveAttachDefaults(position.side, marketNow, LIVE_PHONE_INSTRUMENT.tickSize)[kind] : undefined;
       if (at === undefined) { say('Cena není čerstvá — nohu teď nejde připravit.'); return; }
@@ -292,7 +298,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       });
     },
     onSend: () => {
-      if (shownChipLegs?.stopLoss != null && shownChipLegs.takeProfit != null) sendAttach(shownChipLegs.stopLoss, shownChipLegs.takeProfit);
+      if (shownChipLegs?.stopLoss != null && shownChipLegs.takeProfit != null) sendAttach(shownChipLegs.stopLoss, shownChipLegs.takeProfit, chipSeenGroupHash.current, chipSeenGroupRequired.current);
     },
   } : null;
   // Objednávka z position toolu: návrh jako ⚡ na PC (draftFromPositionBox), velikost v kontraktech.
@@ -468,7 +474,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     // List se zavře (hláška by byla za ním); návrh v grafu zůstane, ať jde opravit tažením.
     const keep = order?.mode === 'chart';
     const refuse = (text: string) => { if (!keep) setOrder(null); say(`${draftSummary(draft)} — ${text}`); };
-    const blocked = sendBlocked(draft.type === 'market')
+    const blocked = liveTicketLegsProblem(draft, trade?.bareSupported === true, trade?.barePendingSupported === true, trade?.bareLimitSupported === true)
+      ?? sendBlocked(draft.type === 'market')
       ?? (draft.quantity > (trade?.maxContracts ?? 1) ? `Strop ručního vstupu je ${trade?.maxContracts ?? 1} kontraktů.` : null);
     if (blocked) { refuse(blocked); return; }
     // Znovu proti čerstvé kotaci: limit/stop, který by se teď hned vyplnil, neposílat.
@@ -655,6 +662,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             attach={trade?.bareLeg && trade.bareLegTrade ? null : attachChipBridge}
             bareLeg={trade?.bareLeg && trade.bareLegTrade ? intent => trade.bareLeg!(trade.bareLegTrade!, intent) : null}
             moveLimit={trade?.moveLimit === true}
+            groupLimitMove={trade?.groupLimitMove === true}
+            groupLimitStateHash={trade?.groupLimitStateHash ?? null}
             moveBareEntry={trade?.moveBareEntry === true}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
@@ -705,7 +714,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {positionBarShown(replay) && position && <LivePhonePositionBar
             side={position.side} quantity={position.quantity} symbol={position.symbol} pending={position.pending}
             unprotected={position.bareEntryOperationId != null} busy={busy}
-            onAttach={() => { if (marketNow == null) say('Cena není čerstvá — SL/TP teď nejde připravit.'); else setAttachOpen(true); }}
+            onAttach={() => { if (marketNow == null) say('Cena není čerstvá — SL/TP teď nejde připravit.'); else { attachSeenGroupHash.current = trade?.groupLimitStateHash ?? null; attachSeenGroupRequired.current = trade?.bareLimitSupported === true || trade?.groupLimitStateHash != null; setAttachOpen(true); } }}
             // Správa (U10) jen mimo přehrávání; Zavřít a Přidat SL/TP zůstávají (snižují riziko, INV-UI-02).
             onManage={openManage && !replay ? () => openManage('stopLoss') : undefined}
             // Čekající vstup se ruší cílenou cestou × (cancel-entry, i za vypnuté kopírky) — ne

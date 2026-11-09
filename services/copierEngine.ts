@@ -340,6 +340,13 @@ export type CopierManualEntryStatus =
   | 'sending' | 'acknowledged' | 'rejected' | 'unknown' | 'abandoned' | 'not-sent' | 'waived';
 
 export interface CopierManualEntryRecord {
+  /** Sealed opt-in intent; never inferred from symbol/quantity. */
+  groupLimitContract?: 1;
+  groupLimitMembers?: import('./groupLimitLifecycle').GroupLimitMemberRecord[];
+  groupLimitConfigHash?: string;
+  groupLimitParticipants?: Array<{ accountId: number; quantity: number }>;
+  /** P7 uncertain/filled member: no automatic pending-entry cleanup, including later heartbeat review. */
+  groupLimitCleanupBlocked?: true;
   operationId: string;
   payloadHash: string;
   /** clOrdId vstupu (`me…`); nohy nesou `…s`/`…t`. */
@@ -436,6 +443,8 @@ export interface CopierManualEntryRecord {
 }
 
 export interface CopierManualOrderActionRecord {
+  /** Group ownership and verification WAL. Ordinary OSO cascade remains its sole writer. */
+  groupLimit?: { contract: 1; stateHash: string; members: import('./groupLimitLifecycle').GroupLimitMemberRecord[] };
   operationId: string;
   payloadHash: string;
   entryOperationId: string;

@@ -465,9 +465,10 @@ describe('kontrolní seznam 25: Shift+X přes celou cestu až k jedinému close-
     expect(unknown.manage).not.toHaveBeenCalled();
   });
 
-  it('zdroj: × pozice na obrazovce = runLiveManage(close-position, SL leadera)', () => {
+  it('zdroj: × pozice zachová solo SL očekávání a předá neměnný group token do společného runneru', () => {
     const screenSource = source('components/LiveTradingScreen.tsx');
-    expect(screenSource).toMatch(/if \(line\.kind === 'entry' && summary\?\.kind === 'position'\) void runLiveManage\('close-position', summary\.stop \?\? entryScaleIn\?\.stopLoss\);/);
+    expect(screenSource).toMatch(/const closeReference = line\.groupLimitStateHash \? summary\?\.leader\?\.entry \?\? summary\?\.entry : summary\?\.stop \?\? entryScaleIn\?\.stopLoss;/);
+    expect(screenSource).toMatch(/if \(line\.kind === 'entry' && summary\?\.kind === 'position'\) void runLiveManage\('close-position', closeReference, undefined, undefined, line\.groupLimitStateHash\);/);
   });
 });
 
@@ -488,9 +489,11 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
   it('zdroj: desk kontroluje čerstvý stav PŘED relayem; panel konečnost odvozuje z tónu', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     // C8 (4. 11. 2026): relay volá jen sdílený `sendLeaderManage` (správa, attach, × holé pozice, C7).
-    const attach = between(desk, 'const attachBrackets = useCallback(', '}, [sendLeaderManage]);');
+    const attach = between(desk, 'const attachBrackets = useCallback(', '// C8 (4. 11. 2026):');
     const fresh = attach.indexOf('if (!armStatusRef.current.fresh');
     const relay = attach.indexOf('sendLeaderManage(');
+    const groupRelay = attach.indexOf('manageGroupLimitPosition(');
+    expect(groupRelay).toBeGreaterThan(fresh);
     expect(fresh).toBeGreaterThan(0);
     expect(relay).toBeGreaterThan(fresh);
     // Relay odeslání správy je v čisté továrně desku (lib/liveDeskCommands.ts); desk dodá jen relay klienta.

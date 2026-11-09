@@ -36,6 +36,9 @@ export interface LivePositionLineControls {
    */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  /** Distinct group capability: aggregate chart quantity may exceed the leader quantity. */
+  groupLimitMove?: boolean;
+  groupLimitStateHash?: string | null;
   /** Čekající Limit/Stop bez SL/TP jde táhnout (capability `manual-order-move-bare-entry-v1`). */
   moveBareEntry?: boolean;
   /**
@@ -68,15 +71,15 @@ export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
   kind: 'entry' | 'stopLoss' | 'takeProfit',
   price: number,
-  options: { pendingLegs?: boolean; moveLimit?: boolean; moveBareEntry?: boolean } = {},
+  options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean } = {},
 ): string | null {
   // Holý Limit/Stop: nohy nejsou; jestli by se nová cena vyplnila hned, rozhodne worker podle své kotace.
   if (kind === 'entry' && options.moveBareEntry && summary.kind === 'pending' && summary.stop == null && summary.target == null) {
     return summary.entryType?.toLowerCase() === 'limit' ? null : 'Posun Stopu bez SL/TP zatím nejde — zruš ho × a zadej znovu.';
   }
   if (kind === 'entry') {
-    if (!options.moveLimit || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
-    if (summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
+    if (!(options.moveLimit || options.groupLimitMove) || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
+    if (!options.groupLimitMove && summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
     if (summary.stop == null || summary.target == null) return 'Ochranné ceny vstupu nejsou známé.';
     return pendingLegSideProblem('stopLoss', summary.side, price, 'Limit', summary.stop)
       ?? pendingLegSideProblem('takeProfit', summary.side, price, 'Limit', summary.target);
@@ -147,12 +150,13 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
   const lines: BacktestChartOrderLine[] = [{
     id: bare ? liveBareLineId(bare.entryOperationId) : `${LIVE_POSITION_OWNER}:entry`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind: 'entry',
     price: displayEntry,
+    ...(controls.groupLimitStateHash ? { groupLimitStateHash: controls.groupLimitStateHash } : {}),
     color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : MUTED_COLOR,
     label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
     draggable: controls.manageable && !position && pendingEntry == null && (controls.moveBareEntry === true && summary.stop == null && summary.target == null
       // Stop až po ověření na DEMO (worker `BARE_STOP_MOVE_VERIFIED`).
       ? summary.entryType?.toLowerCase() === 'limit'
-      : controls.moveLimit === true && summary.quantity === 1 && summary.entryType?.toLowerCase() === 'limit') && pendingEntry == null,
+      : (controls.groupLimitMove === true || (controls.moveLimit === true && summary.quantity === 1)) && summary.entryType?.toLowerCase() === 'limit') && pendingEntry == null,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',
@@ -179,6 +183,7 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     lines.push({
       id: `${LIVE_POSITION_OWNER}:${kind}`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind,
       price: at,
+      ...(controls.groupLimitStateHash ? { groupLimitStateHash: controls.groupLimitStateHash } : {}),
       color: pendingPrice != null ? MUTED_COLOR : kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
       label: levelLabel(kind, at, pendingPrice != null ? 'odesílám' : position ? undefined : 'čeká na vstup'),
       labelAt: next => levelLabel(kind, next),
@@ -200,4 +205,9 @@ export function livePositionChartLines(summary: LiveChartPositionSummary, contro
     });
   }
   return lines;
+}
+
+/** Hash is part of what the user grabbed, even if only a follower changed at the same leader price. */
+export function liveGroupLineSnapshotChanged(startLine: Pick<BacktestChartOrderLine, 'groupLimitStateHash'> | undefined, currentHash: string | null | undefined): boolean {
+  return (startLine?.groupLimitStateHash ?? null) !== (currentHash ?? null);
 }

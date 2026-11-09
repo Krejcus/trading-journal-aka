@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { GroupLimitTradeState } from '../lib/groupLimitProtocol';
 import {
-  decryptCopierLiveExposure, encryptCopierLiveExposure, isCopierLiveExposurePayload, mergeCopierLiveExposure, mergeCopyEvents,
+  boundCopierLiveExposureGroupProjection, decryptCopierLiveExposure, encryptCopierLiveExposure, isCopierLiveExposurePayload, mergeCopierLiveExposure, mergeCopyEvents,
   type CopierLiveExposurePayload,
 } from '../lib/copierLiveExposure';
 
@@ -47,6 +48,57 @@ const status = (displaySeq: number | undefined, displayBuiltAt: number | undefin
     recentCopyEvents: [{ id: 'e-0', at: 5, kind: 'order-placed' }],
   },
 } as unknown as LocalCopierAgentStatus);
+
+describe('group LIMIT projection travels with ordered exposure', () => {
+  const trade = (groupId = 'group-current'): GroupLimitTradeState => ({
+    groupId, entryOperationId: 'entry:grouptransport01', symbol: 'MNQZ6', side: 'Buy', stateHash: 'abcd1234abcd', state: 'pending',
+    accounts: [70771429, 70423188].map((accountId, index) => ({
+      accountId, role: index ? 'follower' : 'leader', expectedQuantity: index + 1, openQuantity: 0,
+      entry: { brokerOrderId: String(611860533628 + index), quantity: index + 1, filledQuantity: 0, price: 29_500, state: 'working' },
+      stop: null, target: null, state: 'pending', verifiedAt: 1000,
+    })),
+  });
+  const current = () => ({ ...status(1, 1000), group: { id: 'group-current' },
+    controller: { ...status(1, 1000).controller, groupLimitTrades: [trade()] },
+  } as LocalCopierAgentStatus);
+  it('authenticates and preserves separate member quantities', async () => {
+    const message = { ...payload(2, 1100), groupLimitTrades: [trade()] };
+    const encrypted = await encryptCopierLiveExposure(message, KEY, TOPIC);
+    expect(await decryptCopierLiveExposure(encrypted, KEY, TOPIC)).toEqual(message);
+    const merged = mergeCopierLiveExposure(current(), 1000, { payload: message, receivedAt: 1100, receivedPerformanceAt: 100 });
+    expect(merged.status?.controller.groupLimitTrades?.[0].accounts.map(account => account.expectedQuantity)).toEqual([1, 2]);
+  });
+  it('never overwrites group evidence with another group, worker epoch or an older sequence', () => {
+    const before = current();
+    const wrongGroup = { ...payload(2, 1100), groupLimitTrades: [trade('other-group')] };
+    expect(mergeCopierLiveExposure(before, 1000, { payload: wrongGroup, receivedAt: 1100, receivedPerformanceAt: 100 }).status).toBe(before);
+    for (const patch of [{ startedAt: '2026-11-09T01:00:00.000Z' }, { seq: 1 }]) {
+      const message = { ...payload(2, 1100), groupLimitTrades: [], ...patch };
+      expect(mergeCopierLiveExposure(before, 1000, { payload: message, receivedAt: 1100, receivedPerformanceAt: 100 }).status).toBe(before);
+    }
+  });
+  it('an explicit empty group projection clears old evidence while older workers preserve the poll', () => {
+    const before = current();
+    expect(mergeCopierLiveExposure(before, 1000, { payload: payload(2, 1100), receivedAt: 1100, receivedPerformanceAt: 100 }).status?.controller.groupLimitTrades).toEqual(before.controller.groupLimitTrades);
+    expect(mergeCopierLiveExposure(before, 1000, { payload: { ...payload(2, 1100), groupLimitTrades: [] }, receivedAt: 1100, receivedPerformanceAt: 100 }).status?.controller.groupLimitTrades).toEqual([]);
+  });
+  it('keeps normal complete groups and preserves base exposure when full group coverage exceeds the byte budget', async () => {
+    const small = { ...payload(2, 1100), groupLimitTrades: [trade()] };
+    expect(boundCopierLiveExposureGroupProjection(small)).toBe(small);
+    const large = { ...payload(2, 1100), groupLimitTrades: Array.from({ length: 10 }, (_, index) => ({
+      ...trade(), entryOperationId: `entry:grouptransport${index}`,
+      accounts: Array.from({ length: 65 }, (_, member) => ({ ...trade().accounts[member ? 1 : 0], accountId: 70000000 + member })),
+    })) };
+    expect(isCopierLiveExposurePayload(large)).toBe(true);
+    expect(await encryptCopierLiveExposure(large, KEY, TOPIC)).toBeNull();
+    const bounded = boundCopierLiveExposureGroupProjection(large);
+    expect(bounded).not.toHaveProperty('groupLimitTrades'); // Missing preserves the complete polled projection.
+    expect(bounded.exposure).toBe(large.exposure);
+    const encrypted = await encryptCopierLiveExposure(bounded, KEY, TOPIC);
+    expect(encrypted).not.toBeNull();
+    expect(await decryptCopierLiveExposure(encrypted, KEY, TOPIC)).toEqual(payload(2, 1100));
+  });
+});
 
 describe('expozice workeru přímo do grafu (F2a, 30. 10.)', () => {
   it('šifrování tam a zpět zachová obsah; cizí klíč, jiné téma ani upravená zpráva neprojdou', async () => {

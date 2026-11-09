@@ -69,6 +69,10 @@ export interface ManualFlattenOptions {
   cleanupScope?: 'account' | 'target-symbol' | 'target-symbol-or-account';
   /** Guard nikdy nesmí spadnout na cancel + Market fallback. */
   nativeOnly?: boolean;
+  /** Group close only: revalidate its exact ownership/fence after durable WAL, before each write. */
+  beforeWrite?: (input: { accountId: number; symbol: string; kind: 'liquidate' | 'cancel'; brokerOrderId?: string }) => Promise<void>;
+  assertWriteAllowed?: NonNullable<ManualFlattenOptions['beforeWrite']> extends (input: infer T) => unknown ? (input: T) => void : never;
+  onWrite?: (accountId: number, write: Promise<unknown>) => void;
   operationId: string;
   clock: () => number;
   /** Počet read-only kontrol autoritativního Order/Position stavu. */
@@ -394,11 +398,15 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
               await commitSerialized();
               let result: BrokerLiquidateResult;
               try {
-                result = await options.broker.liquidatePosition({
+                await options.beforeWrite?.({ accountId, symbol: position.symbol, kind: 'liquidate' });
+                options.assertWriteAllowed?.({ accountId, symbol: position.symbol, kind: 'liquidate' });
+                const raw = options.broker.liquidatePosition({
                   tag: entry.tag,
                   accountId,
                   symbol: position.symbol,
                 });
+                options.onWrite?.(accountId, raw);
+                result = await raw;
               } catch (reason) {
                 result = { status: 'indeterminate', reason: errorMessage(reason) };
               }
@@ -415,11 +423,15 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
               await commitSerialized();
               let retried: BrokerLiquidateResult;
               try {
-                retried = await options.broker.liquidatePosition({
+                await options.beforeWrite?.({ accountId, symbol: position.symbol, kind: 'liquidate' });
+                options.assertWriteAllowed?.({ accountId, symbol: position.symbol, kind: 'liquidate' });
+                const raw = options.broker.liquidatePosition({
                   tag: entry.tag,
                   accountId,
                   symbol: position.symbol,
                 });
+                options.onWrite?.(accountId, raw);
+                retried = await raw;
               } catch (reason) {
                 retried = { status: 'indeterminate', reason: errorMessage(reason) };
               }
@@ -544,7 +556,11 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
         runtime.current.cancelOutbox.set(key, entry);
         await commitSerialized();
         try {
-          await options.broker.cancelOrder(accountId, order.brokerOrderId);
+          await options.beforeWrite?.({ accountId, symbol: order.symbol, kind: 'cancel', brokerOrderId: order.brokerOrderId });
+          options.assertWriteAllowed?.({ accountId, symbol: order.symbol, kind: 'cancel', brokerOrderId: order.brokerOrderId });
+          const raw = options.broker.cancelOrder(accountId, order.brokerOrderId);
+          options.onWrite?.(accountId, raw);
+          await raw;
           entry = await confirmCancel(entry, accountId, order.brokerOrderId);
         } catch (reason) {
           throwIfCommitFailed();

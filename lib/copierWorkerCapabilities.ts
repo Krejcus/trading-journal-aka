@@ -229,3 +229,14 @@ export const assertCopierRiskConfigAcknowledged = (
     throw new Error(`Worker nepotvrdil požadované Risk nastavení (${differences.join(', ')}). Zkontroluj skutečný stav workeru před dalším použitím.`);
   }
 };
+
+/** Group LIMIT features are independent of solo Market/Stop and scale-in opt-ins. */
+export const COPIER_GROUP_LIMIT_MOVE_CAPABILITY = 'manual-group-limit-move-v1';
+export const COPIER_GROUP_LIMIT_BARE_CAPABILITY = 'manual-group-limit-bare-v1';
+export const COPIER_GROUP_LIMIT_MANAGE_CAPABILITY = 'manual-group-limit-manage-v1';
+export const supportsCopierGroupLimitMove = (status: { capabilities?: readonly string[] } | null | undefined): boolean =>
+  Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_LIMIT_MOVE_CAPABILITY);
+export const supportsCopierGroupLimitBare = (status: { capabilities?: readonly string[] } | null | undefined): boolean =>
+  Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_LIMIT_BARE_CAPABILITY);
+export const supportsCopierGroupLimitManage = (status: { capabilities?: readonly string[] } | null | undefined): boolean =>
+  Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_LIMIT_MANAGE_CAPABILITY);

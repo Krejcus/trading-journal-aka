@@ -1,3 +1,4 @@
+import { GROUP_LIMIT_CONTRACT, GROUP_LIMIT_STATE_HASH_PATTERN } from './groupLimitProtocol.js';
 import { stableHash64 } from '../services/copierKeys.js';
 
 /**
@@ -88,6 +89,9 @@ export interface LeaderOrderManageCommand {
    * neznámé pole odmítne sám. Tím je akce vypnutá do nasazení opravy všude, bez přepínače.
    */
   moveLimitContract?: typeof LEADER_ORDER_MOVE_LIMIT_CONTRACT;
+  /** Required for new group-specific lifecycle operations. */
+  groupLimitContract?: typeof GROUP_LIMIT_CONTRACT;
+  groupLimitStateHash?: string;
   payloadHash: string;
 }
 
@@ -108,7 +112,7 @@ const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
 const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'move-limit', 'cancel-entry', 'close-position', 'attach-brackets', 'add-leg', 'remove-leg'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'leg', 'stopLoss', 'takeProfit', 'scope', 'moveLimitContract', 'payloadHash'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'leg', 'stopLoss', 'takeProfit', 'scope', 'moveLimitContract', 'groupLimitContract', 'groupLimitStateHash', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
@@ -133,6 +137,10 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   const command = value as Record<string, unknown>;
   if (Object.keys(command).some(key => !KEYS.includes(key))) fail();
   if (command.type !== 'manage-leader-order') fail();
+  if (command.groupLimitContract !== undefined
+    ? (command.groupLimitContract !== GROUP_LIMIT_CONTRACT || typeof command.groupLimitStateHash !== 'string'
+      || !GROUP_LIMIT_STATE_HASH_PATTERN.test(command.groupLimitStateHash) || command.entryOperationId === undefined || command.scope !== undefined)
+    : command.groupLimitStateHash !== undefined) fail();
   if (typeof command.groupId !== 'string' || command.groupId.trim() === '' || command.groupId.length > 200) fail();
   if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId)) fail();
   if (typeof command.leaderAccountId !== 'number' || !Number.isSafeInteger(command.leaderAccountId) || command.leaderAccountId <= 0) fail();

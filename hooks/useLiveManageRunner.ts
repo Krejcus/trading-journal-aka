@@ -1,3 +1,4 @@
+import { groupLimitOutcomeNotice } from '../lib/groupLimitUiNotice';
 import { liveRepeatClick, type LiveClickState } from '../lib/liveClickGate';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
@@ -19,7 +20,7 @@ import type { LiveManageIntent, LiveManageLeg } from '../lib/liveManagePrices';
  */
 
 /** Stejný podpis jako `onManageEntry` desku a telefonní `LivePhoneManage`. */
-export type LiveManageCallback = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+export type LiveManageCallback = (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
 
 /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
 export interface LiveManagePendingMove { kind: LiveManageLeg | 'entry'; price: number; until: number }
@@ -107,6 +108,7 @@ export function liveManageErrorNotice(reason: unknown, at: number): LiveManageNo
 const errorNotSent = (reason: unknown) => NOT_SENT_PATTERN.test(reason instanceof Error ? reason.message : '');
 
 export interface LiveManageRunDeps {
+  groupLimitStateHash?: () => string | null | undefined;
   /** Aktuální `onManageEntry` (čte se při každém běhu); null = správa teď nejde. */
   manage: () => LiveManageCallback | null | undefined;
   busyRef: { current: boolean };
@@ -131,9 +133,10 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
     return { called, status, notice };
   };
   return async (
-    action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry',
+    action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry', seenGroupLimitStateHash?: string,
   ): Promise<LiveManageOutcome> => {
     const manage = deps.manage();
+    const groupToken = seenGroupLimitStateHash ?? deps.groupLimitStateHash?.();
     if (!manage) return finish({ tone: 'bad', text: 'Správa obchodu z appky teď nejde — nic se neodeslalo.', at: now() }, false, 'not-sent');
     // „Co jsem viděl“ chybí (např. rozjeté SL nohy pozice z přikoupení) — nikdy tiché nic.
     if (expectPrice == null || !Number.isFinite(expectPrice)) {
@@ -145,10 +148,10 @@ export function createLiveManageRun(deps: LiveManageRunDeps) {
     // „Odesílám“ drží, dokud příkaz neskončí (relay čeká až ~35 s), pak ještě chvíli na dosednutí ceny.
     if (move && newPrice != null) deps.setPendingMove({ kind: move, price: newPrice, until: Number.POSITIVE_INFINITY });
     try {
-      const result = await manage(action, expectPrice, newPrice);
+      const result = seenGroupLimitStateHash ? await manage(action, expectPrice, newPrice, seenGroupLimitStateHash) : await manage(action, expectPrice, newPrice);
       if (result.status !== 'acknowledged') deps.setPendingMove(null);
       else deps.setPendingMove(current => (current ? { ...current, until: now() + LIVE_MANAGE_PENDING_HOLD_MS } : current));
-      return finish((deps.resultNotice ?? liveManageResultNotice)(action, result, now()), true, result.status);
+      return finish(groupToken ? groupLimitOutcomeNotice(action, result, now()) : (deps.resultNotice ?? liveManageResultNotice)(action, result, now()), true, result.status);
     } catch (reason) {
       deps.setPendingMove(null);
       // Výjimka po odeslání = výsledek neznámý; nic se znovu neposílá (žádné slepé opakování).
@@ -182,6 +185,7 @@ export function useLiveManageRunnerState(): LiveManageRunnerState {
 }
 
 export interface UseLiveManageRunnerOptions {
+  groupLimitStateHash?: string | null;
   /** `onManageEntry` desku; null/undefined = správa nejde (nic se neodešle, jen text). */
   manage: LiveManageCallback | null | undefined;
   /** Sdílený zámek a „odesílám“ (telefon: z rodiče). Bez něj vlastní. */
@@ -208,7 +212,7 @@ export interface LiveManageRunner {
   clearResult: () => void;
   pendingMove: LiveManagePendingMove | null;
   /** Přímý běh se stejným podpisem jako dosavadní `runLiveManage` / telefonní `run`. */
-  run: (action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry') => Promise<LiveManageOutcome>;
+  run: (action: LeaderOrderManageAction, expectPrice: number | null | undefined, newPrice?: number, move?: LiveManageLeg | 'entry', seenGroupLimitStateHash?: string) => Promise<LiveManageOutcome>;
   /** Záměr z `lib/liveManagePrices`: první klik odesílá. Záměr počítej při každém kliku znovu. */
   request: (intent: LiveManageIntent) => LiveManageRequest;
 }
@@ -217,6 +221,8 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
   const own = useLiveManageRunnerState();
   const state = options.state ?? own;
   const { pendingMove, setPendingMove, busyRef } = state;
+  const groupLimitStateHashRef = useRef(options.groupLimitStateHash);
+  groupLimitStateHashRef.current = options.groupLimitStateHash;
   const manageRef = useRef(options.manage);
   manageRef.current = options.manage;
   const onNoticeRef = useRef(options.onNotice);
@@ -241,6 +247,7 @@ export function useLiveManageRunner(options: UseLiveManageRunnerOptions): LiveMa
 
   const run = useMemo(() => createLiveManageRun({
     manage: () => manageRef.current,
+    groupLimitStateHash: () => groupLimitStateHashRef.current,
     busyRef,
     setPendingMove,
     setBusy,

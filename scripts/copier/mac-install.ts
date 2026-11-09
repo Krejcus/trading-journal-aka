@@ -255,6 +255,10 @@ async function install(): Promise<void> {
     throw new Error('--tradovate-ws-writes on je povolený jen s --manual-only');
   }
   const webSocketWritesEnabled = manualOnly && webSocketWritesFlag === 'on';
+  const groupLimitsFlag = flags.get('group-limits')?.trim().toLowerCase();
+  if (groupLimitsFlag && groupLimitsFlag !== 'on' && groupLimitsFlag !== 'off') throw new Error('--group-limits musí být on nebo off');
+  if (groupLimitsFlag === 'on' && manualOnly) throw new Error('--group-limits on vyžaduje běžnou skupinu s followery');
+  const groupLimitsEnabled = !manualOnly && groupLimitsFlag === 'on';
   const follower = cliFollowers[0]?.accountId ?? null;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
@@ -521,6 +525,7 @@ async function install(): Promise<void> {
     ${priceSourceIbkr ? '<key>ALPHATRADE_PRICE_SOURCE</key><string>ibkr</string>' : ''}
     ${priceAlertsEnabled ? '<key>ALPHATRADE_PRICE_ALERTS</key><string>on</string>' : ''}
     ${scaleInEnabled ? '<key>ALPHATRADE_SCALE_IN</key><string>on</string>' : ''}
+    ${groupLimitsEnabled ? '<key>ALPHATRADE_GROUP_LIMITS</key><string>on</string>' : ''}
     ${pendingLegsEnabled ? '<key>ALPHATRADE_PENDING_LEGS</key><string>on</string>' : ''}
     ${webSocketWritesEnabled ? '<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>' : ''}
   </dict>

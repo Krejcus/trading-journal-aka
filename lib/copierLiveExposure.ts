@@ -1,3 +1,4 @@
+import { isGroupLimitTradeStates, type GroupLimitTradeState } from './groupLimitProtocol.js';
 import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
 
 /**
@@ -40,6 +41,8 @@ export interface CopierLiveExposurePayload {
   manualEntries?: CopierLiveManualEntries;
   /** Poslední posuny/zrušení/zavření pro korelaci klik → první paint. Jen diagnostika/zobrazení. */
   manualOrderActions?: CopierLiveManualActions;
+  /** Exact per-account group LIMIT display evidence, from the same ordered snapshot. */
+  groupLimitTrades?: GroupLimitTradeState[];
   /**
    * Plnění leadera aktuální epizody (šipky v grafu, 2. 11. 2026) — ve stejné zprávě jako
    * expozice, aby seděly k sobě. Chybí = starší worker (platí hodnota z pollu).
@@ -51,6 +54,16 @@ export interface CopierLiveExposureEnvelope {
   v: 1;
   iv: string;
   ct: string;
+}
+
+/** Keep complete account coverage or leave it to the poll; never truncate a trade's members. */
+export function boundCopierLiveExposureGroupProjection(payload: CopierLiveExposurePayload): CopierLiveExposurePayload {
+  if (payload.groupLimitTrades === undefined) return payload;
+  // AES-GCM appends a 16-byte tag; unpadded base64url length is ceil(bytes * 4 / 3).
+  const bytes = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+  if (Math.ceil((bytes + 16) * 4 / 3) <= COPIER_LIVE_EXPOSURE_MAX_CHARS) return payload;
+  const { groupLimitTrades: _omitted, ...base } = payload;
+  return base;
 }
 
 const subtle = (): SubtleCrypto | null => {
@@ -191,7 +204,8 @@ export function isCopierLiveExposurePayload(value: unknown): value is CopierLive
   if (payload.exposure !== null && !isExposure(payload.exposure)) return false;
   return Array.isArray(payload.events) && payload.events.length <= COPIER_LIVE_EXPOSURE_EVENTS && payload.events.every(isCopyEvent)
     && (payload.manualEntries === undefined || isManualEntries(payload.manualEntries))
-    && (payload.manualOrderActions === undefined || isManualActions(payload.manualOrderActions));
+    && (payload.manualOrderActions === undefined || isManualActions(payload.manualOrderActions))
+    && (payload.groupLimitTrades === undefined || isGroupLimitTradeStates(payload.groupLimitTrades));
 }
 
 /** Zašifrovat pro téma budíčku (AAD = téma); příliš velká zpráva nebo chybějící WebCrypto = null. */
@@ -254,6 +268,9 @@ export function mergeCopierLiveExposure(
   // Starší worker bez pořadí: kanál neřadit (posílat ho stejně neumí).
   if (!finite(status.displaySeq) || !finite(status.displayBuiltAt)) return unchanged;
   if (!(live.payload.seq > status.displaySeq)) return unchanged;
+  // A worker can switch groups without changing its process epoch. Wait for that group's poll.
+  if (live.payload.groupLimitTrades !== undefined && isGroupLimitTradeStates(live.payload.groupLimitTrades)
+    && live.payload.groupLimitTrades.some(trade => trade.groupId !== status.group.id)) return unchanged;
   const ahead = live.payload.builtAt - status.displayBuiltAt;
   if (ahead > Math.max(0, live.receivedAt - observedAt) + COPIER_LIVE_EXPOSURE_FUTURE_SLACK_MS) return unchanged;
   return {
@@ -262,6 +279,9 @@ export function mergeCopierLiveExposure(
       controller: {
         ...status.controller,
         exposure: live.payload.exposure,
+        ...(live.payload.groupLimitTrades !== undefined && isGroupLimitTradeStates(live.payload.groupLimitTrades)
+          && live.payload.groupLimitTrades.every(trade => trade.groupId === status.group.id)
+          ? { groupLimitTrades: live.payload.groupLimitTrades } : {}),
         recentCopyEvents: mergeCopyEvents(status.controller.recentCopyEvents ?? [], live.payload.events),
         // Neplatné nebo chybějící pole = platí poll (nikdy kvůli němu nezahodit expozici).
         ...(live.payload.leaderFills !== undefined && isLeaderFills(live.payload.leaderFills) ? { leaderFills: live.payload.leaderFills } : {}),

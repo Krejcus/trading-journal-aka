@@ -1,4 +1,5 @@
 import type { LeaderOrderManageResult } from '../lib/leaderOrderManage';
+import { groupLimitSeenHash } from '../lib/groupLimitUi';
 import { liveBareCloseErrorNotice, liveBareCloseResultNotice, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import { CANCEL_PENDING_NOT_SENT_PATTERN, cancelPendingSummary, type CancelPendingItemResult, type PendingOwnEntry } from '../lib/liveCancelPending';
 import type { LiveCancelPendingView } from '../lib/liveCancelPendingUi';
@@ -32,7 +33,7 @@ export function createLiveBareCloseRun(deps: Omit<LiveManageRunDeps, 'manage' | 
     },
     resultNotice: (_action, result, at) => liveBareCloseResultNotice(result, at),
     errorNotice: liveBareCloseErrorNotice,
-  })('close-position', seen.referencePrice);
+  })('close-position', seen.referencePrice, undefined, undefined, groupLimitSeenHash(seen) ?? undefined);
 }
 
 /** Výsledek „Zrušit čekající“ (C7): `called` = desk dostal sadu (příkazy mohly odejít). */

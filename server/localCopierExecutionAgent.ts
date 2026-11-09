@@ -1,3 +1,4 @@
+import { COPIER_GROUP_LIMIT_MOVE_CAPABILITY, COPIER_GROUP_LIMIT_BARE_CAPABILITY, COPIER_GROUP_LIMIT_MANAGE_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { validateLeaderEntryPreview } from '../lib/leaderEntryPreview.js';
 import { validateLeaderEntryPlace } from '../lib/leaderEntryPlace.js';
 import { validateLeaderOrderManage } from '../lib/leaderOrderManage.js';
@@ -409,7 +410,11 @@ export async function startLocalCopierExecutionAgent(
   let displaySeq = 0;
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
+    capabilities: [
+      ...(options.controller.manualGroupLimitMoveEnabled?.() === true ? [COPIER_GROUP_LIMIT_MOVE_CAPABILITY] : []),
+      ...(options.controller.manualGroupBareLimitEnabled?.() === true ? [COPIER_GROUP_LIMIT_BARE_CAPABILITY] : []),
+      ...(options.controller.manualGroupLimitManageEnabled?.() === true ? [COPIER_GROUP_LIMIT_MANAGE_CAPABILITY] : []),
+      COPIER_RISK_CONFIG_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY,
       ...(typeof options.controller.placeLeaderEntry === 'function' ? [COPIER_MANUAL_ENTRY_CAPABILITY] : []),
       // Nativní Market jen pro instalační manual-only skupinu bez followerů (oponentura 2. 11.).
       ...(typeof options.controller.placeLeaderEntry === 'function' && group.manualOnly === true && group.localOnly === true && group.followers.length === 0

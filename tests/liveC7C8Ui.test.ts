@@ -279,10 +279,12 @@ describe('C8 UI: desk — tatáž cesta správy leadera, jen obchod, který uži
     // place-leader-entry (vstup) zvlášť; správa jen přes `relay` továrny — žádná třetí kopie.
     expect(desk.match(/executeTradovateCopierRelayCommand\(route\.relayConnectionId, \{ type: 'copy-command', command \}\)/g) ?? []).toHaveLength(1);
     expect(desk.match(/relay: \(relayId, command\) => executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\),/g) ?? []).toHaveLength(1);
-    expect(between(desk, 'const manageLeaderEntry = useCallback(', '}, [chartData.position?.summary, sendLeaderManage]);')).toMatch(/return sendLeaderManage\(command,/);
-    expect(between(desk, 'const attachBrackets = useCallback(', '}, [sendLeaderManage]);')).toMatch(/return sendLeaderManage\(command,/);
-    expect(desk).toContain('{...(supportsCopierManualOrderCloseBare(agentStatus) ? { onBareClose: closeBareLeader } : {})}');
-    expect(desk).toContain('...(supportsCopierManualOrderCloseBare(agentStatus) ? { bareClose: bareCloseOffer, closeBare: closeBareLeader } : {}),');
+    expect(between(desk, 'const manageLeaderEntry = useCallback(', '// Telefon (2. 11. 2026):')).toMatch(/return sendLeaderManage\(command,/);
+    expect(between(desk, 'const attachBrackets = useCallback(', '// C8 (4. 11. 2026):')).toMatch(/return sendLeaderManage\(command,/);
+    expect(between(desk, 'const manageLeaderEntry = useCallback(', '// Telefon (2. 11. 2026):')).toMatch(/if \(groupTrade && action === 'close-position'\)[\s\S]*return manageGroupLimitPosition\(/);
+    expect(between(desk, 'const attachBrackets = useCallback(', '// C8 (4. 11. 2026):')).toMatch(/if \(groupTrade\) return manageGroupLimitPosition\(/);
+    expect(desk).toContain('{...(supportsCopierManualOrderCloseBare(agentStatus) || groupLimitLegDisplay != null ? { onBareClose: closeBareLeader } : {})}');
+    expect(desk).toContain('...(supportsCopierManualOrderCloseBare(agentStatus) || groupLimitLegDisplay != null ? { bareClose: bareCloseOffer, closeBare: closeBareLeader } : {}),');
   });
 });
 

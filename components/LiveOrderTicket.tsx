@@ -777,7 +777,7 @@ interface Props {
   /** Fáze 1b: odeslání ručního vstupu na leadera (jen worker s `manual-entry-v1`). */
   onPlaceEntry?: (draft: LiveEntryPreviewDraft, operationId: string) => Promise<LeaderEntryPlaceResult>;
   /** Fáze 2a: správa vlastního ručního vstupu na symbolu grafu (jen worker s `manual-order-manage-v1`). */
-  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
+  onManageEntry?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
   /** Průměrný vstup spravovaného obchodu leadera od workeru (SL na BE). */
   manageEntryAvgPrice?: number | null;
   /** Worker umí nativní Market (`manual-entry-market-v1`); bez něj Market nejde odeslat. */
@@ -795,6 +795,7 @@ interface Props {
   /** Worker inzeruje holý Market a „Přidat SL/TP“ (`manual-entry-bare-v1`); výchozí false = holý Market se nenabídne. */
   entryBareSupported?: boolean;
   entryBarePendingSupported?: boolean;
+  entryBareLimitSupported?: boolean;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null = „Přidat SL/TP“ se neukáže. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (`liveAttachIntent.position`); výchozí null. */
@@ -875,7 +876,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   isDark, shownOpenPnl, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBarePendingSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
   bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
 }) => {
@@ -950,7 +951,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   // Holý Market (U4, 3. 11. 2026): Market bez SL i TP jen s capability `manual-entry-bare-v1`
   // (manual-only DEMO). Stejný payload jako list a lišta telefonu; kontrakt jen z IBKR.
   // Holý Limit/Stop (7. 11. 2026): opravdu bez nohou u brokera, jen 1 kontrakt, capability `manual-entry-bare-pending-v1`.
-  const barePendingDraft = draft != null && entryBarePendingSupported && isBarePendingTicketDraft(draft);
+  const barePendingDraft = draft != null && (entryBarePendingSupported || (entryBareLimitSupported && draft.type === 'limit')) && isBarePendingTicketDraft(draft);
   const bareDraft = barePendingDraft || (draft != null && entryBareSupported && isBareTicketDraft(draft));
   const bareQuote: LiveBareQuote | null = quote && quoteInfo.capturedAt != null
     ? { symbol: previewSymbolFromChartSource(quoteInfo.source), bid: quote.bid, ask: quote.ask, at: quoteInfo.capturedAt }
@@ -1001,7 +1002,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       // Jedna noha nikdy; Limit/Stop obě; Market bez obou jen s capability (U4).
-      : liveTicketLegsProblem(draft, entryBareSupported, entryBarePendingSupported) ?? (bareDraft
+      : liveTicketLegsProblem(draft, entryBareSupported, entryBarePendingSupported, entryBareLimitSupported) ?? (bareDraft
         ? (draft.sizing !== 'qty' ? 'Bez SL/TP jen v kontraktech — bez SL nejde velikost podle rizika.'
           : barePendingDraft ? liveBarePendingBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0)
             : liveBareMarketBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0))

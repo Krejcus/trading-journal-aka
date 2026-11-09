@@ -283,6 +283,7 @@ export interface BacktestChartSessionBridge {
     line: BacktestChartOrderLine,
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
+    startLine?: BacktestChartOrderLine,
   ) => void;
   /** Tlačítka ve štítku (BE u pozice), stejně jako v LIVE. */
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
@@ -325,6 +326,7 @@ export interface LiveOrderEntryBridge {
     line: BacktestChartOrderLine,
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>,
     price?: number,
+    startLine?: BacktestChartOrderLine,
   ) => void;
   /** Tlačítka ve štítku (BE u živé pozice). */
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
