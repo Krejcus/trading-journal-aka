@@ -289,6 +289,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 ## Deník
 
 
+### 2026-11-09 (Codex — hlavní skrytý producent: ActivityKit v relay pollu)
+
+Praktický test odhalil zásadní neúplnost předchozího kapacitního modelu:
+`nativeLiveActivityTick` při ARM každých5s spouštěl nejméně6GET na KAŽDÝ login,
+i když byl flat (=72/min/login). Relay na práci čekal až2.5s; timeout čtení
+nezrušil. To znovu vyčerpávalo BG a blokovalo nové riziko. Odstraněna celá větev
+z relay pollu, bez detachedpromise a bez přesunu do priority. Immediate copy/ARM
+notifikace zachovány. Minutový cron zámku má finančníčas capturedAt, pozice
+stale+30s a heartbeat50s. Dočasný kompromis: zamčená obrazovka obnovuje po minutě,
+mezi snapshoty pravdivě ukazuje STAV NEOVĚŘEN; rychlé PnL otevřeného LIVE beze změny.
+Kritik OK;59cílených/8447celkem passed+1todo, tsc0, webbuildpassed; scopedlint0errors
+(1staršíwarning). Tento zápis předchází finálnímu serverovému deployi a broker
+retestu. Interní auto flat recovery/front metadata zatím BG; nenazývat hotovou
+bounded recovery ve všech cestách. Worker/currentclient před touto cloudovou
+opravou je eac261bf; případný reinstall rozhodnout podle obsahu a bezpečné brány.
+
+
 ### 2026-11-09 (Codex — další skutečný producent dotazů po reliability release)
 
 Po schválené DB policy2/web/worker instalaci bylo na jediném DEMO ověřeno

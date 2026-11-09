@@ -1927,6 +1927,12 @@ existující ochranu.
   Odklad se nedotýká worker statusu, command/reconcile cest ani datových časů,
   nezmění429/OAuth stav, přežije foreground/efekt restart a nepřejde na jiného
   uživatele. Druhé zdravé připojení dál pokračuje.
+- Relay poll nesmí kvůli ActivityKit spouštět další broker snapshot ani na něj
+  čekat: původní5stick znamenal nejméně72GET/min/login iARM+flat a timeout
+  broker čtení nezrušil. Okamžité copy/ARM notifikace zůstávají samostatné.
+  Broker-backed zámek nyní obnovuje minutový cron; finanční updatedAt vychází
+  z capturedAt a otevřená pozice je po30s stale. Heartbeat otevřené pozice
+  dovolí další minutový push i při stejném obsahu; staré PnL se neomlazuje.
 - Worker-first display coverage vzniká teprve po validovaných Position a
   Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.

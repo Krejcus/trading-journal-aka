@@ -122,3 +122,28 @@ Diagnostické logy jsou mimo repo v `/private/tmp/at-reliability-*`.
   nejsou doložené. Instalace iPhonu uspěla, launch odmítl zamčený telefon.
 
 Finální doplněk: plná sada8444 passed +1todo (785 souborů passed,1skipped), root i pilot typecheck exit0, web/native/Xcode build passed. Scoped lint0errors,1starší journalOptions warning.
+
+## Primární zbývající producent: serverový ActivityKit tick
+
+Po eac261bf byl zdrojově a provozním chováním dohledán fast tick v relay pollu:
+každých5s při ARM (i flat) znovu načítal kompletní broker snapshot ze všech
+připojených loginů, nejméně6GET/login. To odpovídá72/min/login před ostatní
+spotřebou. Relay navíc čekal až2.5s; timeout fyzické broker čtení nezrušil.
+Samotný pětiminutový prewarm/UIdefer proto nebyl kompletní opravou.
+
+Akutní doplněk odstraňuje import a celou fast-snapshot větev z relaye.
+Nepřesouvá ji do priority ani do detachedpromise. Immediate copy/ARM notifikace
+zůstávají. Minutový cron dál čte skutečného brokera; finanční čas se bere z jeho
+capturedAt, otevřená pozice má staleAt+30s a heartbeat50s dovolí každou minutu
+obnovit i beze změny ceny. Zamčená obrazovka tedy dočasně obnovuje po minutě
+s pravdivým STAV NEOVĚŘEN mezi snímky; rychlé PnL uvnitř otevřeného LIVE se
+nemění. Nová worker→ActivityKit projekce není v tomto akutním balíku.
+
+Kritik: OK. Cílené59/59 včetně12pollů ARM+flat/position, visícího loaderu,
+zachovaných immediate eventů, starého capture a čerstvého minutového heartbeat.
+Tento doplněk mění jen cloudový API/ActivityKit updater; workerové soubory se
+před rozhodnutím o případném reinstallu porovnají obsahově. Interní automatická
+flat recovery a periodický frontContract zatím používají BG (dostupnostní
+mezera, ne povolení obchodu). Veřejný reconcile má svou bounded recovery lane.
+
+Akutní serverový doplněk: plná sada8447passed+1todo, root tsc0, webbuildpassed, scopedlint0errors/1staršíunusedimport warning.

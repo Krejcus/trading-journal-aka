@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import * as apns from '../server/apns';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildApnsLiveActivityPayload,
@@ -10,6 +11,7 @@ import {
 import { loadNativeLiveActivityBrokerSnapshot } from '../server/nativeLiveActivityBrokerSnapshot';
 import {
   liveActivityAccountIds,
+  updateNativeLiveActivities,
   planNativeLiveActivityUpdate,
   type NativeLiveActivityRuntimeRow,
 } from '../server/nativeLiveActivityUpdater';
@@ -17,6 +19,12 @@ import {
   planNativeLiveActivityStart,
   startNativeLiveActivities,
 } from '../server/nativeLiveActivityStarter';
+
+vi.mock('../server/priceAlertLiveActivity', async importOriginal => ({
+  ...await importOriginal<typeof import('../server/priceAlertLiveActivity')>(),
+  loadRecentPriceAlert: vi.fn(async () => null),
+}));
+afterEach(() => vi.restoreAllMocks());
 
 const runtime = (controller: Record<string, unknown>): NativeLiveActivityRuntimeRow => ({
   device_id: 'device',
@@ -53,6 +61,31 @@ const broker = {
 };
 
 describe('remote native Live Activity', () => {
+  it('a repeated position push retains financial capture time and becomes stale30s after that capture', () => {
+    const at=broker.capturedAt, now=at+60_000;
+    const plan=planNativeLiveActivityUpdate({runtime:runtime({armed:true,connected:true}),broker,now});
+    expect(plan.update.state.updatedAt).toBe(at/1_000);
+    expect(plan.update.staleAt).toBe(at/1_000+30);
+    expect(plan.update.staleAt!).toBeLessThan(now/1_000);
+  });
+
+  it('the minute cron republishes an unchanged fresh position without waiting110s', async () => {
+    const now=broker.capturedAt+60_000;
+    const fresh={...broker,capturedAt:now};
+    const current={...runtime({armed:true,connected:true}),last_seen_at:new Date(now).toISOString()};
+    const plan=planNativeLiveActivityUpdate({runtime:current,broker:fresh,now});
+    const rows=[{id:'sub',user_id:'user',activity_id:'activity',push_token:'aa',environment:'development',bundle_id:'app.alphatrade.native',last_payload_hash:plan.payloadHash,last_payload_at:new Date(now-60_000).toISOString()}];
+    const writes:unknown[]=[];
+    const db={from:()=>({select:()=>({is:async()=>({data:rows,error:null})}),update:(value:unknown)=>({eq:async()=>{writes.push(value);return{error:null};}})})};
+    const send=vi.spyOn(apns,'sendApnsLiveActivityUpdate').mockResolvedValue({status:'sent',statusCode:200});
+    const result=await updateNativeLiveActivities({db:db as never,runtimes:[current],config:{} as never,now,brokerSnapshot:async()=>fresh});
+    expect(result.sent).toBe(1);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0][1].state.updatedAt).toBe(now/1_000);
+    expect(send.mock.calls[0][1].staleAt).toBe(now/1_000+30);
+    expect(writes).toHaveLength(1);
+  });
+
   it('builds the exact ActivityKit APNs payload keys', () => {
     expect(buildApnsLiveActivityPayload({
       state: {

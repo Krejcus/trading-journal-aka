@@ -14,7 +14,6 @@ import { beginSupabaseUserIdVerification, createTradovateAdminClient, readTradov
 import { decryptTradovateSecret, encryptTradovateSecret } from '../../../server/tradovateOAuth.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
-import { tickNativeLiveActivitiesWithinBudget } from '../../../server/nativeLiveActivityTick.js';
 import type { LocalCopierAgentStatus } from '../../../lib/localCopierAgentProtocol.js';
 import {
   CopierSnapshotRateLimiter,
@@ -334,20 +333,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               reason instanceof Error ? reason.message : String(reason));
           }
         }
-        // Live Activity na zamčené obrazovce: při armovaném copieru pošle
-        // update nejvýše jednou za 5 s ze stejného read-only snapshotu jako
-        // cron. Časový rozpočet chrání latenci příkazů; cron zůstává záloha.
-        if (!command && req.body?.status) {
-          try {
-            await tickNativeLiveActivitiesWithinBudget({
-              db, userId: device.userId, deviceId: device.id, connectionId: device.connectionId,
-              status: req.body.status as Record<string, unknown>, config,
-            });
-          } catch (reason) {
-            console.warn('[copier-relay] live activity tick failed',
-              reason instanceof Error ? reason.message : String(reason));
-          }
-        }
+        // The lock-screen broker snapshot belongs to the bounded minute cron.
+        // A5s snapshot here costs at least72 broker reads/min/login even flat,
+        // and awaiting its timeout also delays command pickup. Keep immediate
+        // copy/ARM notifications above; never spawn a detached snapshot here.
         // Broker/UI command má přednost: pokud nějaký čeká, poll nečeká ani na
         // levný snapshot dotaz. Obrázek si worker vyzvedne až v dalším kole.
         let snapshotRequests: Awaited<ReturnType<typeof loadPendingTvAlertSnapshotRequests>> = [];

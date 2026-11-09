@@ -344,6 +344,9 @@ export function planNativeLiveActivityUpdate(options: {
     : options.broker != null
       ? BROKER_ACCOUNTS_DAILY_PNL_LABEL
       : COPIER_LEADER_DAILY_STATS_LABEL;
+  const rawCapturedAt = options.broker?.capturedAt ?? Date.parse(options.runtime.last_seen_at);
+  const dataAt = Number.isFinite(rawCapturedAt) && rawCapturedAt > 0 && rawCapturedAt <= options.now + 1_000
+    ? Math.min(rawCapturedAt, options.now) : 0;
   const state: ApnsLiveActivityContentState = {
     status: status.status,
     headline,
@@ -356,7 +359,7 @@ export function planNativeLiveActivityUpdate(options: {
     pnlLabel,
     isPositive: pnlAvailable && pnl >= 0,
     progress: bool(controller.killSwitch) ? 1 : bool(controller.armed) ? 0.75 : controller.connected === true ? 0.35 : 0.1,
-    updatedAt: options.now / 1_000,
+    updatedAt: dataAt / 1_000,
     // Po DISARM a flat aktivita končí shrnutím dne (L5) místo prázdné karty.
     ...(shouldEnd ? { mode: 'summary' as const } : mode ? { mode } : {}),
     ...(stateSymbol ? { symbol: stateSymbol } : {}),
@@ -386,7 +389,7 @@ export function planNativeLiveActivityUpdate(options: {
     update: {
       state,
       event: shouldEnd ? 'end' : 'update',
-      staleAt: options.now / 1_000 + 180,
+      staleAt: dataAt / 1_000 + (openPositionCount > 0 ? 30 : 180),
       // Shrnutí dne zůstane na zámku 15 minut, pak se sklidí samo.
       ...(shouldEnd ? { dismissalAt: options.now / 1_000 + 15 * 60 } : {}),
     },
@@ -537,14 +540,18 @@ export async function updateNativeLiveActivities(options: {
       continue;
     }
     const priceAlert = await recentPriceAlert(subscription.user_id);
+    const snapshot = await brokerSnapshot(runtime);
     const plan = planNativeLiveActivityUpdate({
       runtime,
-      broker: await brokerSnapshot(runtime),
+      broker: snapshot,
       now,
       priceAlert,
     });
     const lastPayloadAt = Date.parse(subscription.last_payload_at ?? '');
-    const heartbeatDue = !Number.isFinite(lastPayloadAt) || now - lastPayloadAt >= 110_000;
+    // A fresh open-position snapshot must be republished each minute even
+    // if the price is unchanged. Its capturedAt, never push time, sets age.
+    const heartbeatDue = !Number.isFinite(lastPayloadAt)
+      || now - lastPayloadAt >= ((snapshot?.positions.length ?? 0) > 0 ? 50_000 : 110_000);
     if (!plan.shouldEnd && subscription.last_payload_hash === plan.payloadHash && !heartbeatDue) {
       skipped++;
       continue;

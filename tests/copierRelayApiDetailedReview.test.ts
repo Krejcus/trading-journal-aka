@@ -107,17 +107,17 @@ describe('copier relay API fault review', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('ticks the Live Activity on polls without a queued command and survives a tick failure', async () => {
-    const res = response();
-    await handler(poll(), res as unknown as VercelResponse);
-    expect(mocks.tick).toHaveBeenCalledOnce();
-    expect(mocks.tick.mock.calls[0][0]).toMatchObject({ userId: 'user', deviceId: 'device', connectionId: 'connection' });
-    expect(res.status).toHaveBeenCalledWith(200);
-
-    mocks.tick.mockRejectedValueOnce(new Error('apns down'));
-    const again = response();
-    await handler(poll(), again as unknown as VercelResponse);
-    expect(again.status).toHaveBeenCalledWith(200);
+  it.each([false,true])('ARM with openPosition=%s never starts or awaits a broker-backed ActivityKit poller', async openPosition => {
+    mocks.tick.mockImplementation(()=>new Promise(()=>{}));
+    for(let n=0;n<12;n++) {
+      const request=poll(); request.body.status={controller:{armed:true,groupFlat:!openPosition}};
+      const res=response();
+      await handler(request,res as unknown as VercelResponse);
+      expect(res.status).toHaveBeenCalledWith(200);
+    }
+    expect(mocks.tick).not.toHaveBeenCalled();
+    expect(mocks.push).toHaveBeenCalledTimes(12);
+    expect(mocks.claim).toHaveBeenCalledTimes(12);
   });
 
   it('rejects invalid device authorization before heartbeat or command claim', async () => {
