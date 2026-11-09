@@ -2886,7 +2886,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     });
   };
 
-  const sweepFollowerProtectiveLegs = async (
+  /**
+   * Úklid ochranných nohou po flat je ochranný krok obchodu, ne čtení na pozadí (9. 11. 2026): jeho REST čtení
+   * jdou jako přijatá správa, takže je nezastaví vyčerpaný ani nedostupný sdílený rozpočet dotazů. Skutečná
+   * brokerova pauza (429, captcha) blokuje dál. Kontrola pozic (reconcile) volá úklid bez výjimky.
+   */
+  const sweepFollowerProtectiveLegs = (...args: Parameters<typeof sweepFollowerProtectiveLegsInRequestBudget>): Promise<void> => (
+    options.broker.runWithAcceptedRequests
+      ? options.broker.runWithAcceptedRequests(() => sweepFollowerProtectiveLegsInRequestBudget(...args))
+      : sweepFollowerProtectiveLegsInRequestBudget(...args)
+  );
+  const sweepFollowerProtectiveLegsInRequestBudget = async (
     accountId: number,
     symbol: string,
     at: number,
@@ -9312,7 +9322,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const timer = setTimeout(() => {
       leaderFlatGuardTimers.delete(epoch.id);
       eventTail = eventTail
-        .then(() => verifyLeaderFlatEpoch(token, expectedSafetyGeneration, allowWrites))
+        // Dozor po flat leaderovi ověřuje, že nikde nezůstala pozice ani noha: ochranný krok, ne čtení na pozadí.
+        .then(() => (options.broker.runWithAcceptedRequests
+          ? options.broker.runWithAcceptedRequests(() => verifyLeaderFlatEpoch(token, expectedSafetyGeneration, allowWrites))
+          : verifyLeaderFlatEpoch(token, expectedSafetyGeneration, allowWrites)))
         .catch(reason => failClosed(reason, { autoClose: false }));
     }, delay);
     leaderFlatGuardTimers.set(epoch.id, timer);
@@ -10659,7 +10672,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     clearPendingFollowerTransition(key);
     const timer = setTimeout(() => {
       eventTail = eventTail
-        .then(() => verifyPendingFollowerTransition(key))
+        // Ověření přechodu followera po fillu je ochranný krok obchodu, ne čtení na pozadí (9. 11. 2026).
+        .then(() => (options.broker.runWithAcceptedRequests
+          ? options.broker.runWithAcceptedRequests(() => verifyPendingFollowerTransition(key))
+          : verifyPendingFollowerTransition(key)))
         .catch(reason => failClosed(reason, { autoClose: false }));
     }, followerTransitionCorrelationWindowMs);
     pendingFollowerTransitions.set(key, { accountId, symbol, netQuantity, timer });
@@ -11297,7 +11313,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     clearPendingFollowerMagnitudeCheck(accountId, symbol);
     const timer = setTimeout(() => {
       eventTail = eventTail
-        .then(() => verifyFollowerMagnitude(accountId, symbol))
+        // Kontrola pozice followera po fillu je ochranný krok obchodu, ne čtení na pozadí (9. 11. 2026).
+        .then(() => (options.broker.runWithAcceptedRequests
+          ? options.broker.runWithAcceptedRequests(() => verifyFollowerMagnitude(accountId, symbol))
+          : verifyFollowerMagnitude(accountId, symbol)))
         .catch(reason => failClosed(reason, { autoClose: false }));
     }, followerTransitionCorrelationWindowMs);
     pendingFollowerMagnitudeChecks.set(key, timer);
@@ -22415,7 +22434,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
         }
         for (const symbol of flatSymbols) {
-          reconciliationSweepJobs.push(sweepFollowerProtectiveLegs(
+          reconciliationSweepJobs.push(sweepFollowerProtectiveLegsInRequestBudget(
             follower.accountId,
             symbol,
             clock(),

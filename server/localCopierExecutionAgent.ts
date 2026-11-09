@@ -25,6 +25,7 @@ import {
 } from '../lib/copierRiskConfig.js';
 import { COPIER_FOLLOWER_EXCLUDE_EXPOSURE_CAPABILITY, COPIER_GROUP_DELETE_CAPABILITY, COPIER_MANUAL_ORDER_MOVE_LIMIT_CAPABILITY, COPIER_MANUAL_ORDER_PENDING_LEGS_CAPABILITY, COPIER_INCIDENT_ACK_CAPABILITY, COPIER_MANUAL_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_AUTO_CANCEL_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_CAPABILITY, COPIER_MANUAL_ORDER_MOVE_BARE_ENTRY_CAPABILITY, COPIER_MANUAL_ENTRY_BARE_PENDING_CAPABILITY, COPIER_MANUAL_ENTRY_MARKET_CAPABILITY, COPIER_MANUAL_ENTRY_SCALE_IN_CAPABILITY, COPIER_MANUAL_ORDER_CANCEL_PENDING_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_BARE_CAPABILITY, COPIER_MANUAL_ORDER_SINGLE_LEG_CAPABILITY, COPIER_MANUAL_ORDER_CLOSE_CAPABILITY, COPIER_MANUAL_ORDER_MANAGE_CAPABILITY, COPIER_RISK_CONFIG_CAPABILITY, COPIER_TRANSPORT_AUTO_RESUME_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
+import { tradovateRequestContext } from './tradovateRequestContext.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
@@ -1390,7 +1391,11 @@ export async function startLocalCopierExecutionAgent(
     admittedBrakeEpoch?: number,
   ): Promise<LocalCopierAgentCommandResult> => {
     console.log(`${new Date().toISOString()} AGENT COMMAND source=${context?.source ?? 'internal'} type=${command.type}`);
-    const result = await execute(command, context, admittedBrakeEpoch);
+    // Zapnutí kopírky (9. 11. 2026): kontrola u brokera je výslovná akce uživatele, ne čtení na pozadí.
+    // Nesmí ji zablokovat vyčerpaný ani nedostupný sdílený rozpočet dotazů; skutečná pauza brokera (429) dál platí.
+    const result = command.type === 'arm-live'
+      ? await tradovateRequestContext.accepted(() => execute(command, context, admittedBrakeEpoch))
+      : await execute(command, context, admittedBrakeEpoch);
     return {
       ok: true,
       status: status(),

@@ -288,6 +288,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-09 — Ochranné kroky kopírky mimo rozpočet dotazů (Claude, incident skupiny Ahojda)
+
+- **Incident:** dvakrát (15:26 a 15:32) obchod na 4 Lucid účtech proběhl u brokera správně a skončil SL, potom kopírka fail-closed DISARM: úklid po flat, dozor nad flat leaderem a kontrola followera dostaly od společného řízení dotazů `request-control-remote-503` / „stale“ / „budget exhausted“; ARM pak padal na stejném 503. DB: Lucid broker user 6684649 měl 2 492/3 000 rezervovaných jednotek za hodinu, v minutách úklidu 118–120/120; v klidu 35–45/min.
+- **Oprava:** `sweepFollowerProtectiveLegs` (kromě reconcile), `verifyLeaderFlatEpoch`, `verifyFollowerMagnitude`, `verifyPendingFollowerTransition` a `arm-live` běží v `runWithAcceptedRequests` (purpose management): soft rozpočet je nezastaví, skutečná pauza brokera (429/captcha) ano. Critic: OK s výhradami.
+- **Otevřené (critic):** `user/syncrequest` po reconnectu má purpose `control` v rozpočtu; server vrací 503 i pro vyčerpaný rozpočet a governor pak hlásí „stale“ do dalšího syncu; zpoždění eventu leadera 7,4 s (`stale-exposure-increase`) pravděpodobně kvůli čekání úloh na pozadí na `eventTail`; hlavně spotřeba 35–45 jednotek/min v klidu, rozpočet 120/min a 3 000/h je na 4 účty těsný.
+
 ### 2026-11-09 — Codex: řízení Tradovate požadavků dokončené a ověřené lokálně
 
 - Hotový lokální balík na větvi `codex/tradovate-request-control-20261109` nad `f5e2f904`: service-only DB rozpočet podle ověřené broker identity, trvalý monotónní cooldown, okamžité429headers/krátké423inspection, jednoznačný notSent proti dřívějšímu unknown, background scheduler a accepted lifecycle včetně Flattenu bez nové kreditové fronty. Skutečnou blokaci brokera nic neobchází. Verze produkce se tímto zápisem nemění.

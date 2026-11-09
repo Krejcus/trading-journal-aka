@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, expect, it, vi } from 'vitest';
 import type { BrokerOrder, BrokerOrderStatusLookup } from '../services/brokerPort';
 import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
@@ -328,6 +329,45 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       expect(listPositions.mock.calls.filter(([accountId]) => accountId === 200).length).toBe(0);
       expect(findOrderById).not.toHaveBeenCalled();
       expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([0, 0]);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  // 9. 11. 2026 (produkce, skupina Ahojda): úklid po SL narazil na vyčerpaný / nedostupný sdílený rozpočet
+  // dotazů na Tradovate a kopírku zbytečně vypnul. Úklid je ochranný krok: jeho čtení jdou jako přijatá správa.
+  it('úklid po flat čte i ruší ve výjimce přijaté správy, ne z rozpočtu čtení na pozadí', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const scope = new AsyncLocalStorage<boolean>();
+      const outside: string[] = [];
+      harness.broker.runWithAcceptedRequests = action => scope.run(true, action);
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      harness.broker.listOrders = async (...args) => {
+        if (scope.getStore() !== true) outside.push('listOrders');
+        return realListOrders(...args);
+      };
+      const realListPositions = harness.broker.listPositions.bind(harness.broker);
+      let positionReads = 0;
+      harness.broker.listPositions = async (...args) => {
+        positionReads += 1;
+        if (scope.getStore() !== true) outside.push('listPositions');
+        return realListPositions(...args);
+      };
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (...args) => {
+        if (scope.getStore() !== true) outside.push('cancelOrder');
+        return realCancel(...args);
+      };
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await harness.controller.waitForIdle();
+      expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([1, 1]);
+      expect(positionReads).toBeGreaterThan(0);
+      expect(outside).toEqual([]);
       expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
     } finally {
       harness.controller.stop();
