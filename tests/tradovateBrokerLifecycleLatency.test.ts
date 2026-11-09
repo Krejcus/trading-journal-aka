@@ -272,3 +272,80 @@ describe('display coverage re-baseline after trade ingress', () => {
     t.unsubscribe();
   }, 10_000);
 });
+
+describe('OrderVersion read primed at the write ACK', () => {
+  const order = { accountId: 101, tag: 'own-entry', symbol: 'MNQZ6', quantity: 1, side: 'Buy' as const, orderType: 'Market' as const };
+  const frame = (orderId: number) => [props('order', { id: orderId, accountId: 101, contractId: 77, ordStatus: 'Working', action: 'Buy', timestamp: '2026-11-09T20:00:00Z' }, 'Created')];
+  const versionReads = (paths: string[]) => paths.filter(path => path.endsWith('/orderVersion/deps')).length;
+
+  it('starts the read at the ACK and the first Order frame reuses it instead of reading again', async () => {
+    const t = await connected({ accepted: true, wire: path => {
+      if (path.endsWith('/order/placeorder')) return { orderId: 900 };
+      if (path.endsWith('/orderVersion/deps')) return [{ id: 9900, orderId: 900, orderQty: 1, orderType: 'Market' }];
+      if (path.endsWith('/contract/find') || path.endsWith('/contract/items')) return [{ id: 77, name: 'MNQZ6' }];
+      return [];
+    } });
+    t.socket.deliver([props('contract', { id: 77, name: 'MNQZ6' })]); await flush();
+    t.paths.length = 0;
+    await t.broker.runWithAcceptedRequests!(() => t.broker.placeOrder(order));
+    await flush();
+    expect(versionReads(t.paths)).toBe(1);
+    t.socket.deliver(frame(900)); await flush();
+    expect(versionReads(t.paths)).toBe(1);
+    // Předčtení je jednorázové: jiný nový příkaz si verzi čte sám jako dřív.
+    t.socket.deliver(frame(950)); await flush();
+    expect(versionReads(t.paths)).toBe(2);
+    t.unsubscribe();
+  });
+
+  it('a failed primed read is discarded and the frame reads the version itself', async () => {
+    let reads = 0;
+    const t = await connected({ accepted: true, wire: path => {
+      if (path.endsWith('/order/placeorder')) return { orderId: 901 };
+      if (path.endsWith('/orderVersion/deps')) { reads += 1; if (reads === 1) throw new Error('first read failed'); return [{ id: 9901, orderId: 901, orderQty: 1, orderType: 'Market' }]; }
+      return [];
+    } });
+    t.socket.deliver([props('contract', { id: 77, name: 'MNQZ6' })]); await flush();
+    await t.broker.runWithAcceptedRequests!(() => t.broker.placeOrder(order));
+    await flush();
+    expect(reads).toBe(1);
+    t.socket.deliver(frame(901)); await flush();
+    expect(reads).toBe(2);
+    expect(t.socket.readyState).toBe(1);
+    t.unsubscribe();
+  });
+
+  it('an empty primed list (read raced the broker commit) is not a result: the frame reads again', async () => {
+    let reads = 0;
+    const t = await connected({ accepted: true, wire: path => {
+      if (path.endsWith('/order/placeorder')) return { orderId: 903 };
+      if (path.endsWith('/orderVersion/deps')) { reads += 1; return reads === 1 ? [] : [{ id: 9903, orderId: 903, orderQty: 1, orderType: 'Market' }]; }
+      return [];
+    } });
+    await t.broker.runWithAcceptedRequests!(() => t.broker.placeOrder(order));
+    await flush();
+    expect(reads).toBe(1);
+    t.socket.deliver(frame(903)); await flush();
+    expect(reads).toBe(2);
+    t.unsubscribe();
+  });
+
+  it('without the expiring lifecycle class nothing is primed (no read outside the budget lanes)', async () => {
+    const t = await connected({ accepted: false, wire: path => (path.endsWith('/order/placeorder') ? { orderId: 904 } : []) });
+    t.paths.length = 0;
+    await t.broker.placeOrder(order);
+    await flush();
+    expect(versionReads(t.paths)).toBe(0);
+    t.unsubscribe();
+  });
+
+  it('nothing is primed without a synced live socket', async () => {
+    const paths: string[] = [];
+    const broker = createTradovateBroker({ environment: 'demo', accessToken: 'token', accountSpecsByAccountId: { 101: 'DEMO' }, accountSpec: 'DEMO',
+      fetchImpl: async input => { const path = new URL(String(input)).pathname; paths.push(path); return response(path.endsWith('/order/placeorder') ? { orderId: 902 } : []); },
+      webSocketFactory: () => { throw new Error('WebSocket is not used'); } });
+    await broker.placeOrder(order);
+    await flush();
+    expect(versionReads(paths)).toBe(0);
+  });
+});

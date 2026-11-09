@@ -64,6 +64,8 @@ export async function updateNativeWidgetPushes(options: {
   db: SupabaseClient;
   runtimes: readonly NativeLiveActivityRuntimeRow[];
   brokerSnapshot: NativeBrokerSnapshotLoader;
+  /** Klid podle workeru: zařízení se v této minutě přeskočí bez čtení brokera. */
+  skipBrokerRead?: (runtime: NativeLiveActivityRuntimeRow) => boolean;
   now?: number;
 }): Promise<{ registered: number; sent: number; skipped: number; failed: number; expired: number }> {
   const now = options.now ?? Date.now();
@@ -84,6 +86,10 @@ export async function updateNativeWidgetPushes(options: {
   for (const device of devices) {
     const runtime = runtimes.get(device.user_id);
     if (!runtime) {
+      skipped++;
+      continue;
+    }
+    if (options.skipBrokerRead?.(runtime)) {
       skipped++;
       continue;
     }

@@ -107,6 +107,29 @@ function workerTimes(commandId: string): { queueMs?: number; execMs?: number; ac
   } catch { return {}; }
 }
 
+/** Lokální agent: jen risk-redukční a provozní příkazy (Flatten účtu, kontrola pozic, zapnutí). */
+async function loopback(command: unknown): Promise<any> {
+  const current = await status();
+  const response = await fetch(`${BASE}/v1/command`, {
+    method: 'POST', headers: { Origin: ORIGIN, 'Content-Type': 'application/json', 'X-AlphaTrade-Agent-Nonce': current.nonce },
+    body: JSON.stringify(command),
+  });
+  return response.json().catch(() => ({}));
+}
+/** Zavření bez relaye (nečerpá denní strop správy): Flatten účtu → kontrola pozic → znovu zapnout. */
+async function flattenAndRearm(groupId: string): Promise<void> {
+  const flat = await loopback({ type: 'copy-command', command: { type: 'flatten-account', groupId, accountId: ACCOUNT, operationId: `flatten-${crypto.randomUUID().replaceAll('-', '')}` } });
+  if (flat?.result?.flat !== true) throw new Error(`Flatten nepotvrdil flat: ${JSON.stringify(flat?.result ?? flat?.error).slice(0, 300)}`);
+  await sleep(1500);
+  const reconciled = await loopback({ type: 'reconcile' });
+  if (reconciled?.result?.authoritativelyClean !== true) throw new Error(`kontrola pozic není čistá: ${JSON.stringify(reconciled?.result ?? reconciled?.error).slice(0, 300)}`);
+  const before = await status();
+  const incident = before.controller.manualRecovery?.id;
+  const armed = await loopback({ type: 'arm-live', ...(incident ? { acknowledgeIncidentId: incident } : {}) });
+  const after = await status();
+  if (after.controller.armed !== true) throw new Error(`zapnutí selhalo: ${JSON.stringify(armed?.error ?? armed).slice(0, 300)}`);
+}
+
 /** Čeká na podmínku ve statusu; vrací ms od `since` (performance.now) nebo null po timeoutu. */
 async function until(since: number, predicate: (s: Status) => boolean, timeoutMs = 8000): Promise<number | null> {
   const deadline = performance.now() + timeoutMs;
@@ -222,6 +245,11 @@ async function cycle(index: number) {
     }
   }
 
+  if (flag('close', 'manage') === 'flatten') {
+    await sleep(GAP);
+    await flattenAndRearm(s.group.id);
+    return;
+  }
   const manage = async (action: string, fields: Record<string, unknown>, done: (s: Status) => boolean) => {
     const command = buildLeaderOrderManageCommand({
       groupId: s.group.id, operationId: newId('manage'), leaderAccountId: ACCOUNT,

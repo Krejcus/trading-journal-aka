@@ -130,3 +130,24 @@ Neměřeno: držené spojení a zápisy po WebSocketu (denní strop 100 příkaz
 
 Vedlejší nálezy z měření: po zavření pozice blokuje nový vstup krátké „leader event quiet window“
 (`group-busy`); IB Gateway se denně ve 23:45 SEČ odhlásí a bez ručního přihlášení worker nemá cenu.
+
+## Dodatek 10. 11. 2026 (po půlnoci)
+
+**Oprava příčiny nasyceného zobrazovacího pruhu.** Výše stojí, že pruh plní čtení webu/telefonu. Rozbor časů
+grantů to zpřesňuje: na DEMO loginu padá ~46 % čerpání do 20.–24. sekundy každé minuty a dalších ~20 % do
+0.–4. sekundy, na Lucid loginu ~23 % a ~13 %. Ve 20. sekundě běží minutový cron `/api/cron/send-alerts`, který
+pro každého uživatele s nativním zařízením a živým workerem čte snímek brokera (zámky účtů, start Live
+Activity, widgety) — i bez pozice a i když nic neposílá (`0 live activity updates, 0 widget pushes`, v logu
+každou minutu `Native Broker Snapshot … tradovate-request-budget`). Hlavním stálým spotřebitelem je tedy
+serverový cron, klienti až druzí.
+
+- **Zpomalení v klidu** (`server/nativeIdleBrokerSnapshot.ts`, zapojeno v `api/cron/send-alerts.ts`,
+  `nativeLiveActivityStarter`, `nativeWidgetPushUpdater`): když čerstvý worker hlásí flat, žádný příkaz, žádný
+  incident a expozice se tři minuty nezměnila, čte cron brokera jen každou pátou minutu. Běžící Live Activity
+  a čtvrthodinový sběr zůstatků se nemění. Není to jádro kopírky (jen zobrazení a notifikace); účinek až po
+  nasazení webu. Očekávání: ~7 → ~1,5 dotazu/min na login v klidu.
+- **Předčtení verze příkazu hned po ACK zápisu** (`tradovateBroker.primeOrderVersion`): fill vstupu čekal za
+  dvěma dotaženími nohou OSO po sobě (~240 ms; broker ACK přichází 100–300 ms před rámci). Čtení teď začne při
+  ACK, výsledek použije jen první rámec `order` téhož id stejnou cestou jako dosud. Po oponentuře: jen
+  v lokálním přídělu a s vyhasínající třídou, prázdný nebo cizí seznam se zahodí a rámec čte sám.
+  INV-TRAD-ACK-01 (pořadí) beze změny.

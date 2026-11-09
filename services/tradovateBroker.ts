@@ -1149,6 +1149,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     stagedOrderVersionWaiters = new Map();
     stagedOrderVersions = new Map();
+    primedOrderVersions.clear();
     activeSemanticFrameId = null;
   };
 
@@ -1187,6 +1188,43 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // v poradi ramcu ji znovu vyhodi az hydrateOrderVersion.
       .catch(error => ({ ok: false as const, error }))
   );
+
+  // Předčtení verze hned po ACK vlastního zápisu (10. 11. 2026). Broker vrací id nového
+  // příkazu v odpovědi na POST o 100–300 ms dřív, než přijde jeho rámec ve streamu; REST
+  // dotažení verze tak může běžet souběžně s čekáním na rámec místo až po něm (fill vstupu
+  // stál za dvěma dotaženími nohou OSO po sobě, ~240 ms). Výsledek se jen odloží: použije ho
+  // jediný první rámec Order téhož id stejnou cestou jako dosavadní předčtení při příjmu
+  // rámce, takže pořadí zpracování ani obsah execution cache se nemění. Chybný nebo starý
+  // výsledek se zahodí a rámec si verzi přečte sám jako dřív.
+  const PRIMED_ORDER_VERSION_TTL_MS = 5_000;
+  const primedOrderVersions = new Map<number, { result: Promise<OrderVersionFetchResult>; at: number }>();
+  const primeOrderVersion = (orderId: number) => {
+    if (!Number.isSafeInteger(orderId) || orderId <= 0 || orderVersions.has(orderId) || primedOrderVersions.has(orderId)) return;
+    if (!syncReady || socketState !== 'connected') return;
+    const now = clock();
+    for (const [id, primed] of primedOrderVersions) if (now - primed.at >= PRIMED_ORDER_VERSION_TTL_MS) primedOrderVersions.delete(id);
+    if (primedOrderVersions.size >= 32) return;
+    // Jen v lokálním přídělu a jen s vyhasínající třídou: nad příděl se nepředčítá vůbec
+    // (rámec si verzi přečte původní cestou s rezervací), takže předčtení nikdy nejde
+    // mimo rozpočet ani mimo recovery pruh.
+    const lifecycle = config.runWithLifecycleReads;
+    if (!lifecycle || !takeLifecycleHydration()) return;
+    const result: Promise<OrderVersionFetchResult> = lifecycle(() => request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`))
+      .then(versions => ({ ok: true as const, versions: versions ?? [] }))
+      .catch(error => ({ ok: false as const, error }));
+    primedOrderVersions.set(orderId, { result, at: now });
+  };
+  /** Jednorázově vydá předčtení po ACK; chybu nebo prošlý výsledek nahradí běžným čtením. */
+  const takePrimedOrderVersion = (orderId: number): Promise<OrderVersionFetchResult> | null => {
+    const primed = primedOrderVersions.get(orderId);
+    if (!primed) return null;
+    primedOrderVersions.delete(orderId);
+    if (clock() - primed.at >= PRIMED_ORDER_VERSION_TTL_MS) return null;
+    // Čtení při ACK mohlo předběhnout zápis verze u brokera: prázdný seznam (nebo seznam bez
+    // verze tohoto příkazu) není výsledek — rámec si verzi přečte znovu jako dřív.
+    return primed.result.then(result => ('error' in result || !result.versions.some(version => version.orderId === orderId)
+      ? fetchOrderVersions(orderId) : result));
+  };
 
   const hydrateOrderVersion = async (
     orderId: number,
@@ -1250,7 +1288,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const supplied = siblingVersions.get(orderId) ?? [];
         if (supplied.some(version => requiredVersionId == null || version.id === requiredVersionId)) continue;
         if (!isCurrent()) return;
-        prepared.set(orderId, fetchOrderVersions(orderId));
+        prepared.set(orderId, (entityType === 'order' ? takePrimedOrderVersion(orderId!) : null) ?? fetchOrderVersions(orderId!));
       }
     };
     const visit = (message: unknown) => {
@@ -1509,6 +1547,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (!Number.isSafeInteger(orderId) || orderId <= 0 || !Number.isSafeInteger(accountId) || accountId <= 0) return;
     orderAccountHints.set(orderId, accountId);
     if (tag) orderTags.set(orderId, tag);
+    primeOrderVersion(orderId);
     // Fill mohl přijít ještě během HTTP POSTu. Rychlý flush nesmí prodloužit
     // ani změnit broker ACK; při chybě zůstává položka pending pro původní
     // Order/ExecutionReport fallback.

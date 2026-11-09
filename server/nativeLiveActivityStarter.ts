@@ -90,6 +90,8 @@ export async function startNativeLiveActivities(options: {
   db: SupabaseClient;
   runtimes: readonly NativeLiveActivityRuntimeRow[];
   brokerSnapshot: NativeBrokerSnapshotLoader;
+  /** Klid podle workeru: bez pozice a příkazu není co startovat, brokera v této minutě nečteme. */
+  skipBrokerRead?: (runtime: NativeLiveActivityRuntimeRow) => boolean;
   now?: number;
   registrationSecret?: string;
   send?: (device: ApnsDevice, start: ApnsLiveActivityStart) => Promise<ApnsResult>;
@@ -117,6 +119,7 @@ export async function startNativeLiveActivities(options: {
   for (const subscription of subscriptions) {
     const runtime = runtimes.get(subscription.user_id);
     if (!runtime) { skipped++; continue; }
+    if (options.skipBrokerRead?.(runtime)) { skipped++; continue; }
     const broker = await options.brokerSnapshot(runtime);
     const startPlan = planNativeLiveActivityStart({ runtime, broker, now });
     if (!startPlan.trigger || subscription.last_start_trigger === startPlan.trigger) {
