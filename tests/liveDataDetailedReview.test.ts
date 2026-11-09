@@ -148,6 +148,81 @@ describe('detailed LIVE data reliability regressions', () => {
     expect(Object.keys(view('review-prune').connectionData)).toEqual(['keep']);
   });
 
+  it('a soft budget refusal defers full refresh per connection and preserves original data timestamps', async () => {
+    const limited = await dataset('limited'), healthy = await dataset('healthy');
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['limited','healthy']));
+    api.runTradovateReadOnlyPreflight.mockImplementation(async id => id === 'limited' ? limited : healthy);
+    await view('review-soft-budget',true).refreshStatus();
+    await settle();
+    const capturedAt = view('review-soft-budget',true).connectionData.limited.capturedAt;
+    api.runTradovateReadOnlyPreflight.mockImplementation(async id => {
+      if(id === 'limited') throw new api.TradovateRequestError('tradovate-request-budget',503,45_000);
+      return healthy;
+    });
+    await view('review-soft-budget',true).refreshData(true);
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('review-soft-budget',true).refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call=>call[0])).toEqual(['healthy']);
+    expect(view('review-soft-budget',true).connectionData.limited.capturedAt).toBe(capturedAt);
+    expect(view('review-soft-budget',true).connectionHealth.limited.state).toBe('budget-limited');
+    vi.mocked(Date.now).mockReturnValue(now + 45_001);
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('review-soft-budget',true).refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call=>call[0])).toContain('limited');
+  });
+
+  it('stale open-position data cannot repeat a soft-refused tick or full refresh; another connection keeps polling', async () => {
+    const limited = await dataset('limited'), healthy = await dataset('healthy');
+    limited.accounts[0].netPositionCount = 1;
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['limited','healthy']));
+    api.runTradovateReadOnlyPreflight.mockImplementation(async id => id === 'limited' ? limited : healthy);
+    await view('review-soft-tick',true).refreshStatus();
+    await settle();
+    view('review-soft-tick',true);
+    api.runTradovateLivePnlTick.mockImplementation(async id => {
+      if(id === 'limited') throw new api.TradovateRequestError('tradovate-request-budget',503,45_000);
+      throw new Error('healthy route fixture stops before applying a tick');
+    });
+    const fire = async () => {
+      const due = timers.filter(timer=>!timer.cleared && timer.delay <= 15_000);
+      due.forEach(timer=>{timer.cleared=true;timer.callback();});
+      await settle();
+      view('review-soft-tick',true);
+    };
+    await fire();
+    expect(api.runTradovateLivePnlTick.mock.calls.filter(call=>call[0]==='limited')).toHaveLength(1);
+    const beforeHealthy=api.runTradovateLivePnlTick.mock.calls.filter(call=>call[0]==='healthy').length;
+    vi.mocked(Date.now).mockReturnValue(now+10_000);
+    await fire();
+    expect(api.runTradovateLivePnlTick.mock.calls.filter(call=>call[0]==='limited')).toHaveLength(1);
+    expect(api.runTradovateLivePnlTick.mock.calls.filter(call=>call[0]==='healthy').length).toBeGreaterThan(beforeHealthy);
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('review-soft-tick',true).refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call=>call[0])).toEqual(['healthy']);
+    expect(api.runTradovateLivePnlAnchor.mock.calls.filter(call=>call[0]==='limited')).toHaveLength(0);
+    vi.mocked(Date.now).mockReturnValue(now+45_001);
+    await fire();
+    expect(api.runTradovateLivePnlTick.mock.calls.filter(call=>call[0]==='limited')).toHaveLength(2);
+  });
+
+  it('a late soft-refused tick cannot defer a different user on the same connectionId', async () => {
+    const current = await dataset('c'); current.accounts[0].netPositionCount=1;
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    api.runTradovateReadOnlyPreflight.mockResolvedValue(current);
+    let rejectTick!: (error: unknown)=>void;
+    api.runTradovateLivePnlTick.mockImplementationOnce(()=>new Promise((_resolve,reject)=>{rejectTick=reject;}));
+    await view('soft-user-a',true).refreshStatus(); await settle(); view('soft-user-a',true);
+    timers.filter(timer=>!timer.cleared && timer.delay===0).forEach(timer=>{timer.cleared=true;timer.callback();});
+    await settle();
+    expect(rejectTick).toBeTypeOf('function');
+    await view('soft-user-b',true).refreshStatus(); await settle();
+    rejectTick(new api.TradovateRequestError('tradovate-request-budget',503,45_000));
+    await settle();
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('soft-user-b',true).refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call=>call[0])).toEqual(['c']);
+  });
+
   it('honors a cold-start 429 instead of immediately retrying the full read', async () => {
     api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
     api.runTradovateReadOnlyPreflight.mockRejectedValue(new api.TradovateRequestError('rate limited', 429, 60_000));

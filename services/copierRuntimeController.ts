@@ -2213,9 +2213,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const seenFollowerRiskFillIds = new Set(restoredRiskLedger.ledger?.seenFillIds ?? []);
   let reconciliationTail: Promise<void> = Promise.resolve();
   const ARM_PREPARATION_MAX_AGE_MS = 30_000;
-  const ARM_PREPARATION_ACTIVE_REFRESH_MS = 20_000;
   const ARM_PREPARATION_IDLE_REFRESH_MS = 5 * 60_000;
-  const ARM_PREPARATION_INTEREST_MS = 60_000;
   let armPreparationReceipt: {
     generation: number;
     observation: number;
@@ -2230,7 +2228,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let armPreparationIncidentRequiresRecovery = restoredManualRecovery != null;
   let currentManualRecovery: { id: string; at: number; reason: string } | null = restoredManualRecovery;
   let armPreparationLastAttemptAt = -Infinity;
-  let armPreparationInterestUntil = -Infinity;
   let automaticArmPreparation = false;
   let reconciliationRequestsPending = 0;
   const admittedLeaderOrders = new Set<string>();
@@ -15720,15 +15717,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
   const scheduleArmPreparation = () => {
     const now = clock();
-    const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
-    const activePreparation = tradingWindowStateAt(tradingWindow, now) === 'inside'
-      || now <= armPreparationInterestUntil;
-    const refreshMs = activePreparation
-      ? ARM_PREPARATION_ACTIVE_REFRESH_MS
-      : ARM_PREPARATION_IDLE_REFRESH_MS;
+    // Passive LIVE status reads must not spend a full broker preflight every20s.
+    // This is only a prewarm cadence: receipts still expire after30s, and an
+    // explicit ON/auto-resume performs the unchanged fresh preparation.
+    const refreshMs = ARM_PREPARATION_IDLE_REFRESH_MS;
+    const receiptAt = armPreparationReceipt?.generation === safetyGeneration
+      && armPreparationReceipt.connection === connectionSyncGeneration
+      && armPreparationReceipt.observation === brokerObservationVersion
+      && armPreparationReceipt.configuration === armPreparationConfiguration()
+      && armPreparationReceipt.routes === armPreparationRoutes(armPreparationReceipt.accountIds)
+      ? armPreparationReceipt.verifiedAt : -Infinity;
     if (!automaticArmPreparation || gate.armed || !gate.connected || stopped || armPreparationInFlight
       || armPreparationBlocker() || recoveryInFlight || pendingReadOnlyConnectionRecovery
-      || now - armPreparationLastAttemptAt < refreshMs) return;
+      || now - Math.max(armPreparationLastAttemptAt, receiptAt) < refreshMs) return;
     if (hasFreshArmPreparation() && armPreparationReceipt
       && now - armPreparationReceipt.verifiedAt < refreshMs) return;
     void prepareArm(true).catch(() => undefined);
@@ -23819,10 +23820,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       scheduleArmPreparation();
     },
     noteArmPreparationInterest() {
-      armPreparationInterestUntil = Math.max(
-        armPreparationInterestUntil,
-        clock() + ARM_PREPARATION_INTEREST_MS,
-      );
       scheduleArmPreparation();
     },
     cancelTransportResume(reason) {

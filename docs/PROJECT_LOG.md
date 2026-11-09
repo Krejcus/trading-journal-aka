@@ -288,6 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+
+### 2026-11-09 (Codex — další skutečný producent dotazů po reliability release)
+
+Po schválené DB policy2/web/worker instalaci bylo na jediném DEMO ověřeno
+zadání, posun a cancel chráněného limitu. Market se správně zablokoval před
+odesláním při BG40/min. Dohledán další zdroj: flat ARM prewarm každých20s,
+vynucovaný i pouhým čtením LIVE statusu. Automatická příprava nyní běží po5min;
+receipt zůstává max30s a explicitní ON/auto-resume má původní fresh checks.
+Cadence nepoužije receipt z jiné generation/observation/config/connection/route.
+Samostatný UI soft-budget defer (min15s, delší validní retry) zastaví opakování
+tick/anchor/full/history, nedotýká se commandů, OAuth ani skutečných429 a časů dat.
+Kritik: OK. Finální plná sada8444passed+1todo, root+pilot tsc0, web/native/Xcode
+build passed; scoped lint0errors/1starší warning. Release checkout je
+`~/alphatrade-worktrees/live-reliability-20261109`; Documents a Claude checkout
+zachovány. Tento zápis je před doplňujícím pushem/worker instalací a konečným
+DEMO testem vyplněného obchodu; provozní výsledek doplní další zápis/report.
+
 ### 2026-11-09 — Codex: lokální oprava kapacity LIVE a datové kontinuity ověřena cíleně
 
 - Izolovaný balík `/private/tmp/at-live-reliability-20261109`, větev `codex/live-reliability-20261109`, základ `cbce5d1b`. Typed quota/cooldown/captcha refusals s okamžitým hard-fence a ochranou proti starší autoritě; oddělené BG/risk/recovery limity v nové neaplikované migraci `20261109162721`; demand-only rezervace, final ARM gate, lehký startup account directory a read-only recovery. Management, outbox/no-retry a skutečné brokerové zákazy zachované.

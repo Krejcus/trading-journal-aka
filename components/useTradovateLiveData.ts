@@ -1,3 +1,4 @@
+import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -249,6 +250,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const livePnlMarksRef = useRef<Record<string, TradovateContractMarkMap>>({});
   const livePnlLastFullTickAtRef = useRef(0);
   const rateLimitUntilByConnectionRef = useRef<Record<string, number>>({});
+  const softReadDeferralsRef = useRef(createTradovateSoftReadDeferrals());
   const fullRefreshInFlightRef = useRef(new Map<string, symbol>());
   const journalLinkAttemptsRef = useRef(new Set<string>());
   const previousUserIdRef = useRef(userId);
@@ -318,6 +320,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     livePnlMarksRef.current = {};
     livePnlLastFullTickAtRef.current = 0;
     rateLimitUntilByConnectionRef.current = {};
+    softReadDeferralsRef.current = createTradovateSoftReadDeferrals();
     setStatus(cached?.status ?? persisted?.status ?? null);
     statusRef.current = cached?.status ?? persisted?.status ?? null;
     connectionDataRef.current = cached?.connectionData ?? {};
@@ -415,7 +418,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }, [persisted?.status, status, userId]);
 
   const advanceHistoricalBackfill = useCallback(async (datasets: TradovatePreflightResult[]) => {
-    datasets = datasets.filter(dataset => Date.now() >= (rateLimitUntilByConnectionRef.current[dataset.connectionId] ?? 0));
+    datasets = datasets.filter(dataset => Date.now() >= softReadDeferralsRef.current.resumeAt(dataset.connectionId, rateLimitUntilByConnectionRef.current[dataset.connectionId] ?? 0));
     if (historyBusyRef.current || datasets.length === 0) return;
     const user = activeUserIdRef.current;
     const epoch = identityEpochRef.current.epoch;
@@ -427,6 +430,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         runTradovateHistoricalBackfill({
           connectionId: dataset.connectionId,
           accountId: account.id,
+        }).catch(reason => {
+          if (isCurrent()) softReadDeferralsRef.current.record(dataset.connectionId, reason);
+          throw reason;
         }),
       )));
       if (!isCurrent()) return;
@@ -479,6 +485,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     }
     const startedAt = Date.now();
     const recordRateLimit = (connectionId: string, reason: unknown) => {
+      if (isCurrent()) softReadDeferralsRef.current.record(connectionId, reason);
       if (isCurrent() && reason instanceof TradovateRequestError && reason.status === 429) {
         rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
           rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
@@ -503,7 +510,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const markFailure = (connectionId: string, reason: unknown) => updateEnrichment(current => {
       const previous = current[connectionId] ?? emptyEnrichment();
       const failureCount = previous.failureCount + 1;
-      const rateLimitUntil = rateLimitUntilByConnectionRef.current[connectionId] ?? 0;
+      const rateLimitUntil = softReadDeferralsRef.current.resumeAt(connectionId, rateLimitUntilByConnectionRef.current[connectionId] ?? 0);
       const retryAt = Math.max(Date.now() + tradovateFullRefreshBackoffMs(failureCount), rateLimitUntil);
       return {
         ...current,
@@ -517,7 +524,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       };
     });
     if (detail === 'full') markPending(connectionIds);
-    const eligibleConnectionIds = connectionIds.filter(id => startedAt >= (rateLimitUntilByConnectionRef.current[id] ?? 0));
+    const eligibleConnectionIds = connectionIds.filter(id => startedAt >= softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0));
     if (detail === 'full') {
       const blocked = connectionIds.filter(id => !eligibleConnectionIds.includes(id));
       if (blocked.length > 0) updateEnrichment(current => {
@@ -527,7 +534,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           next[id] = {
             ...previous,
             pending: false,
-            retryAt: rateLimitUntilByConnectionRef.current[id] ?? previous.retryAt,
+            retryAt: softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0) || previous.retryAt,
             error: previous.error ?? 'Tradovate dočasně omezuje načítání dat tohoto připojení.',
           };
         }
@@ -660,7 +667,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     await Promise.all(connectionIds.map(async connectionId => {
       if (connectionDataRef.current[connectionId]?.historicalSync.status !== 'not-checked') return;
       // Připojení v Tradovate backoffu se neptáme; zkusí se to po jeho konci.
-      const limitedUntil = rateLimitUntilByConnectionRef.current[connectionId] ?? 0;
+      const limitedUntil = softReadDeferralsRef.current.resumeAt(connectionId, rateLimitUntilByConnectionRef.current[connectionId] ?? 0);
       if (Date.now() < limitedUntil) {
         if (attempt === 0) window.setTimeout(() => void refreshHistoricalProbe([connectionId], 1), limitedUntil - Date.now() + 1_000);
         return;
@@ -674,6 +681,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         setConnectionData(next);
       } catch (reason) {
         if (!isCurrent()) return;
+        softReadDeferralsRef.current.record(connectionId, reason);
         if (reason instanceof TradovateRequestError && reason.status === 429) {
           rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
             rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
@@ -684,7 +692,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         // načtení, které probe obsahuje.
         if (attempt === 0) window.setTimeout(() => void refreshHistoricalProbe([connectionId], 1), Math.max(
           15_000,
-          (rateLimitUntilByConnectionRef.current[connectionId] ?? 0) - Date.now() + 1_000,
+          softReadDeferralsRef.current.resumeAt(connectionId, rateLimitUntilByConnectionRef.current[connectionId] ?? 0) - Date.now() + 1_000,
         ));
       }
     }));
@@ -721,7 +729,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // Připojení, jehož úplné čtení už běží (např. retry), se nespouští znovu.
       perfMark('live:preflight-start');
       const prestartedFull = startTradovatePreflights(
-        cachedConnectionIds.filter(id => Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0)
+        cachedConnectionIds.filter(id => Date.now() >= softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0)
           && !fullRefreshInFlightRef.current.has(id)),
         connectionId => runTradovateReadOnlyPreflight(connectionId, 'full', undefined, { historicalProbe: false }),
       );
@@ -768,7 +776,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               { historicalProbe: false },
             );
             if (!isCurrent()) return null;
-            if (activeConnectionIds.every(id => Date.now() < (rateLimitUntilByConnectionRef.current[id] ?? 0))) {
+            if (activeConnectionIds.every(id => Date.now() < softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0))) {
               setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
             }
             // Neúspěšná připojení mají vlastní 15/30/60s retry a nezadržují ostatní.
@@ -943,6 +951,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (ids.length === 0) return;
     let cancelled = false;
     const pollUserId = activeUserIdRef.current;
+    const pollIdentityEpoch = identityEpochRef.current.epoch;
     let timer: number | null = null;
     const idleDelay = tradovatePositionPollDelay(enabled, journalFocus, false);
     // Každý odchod do pozadí zneplatní rozpracované čtení: tick zahájený před
@@ -967,9 +976,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         return;
       }
       const available = ids.filter(id => connectionDataRef.current[id]
-        && Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0));
+        && Date.now() >= softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0));
       if (available.length === 0) {
-        const nextRateLimit = ids.map(id => rateLimitUntilByConnectionRef.current[id] ?? 0)
+        const nextRateLimit = ids.map(id => softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0))
           .filter(until => until > Date.now()).sort((a, b) => a - b)[0];
         schedule(nextRateLimit ? Math.min(idleDelay, nextRateLimit - Date.now()) : background ? idleDelay : 1_000);
         return;
@@ -1008,6 +1017,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               applyTradovateConnectionHealth(current, connectionId, requestedAt));
             return result;
           } catch (error) {
+            // A refusal still governs the same user after hiding or restarting
+            // this effect. It never refreshes data or changes broker penalties.
+            if (activeUserIdRef.current === pollUserId && identityEpochRef.current.epoch === pollIdentityEpoch) {
+              softReadDeferralsRef.current.record(connectionId, error);
+            }
             if (!cancelled && activeUserIdRef.current === pollUserId) setConnectionHealth(current =>
               applyTradovateConnectionHealth(current, connectionId, requestedAt, error));
             throw error;

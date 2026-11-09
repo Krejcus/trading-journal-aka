@@ -1918,6 +1918,15 @@ existující ochranu.
   zdědí původní účel, explicitní accepted/risk scopy se zachovají. Context nepovoluje
   write: jeho stávající klasifikace, controller gates, outbox a skutečná penalizace
   zůstávají beze změny.
+- Pasivní status LIVE ani obchodní okno nezrychlí nákladný flat prewarm:
+  automatická příprava má pětiminutový interval. Receipt platí nadále nejvýš30s;
+  explicitní ON i auto-resume projdou původní čerstvou kontrolou a všechny
+  generation/observation/config/connection/route invalidace zůstávají zachované.
+- UI po typovaném soft-budget503 odloží pouze broker display/history reads
+  příslušného připojení nejméně15s nebo podle delšího platného server minima.
+  Odklad se nedotýká worker statusu, command/reconcile cest ani datových časů,
+  nezmění429/OAuth stav, přežije foreground/efekt restart a nepřejde na jiného
+  uživatele. Druhé zdravé připojení dál pokračuje.
 - Worker-first display coverage vzniká teprve po validovaných Position a
   Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.

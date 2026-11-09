@@ -2,11 +2,14 @@
 
 ## Stav a zdroj
 
-Lokální balík v `/private/tmp/at-live-reliability-20261109`, větev
+Release source je nyní samostatný čistý checkout
+`/Users/filipkrejca/alphatrade-worktrees/live-reliability-20261109`, větev
 `codex/live-reliability-20261109`, základ `cbce5d1b` včetně `2c6b588f`.
-Žádný push, produkční DB změna, instalace workeru/iPhonu ani brokerový příkaz
-během této opravy. Documents a Claudův request-budget checkout zůstávají zachované.
-Tento report není potvrzení nasazení ani živého obchodního ověření.
+Původní sekce ověření níže popisuje predeploy snapshot, ne úplný provozní důkaz.
+Po výslovném souhlasu byla aplikována policy2 migrace a nasazen web i worker
+`b2671177`. Následující doplněk odstraňuje další skutečně nalezené čerpání;
+finální nasazení a brokerové výsledky patří do samostatného release reportu.
+Documents a Claudův request-budget checkout zůstávají zachované.
 
 ## Oprava příčiny
 
@@ -24,7 +27,8 @@ Tento report není potvrzení nasazení ani živého obchodního ověření.
 4. ARM/auto-resume i nové vstupy mají finální blocker aktuální sdílené kapacity.
    ARM, kill, day lock, outbox a ownership nepřebírá server ani display.
 5. Bootstrap identity directory workeru čte jen account/list, bez25–40 nepoužitých
-   finančních/history dotazů. Výsledek obsahuje pouze id/name; nenese ARM oprávnění.
+   finančních/history dotazů. Výsledek obsahuje id/name a explicitní active/canTrade z brokerových flags;
+   neobsahuje vymyšlené finanční/risk hodnoty ani nepovoluje sám ARM.
    Sync/reconnect baseline a nutná metadata mají omezenou interní recovery cestu.
 6. Souběžná čtení odděluje principal, host, socket/generace a účel. Urgentní
    správa se nepřipojí na dřívější blokovaný background fetch. Fresh order graph
@@ -94,3 +98,27 @@ samostatný limit. Oprava nesmí povolit živý obchod jako test těchto mezer.
 6. Ověřit skutečnou delší spotřebu, ne extrapolovat tento model na upstream SLA.
 
 Diagnostické logy jsou mimo repo v `/private/tmp/at-reliability-*`.
+
+## Doplněk po skutečném nasazení (9. 11. večer)
+
+- Na b267 byl v produkci na jediném DEMO ověřen chráněný limit611860534703
+  (SL704/TP705), posun a cancel. Nový Market byl dvakrát prokazatelně
+  zablokován před broker write, protože BG se pohybovalo u40/min; žádný blind retry.
+- Zdroj navíc: vypnutý controller dělal flat ARM prewarm po20s v obchodním
+  okně nebo po pouhém GETstatus z LIVE. To stálo další plný order graph,
+  přestože syntetický kapacitní model tohoto producenta nezahrnoval.
+- Automatický prewarm má nyní vždy původní idle5mincadence. Startup/recovery
+  receipt určí počátek intervalu jen při shodných generation,observation,
+  connection,config,route. Čerstvost receipt zůstává30s, explicitní ON čte
+  znovu. Nejde o zpomalení risk pollu ani ochranných příkazů.
+- UI budget503 dosud jen zobrazovalo, ale neodkládalo tick/anchor. Samostatný
+  display defer nově ctí minimum15s nebo delší validní retry (včetně1h+grantTTL),
+  také pro fullrefresh/history. Nemění OAuth,429,cooldown, timestamps ani příkazy.
+- Cílené regrese74/74 zahrnují deset minut nepřetržitého status zájmu,
+  skutečný explicitní ON po expiraci, stále otevřenou starou UI pozici,
+  omezenou a zdravou connection současně, expiry a opožděné odmítnutí jiného uživatele.
+- Samostatný kritik finálního doplňku: OK bez zbývajících nálezů.
+- Živý hodinový soak a skutečný tap→pixel na fyzickém iPhonu tímto reportem
+  nejsou doložené. Instalace iPhonu uspěla, launch odmítl zamčený telefon.
+
+Finální doplněk: plná sada8444 passed +1todo (785 souborů passed,1skipped), root i pilot typecheck exit0, web/native/Xcode build passed. Scoped lint0errors,1starší journalOptions warning.

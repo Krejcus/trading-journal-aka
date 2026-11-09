@@ -119,21 +119,21 @@ describe('worker read-only ARM preparation', () => {
     expect(runtime.status().armed).toBe(false);
   });
 
-  it('keeps readiness warm in the trading window and deduplicates heartbeats', async () => {
-    const broker = await boot(
-      groupWithTradingWindow('11:00', '13:00'),
-      undefined,
-      Date.parse('2026-10-05T12:00:00Z'),
-    );
+  it('passive status interest throughout ten minutes inside the trading window stays on the five-minute cadence', async () => {
+    const broker = await boot(groupWithTradingWindow('11:00', '13:00'), undefined, Date.parse('2026-10-05T12:00:00Z'));
     const positions = vi.spyOn(broker, 'listPositions');
-    now += 21_000;
-    broker.emitEvent({ type: 'heartbeat', at: now });
-    await runtime.waitForIdle();
-    expect(positions).toHaveBeenCalledTimes(2);
-    for (let i = 0; i < 10; i++) broker.emitEvent({ type: 'heartbeat', at: now });
-    await runtime.waitForIdle();
-    expect(positions).toHaveBeenCalledTimes(2);
-    expect(runtime.status().armPreparation?.state).toBe('ready');
+    const beganAt = now;
+    for (let second = 1; second <= 600; second++) {
+      now = beganAt + second * 1_000;
+      runtime.noteArmPreparationInterest!();
+      broker.emitEvent({ type: 'heartbeat', at: now });
+      await runtime.waitForIdle();
+      expect(positions.mock.calls.length).toBeLessThanOrEqual(Math.floor(second / 300) * 2);
+    }
+    expect(positions).toHaveBeenCalledTimes(4); // Two accounts, two refreshes after startup.
+    expect(runtime.status().armed).toBe(false);
+    expect(broker.placedRequests()).toEqual([]);
+    expect(broker.liquidateRequests()).toEqual([]);
   });
 
   it('uses a five-minute idle interval outside the trading window', async () => {
@@ -154,18 +154,18 @@ describe('worker read-only ARM preparation', () => {
     expect(positions).toHaveBeenCalledTimes(2);
   });
 
-  it('returns to the active interval after the LIVE client reads local status', async () => {
-    const broker = await boot(
-      groupWithTradingWindow('13:00', '14:00'),
-      undefined,
-      Date.parse('2026-10-05T12:00:00Z'),
-    );
+  it('status interest cannot refresh expired evidence; explicit ON still reads fresh positions before arming', async () => {
+    const broker = await boot(group(), undefined, Date.parse('2026-10-05T12:00:00Z'));
     const positions = vi.spyOn(broker, 'listPositions');
-    now += 21_000;
+    now += 31_000;
     runtime.noteArmPreparationInterest!();
     await runtime.waitForIdle();
-    expect(positions).toHaveBeenCalledTimes(2);
-    expect(runtime.status().armPreparation?.state).toBe('ready');
+    expect(positions).not.toHaveBeenCalled();
+    expect(runtime.status().armPreparation?.state).toBe('needed');
+    agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    await agent.execute({ type: 'arm-live', group: group() });
+    expect(new Set(positions.mock.calls.map(call => call[0]))).toEqual(new Set([11,22]));
+    expect(runtime.status().armed).toBe(true);
   });
 
   it('refreshes required risk evidence before ARM and rejects missing risk data', async () => {
