@@ -91,6 +91,10 @@ Třetí kolo oponentury (jen opravy): **OK S VÝHRADAMI**, nic neblokuje. Zapsan
 - **Starší defekt, tady neopravený:** odmítnutí hydratace *rozpočtem* shodí socket (`tradovateBroker.ts`
   zpracování rámce), ačkoli se nic neodeslalo; resync pak čte ze stejného vyčerpaného pruhu. Vyšší příděl práh
   jen posouvá. Správně má rámec zůstat ve frontě a hydratace se omezeně opakovat. Řešit samostatně.
+  Pokus o krátké opakování (10× po 500 ms) oponent vrátil: smyčka není svázaná se svým socketem (po reconnectu
+  by dál čerpala stejný pruh), pokus sám může trvat až 5 s, a stojící rámec mění okamžitý fail-closed v nejistý
+  výsledek ručního modify. Změna byla stažena; chce vlastní návrh (termín podle hodin, `isCurrent` socketu,
+  chování `waitForOrder` za stojícím rámcem).
 
 ## Co se nemění
 
