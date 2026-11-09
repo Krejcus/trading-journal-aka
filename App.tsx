@@ -28,6 +28,7 @@ import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { historyCardOrder } from './lib/historyCardOrder';
 import type { JournalLiveSource } from './hooks/useJournalLivePosition';
+import { workerCoverageOwners } from './lib/tradovateWorkerCoverage';
 import type { JournalLiveInterest } from './lib/journalLivePosition';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
@@ -1364,8 +1365,9 @@ const App: React.FC = () => {
     data: tradovateLive.data,
     profiles: tradovateLive.profiles,
     connectionIds: tradovateLive.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
+    coverageOwners: workerCoverageOwners(tradovateLive.connectionData),
     setInterest: setJournalLiveInterest,
-  } : null), [journalLiveUserId, tradovateLive.data, tradovateLive.profiles, tradovateLive.status]);
+  } : null), [journalLiveUserId, tradovateLive.data, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
   tradovateLiveDataRef.current = tradovateLive.data;
   const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
   useEffect(() => {

@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const now = Date.now();
     const broker = await loadNativeLiveActivityBrokerSnapshot({
       baseUrl: tradovateApiBaseUrl(config.environment),
-      connections: tokens.map(token => ({ accessToken: token.accessToken, baseUrl: tradovateApiBaseUrl(config.environment, token.apiHosts) })),
+      connections: tokens.map(token => ({ accessToken: token.accessToken, fetchImpl: token.fetchImpl, baseUrl: tradovateApiBaseUrl(config.environment, token.apiHosts) })),
       accountIds,
       now,
     });

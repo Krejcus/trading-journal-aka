@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { ibkrPositionPnl, type IbkrDisplayPositionLeg } from '../lib/ibkrDisplayPnl';
 import { tvLivePnlDelta, type TvLivePnlLeg } from '../lib/tvLivePnl';
 import type { TvPriceDiagnostics } from '../lib/tvPriceStore';
 import { tvPriceChannel, tvPriceStore } from '../services/tvPriceChannel';
@@ -17,7 +18,7 @@ import { isLivePriceFallback, noteLivePriceSource } from '../lib/livePriceSource
 
 const NO_DELTA = Number.NaN;
 
-export const TV_LIVE_PNL_TITLE = 'Živě: poslední kotva brokera + pohyb živé ceny (IBKR, záloha TradingView). Jen zobrazení.';
+export const TV_LIVE_PNL_TITLE = 'Živě: přesná cena IBKR proti ověřené pozici; záložně poslední kotva brokera a pohyb ceny. Jen zobrazení.';
 
 /** Zdroj živé ceny podle symbolu zprávy: vlákno workeru posílá `IBKR:…`, nebo symbol grafu TV. */
 export const livePriceSourceName = (chart: string | null | undefined): 'IBKR' | 'TV' =>
@@ -64,19 +65,23 @@ export const LivePriceSourceTag = () => {
     : <>živě · {source}</>;
 };
 
-export function LiveOpenPnlValue({ anchor, legs, children }: {
+export function LiveOpenPnlValue({ anchor, legs, ibkrLegs = null, children }: {
   /** Zobrazená hodnota z read modelu (bez TV). */
   anchor: number;
+  ibkrLegs?: readonly IbkrDisplayPositionLeg[] | null;
   /** Pozice, kterých se hodnota týká; `null` = jen kotva (a worker nestreamuje). */
   legs: readonly TvLivePnlLeg[] | null;
   children: (value: number, live: boolean) => React.ReactNode;
 }) {
-  const interested = legs != null && legs.length > 0;
+  const interested = (legs != null && legs.length > 0) || (ibkrLegs != null && ibkrLegs.length > 0);
   // Presence „dívám se na P&L“ jen s otevřenou pozicí; skrytí appky řeší kanál.
   useEffect(() => (interested ? tvPriceChannel.addPnlInterest() : undefined), [interested]);
   // Primitivní výběr: změna storu bez změny pohybu komponentu nepřekreslí.
   const delta = useSyncExternalStore(tvPriceStore.subscribe, () => {
-    const result = tvLivePnlDelta(legs, tvPriceStore.view());
+    const view = tvPriceStore.view();
+    const direct = ibkrPositionPnl(ibkrLegs, view, tvPriceStore.diagnostics().lastReceivedAt, Date.now());
+    if (direct != null) return direct - anchor;
+    const result = tvLivePnlDelta(legs, view);
     return result.live ? result.deltaUsd : NO_DELTA;
   }, () => NO_DELTA);
   const live = Number.isFinite(delta) && Number.isFinite(anchor);

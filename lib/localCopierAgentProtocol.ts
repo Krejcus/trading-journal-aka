@@ -1,3 +1,4 @@
+import type { TradovateRequestHealth } from './tradovateRequestControl';
 import type { TradovateAccountDisplayFeedState } from './tradovateAccountDisplayTypes.js';
 import type {
   CopyGroupConfig,
@@ -120,6 +121,7 @@ export interface LocalCopierAgentStatus {
    */
   priceAlertWatch?: CopierPriceAlertWatchStatus | null;
   /** Read-only display snapshots; never authorize broker actions. */
+  requestHealth?: TradovateRequestHealth[];
   accountDisplay?: TradovateAccountDisplayFeedState[];
   /** Využití Tradovate API a stav session každého OAuth spojení workeru; jen zobrazení. */
   connectionUsage?: CopierConnectionUsage[];

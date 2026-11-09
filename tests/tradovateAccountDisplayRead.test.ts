@@ -1,14 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
-import { readTradovateAccountDisplay } from '../server/tradovateAccountDisplayRead';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readTradovateAccountDisplay, resetTradovateDisplayCurrencyCacheForTests } from '../server/tradovateAccountDisplayRead';
 const read = (fetchImpl: typeof fetch) => readTradovateAccountDisplay({baseUrl:'https://demo.tradovateapi.com/v1',accessToken:'test',accountId:10,signal:new AbortController().signal,fetchImpl});
 describe('cash display adapter', () => {
+  beforeEach(resetTradovateDisplayCurrencyCacheForTests);
   it('reads only the exact account and preserves zero without accepting arbitrary properties', async () => {
-    const fetcher=vi.fn().mockImplementation(() => Promise.resolve(Response.json({totalCashValue:0,realizedPnL:0,netLiq:'10',unexpected:1})));
+    const fetcher=vi.fn().mockImplementation((url: string) => Promise.resolve(Response.json(url.includes('/currency/') ? [] : {totalCashValue:0,realizedPnL:0,netLiq:'10',unexpected:1})));
     expect(await read(fetcher)).toEqual({totalCashValue:0,realizedPnL:0});
     expect(fetcher).toHaveBeenCalledWith('https://demo.tradovateapi.com/v1/cashBalance/getcashbalancesnapshot',expect.objectContaining({method:'POST',body:'{"accountId":10}'}));
   });
+  it('caches only currency metadata; cash and balance deps are freshly fetched', async () => {
+    let cash = 50000;
+    const fetcher=vi.fn(async (url: string | URL | Request) => Response.json(String(url).includes('/currency/') ? [{id:2,name:'USD'}] : String(url).includes('/deps?') ? [] : {totalCashValue:cash++}));
+    expect((await read(fetcher)).totalCashValue).toBe(50000);
+    expect((await read(fetcher)).totalCashValue).toBe(50001);
+    expect(fetcher.mock.calls.filter(([url]) => String(url).includes('/currency/'))).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
   it('preserves Retry-After and rejects penalty responses', async () => {
-    await expect(read(vi.fn().mockResolvedValue(new Response('',{status:429,headers:{'retry-after':'90'}})))).rejects.toMatchObject({status:429,retryAfterMs:90000});
+    await expect(read(vi.fn().mockResolvedValue(new Response('',{status:429,headers:{'retry-after':'90'}})))).rejects.toMatchObject({status:429,retryAfterMs:3600000});
     await expect(read(vi.fn().mockResolvedValue(Response.json({'p-ticket':'hidden','p-time':42})))).rejects.toMatchObject({status:429,retryAfterMs:42000});
   });
   it('rejects broker error responses even when numeric-looking fields coexist', async () => {

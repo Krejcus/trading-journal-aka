@@ -457,10 +457,26 @@ describe('remote native Live Activity', () => {
       return body == null ? new Response('{}', { status: 404 }) : new Response(JSON.stringify(body));
     }) as unknown as typeof fetch;
 
-    const snapshot = await loadNativeLiveActivityBrokerSnapshot({
-      baseUrl: 'https://demo.tradovateapi.com/v1', accessTokens: ['followers', 'leader'], accountIds: [10, 11],
-      leaderAccountId: 10, fetchImpl,
+    // Both logins use the same broker host; each must keep its own governed
+    // fetch. A shared URL/global fetch would charge the wrong principal.
+    const scopedFetch = (token: string) => vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe(`Bearer ${token}`);
+      return fetchImpl(input, init);
     });
+    const followersFetch = scopedFetch('followers');
+    const leaderFetch = scopedFetch('leader');
+    const globalFetch = vi.fn(async () => { throw new Error('unguarded-global-fetch'); });
+    const snapshot = await loadNativeLiveActivityBrokerSnapshot({
+      baseUrl: 'https://demo.tradovateapi.com/v1', accountIds: [10, 11],
+      connections: [
+        {accessToken:'followers',baseUrl:'https://demo.tradovateapi.com/v1',fetchImpl:followersFetch},
+        {accessToken:'leader',baseUrl:'https://demo.tradovateapi.com/v1',fetchImpl:leaderFetch},
+      ],
+      leaderAccountId: 10, fetchImpl: globalFetch,
+    });
+    expect(followersFetch).toHaveBeenCalled();
+    expect(leaderFetch).toHaveBeenCalled();
+    expect(globalFetch).not.toHaveBeenCalled();
     expect(snapshot.pendingOrder).toEqual({
       symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 23_400, stopPrice: null, targetPrice: null, groupQuantity: 3,
     });

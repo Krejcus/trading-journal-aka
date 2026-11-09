@@ -5,18 +5,17 @@ import type {
   TradovateAccountOrder,
   TradovateAccountPosition,
 } from './tradovateAccountDataTypes';
+import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
+import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
 import { tradovateAccountReadState } from './tradovateLiveReadState';
 
-/** Heartbeat starší než tohle už není živý obraz brokera; web se vrátí k REST čtení. */
+/** Starší doručení důkazu kontinuity už nepokrývá webové čtení. */
 export const WORKER_EXPOSURE_MAX_AGE_MS = 8_000;
 /** Text workeru (`services/copierRuntimeController.ts`) pro followera bez ověřené pozice. */
 export const WORKER_POSITION_UNKNOWN_DETAIL = 'pozice neověřena';
 /** Texty workeru, které vznikají jen z porovnání skutečně držené pozice followera. */
 export const WORKER_POSITION_DIVERGENT_DETAIL = 'pozice se liší od leadera';
 export const WORKER_POSITION_MISMATCH_DETAIL = /: drží -?\d+, očekáváno -?\d+$/;
-/** Ručně vypnutý režim followera: worker ho hlásí OK bez čtení pozice. */
-const WORKER_FOLLOWER_OFF_DETAIL = 'vypnutý follower';
-
 type WorkerExposure = NonNullable<NonNullable<LocalCopierAgentStatus['controller']['exposure']>>;
 
 const tradovateOrderStatus = (status: string): string => {
@@ -31,28 +30,29 @@ const tradovateOrderStatus = (status: string): string => {
 };
 
 /**
- * Pozice a aktivní příkazy účtů kopírky z heartbeatu workeru mají přednost
- * před REST čtením přes Vercel: worker je drží z brokerového streamu a hlásí
- * je každou sekundu. Použije se jen když je heartbeat čerstvý, stream
- * připojený a worker už udělal úplnou broker kontrolu; jinak se data vrátí
- * beze změny a platí původní REST čerstvost. Zůstatky a P&L se nemění.
+ * Pozice a aktivní příkazy přebírá jen pro explicitně pokryté účty: úplná
+ * baseline, shodná route/session a nepřerušený synchronizovaný stream bez
+ * mezery, backlogu či merge. Samotný heartbeat ani role leadera nestačí.
+ * Čas dat zůstává poslední skutečnou změnou, nikoli časem doručení statusu.
+ * Účty bez tohoto důkazu zůstávají na REST. Zůstatky a P&L se nemění.
  */
 export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
   data: T | null,
   status: LocalCopierAgentStatus | null | undefined,
   observedAtMs: number | null | undefined,
   now = Date.now(),
+  owners: ReadonlyMap<number, WorkerCoverageOwner> = new Map(),
 ): T | null {
   if (!data) return null;
   const exposure = status?.controller?.exposure;
   if (!exposure || !status?.controller?.connected || observedAtMs == null || !Number.isFinite(observedAtMs)) return data;
   if (observedAtMs > now + 5_000 || now - observedAtMs > WORKER_EXPOSURE_MAX_AGE_MS) return data;
-  const members = new Set<number>([
-    ...(typeof status.group?.leaderAccountId === 'number' ? [status.group.leaderAccountId] : []),
-    ...(status.group?.followers ?? []).map(follower => follower.accountId),
-  ]);
-  if (members.size === 0) return data;
-  const asOf = new Date(observedAtMs).toISOString();
+  const covered = new Map<number, TradovateWorkerAccountCoverage>();
+  for (const [accountId, owner] of owners) {
+    const proof = coveredWorkerAccounts({ status, observedAt: observedAtMs }, owner, [accountId], now).get(accountId);
+    if (proof) covered.set(accountId, proof);
+  }
+  if (!covered.size) return data;
   const contractIdBySymbol = new Map(data.contracts.flatMap(contract => (contract.name ? [[contract.name, contract.id] as const] : [])));
   const positionsByAccount = new Map<number, WorkerExposure['positions']>();
   for (const position of exposure.positions) {
@@ -62,28 +62,22 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
   for (const order of exposure.orders ?? []) {
     ordersByAccount.set(order.accountId, [...(ordersByAccount.get(order.accountId) ?? []), order]);
   }
-  // Followera překrýt jen tehdy, když worker jeho pozici prokazatelně zná
-  // (OK verdikt po porovnání, rozdíl kusů proti leaderovi, nebo záznam
-  // pozice). Jinak (neověřená pozice, zlikvidovaný účet, denní limit,
-  // aktivní příkazy mimo kopii, vypnutý režim, rozjetí čekající na reconcile)
-  // by bez pozic v heartbeatu vypadal jako ověřeně flat — nechá se mu REST
-  // čtení s jeho vlastní čerstvostí.
-  const leaderId = typeof status.group?.leaderAccountId === 'number' ? status.group.leaderAccountId : null;
-  const knownFollowers = new Set((exposure.followers ?? [])
-    .filter(follower => (follower.ok && follower.detail !== WORKER_FOLLOWER_OFF_DETAIL)
-      || (follower.detail != null && WORKER_POSITION_MISMATCH_DETAIL.test(follower.detail)))
-    .map(follower => follower.accountId));
-  const positionKnown = (accountId: number) => accountId === leaderId || knownFollowers.has(accountId) || positionsByAccount.has(accountId);
   let changed = false;
   const accounts = data.accounts.map((account): TradovateAccountDataAccount => {
-    if (!members.has(account.id) || !positionKnown(account.id)) return account;
+    const proof = covered.get(account.id);
+    if (!proof || !exposure.orders) return account;
+    const asOf = new Date(proof.lastDataAt).toISOString();
     changed = true;
     const previousBySymbol = new Map(account.positions.flatMap(position => (position.symbol ? [[position.symbol, position] as const] : [])));
+    const restPositionsAt = Date.parse(tradovateAccountReadState(account, data).positionsAsOf ?? '');
     // REST tutéž pozici ještě nezná (čerstvý vstup, přikoupení, otočení): jeho
     // otevřené P&L patří k dřívějšímu stavu — karta obchodu ho do potvrzení
     // z REST neukáže (nedopočítá cenu trhu z cizího P&L, utažení SL zůstane
     // blokované). Zdroj P&L pro ostatní (denní limit účtu) se nemění.
-    const restBehind = (positionsByAccount.get(account.id) ?? []).some(position => previousBySymbol.get(position.symbol)?.netPosition !== position.netQuantity)
+    const restBehind = (positionsByAccount.get(account.id) ?? []).some(position => previousBySymbol.get(position.symbol)?.netPosition !== position.netQuantity
+      || (typeof position.avgPrice === 'number' && Number.isFinite(position.avgPrice) && position.avgPrice > 0
+        && (!Number.isFinite(restPositionsAt) || restPositionsAt < proof.lastDataAt)
+        && previousBySymbol.get(position.symbol)?.averagePrice !== position.avgPrice))
       || account.positions.some(position => position.netPosition !== 0
         && !(positionsByAccount.get(account.id) ?? []).some(next => next.symbol === position.symbol));
     const positions: TradovateAccountPosition[] = (positionsByAccount.get(account.id) ?? []).map(position => {
@@ -104,7 +98,7 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
         // přikoupení, částečné zavření) průměr z fillů workeru (jen když jeho
         // lot sedí na kusy), nebo neznámo, dokud ji nepotvrdí REST.
         averagePrice: previous && previous.netPosition === position.netQuantity
-          ? previous.averagePrice
+          && restPositionsAt >= proof.lastDataAt ? previous.averagePrice
           : typeof position.avgPrice === 'number' && Number.isFinite(position.avgPrice) && position.avgPrice > 0 ? position.avgPrice : null,
         previousPrice: previous?.previousPrice ?? null,
       };
@@ -147,6 +141,7 @@ export function overlayWorkerExposure<T extends TradovateAccountDataResult>(
         ...readState,
         positions: { availability: positions.length > 0 ? 'available' : 'empty', count: positions.length, httpStatus: null },
         positionsAsOf: asOf,
+        displayStreamCoverage: proof,
         ...(exposure.orders
           ? { orders: { availability: orders.length > 0 ? 'available' : 'empty', count: orders.length, httpStatus: null }, ordersAsOf: asOf }
           : {}),

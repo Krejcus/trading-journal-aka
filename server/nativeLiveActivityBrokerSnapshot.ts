@@ -354,7 +354,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   accessToken?: string;
   accessTokens?: readonly string[];
   /** Každé připojení s vlastním základem (prop firmy mají vlastní hosty); má přednost před `accessTokens`. */
-  connections?: ReadonlyArray<{ accessToken: string; baseUrl: string }>;
+  connections?: ReadonlyArray<{ accessToken: string; baseUrl: string; fetchImpl?: typeof fetch }>;
   /** Null načte všechny účty vrácené stejnými broker listy. */
   accountIds: readonly number[] | null;
   leaderAccountId?: number | null;
@@ -368,6 +368,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     ...(options.accessToken ? [options.accessToken] : []),
   ])].filter(token => token.trim() !== '');
   if (accessTokens.length === 0) throw new Error('tradovate-live-activity-missing-token');
+  const fetchByToken = new Map((options.connections ?? []).map(connection => [connection.accessToken, connection.fetchImpl]));
   const baseUrlByToken = new Map((options.connections ?? []).map(connection => [connection.accessToken, connection.baseUrl]));
   const leaderAccountId = options.leaderAccountId
     ?? options.accountIds?.find(Number.isSafeInteger)
@@ -378,7 +379,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     accessToken,
     accountIds: options.accountIds,
     leaderAccountId,
-    fetchImpl,
+    fetchImpl: fetchByToken.get(accessToken) ?? fetchImpl,
   })));
   const raw = bundles.length === 1 ? bundles[0] : mergeBrokerRawBundles(bundles);
   const allowedAccounts = new Set(raw.allowedAccounts);

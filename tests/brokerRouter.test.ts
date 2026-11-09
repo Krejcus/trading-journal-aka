@@ -4,6 +4,25 @@ import type { BrokerEvent } from '../services/brokerPort';
 import { createMockBroker } from '../services/mockBroker';
 
 describe('broker router', () => {
+  it('missing OAuth routes stay unknown for optional coverage without throwing or borrowing another account proof', () => {
+    const underlying = createMockBroker();
+    const streamCoverage = vi.fn(() => null), streamPositionSnapshot = vi.fn(() => ({ positions: [], observedAt: 100 }));
+    const newRiskRequestBlocker = vi.fn((ids: readonly number[]) => ids.includes(11) ? 'existing principal budget' : null);
+    const broker = { ...underlying, streamCoverage, streamPositionSnapshot, newRiskRequestBlocker };
+    const router = createBrokerRouter([{ broker, accountIds: [11] }]);
+    expect(router.streamCoverage?.(99)).toBeNull();
+    expect(router.streamPositionSnapshot?.(99)).toBeNull();
+    expect(streamCoverage).not.toHaveBeenCalled(); expect(streamPositionSnapshot).not.toHaveBeenCalled();
+    expect(router.newRiskRequestBlocker?.([99])).toBeNull();
+    expect(newRiskRequestBlocker).not.toHaveBeenCalled();
+    expect(router.newRiskRequestBlocker?.([99, 11])).toBe('existing principal budget');
+    expect(newRiskRequestBlocker).toHaveBeenCalledWith([11]);
+    router.replaceRoutes([{ broker, accountIds: [] }]);
+    expect(router.streamCoverage?.(11)).toBeNull(); expect(router.streamPositionSnapshot?.(11)).toBeNull();
+    expect(router.newRiskRequestBlocker?.([11])).toBeNull();
+    expect(() => router.placeOrder({ tag: 'absent', accountId: 11, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market' })).toThrow('OAuth');
+  });
+
   it('routes follower side effects by account across OAuth connections', async () => {
     const first = createMockBroker();
     const second = createMockBroker();

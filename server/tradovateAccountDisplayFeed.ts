@@ -1,6 +1,16 @@
+import { TRADOVATE_REQUEST_CONTROL_POLICY, type TradovatePenaltyEvidence } from '../lib/tradovateRequestControl.js';
 import type { TradovateAccountDisplayFeedState, TradovateAccountDisplaySnapshot } from '../lib/tradovateAccountDisplayTypes.js';
 
-export interface TradovateDisplayReadError extends Error { retryAfterMs?: number; status?: number }
+export interface TradovateDisplayReadError extends Error {
+  retryAfterMs?: number | null;
+  status?: number;
+  evidence?: TradovatePenaltyEvidence;
+  captchaRequired?: boolean;
+  /** Local budget/control rejection is not a newly observed broker 429. */
+  blockedBeforeDispatch?: boolean;
+}
+
+const DEFAULT_MIN_READ_INTERVAL_MS = 30_000;
 
 /** One bounded queue per OAuth connection, completely separate from execution. */
 export function createTradovateAccountDisplayFeed(options: {
@@ -14,6 +24,8 @@ export function createTradovateAccountDisplayFeed(options: {
   auditIntervalMs?: number;
 }) {
   const clock = options.clock ?? Date.now;
+  const minReadInterval = Number.isFinite(options.minReadIntervalMs) && options.minReadIntervalMs! >= 0
+    ? options.minReadIntervalMs! : DEFAULT_MIN_READ_INTERVAL_MS;
   const pending = new Set<number>();
   const snapshots = new Map<number, TradovateAccountDisplaySnapshot>();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -25,10 +37,33 @@ export function createTradovateAccountDisplayFeed(options: {
   let lastErrorAt: string | null = null;
   let retryAt: number | null = null;
   let failures = 0;
+  let penaltyUntil = 0;
+  let captchaRequired = false;
+  // Only actual upstream evidence latches this feed. Generic errors get bounded backoff.
+  // The shared request controller remains the authority across feed lifetimes/processes.
+  const rememberPenalty = (error: unknown) => {
+    const failure = error as TradovateDisplayReadError | null | undefined;
+    if (!failure) return false;
+    const explicitDelay = typeof failure.retryAfterMs === 'number' && Number.isFinite(failure.retryAfterMs) && failure.retryAfterMs > 0
+      ? failure.retryAfterMs : 0;
+    const captcha = failure.captchaRequired === true || failure.evidence === 'captcha';
+    if (failure.blockedBeforeDispatch === true && !captcha) return false;
+    const raw429 = failure.evidence === 'raw-429' || (failure.status === 429 && failure.evidence == null);
+    const timedPenalty = raw429 || captcha || failure.evidence === 'retry-after' || failure.evidence === 'p-time';
+    if (!timedPenalty) return false;
+    captchaRequired ||= captcha;
+    const delay = raw429 ? Math.max(TRADOVATE_REQUEST_CONTROL_POLICY.raw429Ms, explicitDelay)
+      : explicitDelay || (captcha ? 0 : TRADOVATE_REQUEST_CONTROL_POLICY.raw429Ms);
+    penaltyUntil = Math.max(penaltyUntil, clock() + delay);
+    retryAt = Math.max(retryAt ?? 0, penaltyUntil);
+    lastErrorAt = new Date(clock()).toISOString();
+    return true;
+  };
   const allowed = () => new Set(options.accountIds().filter(id => Number.isSafeInteger(id) && id > 0).slice(0, 100));
   const schedule = () => {
-    if (closed || timer || active || pending.size === 0) return;
-    timer = setTimeout(() => { timer = null; void drain(); }, Math.max(options.coalesceMs ?? 250, nextReadAt - clock(), (retryAt ?? 0) - clock()));
+    if (closed || captchaRequired || timer || active || pending.size === 0) return;
+    timer = setTimeout(() => { timer = null; void drain(); }, Math.min(2_147_483_647,
+      Math.max(options.coalesceMs ?? 250, nextReadAt - clock(), (retryAt ?? 0) - clock())));
   };
   const invalidate = (accountId: number | null) => {
     if (closed) return;
@@ -38,7 +73,9 @@ export function createTradovateAccountDisplayFeed(options: {
     schedule();
   };
   const drain = async () => {
-    if (closed || active) return;
+    if (closed || captchaRequired || active) return;
+    // A late upstream penalty can extend the deadline after this timer was created.
+    if (nextReadAt > clock() || (retryAt ?? 0) > clock()) { schedule(); return; }
     const ids = allowed();
     for (const id of pending) if (!ids.has(id)) pending.delete(id);
     const accountId = pending.values().next().value as number | undefined;
@@ -55,7 +92,12 @@ export function createTradovateAccountDisplayFeed(options: {
       const fields = await new Promise<TradovateAccountDisplaySnapshot['fields']>((resolve, reject) => {
         const cancelled = () => reject(new Error('display-read-aborted'));
         abort.signal.addEventListener('abort', cancelled, { once: true });
-        Promise.resolve().then(() => options.read(accountId, abort.signal)).then(resolve, reject)
+        Promise.resolve().then(() => options.read(accountId, abort.signal)).then(resolve, error => {
+          // Even a late rejection after a display reset is real penalty evidence.
+          // Only the snapshot merge is generation-scoped; resetting cannot erase a cooldown.
+          rememberPenalty(error);
+          reject(error);
+        })
           .finally(() => abort.signal.removeEventListener('abort', cancelled));
       });
       if (closed || abort.signal.aborted || generation !== currentGeneration || !allowed().has(accountId)) return;
@@ -68,8 +110,9 @@ export function createTradovateAccountDisplayFeed(options: {
       if (Object.keys(safeFields).length === 0) throw new Error('empty-display-snapshot');
       snapshots.set(accountId, { accountId, connectionId: options.connectionId, environment: options.environment,
         requestedAt: new Date(requestedAt).toISOString(), confirmedAt: new Date(clock()).toISOString(), fields: safeFields });
-      failures = 0; retryAt = null;
-      if (pending.size === 0) lastErrorAt = null;
+      failures = 0;
+      if (!captchaRequired && penaltyUntil <= clock()) { penaltyUntil = 0; retryAt = null; }
+      if (pending.size === 0 && !captchaRequired && (retryAt ?? 0) <= clock()) lastErrorAt = null;
     } catch (error) {
       if (closed || generation !== currentGeneration) return;
       pending.add(accountId);
@@ -77,12 +120,12 @@ export function createTradovateAccountDisplayFeed(options: {
       failures += 1;
       const failure = error as TradovateDisplayReadError;
       const delay = typeof failure.retryAfterMs === 'number' && Number.isFinite(failure.retryAfterMs) && failure.retryAfterMs > 0
-        ? failure.retryAfterMs : failure.status === 429 ? 60_000 : Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5));
-      retryAt = clock() + delay;
+        ? failure.retryAfterMs : Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5));
+      retryAt = Math.max(retryAt ?? 0, penaltyUntil, clock() + delay);
     } finally {
       clearTimeout(timeout);
       active = null;
-      nextReadAt = clock() + (options.minReadIntervalMs ?? 1_000);
+      nextReadAt = clock() + minReadInterval;
       schedule();
     }
   };
@@ -93,7 +136,7 @@ export function createTradovateAccountDisplayFeed(options: {
     /** Revoked/replaced connection: in-flight data must never cross the boundary. */
     reset() {
       generation += 1; active?.abort(); pending.clear(); snapshots.clear();
-      lastErrorAt = null; retryAt = null; failures = 0;
+      // A generation reset invalidates display data, never upstream penalty evidence.
       if (timer) clearTimeout(timer); timer = null;
     },
     state(): TradovateAccountDisplayFeedState {
@@ -101,7 +144,8 @@ export function createTradovateAccountDisplayFeed(options: {
       return { streamConnected, connectionId: options.connectionId, environment: options.environment,
         snapshots: [...snapshots.values()].filter(s => ids.has(s.accountId)).map(s => ({ ...s, fields: { ...s.fields } })),
         pendingAccountIds: [...pending].filter(id => ids.has(id)), lastErrorAt,
-        retryAt: retryAt == null ? null : new Date(retryAt).toISOString() };
+        captchaRequired,
+        retryAt: captchaRequired || retryAt == null ? null : new Date(retryAt).toISOString() };
     },
     close() { closed = true; generation += 1; active?.abort(); clearInterval(audit); if (timer) clearTimeout(timer); pending.clear(); },
   };

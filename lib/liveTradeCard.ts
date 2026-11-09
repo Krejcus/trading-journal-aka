@@ -1,3 +1,4 @@
+import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
 /**
  * Karta aktuálního obchodu skupiny — jen zobrazení.
  *
@@ -37,6 +38,9 @@ export interface TradeCardLevel {
 }
 
 export interface TradeCardAccount {
+  positionAsOf?: string | null;
+  positionVerified?: boolean;
+  displayStreamCoverage?: TradovateWorkerAccountCoverage;
   accountId: number;
   name: string;
   isLeader: boolean;
@@ -54,6 +58,8 @@ export interface TradeCardAccount {
 }
 
 export interface TradeCardModel {
+  /** Complete position proof for every selected member, separate from broker PnL anchors. */
+  positionsComplete?: boolean;
   kind: 'position' | 'pending';
   symbol: string;
   /** 1 = long / buy, −1 = short / sell. */
@@ -217,6 +223,9 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
         isLeader: row.isLeader,
         quantity,
         entry,
+        positionAsOf: row.account.positionsUpdatedAt ?? null,
+        positionVerified: positionsVerified,
+        ...(row.account.displayStreamCoverage ? { displayStreamCoverage: row.account.displayStreamCoverage } : {}),
         openPnl: gross == null ? null : gross - (fees ?? 0),
         openPnlAsOf: gross == null ? null : row.account.unrealizedPnlUpdatedAt ?? null,
         fees,
@@ -225,7 +234,8 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
         ordersVerified,
       };
     }).sort((a, b) => Number(b.isLeader) - Number(a.isLeader));
-    return summarize('position', symbol, direction, null, accounts, value);
+    return { ...summarize('position', symbol, direction, null, accounts, value),
+      positionsComplete: members.length === rows.length && members.every(row => isLiveAccountReadVerified(row.account, 'positions', now)) };
   }
 
   // Čekající vstup: leaderův working Limit/Stop a u followerů jejich kopie

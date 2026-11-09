@@ -9,6 +9,8 @@ export interface TradovateAccountDisplaySnapshot {
 }
 
 export interface TradovateAccountDisplayFeedState {
+  /** Actual upstream captcha is terminal; a feed reset cannot clear it. */
+  captchaRequired?: boolean;
   /** Stream health is separate from the age of an unchanged cash value. */
   streamConnected?: boolean;
   connectionId: string;

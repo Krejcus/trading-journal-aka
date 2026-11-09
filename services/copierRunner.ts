@@ -1,5 +1,6 @@
 import { CopierDispatchRevokedError } from './exposureCappedBroker';
 import {
+  BrokerRequestNotSentError,
   isOpenOrderStatus,
   type BrokerEvent,
   type BrokerOcoRequest,
@@ -702,6 +703,8 @@ async function processStagedLifecycleCommands(options: {
     } catch (error) {
       cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
         ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
+        : error instanceof BrokerRequestNotSentError && entry.attempts === 1
+          ? markCancelRefused(entry, `Neodesláno: ${error.message}`, clock())
         : markCancelUnknown(entry, error instanceof Error ? error.message : String(error), clock()));
     }
   };
@@ -941,6 +944,12 @@ export async function recordLeaderEventOnly(
 
 /** Odesílá protective SL+TP výhradně přes jeden nativní OCO side effect. */
 export async function processBracketPair(options: ProcessBracketPairOptions): Promise<CopierRunResult> {
+  return options.broker.runWithAcceptedRequests
+    ? options.broker.runWithAcceptedRequests(() => processBracketPairAccepted(options))
+    : processBracketPairAccepted(options);
+}
+
+async function processBracketPairAccepted(options: ProcessBracketPairOptions): Promise<CopierRunResult> {
   const { pair, event, group, runtime, context, broker, clock, store } = options;
   const metrics = options.metrics ?? createCopierMetrics();
   const audit: CopierAuditEntry[] = [];
@@ -1145,6 +1154,8 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
         const at = clock();
         entry = error instanceof CopierDispatchRevokedError
           ? waiveBracketOutboxEntry(entry, error.message, at)
+          : error instanceof BrokerRequestNotSentError && entry.attempts === 1
+            ? markBracketRejected(entry, `Neodesláno: ${error.message}`, at)
           : markBracketUnknown(entry, error instanceof Error ? error.message : String(error), at);
         return { entry, at, startedAt: item.startedAt };
       }
@@ -1213,6 +1224,12 @@ export interface ProcessOsoPairOptions extends Omit<ProcessBracketPairOptions, '
 
 /** Odesílá čekající entry + SL + TP jediným nativním placeOSO side effectem. */
 export async function processOsoPair(options: ProcessOsoPairOptions): Promise<CopierRunResult> {
+  return options.broker.runWithAcceptedRequests
+    ? options.broker.runWithAcceptedRequests(() => processOsoPairAccepted(options))
+    : processOsoPairAccepted(options);
+}
+
+async function processOsoPairAccepted(options: ProcessOsoPairOptions): Promise<CopierRunResult> {
   const { pair, event, group, runtime, context, broker, clock, store } = options;
   const metrics = options.metrics ?? createCopierMetrics();
   const audit: CopierAuditEntry[] = [];
@@ -1367,6 +1384,8 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       const at = clock();
       return { entry: error instanceof CopierDispatchRevokedError
         ? waiveOsoOutboxEntry(entry, error.message, at)
+        : error instanceof BrokerRequestNotSentError && entry.attempts === 1
+          ? markOsoRejected(entry, `Neodesláno: ${error.message}`, at)
         : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at,
         startedAt: initial.startedAt };
     }
@@ -1448,6 +1467,16 @@ export function runnerUnmappedReplaceAccounts(
 export async function processLeaderEvent(
   options: ProcessLeaderEventOptions,
 ): Promise<CopierRunResult> {
+  // The leader event already exists at the broker. Its follower lifecycle and
+  // confirmation reads must not be cut in half by a new background soft limit.
+  // This scope changes request capacity only; every existing risk/route gate
+  // below and the actual upstream cooldown still apply.
+  return options.broker.runWithAcceptedRequests
+    ? options.broker.runWithAcceptedRequests(() => processLeaderEventAccepted(options))
+    : processLeaderEventAccepted(options);
+}
+
+async function processLeaderEventAccepted(options: ProcessLeaderEventOptions): Promise<CopierRunResult> {
   const { event, group, runtime, context, broker, clock, store } = options;
   const metrics = options.metrics ?? createCopierMetrics();
   const audit: CopierAuditEntry[] = [];
@@ -1937,6 +1966,8 @@ export async function processLeaderEvent(
       } catch (error) {
         cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
           ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
+          : error instanceof BrokerRequestNotSentError && entry.attempts === 1
+            ? markCancelRefused(entry, `Neodesláno: ${error.message}`, clock())
           : markCancelUnknown(entry, error instanceof Error ? error.message : String(error), clock()));
       }
     }));
@@ -2235,6 +2266,15 @@ export async function processLeaderEvent(
               accountId: request.accountId, key: entry.key, reason: entry.reason },
           };
         }
+        if (error instanceof BrokerRequestNotSentError && entry.attempts === 1) {
+          metrics.rejected += 1;
+          entry = markRejected(entry, `Neodesláno: ${error.message}`, failedAt, 'policy');
+          return {
+            entry, resolvedKey: entry.key,
+            audit: { at: failedAt, leaderEventId: event.id, kind: 'rejected' as CopierAuditKind,
+              accountId: request.accountId, key: entry.key, reason: entry.reason },
+          };
+        }
         metrics.unknown += 1;
         entry = markUnknown(entry, error instanceof Error ? error.message : String(error), failedAt);
         return {
@@ -2304,6 +2344,12 @@ export interface RecoverOutboxOptions {
  *  - nenalezena nic  → retry jen po autoritativním synchronizačním výsledku
  */
 export async function recoverOutbox(options: RecoverOutboxOptions): Promise<CopierRunResult> {
+  return options.broker.runWithAcceptedRequests
+    ? options.broker.runWithAcceptedRequests(() => recoverOutboxAccepted(options))
+    : recoverOutboxAccepted(options);
+}
+
+async function recoverOutboxAccepted(options: RecoverOutboxOptions): Promise<CopierRunResult> {
   const { runtime, broker, clock, store } = options;
   const metrics = options.metrics ?? createCopierMetrics();
   const audit: CopierAuditEntry[] = [];

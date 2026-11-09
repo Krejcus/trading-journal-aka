@@ -114,6 +114,29 @@ export function createBrokerRouter(
 
   return {
     environment,
+    runWithAcceptedRequests: run => fixedBrokers.find(owner => owner.runWithAcceptedRequests)?.runWithAcceptedRequests?.(run) ?? run(),
+    newRiskRequestBlocker(accountIds) {
+      // Optional read proof must not replace the existing missing-OAuth admission gates.
+      // An absent route is unknown, never an empty/flat account or a status exception.
+      const owners = new Set(accountIds.flatMap(accountId => {
+        const owner = byAccount.get(accountId); return owner ? [owner] : [];
+      }));
+      for (const owner of owners) {
+        const reason = owner.newRiskRequestBlocker?.(accountIds.filter(id => byAccount.get(id) === owner));
+        if (reason) return reason;
+      }
+      return null;
+    },
+    requestHealth: () => [...new Map(fixedBrokers.flatMap(owner => owner.requestHealth?.() ?? []).map(row => [row.brokerUserId, row])).values()],
+    streamPositionSnapshot: accountId => byAccount.get(accountId)?.streamPositionSnapshot?.(accountId) ?? null,
+    streamCoverage(accountId) {
+      const owner = byAccount.get(accountId);
+      if (!owner) return null;
+      const row = owner.streamCoverage?.(accountId);
+      if (!row) return null;
+      const epoch = routeEpochByBroker.get(owner) ?? 0;
+      return { ...row, routeEpoch: epoch, currentRouteEpoch: epoch };
+    },
     replaceRoutes(nextRoutes) {
       const validated = validateRoutes(nextRoutes, true);
       // Přepnutí je synchronní a atomické: při jediné validační chybě zůstane

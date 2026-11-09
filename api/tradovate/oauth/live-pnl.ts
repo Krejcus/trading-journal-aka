@@ -1,3 +1,4 @@
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import { readTradovateAccountDisplay } from '../../../server/tradovateAccountDisplayRead.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
@@ -56,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const contractCursor = typeof req.body?.contractCursor === 'number' ? req.body.contractCursor : 0;
-    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
@@ -66,12 +67,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const accountId = Number(req.body?.accountId);
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
       const requestedAt = new Date().toISOString();
+      let brokerCalls = 0;
       const pending = coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
-        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts), accessToken, accountId, signal: AbortSignal.timeout(8_000),
+        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts), accessToken, fetchImpl, accountId, signal: AbortSignal.timeout(8_000), onBrokerRequest: () => { brokerCalls += 1; },
       }));
       const fields = await pending;
-      // readTradovateAccountDisplay = 3 Tradovate volání (snapshot, deps, currency/list).
-      return res.status(200).json({ kind: 'account-display-v1', brokerCalls: pending.shared ? 0 : 3, snapshot: {
+      // Counts physical reads; warm currency metadata saves the third call.
+      return res.status(200).json({ kind: 'account-display-v1', brokerCalls: pending.shared ? 0 : brokerCalls, snapshot: {
         connectionId, environment: config.environment, accountId, requestedAt, confirmedAt: new Date().toISOString(), fields,
       } });
     }
@@ -87,6 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const anchor = await loadTradovateLivePnlAnchor({
         baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
         accessToken,
+        fetchImpl,
         connectionId,
         environment: config.environment,
         accountId,
@@ -97,6 +100,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pendingTick = coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
       baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
       accessToken,
+      fetchImpl,
       connectionId,
       environment: config.environment,
       contractCursor,
@@ -104,10 +108,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const tick = await pendingTick;
     return res.status(200).json(pendingTick.shared ? { ...tick, brokerCalls: 0 } : tick);
   } catch (error) {
+    if (error instanceof TradovateRequestControlError) return res.status(503).json({
+      error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
+      captchaRequired: error.snapshot?.captchaRequired === true,
+    });
     const message = error instanceof Error ? error.message : String(error);
     if (req.body?.mode === 'cash' && error && typeof error === 'object' && 'status' in error && error.status === 429) {
       const retryAfterMs = 'retryAfterMs' in error && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
-        ? Math.max(1_000, error.retryAfterMs) : 60_000;
+        ? Math.max(1_000, error.retryAfterMs) : 3_600_000;
       return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs });
     }
 
@@ -118,9 +126,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(409).json({ error: message });
     }
     if (error instanceof TradovateLivePnlError && error.status === 429) {
-      // Tradovate říká přes p-time nebo Retry-After, jak dlouho čekat; bez toho
-      // 5 minut. Paušální hodina dřív zamrazila LIVE po jediném 429.
-      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs: Math.max(1_000, error.retryAfterMs ?? 300_000) });
+      // Explicit upstream minimum is preserved; raw429 defaults conservatively to one hour.
+      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs: Math.max(1_000, error.retryAfterMs ?? 3_600_000) });
     }
     // A slow broker is not a broken route: report it as a timeout so logs
     // and clients can tell Tradovate latency from a real failure.

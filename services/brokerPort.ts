@@ -16,6 +16,12 @@
  * vyřešenou CME licenci.
  */
 
+/** Exact current dispatch was rejected locally before fetch/socket.send. Not proof about earlier attempts. */
+export class BrokerRequestNotSentError extends Error {
+  readonly beforeDispatch = true;
+  constructor(message: string) { super(message); this.name = 'BrokerRequestNotSentError'; }
+}
+
 export type BrokerEnvironment = 'demo' | 'live';
 
 export type OrderSide = 'Buy' | 'Sell';
@@ -361,6 +367,11 @@ export interface BrokerStreamOrderSnapshot {
 }
 
 export interface BrokerPort {
+  newRiskRequestBlocker?(accountIds: readonly number[]): string | null;
+  requestHealth?(): import('../lib/tradovateRequestControl').TradovateRequestHealth[];
+  streamPositionSnapshot?(accountId: number): { positions: BrokerPosition[]; observedAt: number } | null;
+  streamCoverage?(accountId: number): import('../lib/tradovateRequestControl').TradovateWorkerAccountCoverage | null;
+  runWithAcceptedRequests?<T>(run: () => Promise<T>): Promise<T>;
   /** Optional local admission assertion; throws only before a copier write is attempted. */
   assertDispatchAllowed?: (operation: 'place' | 'oco' | 'oso' | 'modify' | 'cancel') => void;
   readonly environment: BrokerEnvironment;

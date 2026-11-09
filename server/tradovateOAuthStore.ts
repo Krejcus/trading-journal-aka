@@ -1,3 +1,4 @@
+import { createControlledTradovateServerFetch } from './tradovateServerRequestControl.js';
 import { sanitizeTradovateApiHosts, type TradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -284,7 +285,7 @@ export async function getValidTradovateAccessToken(options: {
   connectionId?: string;
   /** Refresh early when a caller needs the token to survive a bounded operation. */
   minimumValidityMs?: number;
-}): Promise<{ accessToken: string; expiresAt: string; apiHosts: TradovateApiHosts | null }> {
+}): Promise<{ accessToken: string; expiresAt: string; apiHosts: TradovateApiHosts | null; brokerUserId: number | null; fetchImpl: typeof fetch }> {
   const now = options.now ?? Date.now();
   const minimumValidityMs = Math.max(120_000, options.minimumValidityMs ?? 120_000);
   const row = await connectionRow(options.db, options.userId, options.connectionId);
@@ -295,16 +296,22 @@ export async function getValidTradovateAccessToken(options: {
   if (row.environment !== options.config.environment) {
     throw new Error('tradovate-reauthorization-required');
   }
+  const controlledFetch = (source: ConnectionRow, purpose: 'background' | 'management' = 'background') => createControlledTradovateServerFetch({
+    db: options.db, userId: options.userId, connectionId: source.id, brokerUserId: source.tradovate_user_id,
+  }, options.fetchImpl ?? fetch, purpose);
+  const fetchImpl = controlledFetch(row);
   const expires = Date.parse(row.access_token_expires_at);
   if (Number.isFinite(expires) && expires - now > minimumValidityMs) {
     return {
       accessToken: decryptTradovateSecret(row.encrypted_access_token, options.config.tokenEncryptionKey),
       expiresAt: row.access_token_expires_at,
       apiHosts: sanitizeTradovateApiHosts(row.api_hosts),
+      brokerUserId: row.tradovate_user_id, fetchImpl,
     };
   }
   if (!row.encrypted_refresh_token) throw new Error('tradovate-reauthorization-required');
 
+  const refreshFetch = controlledFetch(row, 'management');
   const refreshToken = decryptTradovateSecret(row.encrypted_refresh_token, options.config.tokenEncryptionKey);
   const refreshAttemptId = randomUUID();
   const refreshContext = { connectionId: row.id, environment: row.environment, attemptId: refreshAttemptId, credentialRevision: row.updated_at };
@@ -316,7 +323,10 @@ export async function getValidTradovateAccessToken(options: {
       clientId: options.config.clientId,
       clientSecret: options.config.clientSecret,
       environment: options.config.environment,
-      fetchImpl: options.fetchImpl,
+      // Known broker identity: refresh obeys the same global cooldown. Only
+      // the initial OAuth bootstrap before identity is known is exempt.
+      // Soft background exhaustion must not strand management credentials.
+      fetchImpl: refreshFetch,
     });
   } catch (error) {
     console.warn('[tradovate-refresh]', { ...refreshContext, phase: 'exchange-failed', code: error instanceof TradovateOAuthError ? error.code : 'transport-error' });
@@ -329,6 +339,7 @@ export async function getValidTradovateAccessToken(options: {
         accessToken: decryptTradovateSecret(latest.encrypted_access_token, options.config.tokenEncryptionKey),
         expiresAt: latest.access_token_expires_at,
         apiHosts: sanitizeTradovateApiHosts(latest.api_hosts),
+        brokerUserId: latest.tradovate_user_id, fetchImpl: controlledFetch(latest),
       };
     }
     // Classify only definitive refresh rejection, after checking for a newer
@@ -374,13 +385,14 @@ export async function getValidTradovateAccessToken(options: {
       accessToken: decryptTradovateSecret(latest.encrypted_access_token, options.config.tokenEncryptionKey),
       expiresAt: latest.access_token_expires_at,
       apiHosts: sanitizeTradovateApiHosts(latest.api_hosts),
+      brokerUserId: latest.tradovate_user_id, fetchImpl: controlledFetch(latest),
     };
   }
 
   console.info('[tradovate-refresh]', { ...refreshContext, phase: 'saved', expiresAt: nextExpiresAt,
     apiHosts: refreshed.apiHosts ? (refreshed.apiHosts.demo ?? 'present') : 'absent',
     refreshExpiresAt: refreshed.refreshExpiresIn ? new Date(now + refreshed.refreshExpiresIn * 1000).toISOString() : null });
-  return { accessToken: refreshed.accessToken, expiresAt: nextExpiresAt, apiHosts: refreshed.apiHosts ?? sanitizeTradovateApiHosts(row.api_hosts) };
+  return { accessToken: refreshed.accessToken, expiresAt: nextExpiresAt, apiHosts: refreshed.apiHosts ?? sanitizeTradovateApiHosts(row.api_hosts), brokerUserId: row.tradovate_user_id, fetchImpl };
 }
 
 export async function disconnectTradovateConnection(

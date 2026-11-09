@@ -1,3 +1,4 @@
+import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
@@ -157,10 +158,10 @@ const FULL_REFRESH_INTERVAL_MS = 10 * 60_000;
 const FULL_REFRESH_FOREGROUND_MAX_AGE_MS = 5 * 60_000;
 const FULL_REFRESH_RETRY_BASE_MS = 15_000;
 const FULL_REFRESH_RETRY_MAX_MS = 10 * 60_000;
-// Bez p-time od Tradovate se čeká 5 minut, ne hodinu: hodinový backoff nechal
-// LIVE po jediném 429 celé odpoledne na „neověřeno".
-const RATE_LIMIT_FALLBACK_MS = 5 * 60_000;
-const RATE_LIMIT_MAX_MS = 10 * 60_000;
+// A raw HTTP429 without a broker minimum uses the shared conservative one-hour policy.
+// A later UI refresh must not reopen a broker cooldown.
+const RATE_LIMIT_FALLBACK_MS = 60 * 60_000;
+const RATE_LIMIT_MAX_MS = 60 * 60_000;
 
 export interface TradovateConnectionEnrichmentState {
   pending: boolean;
@@ -239,6 +240,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const historyBusyRef = useRef(false);
   const profileOnboardingBusyRef = useRef(false);
   const livePnlBusyRef = useRef(false);
+  const workerReadCoverageRef = useRef<WorkerCoverageReceipt | null>(null);
+  const setWorkerReadCoverage = useCallback((receipt: WorkerCoverageReceipt | null) => { workerReadCoverageRef.current = receipt; }, []);
   const connectionDataRef = useRef(connectionData);
   const statusRef = useRef(status);
   const livePnlCursorsRef = useRef<Record<string, number>>({});
@@ -255,6 +258,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   if (identityEpochRef.current.userId !== userId) {
     identityEpochRef.current = { userId, epoch: identityEpochRef.current.epoch + 1 };
     connectionEpochRef.current += 1;
+    workerReadCoverageRef.current = null;
     statusRef.current = status;
     connectionDataRef.current = connectionData;
     fullRefreshInFlightRef.current.clear();
@@ -967,7 +971,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
       livePnlBusyRef.current = true;
       try {
-        const hasOpenPosition = available.some(connectionId =>
+        const plans = new Map(available.map(connectionId => [connectionId,
+          workerConnectionReadPlan({ ...connectionDataRef.current[connectionId], connectionId }, workerReadCoverageRef.current, Date.now())] as const));
+        const fullTickConnections = available.filter(id => !plans.get(id)?.suppressFullTick);
+        const hasOpenPosition = fullTickConnections.some(connectionId =>
           connectionDataRef.current[connectionId]?.accounts.some(account => account.netPositionCount > 0));
         // Na pozadí vždy plný tick: jde o čerstvost pozic a příkazů, ne o P&L.
         const runFullTick = background || !hasOpenPosition
@@ -1002,9 +1009,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         };
         if (runFullTick) {
           const becameFlat: string[] = [];
-          rateLimitIds = available;
+          rateLimitIds = fullTickConnections;
           rateLimitResults = await consumeTradovateReads(
-            available,
+            fullTickConnections,
             connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
@@ -1031,13 +1038,13 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           );
           recordRateLimits(rateLimitIds, rateLimitResults);
           if (!readIsCurrent()) return;
-          livePnlLastFullTickAtRef.current = Date.now();
+          if (fullTickConnections.length > 0) livePnlLastFullTickAtRef.current = Date.now();
           if (becameFlat.length > 0) await refreshData(becameFlat, true, 'merge');
         } else {
           const candidatesByConnection = new Map(available.flatMap(connectionId => {
             const dataset = connectionDataRef.current[connectionId];
             if (!dataset) return [];
-            const candidates = tradovateLivePnlAnchorCandidates(dataset);
+            const candidates = tradovateLivePnlAnchorCandidates(dataset).filter(candidate => !plans.get(connectionId)?.covered.has(candidate.accountId));
             if (candidates.length === 0) return [];
             const cursor = livePnlAnchorCursorsRef.current[connectionId] ?? 0;
             return [[connectionId, { candidate: candidates[cursor % candidates.length], count: candidates.length }] as const];
@@ -1137,6 +1144,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
   return {
     prefetch,
+    setWorkerReadCoverage,
     status,
     data,
     connectionData,

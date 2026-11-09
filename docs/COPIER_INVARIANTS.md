@@ -1885,6 +1885,46 @@ existující ochranu.
   bytem a pozdější read-only lookup podle `clOrdId`/order ID. Nebezpečný je
   transportní retry nebo přepsání execution state jen z ACK payloadu.
 
+### INV-TRAD-09: Rozpočet čtení a cooldown patří broker uživateli; nové omezení kapacity nesmí přerušit přijatý lifecycle
+
+- Proč: Samostatné pollery workeru, webu a telefonu mohou vyčerpat stejný
+  upstream limit a znemožnit správu otevřeného obchodu. Přepnutí tokenu,
+  účtu, prostředí nebo zařízení nevytváří další brokerovou kvótu.
+- Vynucuje: `lib/tradovateRequestControl.ts`,
+  `services/tradovateRequestControlGovernor.ts`,
+  `server/tradovateServerRequestControl.ts` a service-only RPC
+  `tradovate_request_control_v1`. Identita vychází z owner-filtered OAuth
+  řádku. DB transakce nečeká na broker síť; granty se konzervativně účtují
+  až do svého konce plus příslušné časové okno. Nevyužité kredity se nevracejí
+  a po restartu se znovu nepoužije původní plný grant.
+- Soft budget se uplatní na background čtení a před přijetím nového rizika.
+  Již přijatý fanout, jeho stavové ověření, ochrany a nouzové zápisy nemají
+  novou kreditovou frontu. `BrokerPort.runWithAcceptedRequests` mění jen
+  třídu spotřeby; nenahrazuje ARM, risk, freshness, routing ani durable outbox.
+  Skutečná brokerová penalizace stále zastaví všechny nové dispatches.
+- Poslední synchronní gate běží po token/scheduler awaits před fyzickým
+  fetch/send. Počty dispatchů nejsou potvrzení přijetí brokerem. První
+  prokazatelně neodeslaný příkaz lze odmítnout lokálně; dřívější nejistý
+  zápis takový pozdější neodeslaný lookup nikdy nezmění na „neodesláno“.
+- Cooldown je uložen mimo skupinový snapshot, restart jej nemaže; poškozený
+  existující záznam je chyba. Raw429 znamená konzervativní hodinovou pauzu,
+  explicitní delší minimum se respektuje a skutečná captcha je terminální.
+  Úspěch jiné odpovědi cooldown nevymaže. Zobrazený countdown je lokální
+  odhad, nikoli změřené zbývající trvání upstream blokace.
+- Mezi procesy je asynchronní propagace (control sync2s, freshness5s,
+  krátké background granty5s), nikoli okamžitý globální stop ani fencing
+  více Maců. Neplatný nebo nedostupný control blokuje nové riziko a granty.
+- Hlídá test: `tests/tradovateRequestControlProtocol.test.ts`,
+  `tests/tradovateRequestControlGovernor.test.ts`,
+  `tests/tradovateRequestControlFileStore.test.ts`,
+  `tests/copierRequestNotSent.test.ts` a lokální testy nové SQL funkce.
+- Nikdy: Nepřevést lokální budget denial na upstream429/captcha,
+  neomlazovat brokerová data heartbeatem a nepoužít IBKR display PnL pro
+  DLL/MLL, ARM ani povolení exekuce. Worker-first UI může potlačit čtení
+  jen po úplné baseline a průkazné kontinuitě přesné route/session.
+- Stav: lokální balík9.11.2026; samotný dokument není důkaz aplikované
+  produkční migrace, nainstalovaného workeru ani broker conformance.
+
 ### UI pravidla
 
 ### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální

@@ -1,3 +1,4 @@
+import { readTradovatePenaltyBody } from '../lib/tradovatePenaltyBody';
 import { tradovateRestBaseUrl, tradovateWebSocketUrl, type TradovateApiHosts } from '../lib/tradovateApiHosts';
 import { explicitTradovateTradeDate } from '../lib/tradovateDisplayDay';
 import { createJournalBackfillPlan, validateJournalBackfillScope } from '../lib/journalBackfillPlan';
@@ -26,7 +27,9 @@ import type {
   ObservedOrderType,
   OrderType,
 } from './brokerPort';
-import { isOpenOrderStatus, propDrawdownFloor } from './brokerPort';
+import { isOpenOrderStatus, propDrawdownFloor, BrokerRequestNotSentError } from './brokerPort';
+import { parseTradovateRequestPenalty, type TradovateRequestPurpose, type TradovateWorkerAccountCoverage } from '../lib/tradovateRequestControl';
+import type { TradovateRequestGovernor } from './tradovateRequestControlGovernor';
 import {
   TRADOVATE_HEARTBEAT_MS,
   TRADOVATE_HOSTS,
@@ -50,6 +53,7 @@ interface TradovateContractEntity { id: number; name: string }
 interface TradovateAccountEntity { id: number; name?: string; active: boolean; readonly?: boolean }
 interface TradovateCashBalanceEntity {
   accountId?: number;
+  currencyId?: number;
   /** Některé transportní vrstvy mohou propustit bohatší cash snapshot. */
   netLiq?: number;
   /** Některé snapshoty nesou přímé otevřené P&L, běžná `/deps` entita ne. */
@@ -175,6 +179,11 @@ export interface TradovateSessionSuspect {
 }
 
 export interface TradovateBrokerConfig {
+  connectionId?: string;
+  requestControl?: TradovateRequestGovernor;
+  resolveBrokerUserId?: () => number | null;
+  requestPurpose?: () => TradovateRequestPurpose | undefined;
+  runWithAcceptedRequests?: <T>(run: () => Promise<T>) => Promise<T>;
   /**
    * Smí se držený Modify pozastavené nohy (OnHold) projevit na tomto účtu? Výchozí ne: bez zapnutého
    * posunu nohou (`--pending-legs on`, sólo DEMO) se chování proti followerům nemění (INV-TRAD-02).
@@ -482,6 +491,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
   let stagedOrderVersionWaiters = new Map<number, Set<StagedOrderVersionWaiter>>();
   let lastSocketMessageAt = 0;
+  const lastAccountDataAt = new Map<number, number>();
+  const streamPositions = new Map<string, TradovatePositionEntity>();
+  let coverageBaselineAt = 0;
+  let coverageSession = '';
+  let activeSession = '';
+  let socketSessionSequence = 0;
   /** Běžící REST merge do map příkazů (order graf, cílené čtení) — snímek streamu pak není konzistentní. */
   let orderGraphMerges = 0;
   // Vrací původní promise (žádné mikrokroky navíc v reconnect/sync cestě);
@@ -514,6 +529,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
   const assertNotRateLimited = () => {
+    // Governed clients use the durable monotonic final barrier; legacy wall-clock breaker is fallback only.
+    if (config.requestControl) return;
     const remaining = rateLimitedUntil - clock();
     if (remaining <= 0) return;
     throw new TradovateRateLimitError(
@@ -618,7 +635,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     entityTypes: [...JOURNAL_SOCKET_ENTITY_TYPES, ...(config.onAccountDataChange ? ['cashBalance'] : [])],
   };
 
-  const notifyAccountDataChange = (accountId: unknown, reason: TradovateAccountDataChange['reason']) => {
+  const notifyAccountDataChange = (accountId: unknown, reason: TradovateAccountDataChange['reason'], receivedAt = clock()) => {
+    if (reason !== 'resync' && typeof accountId === 'number') lastAccountDataAt.set(accountId, receivedAt);
     if (!config.onAccountDataChange) return;
     if (reason !== 'resync' && (typeof accountId !== 'number' || !Number.isSafeInteger(accountId) || accountId <= 0)) return;
     try {
@@ -657,6 +675,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
 
+  const assertRequestPrincipal = () => {
+    if (config.requestControl && config.resolveBrokerUserId && config.resolveBrokerUserId() !== config.requestControl.brokerUserId) {
+      throw new BrokerRequestNotSentError('Tradovate broker identity changed; request control must be reinitialized');
+    }
+  };
+
   const accountSpecFor = (accountId: number): string => {
     const value = accountSpecsByAccountId.get(accountId) ?? config.accountSpec;
     if (typeof value !== 'string' || value.trim().length === 0) {
@@ -672,6 +696,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false, maxResponseBytes?: number): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
     assertNotRateLimited();
+    const purpose: TradovateRequestPurpose = init.method && init.method !== 'GET' ? 'management' : config.requestPurpose?.() ?? 'background';
+    const permit = config.requestControl && purpose !== 'management' && purpose !== 'entry' ? await config.requestControl.prepare(purpose) : null;
     const accessToken = await token();
     init.signal?.throwIfAborted();
     // Obnova tokenu přinesla jiné hosty: nový token nesmí jít na starý host a živá session se musí poctivě přepojit.
@@ -693,9 +719,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const forwardAbort = () => abort.abort(init.signal?.reason);
     init.signal?.addEventListener('abort', forwardAbort, { once: true });
     const timedOut = (reason: unknown) => (abort.signal.aborted && abort.signal.reason === timeoutError ? timeoutError : reason);
+    let release: (() => void) | null = null;
     try {
       let response: Response;
       try {
+        assertNotRateLimited();
+        assertRequestPrincipal();
+        release = config.requestControl?.dispatch(purpose, permit) ?? null;
+        restUsage.record();
         response = await fetchImpl(`${hosts.rest}${path}`, {
           ...init,
           // Přesměrování (host organizace) se nenásleduje: zahozený Authorization by z 404 udělal „neexistuje“.
@@ -708,7 +739,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
             ...init.headers,
           },
         });
+        config.requestControl?.response();
       } catch (reason) {
+        if (!(reason instanceof BrokerRequestNotSentError)) config.requestControl?.transportUnknown();
         throw timedOut(reason);
       }
       if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
@@ -717,10 +750,22 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
       if (allowNotFound && response.status === 404) return null;
       if (response.status === 423 || response.status === 429) {
+        // Latch the known429 synchronously from headers; a slow body cannot leave other writes open.
+        const headerLatch = response.status === 429 && config.requestControl
+          ? config.requestControl.penalize(parseTradovateRequestPenalty(429, null, response.headers.get('retry-after'), clock())!) : null;
+        void headerLatch?.catch(() => {});
+        const releaseInspection = response.status === 423 ? config.requestControl?.holdPenaltyInspection('Tradovate HTTP423 penalty is being inspected') : null;
+        let penalty: NonNullable<ReturnType<typeof parseTradovateRequestPenalty>>;
+        try {
+          const penaltyBody = await readTradovatePenaltyBody(response, { setTimeoutImpl: timeouts, clearTimeoutImpl: clearTimeouts });
+          penalty = parseTradovateRequestPenalty(response.status, penaltyBody, response.headers.get('retry-after'), clock())!;
+          if (headerLatch) await headerLatch;
+          if (config.requestControl) await config.requestControl.penalize(penalty);
+        } finally { releaseInspection?.(); }
         const error = new TradovateRateLimitError(
           `Tradovate ${path} rate limited (${response.status})`,
-          response.status === 429 ? 60 * 60 * 1_000 : null,
-          response.status === 429,
+          penalty.retryAfterMs,
+          penalty.captchaRequired === true,
           undefined,
           response.status,
         );
@@ -748,7 +793,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           'p-captcha'?: boolean;
           'p-message'?: string;
         };
-        if (parsed && typeof parsed === 'object' && parsed['p-ticket']) {
+        if (parsed && typeof parsed === 'object' && (parsed['p-ticket'] || parsed['p-captcha'] === true)) {
+          const sharedPenalty = parseTradovateRequestPenalty(response.status, parsed, response.headers.get('retry-after'), clock());
+          if (sharedPenalty && config.requestControl) await config.requestControl.penalize(sharedPenalty);
           const error = new TradovateRateLimitError(
             parsed['p-message'] ?? `Tradovate ${path} returned a penalty ticket`,
             Number.isFinite(parsed['p-time']) ? (parsed['p-time'] as number) * 1_000 : null,
@@ -764,13 +811,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         throw new TradovateTransportError(`Tradovate ${path} returned malformed JSON`);
       }
     } finally {
+      release?.();
       clearTimeouts(timer);
       init.signal?.removeEventListener('abort', forwardAbort);
     }
   };
 
   const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
-    restUsage.record();
     try {
       const result = await requestRaw<T>(path, init, allowNotFound);
       if (!init.method || init.method === 'GET') {
@@ -1399,6 +1446,35 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
    * dotazů (a throttling je natahoval na sekundy). Sdílí se jen souběžné
    * volání — žádná TTL cache, žádné riziko starých dat.
    */
+  let riskUsdCurrencyId: number | null = null;
+  let riskUsdCurrencySource: string | null = null;
+  let riskCurrencyInFlight: Promise<number> | null = null;
+  const riskUsdCurrency = (): Promise<number> => {
+    const source = hostsFor().rest;
+    if (riskUsdCurrencyId != null && riskUsdCurrencySource === source) return Promise.resolve(riskUsdCurrencyId);
+    if (!riskCurrencyInFlight) riskCurrencyInFlight = request<Array<{ id?: number; name?: string }>>('/currency/list')
+      .then(rows => {
+        const usd = (rows ?? []).filter(row => row && row.name === 'USD');
+        if (usd.length !== 1 || !Number.isSafeInteger(usd[0].id) || usd[0].id! <= 0
+          || rows!.filter(row => row?.id === usd[0].id).length !== 1) throw new TradovateTransportError('USD currency metadata is missing or ambiguous');
+        if (hostsFor().rest !== source) throw new TradovateTransportError('Tradovate currency source changed during metadata read');
+        riskUsdCurrencySource = source; return riskUsdCurrencyId = usd[0].id!;
+      }).finally(() => { riskCurrencyInFlight = null; });
+    return riskCurrencyInFlight;
+  };
+  // Cash carries accountId; risk/list entities do not. Never infer a risk entity id is an Account id.
+  let riskCashListInFlight: Promise<{ rows: TradovateCashBalanceEntity[] | null; at: number; source: string }> | null = null;
+  const riskCashList = () => {
+    if (!riskCashListInFlight) {
+      const source = hostsFor().rest;
+      riskCashListInFlight = request<TradovateCashBalanceEntity[]>('/cashBalance/list')
+        .then(rows => {
+          if (hostsFor().rest !== source) throw new TradovateTransportError('Tradovate cash source changed during read');
+          return { rows, at: clock(), source };
+        }).finally(() => { riskCashListInFlight = null; });
+    }
+    return riskCashListInFlight;
+  };
   let positionListInFlight: Promise<TradovatePositionEntity[]> | null = null;
   const listPositionEntities = () => {
     if (!positionListInFlight) {
@@ -1684,17 +1760,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return raw;
   };
 
-  const sendSocketRequest = (endpoint: string, body: unknown, id = requestId++) => {
-    if (!socket || socket.readyState !== 1) throw new TradovateTransportError('WebSocket is not open');
-    wsUsage.record();
+  const socketResponseIds = new Set<number>();
+  const sendSocketRequest = (endpoint: string, body: unknown, id = requestId++, permit?: import('./tradovateRequestControlGovernor').TradovateRequestPermit | null) => {
+    if (!socket || socket.readyState !== 1) throw new BrokerRequestNotSentError('WebSocket is not open');
+    const purpose = endpoint.startsWith('order/') ? 'management' as const : 'control' as const;
+    assertNotRateLimited();
+    assertRequestPrincipal();
+    const release = config.requestControl?.dispatch(purpose, permit);
+    wsUsage.record(); socketResponseIds.add(id);
     if (endpoint === 'user/syncrequest') syncRequestUsage.record();
-    socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
+    try { socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`); }
+    catch (error) { config.requestControl?.transportUnknown(); throw error; }
+    finally { release?.(); }
+  };
+  const sendSocketControl = async (endpoint: string, body: unknown, id: number) => {
+    const candidate = socket;
+    const permit = config.requestControl ? await config.requestControl.prepare('control') : null;
+    if (socket !== candidate) throw new BrokerRequestNotSentError('Socket changed while reserving request credit');
+    sendSocketRequest(endpoint, body, id, permit);
   };
 
   const rejectPendingSocketWrites = (candidate: WebSocketLike, reason: string) => {
     for (const [id, pending] of pendingSocketWrites) {
       if (pending.socket !== candidate) continue;
       pendingSocketWrites.delete(id);
+      if (socketResponseIds.delete(id)) config.requestControl?.transportUnknown();
       clearTimeouts(pending.timeout);
       diagnostic(`WS WRITE UNKNOWN endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=${reason}`);
       pending.reject(contextualError(new TradovateTransportError(
@@ -1729,6 +1819,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return false;
     }
     pendingSocketWrites.delete(id);
+    if (socketResponseIds.delete(id)) config.requestControl?.response();
     clearTimeouts(pending.timeout);
     diagnostic(`WS WRITE ACK endpoint=${pending.endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} status=${String(value.s ?? '-')}`);
     const reject = (reason: Error) => pending.reject(contextualError(reason, 'websocket'));
@@ -1737,14 +1828,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const penalty = data && typeof data === 'object' && !Array.isArray(data)
         ? data as { 'p-ticket'?: string; 'p-time'?: number; 'p-captcha'?: boolean; 'p-message'?: string }
         : null;
-      if (value.s === 423 || value.s === 429 || penalty?.['p-ticket']) {
+      if (value.s === 423 || value.s === 429 || penalty?.['p-ticket'] || penalty?.['p-captcha'] === true) {
+        const sharedPenalty = parseTradovateRequestPenalty(Number(value.s ?? 200), penalty, null, clock());
+        if (sharedPenalty && config.requestControl) void config.requestControl.penalize(sharedPenalty).catch(error => emitOrHoldError(contextualError(error, 'websocket')));
         const retryAfterMs = penalty && Number.isFinite(penalty['p-time'])
           ? Math.max(0, penalty['p-time'] as number) * 1_000
           : value.s === 429 ? 60 * 60 * 1_000 : null;
         const error = new TradovateRateLimitError(
           penalty?.['p-message'] ?? `Tradovate WebSocket ${pending.endpoint} rate limited (${String(value.s ?? 'penalty')})`,
           retryAfterMs,
-          penalty?.['p-captcha'] === true || value.s === 429,
+          penalty?.['p-captcha'] === true,
           penalty?.['p-ticket'],
           typeof value.s === 'number' ? value.s : undefined,
         );
@@ -1778,6 +1871,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const pending = pendingSocketWrites.get(id);
         if (!pending || pending.socket !== candidate) return;
         pendingSocketWrites.delete(id);
+        if (socketResponseIds.delete(id)) config.requestControl?.transportUnknown();
         diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=timeout`);
         pending.reject(contextualError(new TradovateTransportError(
           `Tradovate WebSocket ${endpoint} request timeout (${webSocketWriteTimeoutMs} ms); výsledek zápisu je neznámý`,
@@ -1799,8 +1893,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const pending = pendingSocketWrites.get(id);
         if (!pending) return;
         pendingSocketWrites.delete(id);
+        socketResponseIds.delete(id);
         clearTimeouts(pending.timeout);
         diagnostic(`WS WRITE UNKNOWN endpoint=${endpoint} request=${id} durationMs=${Math.max(0, clock() - pending.startedAt)} reason=send-failed`);
+        if (reason instanceof BrokerRequestNotSentError) { pending.reject(reason); return; }
         pending.reject(contextualError(new TradovateTransportError(
           `Tradovate WebSocket ${endpoint} send failed; výsledek zápisu je neznámý: ${reason instanceof Error ? reason.message : String(reason)}`,
         ), 'websocket'));
@@ -1906,7 +2002,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const entityType = item.entityType?.toLowerCase();
       if (!item.entity || typeof item.entity !== 'object') continue;
       if (entityType === 'cashbalance') {
-        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'cash');
+        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'cash', receivedAt);
       } else if (entityType === 'contract') {
         const contract = item.entity as TradovateContractEntity;
         if (contract.id != null && contract.name) contracts.set(contract.id, contract.name);
@@ -1949,6 +2045,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         }
       } else if (entityType === 'order') {
         const orderEntity = item.entity as TradovateRawOrderEntity;
+        lastAccountDataAt.set(orderEntity.accountId, receivedAt);
         // A new Order and its initial shape can arrive together before REST knows
         // the order. Preserve that correlation without letting standalone requested
         // versions replace an already populated execution order. Journal protection
@@ -1967,8 +2064,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (order) emitBrokerState({ type: 'order', order, receivedAt });
         await flushPendingFills(orderEntity.id);
       } else if (entityType === 'position') {
-        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'position');
+        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'position', receivedAt);
         const position = item.entity as TradovatePositionEntity;
+        streamPositions.set(`${position.accountId}:${position.contractId}`, { ...position });
         await hydrateContracts([position.contractId]);
         // netPrice jen pro zobrazení (stejný zdroj jako REST averagePrice read modelu).
         const displayAveragePrice = typeof position.netPrice === 'number' && Number.isFinite(position.netPrice) && position.netPrice > 0
@@ -1994,7 +2092,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           continue;
         }
         const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
-        if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
+        if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill', receivedAt);
         else notifyAccountDataChange(null, 'resync');
         await emitMappedFill(fill, receivedAt, processingStartedAt);
         const updated = await composeOrder(fill.orderId);
@@ -2013,11 +2111,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const processingStartedAt = clock();
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
+    if (typeof value.i === 'number' && socketResponseIds.delete(value.i)) config.requestControl?.response();
+    const sharedPenalty = parseTradovateRequestPenalty(Number(value.s ?? 200), value.d, null, clock());
+    if (sharedPenalty && config.requestControl) await config.requestControl.penalize(sharedPenalty);
     if (value.s === 423 || value.s === 429) {
       const error = new TradovateRateLimitError(
         `Tradovate WebSocket rate limited (${value.s})`,
         value.s === 429 ? 60 * 60 * 1_000 : null,
-        value.s === 429,
+        false,
         undefined,
         value.s,
       );
@@ -2049,10 +2150,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
             const delay = Number.isFinite(penalty['p-time'])
               ? Math.max(0, penalty['p-time'] as number) * 1_000
               : 1_000;
-            syncRetry = timeouts(() => {
+            syncRetry = timeouts(async () => {
               syncRetry = null;
               try {
-                sendSocketRequest('user/syncrequest', {
+                await sendSocketControl('user/syncrequest', {
                   ...syncRequestBody,
                   'p-ticket': penalty['p-ticket'],
                 }, 1);
@@ -2086,7 +2187,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket authorization failed${socketFailureDetail(value)}`);
       diagnostic(`WS AUTHORIZED afterMs=${Math.max(0, clock() - socketOpenedAt)}`);
       socketState = 'syncing';
-      sendSocketRequest('user/syncrequest', syncRequestBody, 1);
+      await sendSocketControl('user/syncrequest', syncRequestBody, 1);
       return;
     }
     if (value.i === 1) {
@@ -2126,6 +2227,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (syncRetry) clearTimeouts(syncRetry);
         syncRetry = null;
         syncReady = true;
+        // Transport ACK alone is not a complete Position baseline. Explicit empty array is valid; missing/malformed payload is not.
+        const completeCoverageBaseline = Array.isArray(value.d) && (!resync || resync.complete === true);
+        coverageBaselineAt = completeCoverageBaseline ? clock() : 0; coverageSession = completeCoverageBaseline ? activeSession : '';
         hasSyncedOnce = true;
         gapKnownFillIds = null;
         socketState = 'connected';
@@ -2174,7 +2278,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (isCurrent()) socket?.close();
         return;
       }
-      if (isCurrent()) socket?.send(`authorize\n0\n\n${accessToken}`);
+      const permit = config.requestControl ? await config.requestControl.prepare('control') : null;
+      if (isCurrent() && socket) {
+        assertNotRateLimited(); assertRequestPrincipal();
+        const release = config.requestControl?.dispatch('control', permit); wsUsage.record(); socketResponseIds.add(0);
+        try { socket.send(`authorize\n0\n\n${accessToken}`); } catch (error) { config.requestControl?.transportUnknown(); throw error; } finally { release?.(); }
+      }
       return;
     }
     if (raw[0] !== 'a') return;
@@ -2331,6 +2440,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   function ensureSocket(reason = 'subscribe') {
     if (socket || listeners.size === 0) return;
+    const control = config.requestControl?.health();
+    if (control && control.state !== 'ready' && control.state !== 'budget-limited') {
+      // An open TCP/WebSocket is not a free probe during an actual broker penalty.
+      if (control.state !== 'captcha') scheduleReconnect('request-control', control.blockedUntil == null ? 2_000 : Math.max(2_000, control.blockedUntil - clock()));
+      return;
+    }
     const factory = config.webSocketFactory ?? ((url: string) => {
       if (typeof WebSocket === 'undefined') throw new TradovateTransportError('WebSocket is unavailable');
       return new WebSocket(url) as unknown as WebSocketLike;
@@ -2361,6 +2476,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     rememberSyncLoss();
     socket = candidate;
+    activeSession = `${clock()}-${++socketSessionSequence}`;
+    streamPositions.clear();
     syncReady = false;
     socketMessageTail = Promise.resolve();
     pendingSemanticFrames = [];
@@ -2674,6 +2791,29 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   return {
     environment: config.environment,
+    runWithAcceptedRequests: config.runWithAcceptedRequests,
+    newRiskRequestBlocker: () => config.requestControl?.newRiskBlocker() ?? null,
+    requestHealth: () => config.requestControl ? [config.requestControl.health()] : [],
+    streamCoverage(accountId): TradovateWorkerAccountCoverage | null {
+      if (!config.connectionId || !coverageBaselineAt || !accountSpecsByAccountId.has(accountId)) return null;
+      return { accountId, connectionId: config.connectionId, environment: config.environment, routeEpoch: socketSessionSequence, currentRouteEpoch: socketSessionSequence,
+        sessionId: coverageSession, currentSessionId: activeSession, baselineAt: coverageBaselineAt, lastDataAt: Math.max(lastAccountDataAt.get(accountId) ?? 0, coverageBaselineAt), observedAt: clock(),
+        socketLive: !!socket && socket.readyState === 1 && clock() - lastSocketMessageAt <= STREAM_SNAPSHOT_MAX_SILENCE_MS,
+        synchronized: syncReady && socketState === 'connected' && !renewalInProgress,
+        gap: !syncReady || coverageSession !== activeSession || renewalInProgress,
+        backlog: pendingSemanticFrames.length > 0 || pendingCommandReports.size > 0, mergeInProgress: orderGraphMerges > 0 || !!orderGraphInFlight };
+    },
+    streamPositionSnapshot(accountId) {
+      if (!syncReady || coverageSession !== activeSession || !socket || socket.readyState !== 1) return null;
+      const positions: BrokerPosition[] = [];
+      for (const position of streamPositions.values()) {
+        if (position.accountId !== accountId) continue;
+        const symbol = contracts.get(position.contractId);
+        if (!symbol) return null;
+        if (position.netPos !== 0) positions.push({ accountId, symbol, netQuantity: position.netPos });
+      }
+      return { positions, observedAt: clock() };
+    },
     async refreshAccountDirectory(): Promise<TradovateVisibleAccount[]> {
       const entities = await listAccountEntities();
       return (entities ?? []).filter(item => Number.isSafeInteger(item.id) && item.id > 0).map(item => {
@@ -2775,7 +2915,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // Fill race / odmítnutí proto zůstává na původním REST fallbacku.
       const confirmed = await waitForOrder(orderId, order => order.status === 'canceled', commandId);
       if (syncReady && !confirmed) {
-        const rejection = await commandRejection(commandId);
+        const rejection = await commandRejection(commandId).catch(reason => {
+          // This GET may be unsent, but the command above already reached the broker.
+          // Never let a current-read refusal erase the earlier dispatch uncertainty.
+          throw new TradovateTransportError(`Command ${commandId} was sent; confirmation is indeterminate: ${reason instanceof Error ? reason.message : String(reason)}`);
+        });
         if (rejection) throw new TradovateTransportError(`cancelOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`cancelOrder command ${commandId} was not confirmed by the order stream`);
       }
@@ -2805,7 +2949,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         && order.limitPrice === changes.limitPrice
         && order.stopPrice === changes.stopPrice, commandId);
       if (syncReady && !confirmed) {
-        const rejection = await commandRejection(commandId);
+        const rejection = await commandRejection(commandId).catch(reason => {
+          // This GET may be unsent, but the command above already reached the broker.
+          // Never let a current-read refusal erase the earlier dispatch uncertainty.
+          throw new TradovateTransportError(`Command ${commandId} was sent; confirmation is indeterminate: ${reason instanceof Error ? reason.message : String(reason)}`);
+        });
         if (rejection) throw new TradovateTransportError(`modifyOrder command ${commandId} rejected: ${rejection}`);
         throw new TradovateTransportError(`modifyOrder command ${commandId} was not confirmed by the order stream`);
       }
@@ -2840,25 +2988,38 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     },
     async listAccountRiskSnapshots(accountIds): Promise<BrokerAccountRiskSnapshot[]> {
       const uniqueAccountIds = [...new Set(accountIds)];
+      const riskSource = hostsFor().rest;
+      const usdCurrencyId = config.requestControl ? await riskUsdCurrency() : null;
+      const cashBatch = config.requestControl ? riskCashList() : null;
       return Promise.all(uniqueAccountIds.map(async accountId => {
         const encodedId = encodeURIComponent(String(accountId));
-        const [cashBalances, riskStatuses, autoLiqSettings] = await Promise.all([
-          request<TradovateCashBalanceEntity[]>(
-            `/cashBalance/deps?masterid=${encodedId}`,
-            { method: 'GET' },
-          ),
-          request<TradovateAccountRiskStatusEntity[]>(
-            `/accountRiskStatus/deps?masterid=${encodedId}`,
-            { method: 'GET' },
-          ),
-          request<TradovateUserAccountAutoLiqEntity[]>(
-            `/userAccountAutoLiq/deps?masterid=${encodedId}`,
-            { method: 'GET' },
-          ),
+        const [cash, risk, liquidation] = await Promise.all([
+          cashBatch ?? request<TradovateCashBalanceEntity[]>(`/cashBalance/deps?masterid=${encodedId}`, { method: 'GET' })
+            .then(rows => ({ rows, at: clock() })),
+          request<TradovateAccountRiskStatusEntity[]>(`/accountRiskStatus/deps?masterid=${encodedId}`, { method: 'GET' })
+            .then(rows => ({ rows, at: clock() })),
+          request<TradovateUserAccountAutoLiqEntity[]>(`/userAccountAutoLiq/deps?masterid=${encodedId}`, { method: 'GET' })
+            .then(rows => ({ rows, at: clock() })),
         ]);
-        const cashBalance = firstAccountDependent(cashBalances, accountId);
-        const riskStatus = firstAccountDependent(riskStatuses, accountId);
-        const autoLiq = firstAccountDependent(autoLiqSettings, accountId);
+        if (config.requestControl && (hostsFor().rest !== riskSource || riskUsdCurrencySource !== riskSource || 'source' in cash && cash.source !== riskSource)) {
+          throw new TradovateTransportError('Tradovate risk source changed during read; snapshot is unverified');
+        }
+        const observedAt = Math.min(cash.at, risk.at, liquidation.at);
+        const scopedDependent = <T extends { accountId?: number }>(rows: T[] | null): T | null => {
+          if (!Array.isArray(rows) || rows.length > 1 || rows.some(row => !row || row.accountId != null && row.accountId !== accountId)) {
+            throw new TradovateTransportError(`Ambiguous account-scoped risk data for account ${accountId}`);
+          }
+          // The authoritative relation is GET /deps?masterid=Account.id, not the risk row's unrelated id.
+          return rows[0] ?? null;
+        };
+        let cashBalance: TradovateCashBalanceEntity | null;
+        if (cashBatch) {
+          const ownRows = (cash.rows ?? []).filter(row => row && row.accountId === accountId);
+          if (ownRows.length !== 1 || ownRows[0].currencyId !== usdCurrencyId) throw new TradovateTransportError(`Missing, ambiguous or non-USD cash balance for account ${accountId}`);
+          cashBalance = ownRows[0]; // Multiple currencies/rows require explicit metadata; never choose the first.
+        } else cashBalance = firstAccountDependent(cash.rows, accountId);
+        const riskStatus = config.requestControl ? scopedDependent(risk.rows) : firstAccountDependent(risk.rows, accountId);
+        const autoLiq = config.requestControl ? scopedDependent(liquidation.rows) : firstAccountDependent(liquidation.rows, accountId);
         // 17. 9. 2026: čtyři čerstvé funded účty Lucid měly maxNetLiq =
         // minNetLiq = 50 000 (nikdy neobchodované), a protože se dřív
         // maxNetLiq vydával jako net liq a minNetLiq jako floor, worker je
@@ -2870,7 +3031,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const trailingMaxDrawdownLimit = activeRiskThreshold(autoLiq?.trailingMaxDrawdownLimit);
         return {
           accountId,
-          at: clock(),
+          at: observedAt,
           realizedPnlUsd: finiteNumber(cashBalance?.realizedPnL),
           realizedTradeDate: explicitTradovateTradeDate(cashBalance?.tradeDate),
           openPnlUsd: finiteNumber(cashBalance?.openPnL),

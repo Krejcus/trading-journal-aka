@@ -1,3 +1,10 @@
+import { TRADOVATE_REQUEST_CONTROL_POLICY, type TradovateRequestControlRemote } from '../../lib/tradovateRequestControl';
+import { createTradovateRequestControlRegistry, createTradovateRequestGovernor, type TradovateRequestGovernor } from '../../services/tradovateRequestControlGovernor';
+import { createTradovateControlledFetch } from '../../services/tradovateRequestControlFetch';
+import { createTradovateRequestControlFileStore } from '../../server/tradovateRequestControlFileStore';
+import { createTradovateRequestControlRemote } from '../../server/tradovateRequestControlRemote';
+import { createServerTradovateRequestControl } from '../../server/tradovateServerRequestControl';
+import { tradovateRequestContext } from '../../server/tradovateRequestContext';
 import { sanitizeTradovateApiHosts, type TradovateApiHosts } from '../../lib/tradovateApiHosts';
 import { fileRelayDeliveryStore } from '../../server/copierRelayDeliveryStore.js';
 import { createCopierSnapshotDelivery, snapshotDeliveryId } from '../../server/copierSnapshotDelivery';
@@ -36,7 +43,7 @@ import { createTradovateBroker, type TradovateBrokerPort, type TradovateSessionS
 import { createSessionRenewalPolicy, type SessionRenewalPolicy } from '../../services/copierSessionRenewalPolicy';
 import { createCopierSocketRenewalCoordinator } from '../../services/copierSocketRenewal';
 import { createBrokerRouter } from '../../services/brokerRouter';
-import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
+import { BrokerRequestNotSentError, isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
 import {
   previewDynamicBrokerRoutes,
   refreshDynamicBrokerRoutes,
@@ -164,6 +171,10 @@ interface PilotContext {
   displayFeed?: ReturnType<typeof createTradovateAccountDisplayFeed>;
   environment: 'demo';
   connectionId: string;
+  getBrokerUserId?: () => number | null;
+  requestControlRemote?: TradovateRequestControlRemote;
+  requestControl?: TradovateRequestGovernor;
+  controlledFetch?: typeof fetch;
   accountSpec?: string;
   expiresAt: string | null;
   renewable: boolean;
@@ -183,6 +194,37 @@ interface PilotContext {
    */
   discovered?: boolean;
 }
+
+// Principal-wide, outside group state: all adapters, discovery and raw display share it.
+const requestControls = createTradovateRequestControlRegistry();
+const requestControlStore = createTradovateRequestControlFileStore(resolve(homedir(), 'Library/Application Support/AlphaTrade/copier'));
+let requestControlSyncTimer: ReturnType<typeof setInterval> | null = null;
+async function initializeRequestControl(context: PilotContext): Promise<void> {
+  if (context.requestControl) return;
+  const brokerUserId = context.getBrokerUserId?.();
+  if (!Number.isSafeInteger(brokerUserId) || (brokerUserId ?? 0) <= 0) throw new Error('Tradovate trusted broker identity is missing; broker requests are disabled');
+  const remote = context.requestControlRemote ?? (context.relay ? createTradovateRequestControlRemote({
+    apiOrigin: context.relay.apiOrigin, connectionId: context.connectionId, authorizationHeader: context.relay.authorizationHeader,
+  }) : null);
+  if (!remote) throw new Error('Tradovate shared request-control endpoint is unavailable; broker requests are disabled');
+  const governor = requestControls.get(brokerUserId!, () => createTradovateRequestGovernor({ brokerUserId: brokerUserId!, remote, store: requestControlStore }));
+  await governor.initialize();
+  context.requestControl = governor;
+  context.controlledFetch = createTradovateControlledFetch(governor, fetch, 'background', () => {
+    // Refresh may change the lease; token and principal must still belong together at the wire.
+    if (context.getBrokerUserId?.() !== brokerUserId) throw new BrokerRequestNotSentError('Tradovate broker identity changed before dispatch');
+  });
+  if (!requestControlSyncTimer) {
+    requestControlSyncTimer = setInterval(() => {
+      for (const item of requestControls.values()) void item.sync().catch(() => { /* Old shared state expires in 5s; no broker probe. */ });
+    }, TRADOVATE_REQUEST_CONTROL_POLICY.controlSyncMs);
+    requestControlSyncTimer.unref();
+  }
+}
+const brokerRequestOptions = (context: PilotContext) => ({
+  connectionId: context.connectionId, requestControl: context.requestControl, resolveBrokerUserId: context.getBrokerUserId,
+  requestPurpose: tradovateRequestContext.current, runWithAcceptedRequests: tradovateRequestContext.accepted,
+});
 
 /** Hlídání nových/odpojených propfirem za běhu (4. 10. 2026). */
 interface ConnectionWatch {
@@ -297,10 +339,11 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     return;
   }
   const context = await pilotContext();
+  await initializeRequestControl(context);
   const accessToken = await context.getAccessToken();
   const accountResult = await loadTradovateAccountData({
     baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()),
-    accessToken,
+    accessToken, fetchImpl: context.controlledFetch,
   });
   const accounts = accountResult.accounts;
   const accountSpecsByAccountId = Object.fromEntries(
@@ -329,6 +372,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   if (selected === 'agent') {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
+    ...brokerRequestOptions(context),
       environment: 'demo',
       promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
@@ -361,6 +405,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     connectionId: string,
     loadOptions: { strictDirectory?: boolean } = {},
   ) => {
+    await initializeRequestControl(context);
     // Startup reads are retried in-process: a slow or briefly failing
     // Tradovate/cloud read must not exit the worker and start a launchd loop.
     // A connection whose directory stays unreadable after the whole retry
@@ -371,7 +416,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     // routing/preflight and ARM stays blocked until it is visible again.
     const data = await retryTransient(() => (async () => loadTradovateAccountData({
       baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()),
-      accessToken: await context.getAccessToken(),
+      accessToken: await context.getAccessToken(), fetchImpl: context.controlledFetch,
     }))(), {
       ...STARTUP_RETRY,
       // Nově objevená propfirma nesmí start workeru zdržet o celých 10 min.
@@ -394,6 +439,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
+    ...brokerRequestOptions(context),
       environment: 'demo',
       promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
@@ -708,6 +754,7 @@ async function discoveredPilotContext(device: MacCopierDeviceConfig, connectionI
     accountSpec: payload.accountSpec,
     expiresAt: payload.expiresAt,
     renewable: true,
+    getBrokerUserId: provider.getBrokerUserId,
     getAccessToken: provider.getAccessToken,
     getApiHosts: provider.getApiHosts,
     forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
@@ -724,7 +771,7 @@ function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
     read: async (accountId, signal) => {
       // Token dřív než host: obnova tokenu může hosty změnit.
       const accessToken = await context.getAccessToken();
-      return readTradovateAccountDisplay({ baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()), accessToken, accountId, signal });
+      return readTradovateAccountDisplay({ fetchImpl: context.controlledFetch, baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()), accessToken, accountId, signal });
     },
   });
 }
@@ -1626,6 +1673,7 @@ async function runLocalAgent(
       // Jen zobrazení („Do fillu“, Live Activity), nikdy do rozhodování (INV-UI-04).
       marketPrices: () => (tvEnabled ? marketPriceFeed?.current() ?? [] : copierMarketPricesFromQuote(tvPriceStream?.latestQuote('MNQ') ?? null)),
       priceAlertWatch: () => priceAlertWatch?.status() ?? null,
+      requestHealth: () => requestControls.values().map(item => item.health()),
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       ...(connectionWatch ? {
         connectionDiscovery: () => ({
@@ -1789,12 +1837,11 @@ async function runLocalAgent(
        */
       /** Jediný GET /account/list — žádné per-account dotazy (zátěž Tradovate). */
       const readAccountListIds = async (
-        getAccessToken: () => Promise<string>,
-        environment: PilotContext['environment'],
-        getApiHosts?: () => TradovateApiHosts | null,
+        context: PilotContext,
       ): Promise<number[]> => {
-        const authorization = `Bearer ${await getAccessToken()}`;
-        const response = await fetch(`${tradovateApiBaseUrl(environment, getApiHosts?.())}/account/list`, {
+        await initializeRequestControl(context);
+        const authorization = `Bearer ${await context.getAccessToken()}`;
+        const response = await context.controlledFetch!(`${tradovateApiBaseUrl(context.environment, context.getApiHosts?.())}/account/list`, {
           headers: { Authorization: authorization, Accept: 'application/json' },
           redirect: 'manual',
           signal: AbortSignal.timeout(15_000),
@@ -1809,7 +1856,7 @@ async function runLocalAgent(
       const probeEmptyDirectoryConnection = async (connectionId: string): Promise<boolean> => {
         try {
           const probe = await discoveredPilotContext(connectionWatch.device, connectionId);
-          const accountIds = await readAccountListIds(probe.getAccessToken, probe.environment, probe.getApiHosts);
+          const accountIds = await readAccountListIds(probe);
           if (accountIds.length === 0) throw new Error(EMPTY_DIRECTORY_ERROR);
           connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, connectionId);
           console.log(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} má znovu účty (${accountIds.length}); restart, až bude kopírka vypnutá`);
@@ -2193,7 +2240,8 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       accountSpec: payload.accountSpec,
       expiresAt: payload.expiresAt,
       renewable: true,
-      getAccessToken: provider.getAccessToken,
+      getBrokerUserId: provider.getBrokerUserId,
+    getAccessToken: provider.getAccessToken,
       getApiHosts: provider.getApiHosts,
       forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
       relay: { apiOrigin: deviceConfig.apiOrigin, authorizationHeader: provider.authorizationHeader },
@@ -2239,6 +2287,8 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       expiresAt: payload.expiresAt,
       renewable: false,
       getAccessToken,
+      getBrokerUserId: () => paired && provider ? provider.getBrokerUserId() : payload.brokerUserId ?? null,
+      ...(deviceConfig && provider ? { relay: { apiOrigin: deviceConfig.apiOrigin, authorizationHeader: provider.authorizationHeader } } : {}),
       getApiHosts: () => (paired && provider ? provider.getApiHosts() : sanitizeTradovateApiHosts(payload.apiHosts)),
       ...(pairing ? {
         device: {
@@ -2288,13 +2338,14 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
     ?? (stringFlag('account-spec', false) || connection.tradovate_email?.trim() || '');
   if (!accountSpec) throw new Error('Chybí Tradovate accountSpec; použij --account-spec');
   let apiHosts: TradovateApiHosts | null = null;
+  let brokerUserId: number | null = null;
   const getAccessToken = async () => {
     const token = await getValidTradovateAccessToken({ db, config, userId: connection.user_id, connectionId: connection.id });
-    apiHosts = token.apiHosts;
+    apiHosts = token.apiHosts; brokerUserId = token.brokerUserId;
     return token.accessToken;
   };
   await getAccessToken();
-  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken, getApiHosts: () => apiHosts };
+  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken, getApiHosts: () => apiHosts, getBrokerUserId: () => brokerUserId, requestControlRemote: createServerTradovateRequestControl({ db, userId: connection.user_id, connectionId: connection.id, brokerUserId }) };
 }
 
 function validatePair<T extends ExecutionAccount>(
@@ -2327,6 +2378,7 @@ async function runPreflight(
   const accountIds = accounts.map(item => item.id);
   assertFlatAndNoWorking(accounts);
   const broker = createTradovateBroker({
+    ...brokerRequestOptions(context),
     environment: 'demo',
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,
@@ -2379,6 +2431,7 @@ async function runDryRun(context: PilotContext, followerId: number): Promise<voi
   const result = await dryRunTradovateOrder({
     environment: 'demo',
     accessToken: await context.getAccessToken(),
+    fetchImpl: context.controlledFetch,
     order: {
       tag: `at-dry-${randomUUID().replaceAll('-', '').slice(0, 24)}`,
       accountId: followerId,
@@ -2419,6 +2472,7 @@ async function runRuntime(
   const auditPath = resolve(root, `${key}.audit.jsonl`);
   const metrics = createCopierMetrics();
   const broker = createTradovateBroker({
+    ...brokerRequestOptions(context),
     environment: 'demo',
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,

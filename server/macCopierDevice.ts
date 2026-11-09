@@ -274,6 +274,7 @@ export function createMacCopierDeviceTokenProvider(options: {
 
   return {
     refresh,
+    getBrokerUserId: () => payload?.brokerUserId ?? null,
     /** Hosty organizace z posledního lease; null = výchozí hosty. */
     getApiHosts: () => sanitizeTradovateApiHosts(payload?.apiHosts),
     async authorizationHeader(): Promise<string> {

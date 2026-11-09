@@ -1,3 +1,4 @@
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { loadTradovateAccountIdentity } from '../../../server/tradovateAccountData.js';
 import {
@@ -51,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'invalid-history-sync-request' });
     }
 
-    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
       db,
       config,
       userId,
@@ -70,6 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const identity = await loadTradovateAccountIdentity({
         baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
         accessToken,
+        fetchImpl,
         accountId,
       });
       accountName = identity?.name ?? accountName;
@@ -83,6 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       connectionId,
       environment: config.environment,
       accessToken,
+      fetchImpl,
       apiHosts,
       accountId,
       accountName,
@@ -98,6 +101,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     return res.status(200).json({ ...snapshot, sync });
   } catch (error) {
+    if (error instanceof TradovateRequestControlError) return res.status(503).json({
+      error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
+      captchaRequired: error.snapshot?.captchaRequired === true,
+    });
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') return res.status(401).json({ error: message });
     if (message === 'invalid-account-id' || message.startsWith('history-date')) return res.status(400).json({ error: message });

@@ -1,3 +1,5 @@
+import { parseTradovateRequestPenalty } from '../lib/tradovateRequestControl.js';
+import { TradovateRequestControlError } from './tradovateServerRequestControl.js';
 import type {
   TradovateAccountDataAccount,
   TradovateAccountDataResult,
@@ -393,13 +395,16 @@ const request = async <T>(options: {
       signal: AbortSignal.timeout(10_000),
     });
     const parsed = await response.json().then(value => ({ ok: true as const, value }), () => ({ ok: false as const, value: null }));
+    const penalty = parseTradovateRequestPenalty(response.status, parsed.value, response.headers.get('retry-after'));
+    if (penalty) return { ok: false, value: null, status: 429, retryAfterMs: penalty.retryAfterMs };
     if (!response.ok) return { ok: false, value: null, status: response.status,
       ...(response.status === 429 ? { retryAfterMs: retryAfterMs(response.headers.get('Retry-After'), parsed.value) ?? 300_000 } : {}),
     };
     // Nečitelné tělo úspěšné odpovědi není „prázdný seznam“ — čtení selhalo.
     if (!parsed.ok) return { ok: false, value: null, status: response.status };
     return { ok: true, value: parsed.value as T, status: response.status };
-  } catch {
+  } catch (error) {
+    if (error instanceof TradovateRequestControlError) throw error;
     return { ok: false, value: null, status: null };
   }
 };

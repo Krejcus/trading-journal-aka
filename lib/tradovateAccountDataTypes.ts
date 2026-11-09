@@ -1,3 +1,4 @@
+import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
 export type TradovateDataAvailability = 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
 
 export interface TradovateSourceCoverage {
@@ -133,6 +134,8 @@ export interface TradovateAccountDataAccount {
   workingOrderCount: number;
   /** Per-account evidence survives merging connections and slow enrichment. */
   readState?: {
+    /** Current stream continuity is display evidence, separate from data capture time. */
+    displayStreamCoverage?: TradovateWorkerAccountCoverage;
     positions: TradovateSourceCoverage;
     orders: TradovateSourceCoverage;
     positionsAsOf: string | null;

@@ -98,6 +98,7 @@ import {
   tradovateCopyTradeOrders,
   tradovateCopyTradeSnapshot,
 } from '../lib/tradovateCopyTradeBridge';
+import { workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
@@ -139,6 +140,7 @@ import {
   devLiveCopyFixtureSyncPauses,
 } from '../lib/devLiveCopyFixture';
 import LiveStatusStrip from './LiveStatusStrip';
+import TradovateRequestHealthNotice from './TradovateRequestHealthNotice';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import { tradovateAccountProfileNeedsPlan } from '../lib/tradovateAccountOnboarding';
@@ -455,6 +457,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const statusAckFenceRef = useRef(new CopierStatusAckFence());
   const ackSequenceByStatusRef = useRef(new WeakMap<LocalCopierAgentStatus, number>());
   const agentStatusFresh = isCopierStatusFresh(agentStatusObservedAt, freshnessNow, agentStatusReadHealthy);
+  useEffect(() => {
+    live.setWorkerReadCoverage?.(agentStatusFresh && !agentStatusRestored ? { status: agentStatus, observedAt: agentStatusObservedAt } : null);
+    return () => live.setWorkerReadCoverage?.(null);
+  }, [live.setWorkerReadCoverage, agentStatus, agentStatusObservedAt, agentStatusFresh, agentStatusRestored]);
   // Krátká lhůta po návratu na LIVE: obnovený stav (ne starší než 10 min) se
   // první ~1,2 s ZOBRAZUJE jako platný, než ho potvrdí první čtení — jinak by
   // přepínač, ostrov i souhrny na okamžik bliknuly „neověřeno“. Jen zobrazení:
@@ -732,9 +738,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   ), [agentStatus, agentStatusFresh, agentTransport, live.connectionData]);
   // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
   // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
+  const coverageOwners = useMemo(() => workerCoverageOwners(live.connectionData), [live.connectionData]);
   const liveData = useMemo(
-    () => overlayWorkerExposure(live.data, agentStatus, agentStatusObservedAt),
-    [live.data, agentStatus, agentStatusObservedAt],
+    () => overlayWorkerExposure(live.data, agentStatus, agentStatusObservedAt, Date.now(), coverageOwners),
+    [live.data, coverageOwners, agentStatus, agentStatusObservedAt],
   );
   const selectedAccount = liveData?.accounts.find(account => account.id === selectedAccountId) ?? null;
   const [profileSetupAccountIds, setProfileSetupAccountIds] = useState<Set<string> | null>(null);
@@ -1118,6 +1125,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // skupiny v hlavičce; push expozice i fallback poll řídí společný `chartOpenRef`.
     enabled: (chartAvailable || phoneChartAvailable) && tab === 'chart',
     data: live.data,
+    coverageOwners,
     profiles: live.profiles,
     agentStatus: chartLive.status,
     agentStatusObservedAt,
@@ -2071,6 +2079,7 @@ acceptAgentStatus((await executeAgent({
     statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt });
   return (
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
+      <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable) && tab === 'chart'} />
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
       <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.

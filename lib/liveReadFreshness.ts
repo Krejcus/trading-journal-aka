@@ -1,3 +1,4 @@
+import { workerAccountCoverageUsable } from './tradovateWorkerCoverage';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 export const LIVE_READ_MAX_AGE_MS = 45_000;
@@ -6,6 +7,8 @@ export const verifiedReadAvailability = (availability: string | undefined) =>
 
 export function isLiveAccountReadVerified(account: LiveAccount, source: 'positions' | 'orders' | 'cash', now = Date.now()): boolean {
   const availability = account[`${source}Availability`];
+  const proof = account.displayStreamCoverage;
+  if (source !== 'cash' && proof) return verifiedReadAvailability(availability) && workerAccountCoverageUsable(proof, proof, account.id, now);
   // Legacy shadow accounts do not carry the OAuth read-state contract.
   if (availability == null) return true;
   const capturedAt = Date.parse(account[`${source}UpdatedAt`] ?? '');

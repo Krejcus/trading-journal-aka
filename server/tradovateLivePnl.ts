@@ -1,3 +1,4 @@
+import { parseTradovateRequestPenalty } from '../lib/tradovateRequestControl.js';
 import type {
   TradovateLivePnlAnchor,
   TradovateLivePnlAnchorTick,
@@ -138,6 +139,10 @@ async function tradovateRequest<T>(options: {
     signal: AbortSignal.timeout(8_000),
   });
   const payload = await response.json().catch(() => null) as T | null;
+  const penalty = parseTradovateRequestPenalty(response.status, payload, response.headers.get('retry-after'));
+  if (penalty) throw Object.assign(new TradovateLivePnlError('Tradovate request penalized', 429, penalty.retryAfterMs), {
+    evidence: penalty.evidence, captchaRequired: penalty.captchaRequired === true,
+  });
   if (!response.ok || payload == null) {
     throw new TradovateLivePnlError(
       `Tradovate request failed (${response.status})`,

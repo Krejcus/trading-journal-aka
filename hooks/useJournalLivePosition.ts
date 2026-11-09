@@ -10,6 +10,7 @@ import type { JournalLiveInterest, JournalLiveTarget, JournalLiveView } from '..
 import { subscribeAppForeground } from '../lib/appForeground';
 import { useDisplayWorkerStatus } from './useDisplayWorkerStatus';
 import { useLiveTradeCardView } from './useLiveTradeCardView';
+import type { WorkerCoverageOwner } from '../lib/tradovateWorkerCoverage';
 
 /**
  * Data živé pozice pro deník (jen zobrazení): čtení z brokera, které App
@@ -25,6 +26,8 @@ export interface JournalLiveSource {
   profiles: TradovateAccountProfile[];
   /** Připojená Tradovate připojení; relay z kteréhokoli najde Mac worker. */
   connectionIds: readonly string[];
+  /** Exact OAuth ownership from connectionData; missing means REST fallback. */
+  coverageOwners?: ReadonlyMap<number, WorkerCoverageOwner>;
   setInterest: (interest: JournalLiveInterest) => void;
 }
 
@@ -69,8 +72,8 @@ export function useJournalLivePosition(source: JournalLiveSource | null | undefi
   const data = source?.data ?? null;
   const profiles = source?.profiles;
   const liveData = useMemo(
-    () => (active ? overlayWorkerExposure(data, worker.status, worker.observedAt, now) : null),
-    [active, data, worker.status, worker.observedAt, now],
+    () => (active ? overlayWorkerExposure(data, worker.status, worker.observedAt, now, source?.coverageOwners) : null),
+    [active, data, worker.status, worker.observedAt, now, source?.coverageOwners],
   );
   const accounts = useMemo(() => (liveData && profiles ? tradovateCopyTradeSnapshot(liveData, profiles).accounts : []), [liveData, profiles]);
   const orders = useMemo(() => (liveData ? tradovateCopyTradeOrders(liveData) : []), [liveData]);

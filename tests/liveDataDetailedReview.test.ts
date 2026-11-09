@@ -248,7 +248,7 @@ describe('detailed LIVE data reliability regressions', () => {
   });
 
   it('respects explicit Retry-After and keeps only the fallback bounded', () => {
-    expect(tradovateClientBackoffMs(null)).toBe(300_000);
+    expect(tradovateClientBackoffMs(null)).toBe(3_600_000);
     expect(tradovateClientBackoffMs(60_000)).toBe(60_000);
     expect(tradovateClientBackoffMs(3_600_000)).toBe(3_600_000);
   });

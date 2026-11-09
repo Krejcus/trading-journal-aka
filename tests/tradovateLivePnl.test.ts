@@ -360,16 +360,19 @@ describe('broker rate limit carries the wait the broker asked for', () => {
     baseUrl: 'https://mock.invalid/v1', accessToken: 'mock', connectionId: 'c', environment: 'demo',
     fetchImpl: (async (url: string | URL | Request) => (new URL(String(url)).pathname.endsWith('/position/list') ? positionList() : json([]))) as typeof fetch,
   });
-  it('passes p-time from a 429 body as retryAfterMs instead of a fixed hour', async () => {
+  it('keeps the raw429 conservative hour despite a shorter p-time', async () => {
     const rejected = tick(() => json({ 'p-ticket': 'abc', 'p-time': 30 }, 429));
     await expect(rejected).rejects.toBeInstanceOf(TradovateLivePnlError);
-    await expect(rejected).rejects.toMatchObject({ status: 429, retryAfterMs: 30_000 });
+    await expect(rejected).rejects.toMatchObject({ status: 429, retryAfterMs: 3_600_000 });
   });
-  it('reads a Retry-After header in seconds', async () => {
+  it('preserves a short endpoint p-time without a raw429', async () => {
+    await expect(tick(() => json({'p-ticket':'abc','p-time':30}))).rejects.toMatchObject({status:429,retryAfterMs:30_000,evidence:'p-time'});
+  });
+  it('keeps the raw429 policy separate from Retry-After', async () => {
     await expect(tick(() => new Response('{}', { status: 429, headers: { 'retry-after': '12' } })))
-      .rejects.toMatchObject({ status: 429, retryAfterMs: 12_000 });
+      .rejects.toMatchObject({ status: 429, retryAfterMs: 3_600_000 });
   });
-  it('leaves retryAfterMs null when the broker gives no hint', async () => {
-    await expect(tick(() => json({ error: 'slow down' }, 429))).rejects.toMatchObject({ status: 429, retryAfterMs: null });
+  it('uses one hour when raw429 has no broker hint', async () => {
+    await expect(tick(() => json({ error: 'slow down' }, 429))).rejects.toMatchObject({ status: 429, retryAfterMs: 3_600_000 });
   });
 });

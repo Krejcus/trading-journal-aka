@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import {
-  WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL, WORKER_POSITION_UNKNOWN_DETAIL, overlayWorkerExposure, WORKER_EXPOSURE_MAX_AGE_MS,
+  WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL, WORKER_POSITION_UNKNOWN_DETAIL, overlayWorkerExposure as overlayWorkerExposureRaw, WORKER_EXPOSURE_MAX_AGE_MS,
 } from '../lib/tradovateWorkerExposureOverlay';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { buildTradeCard } from '../lib/liveTradeCard';
@@ -13,6 +13,12 @@ import { liveBreakEven, liveLineMoveBlockReason } from '../lib/liveChartOrderLin
 
 const NOW = Date.UTC(2026, 8, 18, 9, 0, 0);
 const iso = (ms: number) => new Date(ms).toISOString();
+const owners = new Map([100, 200].map(accountId => [accountId, { connectionId: 'login-a', environment: 'demo' as const }]));
+const overlayWorkerExposure = (...args: Parameters<typeof overlayWorkerExposureRaw>) => overlayWorkerExposureRaw(args[0], args[1], args[2], args[3], owners);
+const proof = (accountId: number) => ({ accountId, connectionId: 'login-a', environment: 'demo' as const, routeEpoch: 1, currentRouteEpoch: 1,
+  sessionId: 'session', currentSessionId: 'session', baselineAt: NOW - 600_000, lastDataAt: NOW - 1_000, observedAt: NOW - 500,
+  socketLive: true, synchronized: true, gap: false, backlog: false, mergeInProgress: false });
+
 const coverage = (count: number) => ({ availability: count > 0 ? 'available' as const : 'empty' as const, count, httpStatus: 200 });
 const account = (id: number, extras: Partial<TradovateAccountDataAccount> = {}): TradovateAccountDataAccount => ({
   id, name: `A${id}`, createdAt: null, active: true, canTrade: true, netPositionCount: 0, workingOrderCount: 0,
@@ -45,7 +51,8 @@ const status = (extras: Partial<LocalCopierAgentStatus['controller']> = {}, expo
     divergentAccounts: [], workingOrderAccounts: [], stuckOutbox: false, stuckOperations: [], lastError: null, revision: 1, lastSequence: 1,
     exposure: {
       verifiedAt: NOW - 1_000,
-      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
+      streamCoverage: [proof(100), proof(200)],
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7, avgPrice: 29_730.75 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
       followers: [{ accountId: 200, ok: true, detail: null }],
       orders: [{ accountId: 200, brokerOrderId: '663908070136', symbol: 'MNQZ6', side: 'Buy', orderType: 'Stop', quantity: 7, filledQuantity: 0, limitPrice: null, stopPrice: 29_748.25, status: 'working', updatedAt: NOW - 2_000 }],
       ...exposureExtras,
@@ -55,14 +62,14 @@ const status = (extras: Partial<LocalCopierAgentStatus['controller']> = {}, expo
 } as unknown as LocalCopierAgentStatus);
 
 describe('worker exposure overlay', () => {
-  it('replaces positions and orders of group accounts with the fresh heartbeat and stamps the heartbeat time', () => {
+  it('replaces positions and orders of group accounts with the complete current stream proof and preserves the actual last data time', () => {
     const out = overlayWorkerExposure(data(), status(), NOW - 1_500, NOW)!;
     const follower = out.accounts.find(a => a.id === 200)!;
-    expect(follower.positions).toEqual([expect.objectContaining({ symbol: 'MNQZ6', netPosition: -7, contractId: 7, timestamp: iso(NOW - 1_500) })]);
+    expect(follower.positions).toEqual([expect.objectContaining({ symbol: 'MNQZ6', netPosition: -7, contractId: 7, timestamp: iso(NOW - 1_000) })]);
     expect(follower.orders).toEqual([expect.objectContaining({ id: 663908070136, action: 'Buy', orderType: 'Stop', stopPrice: 29_748.25, status: 'Working', contractId: 7 })]);
     expect(follower.netPositionCount).toBe(1);
     expect(follower.workingOrderCount).toBe(1);
-    expect(follower.readState).toMatchObject({ positionsAsOf: iso(NOW - 1_500), ordersAsOf: iso(NOW - 1_500),
+    expect(follower.readState).toMatchObject({ positionsAsOf: iso(NOW - 1_000), ordersAsOf: iso(NOW - 1_000),
       positions: { availability: 'available', count: 1 }, orders: { availability: 'available', count: 1 } });
     const leader = out.accounts.find(a => a.id === 100)!;
     expect(leader.positions[0]).toMatchObject({ netPosition: -7, averagePrice: 29_730.75 });
@@ -92,7 +99,7 @@ describe('worker exposure overlay', () => {
     expect(follower.orders).toHaveLength(1);
     expect(follower.orders[0].id).toBe(5);
     expect(follower.readState?.ordersAsOf).toBe(iso(NOW - 600_000));
-    expect(follower.readState?.positionsAsOf).toBe(iso(NOW - 1_000));
+    expect(follower.readState?.positionsAsOf).toBe(iso(NOW - 600_000));
   });
   it('a flat account from the worker becomes an explicit empty read, never a stale position', () => {
     const out = overlayWorkerExposure(data(), status({}, { positions: [] }), NOW - 1_000, NOW)!;
@@ -132,12 +139,23 @@ describe('worker exposure overlay', () => {
   });
 
   it('tutéž pozici zná REST → jeho průměr i P&L platí, průměr workeru se nepoužije', () => {
-    const out = overlayWorkerExposure(data(), status({}, {
+    const currentRest = data(); currentRest.accounts[0].readState!.positionsAsOf = iso(NOW - 500);
+    const out = overlayWorkerExposure(currentRest, status({}, {
       positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7, avgPrice: 1 }, { accountId: 200, symbol: 'MNQZ6', netQuantity: -7 }],
     }), NOW - 1_000, NOW)!;
     const leader = out.accounts.find(item => item.id === 100)!;
     expect(leader.positions[0]).toMatchObject({ averagePrice: 29_730.75 });
     expect(leader.balance.openPnlBehindPosition).toBeUndefined();
+  });
+
+  it('stejný počet bez času REST snímku nepotvrdí staré P&L proti jiné průměrné ceně', () => {
+    const before = data(); before.accounts[0].readState!.positionsAsOf = null;
+    const out = overlayWorkerExposure(before, status({}, {
+      positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7, avgPrice: 29_740 }],
+    }), NOW - 1_000, NOW)!.accounts[0];
+    expect(out.positions[0].averagePrice).toBe(29_740);
+    expect(out.balance.openPnlBehindPosition).toBe(true);
+    expect(out.balance.totalCashValue).toBe(before.accounts[0].balance.totalCashValue);
   });
 
   it('přikoupení a otočení: průměr workeru, P&L pozadu; částečné zavření bez průměru workeru = neznámo', () => {
@@ -197,7 +215,7 @@ describe('worker exposure overlay', () => {
     const rest = data();
     const result = overlayWorkerExposure(rest, status({}, {
       positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }],
-      followers: [{ accountId: 200, ok: false, detail: WORKER_POSITION_UNKNOWN_DETAIL }],
+      followers: [{ accountId: 200, ok: false, detail: WORKER_POSITION_UNKNOWN_DETAIL }], streamCoverage: [proof(100)],
     }), NOW - 1_000, NOW)!;
     expect(result.accounts.find(item => item.id === 200)).toBe(rest.accounts.find(item => item.id === 200));
   });
@@ -215,13 +233,13 @@ describe('worker exposure overlay', () => {
       const rest = data();
       const result = overlayWorkerExposure(rest, status({}, {
         positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }],
-        followers: [{ accountId: 200, ...verdict }],
+        followers: [{ accountId: 200, ...verdict }], streamCoverage: [proof(100)],
       }), NOW - 1_000, NOW)!;
       expect(result.accounts.find(item => item.id === 200), verdict.detail).toBe(rest.accounts.find(item => item.id === 200));
     }
     // Starší worker bez verdiktů followerů: bez záznamu pozice taky REST.
     const rest = data();
-    const legacy = overlayWorkerExposure(rest, status({}, { positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }], followers: undefined }), NOW - 1_000, NOW)!;
+    const legacy = overlayWorkerExposure(rest, status({}, { positions: [{ accountId: 100, symbol: 'MNQZ6', netQuantity: -7 }], followers: undefined, streamCoverage: [] }), NOW - 1_000, NOW)!;
     expect(legacy.accounts.find(item => item.id === 200)).toBe(rest.accounts.find(item => item.id === 200));
   });
 

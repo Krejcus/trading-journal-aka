@@ -20,6 +20,9 @@ import { liveChartPosition, NO_LIVE_CHART_POSITION, type LiveChartPosition } fro
 import type { JournalLiveTarget } from '../lib/journalLivePosition';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import { useLiveTradeCardView } from './useLiveTradeCardView';
+import type { WorkerCoverageOwner } from '../lib/tradovateWorkerCoverage';
+
+const NO_COVERAGE_OWNERS: ReadonlyMap<number, WorkerCoverageOwner> = new Map();
 
 /**
  * Data LIVE → Graf ze stejných vstupů jako přehled LIVE (jen zobrazení):
@@ -29,6 +32,8 @@ import { useLiveTradeCardView } from './useLiveTradeCardView';
 export function useLiveChartData(input: {
   enabled: boolean;
   data: TradovateAccountDataResult | null;
+  /** Exact OAuth membership from connectionData; roles never establish ownership. */
+  coverageOwners?: ReadonlyMap<number, WorkerCoverageOwner>;
   profiles: TradovateAccountProfile[];
   agentStatus: LocalCopierAgentStatus | null;
   /** Kdy přišel pollovaný status — čerstvost workeru (verdikty, zapnutost kopírky). */
@@ -47,10 +52,11 @@ export function useLiveChartData(input: {
 }): { group: LiveTradeGroup | null; groupKey: string; position: LiveChartPosition; disarm: LiveChartDisarm | null; working: LiveChartWorkingSource } {
   const { enabled, data, profiles, agentStatus, agentStatusObservedAt, statusFresh, group, now } = input;
   const exposureObservedAt = input.exposureObservedAt === undefined ? agentStatusObservedAt : input.exposureObservedAt;
+  const coverageOwners = input.coverageOwners ?? NO_COVERAGE_OWNERS;
   // Pozice z heartbeatu jen do 8 s podle hodin desku (ne až s dalšími daty).
   const chartData = useMemo(
-    () => (enabled ? overlayWorkerExposure(data, agentStatus, exposureObservedAt, now) : null),
-    [enabled, data, agentStatus, exposureObservedAt, now],
+    () => (enabled ? overlayWorkerExposure(data, agentStatus, exposureObservedAt, now, coverageOwners) : null),
+    [enabled, data, agentStatus, exposureObservedAt, now, coverageOwners],
   );
   const accounts = useMemo(() => (chartData ? tradovateCopyTradeSnapshot(chartData, profiles).accounts : []), [chartData, profiles]);
   const orders = useMemo(() => (chartData ? tradovateCopyTradeOrders(chartData) : []), [chartData]);

@@ -118,6 +118,9 @@ describe('Tradovate WebSocket konečný reconnect automat', () => {
     harness.sockets[0].deliver('a[{"e":"props","d":{"entityType":"cashBalance","entity":{"accountId":10,"amount":51200}}}]');
     await flush();await vi.advanceTimersByTimeAsync(1000);
     cache=mergeTradovateAccountDisplay(cache,JSON.parse(JSON.stringify([feed.state()])),membership);
+    expect(cache['demo:c:10'].totalCashValue?.value).toBe(51000); // event invalidates, but cannot bypass the shared serial throttle
+    await vi.advanceTimersByTimeAsync(29_000);
+    cache=mergeTradovateAccountDisplay(cache,JSON.parse(JSON.stringify([feed.state()])),membership);
     const account={id:10,balance:51000,realizedPnl:125,cashAvailability:'available',cashUpdatedAt:'2026-09-03T04:00:00Z',displayValues:cache['demo:c:10']} as LiveAccount;
     expect(liveBalanceDisplay(account).value).toBe(51200);
     expect(liveDailyPnlDisplay(account).value).toBe(325);

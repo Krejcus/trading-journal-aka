@@ -1,3 +1,4 @@
+import type { TradovateWorkerAccountCoverage } from '../lib/tradovateRequestControl';
 import { isRetiredDurableGroup } from './copierRetiredGroup';
 import type { GroupLimitTradeState } from '../lib/groupLimitProtocol';
 import { groupLimitsEnabled, groupProtectedLimitMoveProblem, projectGroupLimitTrade, mergeGroupLimitMembers, type GroupLimitMemberRecord } from './groupLimitLifecycle';
@@ -496,6 +497,7 @@ export interface CopierControllerStatus {
    */
   exposure?: {
     verifiedAt: number;
+    streamCoverage?: TradovateWorkerAccountCoverage[];
     /** `avgPrice` = průměrný vstup (broker `netPrice` ze streamu, jinak z fillů), jen když sedí na kusy (zobrazení). */
     positions: Array<{ accountId: number; symbol: string; netQuantity: number; avgPrice?: number }>;
     followers: Array<{ accountId: number; ok: boolean; detail: string | null }>;
@@ -15238,6 +15240,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (pendingConnectionRecovery || currentRuntime().state.safety.managementOnly) {
       return { blockedBy: 'recovery', reason: 'Nejdřív dokonči obnovu otevřených kopií' };
     }
+    const requestBlocker = broker.newRiskRequestBlocker?.(group.leaderAccountId == null ? [] : [group.leaderAccountId, ...group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').map(follower => follower.accountId)]);
+    if (requestBlocker) return { blockedBy: 'configuration', reason: requestBlocker };
     const recoveryBlocker = readOnlyRecoveryBlocker();
     return recoveryBlocker ? { blockedBy: 'recovery', reason: recoveryBlocker } : null;
   };
@@ -23598,6 +23602,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const windowEnabled = tradingWindow.enabled;
       const accounts = new Map<number, ManualEntryAccountInputs>();
       const accountIds = group.leaderAccountId == null ? [] : [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)];
+      const requestControlBlocker = broker.newRiskRequestBlocker?.(accountIds);
+      if (requestControlBlocker) stateBlockers.push({ code: 'tradovate-request-control', text: requestControlBlocker });
       for (const accountId of accountIds) {
         const positions = positionsByAccount.get(accountId);
         const orders = liveOrdersByAccount.get(accountId);
@@ -23687,7 +23693,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const prepared = eventTail.then(async () => {
         if (abandonedStart || stopped) return null;
         started = true;
-        return prepareManualOrderAction(command, deadlineAt, queuedFence);
+        return broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(() => prepareManualOrderAction(command, deadlineAt, queuedFence)) : prepareManualOrderAction(command, deadlineAt, queuedFence);
       });
       eventTail = prepared.then(() => undefined).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
       let startTimer: ReturnType<typeof setTimeout> | undefined;
@@ -23705,7 +23711,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (typeof first !== 'function') return first;
       // Zápis MIMO frontu controlleru (P7): replace eventy leadera se zatím zrcadlí normálně.
-      const job = first();
+      const job = broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(first) : first();
       const tracked = job.then(() => undefined, () => undefined);
       manualOrderActionJobs.add(tracked);
       void tracked.finally(() => manualOrderActionJobs.delete(tracked));
@@ -23727,7 +23733,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         started = true;
         manualEntryExecuting = true;
         try {
-          return await executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)), queuedFence, { queuedAt, startedAt: clock() });
+          const run = () => executeManualEntry(command, deadlineAt, () => this.previewLeaderEntry(leaderEntryPlaceAsPreview(command)), queuedFence, { queuedAt, startedAt: clock() });
+          return await (broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(run) : run());
         } finally {
           manualEntryExecuting = false;
         }
@@ -25046,6 +25053,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             : []));
           return {
             verifiedAt: Math.max(lastAuthoritativeReadAt, lastBrokerPositionAt ?? 0),
+            // Read-only coverage is earned per account: stream baseline plus controller cache agreement.
+            // A heartbeat cannot prove that a queued trade event was merged or that an omitted account is flat.
+            streamCoverage: [...members].flatMap(accountId => {
+              try {
+                const proof = broker.streamCoverage?.(accountId);
+                const streamedPositions = broker.streamPositionSnapshot?.(accountId);
+                const streamedOrders = broker.streamOrderSnapshot?.(accountId);
+                const cachedPositions = positionsByAccount.get(accountId), cachedOrders = liveOrdersByAccount.get(accountId);
+                if (!proof || !streamedPositions || !streamedOrders || !cachedPositions || !cachedOrders) return [];
+                const positionKey = (rows: Array<{ symbol: string; netQuantity: number }>) => JSON.stringify(rows.filter(row => row.netQuantity !== 0).map(row => [row.symbol, row.netQuantity]).sort());
+                const orderKey = (rows: BrokerOrder[]) => JSON.stringify(rows.filter(row => isOpenOrderStatus(row.status)).map(row => [row.brokerOrderId, row.symbol, row.side, row.status, row.orderType, row.quantity, row.filledQuantity, row.limitPrice ?? null, row.stopPrice ?? null]).sort());
+                const agrees = positionKey(streamedPositions.positions) === positionKey([...cachedPositions].map(([symbol, netQuantity]) => ({ symbol, netQuantity })))
+                  && orderKey(streamedOrders.orders) === orderKey([...cachedOrders.values()]);
+                return [{ ...proof, backlog: proof.backlog || (pendingTradeIngressByAccount.get(accountId) ?? 0) > 0,
+                  mergeInProgress: proof.mergeInProgress || !agrees, synchronized: proof.synchronized && agrees }];
+              } catch { return []; } // Optional display proof failure keeps the normal authoritative REST fallback.
+            }),
             positions,
             followers,
             orders,

@@ -1,3 +1,4 @@
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -28,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!connectionId || !Number.isSafeInteger(accountId) || !datePattern.test(startDate) || !datePattern.test(endDate)) {
       return res.status(400).json({ error: 'invalid-history-request' });
     }
-    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
@@ -37,6 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const accounts = await loadTradovateAccountData({
       baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
       accessToken,
+      fetchImpl,
     });
     const account = accounts.accounts.find(candidate => candidate.id === accountId);
     if (!account) {
@@ -46,6 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       environment: config.environment,
       apiHosts,
       accessToken,
+      fetchImpl,
       accountId,
       accountSpec: account.name,
       startDate,
@@ -53,6 +56,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     return res.status(200).json(result);
   } catch (error) {
+    if (error instanceof TradovateRequestControlError) return res.status(503).json({
+      error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
+      captchaRequired: error.snapshot?.captchaRequired === true,
+    });
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') return res.status(401).json({ error: message });
     if (message === 'tradovate-not-connected' || message === 'tradovate-reauthorization-required') return res.status(409).json({ error: message });

@@ -121,6 +121,7 @@ export function tradovateCopyTradeSnapshot(
         ?? (account.balance.openPnL != null && hasCompleteTradovateRead(account.balance.coverage) ? 'broker' : 'stale'),
       unrealizedPnlUpdatedAt: account.balance.openPnlAsOf ?? readState.cashAsOf,
       ...(account.balance.openPnlBehindPosition ? { unrealizedPnlBehindPosition: true } : {}),
+      ...(readState.displayStreamCoverage ? { displayStreamCoverage: readState.displayStreamCoverage } : {}),
       positionsAvailability: readState.positions.availability,
       ordersAvailability: readState.orders.availability,
       cashAvailability: account.balance.totalCashValue != null && account.balance.netLiq != null

@@ -1,3 +1,4 @@
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -86,12 +87,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       connectionId,
       ...(connection?.tradovateEmail?.trim() ? { accountSpec: connection.tradovateEmail.trim() } : {}),
       accessToken: token.accessToken,
+      brokerUserId: token.brokerUserId,
       expiresAt: token.expiresAt,
       issuedAt,
       ...(token.apiHosts ? { apiHosts: token.apiHosts } : {}),
     }, publicKey);
     return res.status(200).json({ envelope, expiresAt: token.expiresAt, issuedAt });
   } catch (error) {
+    if (error instanceof TradovateRequestControlError) return res.status(503).json({
+      error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
+      captchaRequired: error.snapshot?.captchaRequired === true,
+    });
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token' || message === 'invalid-copier-device-auth') {
       return res.status(401).json({ error: message });

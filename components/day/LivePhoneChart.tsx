@@ -1,3 +1,5 @@
+import { independentIbkrTick } from '../../lib/ibkrDisplayPnl';
+import { tvPriceChannel, tvPriceStore } from '../../services/tvPriceChannel';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import DayFullscreenChart from './DayFullscreenChart';
@@ -18,7 +20,6 @@ import { LivePhoneAttachSheet, LivePhoneCancelPendingChip, LivePhonePositionBar,
 import { groupLimitOutcomeNotice } from '../../lib/groupLimitUiNotice';
 import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/liveCommandRuns';
-import { useLiveTicketQuote } from '../../hooks/useLiveTicketQuote';
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
 import { useLivePositionBoxFollow } from '../../hooks/useLivePositionBoxFollow';
 import LiveChartAutomationSettings, { LiveBoxFollowPane } from '../LiveChartAutomationSettings';
@@ -188,17 +189,22 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const clearNotice = useCallback(() => setNotice(null), []);
   const trade = slots.trade ?? null;
   // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
-  const candleClose = ctl.chart.candles.at(-1)?.close ?? null;
-  const tick = useLiveTicketQuote(ctl.chart.liveFeed, 'MNQ', candleClose);
-  // Po návratu z pozadí je na obrazovce starý stav: musí to být vidět, dokud nepřijde živá cena.
-  const resuming = useLiveResumeState(tick != null || ctl.chart.liveStatus === 'live', tick?.at ?? null);
-  const noPriceNotice = useLiveNoPriceNotice(true, tick?.at ?? null, resuming);
-  const contract = previewSymbolFromChartSource(ctl.chart.liveSource);
+  const watchingPositionPrice = slots.position.summary?.kind === 'position';
+  useEffect(() => watchingPositionPrice ? tvPriceChannel.addPnlInterest() : undefined, [watchingPositionPrice]);
+  const priceView = useSyncExternalStore(tvPriceStore.subscribe, tvPriceStore.view, tvPriceStore.view);
+  const priceReceivedAt = tvPriceStore.diagnostics().lastReceivedAt;
+  const independentTick = useMemo(() => independentIbkrTick(priceView, priceReceivedAt, Date.now()), [priceView, priceReceivedAt]);
+  // Minute-history freshness does not certify or invalidate an independent signed IBKR tick.
+  const liveTickAt = independentTick?.at ?? null;
+  const resuming = useLiveResumeState(liveTickAt != null || ctl.chart.liveStatus === 'live', liveTickAt);
+  const noPriceNotice = useLiveNoPriceNotice(true, liveTickAt, resuming);
+  const contract = independentTick?.symbol ?? previewSymbolFromChartSource(ctl.chart.liveSource);
   const quote = useMemo<LivePhoneQuote | null>(() => {
-    if (!tick || ctl.chart.liveStatus !== 'live') return null;
-    const bid = snapToTick(tick.price, LIVE_PHONE_INSTRUMENT.tickSize);
-    return { symbol: contract, bid, ask: bid + LIVE_PHONE_INSTRUMENT.tickSize, at: tick.at };
-  }, [tick, contract, ctl.chart.liveStatus]);
+    if (!independentTick || !independentTick.symbol.startsWith('MNQ') || independentTick.bid == null || independentTick.ask == null
+      || !Number.isFinite(independentTick.bid) || !Number.isFinite(independentTick.ask) || independentTick.bid <= 0
+      || independentTick.ask < independentTick.bid) return null;
+    return { symbol: independentTick.symbol, bid: independentTick.bid, ask: independentTick.ask, at: independentTick.at };
+  }, [independentTick]);
   // Jeden příkaz naráz (zámek přes ref — dvojklep nepošle druhý; nový operationId jen za nový pokus).
   // Zámek je JEDEN pro celý graf i desk (oponentura UI C7/C8 kolo 1): vstup, attach, × / BE / posun
   // z čar, list správy, Zavřít holé pozice i „Zrušit čekající“; s deskem (`trade.commandLockRef`)
@@ -328,12 +334,12 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // čerstvá kotace IBKR téhož kontraktu (≤ 3 s). Jen blokuje, nic neautorizuje (INV-UI-04).
   const guardAt = useCallback((at: number) => (chartPosition.summary
     ? withIbkrTightenMark(chartPosition.summary, chartPosition.symbol ?? null,
-      { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, at)
-    : null), [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
+      { source: independentTick?.source ?? null, price: independentTick?.price ?? null, at: independentTick?.at ?? null, stale: independentTick == null }, at)
+    : null), [chartPosition.summary, chartPosition.symbol, independentTick]);
   // Živé P&L jen do štítku (INV-UI-04); bez čerstvé ceny IBKR téhož kontraktu číslo brokera.
   const displayOpenPnl = useMemo(() => (chartPosition.summary ? liveDisplayOpenPnl(chartPosition.summary, chartPosition.symbol ?? null,
-    { source: ctl.chart.liveSource ?? null, price: tick?.price ?? null, at: tick?.at ?? null, stale: ctl.chart.liveStatus !== 'live' }, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
-  [chartPosition.summary, chartPosition.symbol, ctl.chart.liveSource, ctl.chart.liveStatus, tick]);
+    { source: independentTick?.source ?? null, price: independentTick?.price ?? null, at: independentTick?.at ?? null, stale: independentTick == null }, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
+  [chartPosition.summary, chartPosition.symbol, independentTick]);
   const shownOpenPnl = chartPosition.summary ? liveShownOpenPnl(chartPosition.summary, displayOpenPnl) : null;
   // „Zavřít / Zrušit“ lišty pozice: zrušení čekajícího vstupu jde sdíleným zámkem čar (jeden příkaz naráz).
   const barTradeRef = useRef(trade);
@@ -636,7 +642,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {noPriceNotice && (
             <div aria-live="polite" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', justifyContent: 'center' }}>
               <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.25)' }}>
-                Živá cena teď nechodí
+                Živá kotace IBKR teď není dostupná
               </span>
             </div>
           )}

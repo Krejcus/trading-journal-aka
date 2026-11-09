@@ -139,6 +139,7 @@ interface LocalCopierExecutionAgentOptions {
   marketPrices?: () => NonNullable<LocalCopierAgentStatus['marketPrices']>;
   /** Stav hlídače upozornění na cenu; jen zobrazení, výjimka = pole chybí. */
   priceAlertWatch?: () => LocalCopierAgentStatus['priceAlertWatch'];
+  requestHealth?: () => NonNullable<LocalCopierAgentStatus['requestHealth']>;
   accountDisplay?: () => NonNullable<LocalCopierAgentStatus['accountDisplay']>;
   /** Využití Tradovate API a stav session po spojení; jen zobrazení. */
   connectionUsage?: () => NonNullable<LocalCopierAgentStatus['connectionUsage']>;
@@ -439,6 +440,7 @@ export async function startLocalCopierExecutionAgent(
         ? [COPIER_GROUP_DELETE_CAPABILITY]
         : []),
       ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
+      ...(options.requestHealth ? ['tradovate-request-control-v1'] : []),
       ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
     nonce,
@@ -450,6 +452,7 @@ export async function startLocalCopierExecutionAgent(
     ...(options.installation ? { installation: structuredClone(options.installation) } : {}),
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
+    ...(options.requestHealth ? { requestHealth: structuredClone(options.requestHealth()) } : {}),
     ...(options.accountDisplay ? { accountDisplay: structuredClone(options.accountDisplay()) } : {}),
     ...(options.connectionUsage ? { connectionUsage: structuredClone(options.connectionUsage()) } : {}),
     ...(() => {

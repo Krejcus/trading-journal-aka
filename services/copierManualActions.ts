@@ -150,6 +150,17 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   runtime: CopierRuntime;
   result: ManualFlattenResult;
 }> {
+  // Capacity classification spans pre-reads, durable writes and confirmation.
+  // It cannot bypass the existing write/scope/route assertions below.
+  return options.broker.runWithAcceptedRequests
+    ? options.broker.runWithAcceptedRequests(() => processManualFlattenAccepted(options))
+    : processManualFlattenAccepted(options);
+}
+
+async function processManualFlattenAccepted(options: ManualFlattenOptions): Promise<{
+  runtime: CopierRuntime;
+  result: ManualFlattenResult;
+}> {
   const operationId = operationToken(options.operationId);
   const targetSymbolsByAccount = new Map<number, Set<string>>();
   for (const target of options.targets ?? []) {

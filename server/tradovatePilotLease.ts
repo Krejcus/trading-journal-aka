@@ -14,6 +14,8 @@ export interface TradovatePilotLeasePayload {
   version: 1;
   environment: 'demo';
   connectionId: string;
+  /** Trusted OAuth broker identity; absent only in leases from older releases. */
+  brokerUserId?: number | null;
   /** Deprecated single-account fallback. Pilot resolves Account.name per account from account/list. */
   accountSpec?: string;
   accessToken: string;
@@ -96,6 +98,7 @@ function validatePayload(payload: TradovatePilotLeasePayload, now: number): void
     || payload.environment !== 'demo'
     || !payload.connectionId
     || !payload.accessToken.trim()
+    || (payload.brokerUserId != null && (!Number.isSafeInteger(payload.brokerUserId) || payload.brokerUserId <= 0))
   ) {
     throw new Error('invalid-pilot-lease');
   }

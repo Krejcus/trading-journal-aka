@@ -60,6 +60,11 @@ export function createExposureCappedBroker(
     assertDispatchAllowed,
     routeEpoch: broker.routeEpoch ? accountId => broker.routeEpoch!(accountId) : undefined,
     streamOrderSnapshot: broker.streamOrderSnapshot ? accountId => broker.streamOrderSnapshot!(accountId) : undefined,
+    streamPositionSnapshot: broker.streamPositionSnapshot ? accountId => broker.streamPositionSnapshot!(accountId) : undefined,
+    streamCoverage: broker.streamCoverage ? accountId => broker.streamCoverage!(accountId) : undefined,
+    newRiskRequestBlocker: broker.newRiskRequestBlocker ? accountIds => broker.newRiskRequestBlocker!(accountIds) : undefined,
+    requestHealth: broker.requestHealth ? () => broker.requestHealth!() : undefined,
+    runWithAcceptedRequests: broker.runWithAcceptedRequests ? run => broker.runWithAcceptedRequests!(run) : undefined,
     async placeOrder(request) {
       assertDispatchAllowed?.('place');
       try {

@@ -1,3 +1,4 @@
+import { liveAccountIbkrLegs, tradeCardIbkrLegs } from '../lib/ibkrDisplayPnl';
 import { isStuckManageChange, stuckResolvedText } from '../lib/manualEntryDisplay';
 import { perfMark } from '../lib/perfTrace';
 import { LiveRiskValue } from './LiveRiskValue';
@@ -3500,8 +3501,8 @@ const GroupRow = ({ group, rows, tradeCard = null, armed, dailyPnlPending, eligi
     sl: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="stop" /></td>,
     tp: <td className="px-3 py-1.5 text-right"><GroupTradeLevelCell model={tradeCard} level="target" /></td>,
     // Jeden obchod skupiny (karta obchodu) se hýbe s cenou z TV; jiné součty jen z kotvy.
-    unreal: <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)}>
-      {(value, live) => <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(value)}`} title={unrealSource === 'stale' && netOpen == null ? 'Některý účet čeká na nový snapshot.' : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' Po poplatcích za vstup i výstup.' : ''}` : netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(value)}{live ? <LiveTvMark /> : null}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
+    unreal: <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)} ibkrLegs={tradeCardIbkrLegs(tradeCard)}>
+      {(value, live) => <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(value)}`} title={unrealSource === 'stale' && netOpen == null && !live ? 'Některý účet čeká na nový snapshot.' : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' Po poplatcích za vstup i výstup.' : ''}` : netOpen != null ? 'Po poplatcích za vstup i výstup, stejně jako karta obchodu.' : unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(value)}{live ? <LiveTvMark /> : null}{unrealSource === 'stale' && !live ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
     </LiveOpenPnlValue>,
   };
   return (
@@ -4024,16 +4025,16 @@ const CompactAccountRow = ({ row, tradeAccount, variant, live, eligibility, trad
           </span>
         </span>
         {variant === 'market' && a ? (
-          <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, positionsVerified)}>
+          <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, positionsVerified)} ibkrLegs={liveAccountIbkrLegs(a, positionsVerified, tradeAccount?.fees ?? 0)}>
             {(value, live) => (
               <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${pnlClass(value)}`}>
                 <span
                   className="inline-flex items-center justify-end gap-1"
-                  title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' ' + NET_OPEN_TITLE : ''}` : netOpen != null ? NET_OPEN_TITLE : undefined}
+                  title={unrealStale && !live ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' ' + NET_OPEN_TITLE : ''}` : netOpen != null ? NET_OPEN_TITLE : undefined}
                 >
                   {money.format(value)}
                   {live ? <LiveTvMark /> : null}
-                  {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+                  {unrealStale && !live ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
                 </span>
               </span>
             )}
@@ -4348,11 +4349,11 @@ const CompactGroupCard = ({ group, rows, tradeCard = null, armed, observingOnly,
           value={daily == null ? '—' : moneyWhole.format(daily)}
           className={daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
         />
-        <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)}>
+        <LiveOpenPnlValue anchor={unreal} legs={tradeCardTvLegs(tradeCard)} ibkrLegs={tradeCardIbkrLegs(tradeCard)}>
           {(value, live) => (
             <CompactStat
               label="Otevřený"
-              value={unrealStale && netOpen == null
+              value={unrealStale && netOpen == null && !live
                 ? <span className="inline-flex items-center gap-1" title="Některý účet čeká na nový snapshot; součet obsahuje poslední známé údaje.">
                     {moneyWhole.format(value)}<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" />
                   </span>
@@ -5744,7 +5745,7 @@ const AccountRow = ({ row, live, onAccount, columns, tradeAccount, orders, eligi
         </span>;
         return risk.dll;
       case 'unreal':
-        return a ? <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, isLiveAccountReadVerified(a, 'positions'))}>
+        return a ? <LiveOpenPnlValue anchor={netOpen ?? a.unrealizedPnl} legs={liveAccountTvLegs(a, isLiveAccountReadVerified(a, 'positions'))} ibkrLegs={liveAccountIbkrLegs(a, isLiveAccountReadVerified(a, 'positions'), tradeAccount?.fees ?? 0)}>
           {(value, live) => <span
             className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(value)}`}
             title={live ? `${TV_LIVE_PNL_TITLE}${netOpen != null ? ' ' + NET_OPEN_TITLE : ''}` : netOpen != null ? NET_OPEN_TITLE : a.unrealizedPnlSource === 'estimated'

@@ -1,3 +1,4 @@
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -57,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
     const skipProbe = !bootstrap && req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
-    const { accessToken, apiHosts } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
       config,
       userId,
@@ -67,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const historicalSync = await coalescePreflight(
         `${userId}:${connectionId}:historical-probe`,
         Date.now(),
-        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts }),
+        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
       );
       return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
     }
@@ -87,13 +88,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       loadTradovateAccountData({
         baseUrl,
         accessToken,
+        fetchImpl,
         detail: bootstrap ? 'bootstrap' : 'full',
       }),
       bootstrap
         ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
         : skipProbe
           ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
-          : probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts }),
+          : probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
     ]);
     const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
       `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
@@ -107,8 +109,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...result,
     });
   } catch (error) {
+    if (error instanceof TradovateRequestControlError) return res.status(503).json({
+      error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
+      captchaRequired: error.snapshot?.captchaRequired === true,
+    });
     if (error instanceof TradovateAccountDataError && error.status === 429) {
-      const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 300_000);
+      const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 3_600_000);
       res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1_000)));
       return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs });
     }
