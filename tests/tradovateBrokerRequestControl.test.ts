@@ -303,4 +303,10 @@ describe('Tradovate broker final request-control integration', () => {
     expect(broker.streamPositionSnapshot?.(101)?.positions).toEqual([{accountId:101,symbol:'MNQZ6',netQuantity:1}]);unsubscribe();
   });
 
+  it('a recovery read context never turns a broker write into a control-permit dispatch',async()=>{
+    const f=fixture();await f.governor.initialize();const broker=createTradovateBroker({environment:'demo',accessToken:'token',accountSpec:'DEMO',requestControl:f.governor,requestPurpose:tradovateRequestContext.current,fetchImpl:async()=>response({orderId:900})});
+    await tradovateRequestContext.recovery(()=>broker.placeOrder(order));
+    expect(f.remote.reserve).not.toHaveBeenCalled();expect(f.governor.health().counts.dispatchAttempts).toBe(1);
+  });
+
 });

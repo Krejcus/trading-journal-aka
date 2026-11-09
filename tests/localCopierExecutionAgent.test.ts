@@ -1,3 +1,6 @@
+import { createTradovateBroker } from '../services/tradovateBroker';
+import { createTradovateRequestGovernor } from '../services/tradovateRequestControlGovernor';
+import { tradovateRequestContext } from '../server/tradovateRequestContext';
 import { buildLeaderEntryPlaceCommand } from '../lib/leaderEntryPlace';
 import { buildLeaderOrderManageCommand } from '../lib/leaderOrderManage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1458,6 +1461,37 @@ describe('local copier execution agent', () => {
     expect(runtime.unlockDay).toHaveBeenCalledWith('Vědomé odemknutí dne');
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(result.status.controller.armed).toBe(false);
+  });
+
+  it('reconciliation completes through bounded recovery credit when background capacity is exhausted', async () => {
+    const now=1_000_000;
+    const reserve=vi.fn(async input=>{expect(input.purpose).toBe('control');return {version:1 as const,brokerUserId:77,...input,serverNow:now,validUntil:now+5000,epoch:0};});
+    const governor=createTradovateRequestGovernor({brokerUserId:77,clock:()=>now,monotonic:()=>100,
+      store:{load:async()=>null,save:async()=>{}},remote:{read:async()=>({version:1,brokerUserId:77,serverNow:now,epoch:0,blockedUntil:null,captchaRequired:false,evidence:null,reason:null,
+        backgroundReservedHour:1200,backgroundReservedMinute:40,policyVersion:2,riskReservedHour:0,riskReservedMinute:0,controlReservedHour:0,controlReservedMinute:0,totalReservedHour:1200}),reserve,penalize:vi.fn()}});
+    await governor.initialize();
+    const wire=vi.fn(async()=>Response.json([]));
+    const broker=createTradovateBroker({environment:'demo',accessToken:'test',requestControl:governor,requestPurpose:tradovateRequestContext.current,fetchImpl:wire});
+    const runtime=controller();vi.mocked(runtime.reconcile).mockImplementation(async()=>{await Promise.all([broker.listPositions(11),broker.listOrders(11,{fresh:true})]);return {divergentAccounts:[],workingOrderAccounts:[]} as never;});
+    running=await startLocalCopierExecutionAgent({controller:runtime,group:group(),port:0,prepareGroupAccounts:async()=>{await broker.refreshAccountDirectory();return {missingOptional:[]};}});
+    expect((await post(running,running.status().nonce,{type:'reconcile'})).status).toBe(200);
+    expect(reserve).toHaveBeenCalledTimes(6);expect(wire).toHaveBeenCalledTimes(6);expect(runtime.arm).not.toHaveBeenCalled();
+    expect(governor.newRiskBlocker()).toBeTruthy();expect(tradovateRequestContext.current()).toBeUndefined();
+  });
+
+  it('scopes maintenance read priority to reconciliation, including deferred descendants', async () => {
+    const runtime = controller(); let release!: () => void; let deferred!: Promise<unknown>;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const prepareGroupAccounts = vi.fn(async () => { expect(tradovateRequestContext.current()).toBe('control'); return { missingOptional: [] }; });
+    vi.mocked(runtime.reconcile).mockImplementation(async () => {
+      expect(tradovateRequestContext.current()).toBe('control');
+      deferred = held.then(() => expect(tradovateRequestContext.current()).toBeUndefined());
+      return { divergentAccounts: [], workingOrderAccounts: [] } as never;
+    });
+    running = await startLocalCopierExecutionAgent({controller:runtime,group:group(),port:0,prepareGroupAccounts});
+    expect((await post(running,running.status().nonce,{type:'reconcile'})).status).toBe(200);
+    release(); await deferred; expect(tradovateRequestContext.current()).toBeUndefined();
+    expect(runtime.arm).not.toHaveBeenCalled(); expect(runtime.waiveStuckOperation).not.toHaveBeenCalled();
   });
 
   it('exposes read-only reconciliation and audited stuck resolution as separate commands', async () => {

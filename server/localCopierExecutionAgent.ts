@@ -1292,7 +1292,10 @@ export async function startLocalCopierExecutionAgent(
         // Samostatná read-only kontrola musí obnovit stejné multi-OAuth
         // routování jako ARM/SHADOW. Jinak účet z druhého připojení zůstane
         // po nové session navždy `unverifiable`, i když je u brokera zdravý.
-        {
+        // This changes read priority, never trading authority. Reconcile can
+        // schedule existing lifecycle work; the scoped lease expires on return,
+        // so later jobs inherit their original class rather than recovery credit.
+        return tradovateRequestContext.recovery(async () => {
           const prepared = await prepareAccounts({
             required: [group.leaderAccountId],
             optional: group.followers.map(follower => follower.accountId),
@@ -1300,7 +1303,7 @@ export async function startLocalCopierExecutionAgent(
           return options.controller.reconcile({
             missingOptionalAccountIds: [...prepared.missingOptional],
           });
-        }
+        });
       case 'verify-account-eligibility':
         // Cílené ověření nesmí kvůli účtu z jiné uložené skupiny měnit
         // execution skupinu. Připraví jen jeho OAuth route a provede read-only

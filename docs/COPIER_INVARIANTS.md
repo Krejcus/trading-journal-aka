@@ -1912,6 +1912,12 @@ existující ochranu.
   hard refusal bez použitelného scoped snapshotu zavře všechny dispatches
   do novějšího autoritativního ověření; starší souběžný read západku nesmaže.
   Finální ARM včetně auto-resume ověřuje blocker nového rizika.
+- Veřejná Kontrola pozic používá omezenou obnovovací prioritu pro své existující
+  broker reads včetně přípravy routes. Neznamená to, že celý controller reconcile
+  je bez lifecycle akcí. Scope má životnost operace; potomci spuštění po dokončení
+  zdědí původní účel, explicitní accepted/risk scopy se zachovají. Context nepovoluje
+  write: jeho stávající klasifikace, controller gates, outbox a skutečná penalizace
+  zůstávají beze změny.
 - Worker-first display coverage vzniká teprve po validovaných Position a
   Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
