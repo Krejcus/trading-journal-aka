@@ -26,4 +26,9 @@ describe('connection reauthorization display', () => {
   it('offers reconnect for an explicitly disconnected saved connection', () => {
     expect(present(false)).toMatchObject({ label: 'Disconnected', reconnect: true, healthy: false });
   });
+  it.each([['tradovate-request-budget','Načítání omezeno rozpočtem'],['tradovate-request-cooldown','Broker dočasně omezil požadavky'],['tradovate-request-captcha','Broker vyžaduje ověření']])('distinguishes %s from a failed login or transport', (code,label)=>{
+    expect(present(true,apply({},'a',10,new Error(code)).a)).toEqual({label,reconnect:false,healthy:false});
+    const invalid=apply({},'a',10,new Error('tradovate-reauthorization-required'));expect(apply(invalid,'a',11,new Error(code))).toBe(invalid);
+  });
+
 });

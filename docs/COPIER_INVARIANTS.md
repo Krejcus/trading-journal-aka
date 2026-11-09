@@ -1902,6 +1902,21 @@ existující ochranu.
   novou kreditovou frontu. `BrokerPort.runWithAcceptedRequests` mění jen
   třídu spotřeby; nenahrazuje ARM, risk, freshness, routing ani durable outbox.
   Skutečná brokerová penalizace stále zastaví všechny nové dispatches.
+- Kapacitní policy2 odděluje background (1200/h,40/min), risk (2400/h,80/min)
+  a interní read-only recovery (240/h,24/min) pod týmž principal lockem a
+  celkovým stropem4000 rezervovaných jednotek/h. Nejde o úplný wire meter
+  management zápisů ani o garanci brokerovy kvóty. Grant má konkrétní účel;
+  čtecím grantem nelze autorizovat write. Worker rezervuje jen čekající práci,
+  nikoli spekulativní budoucí balík. Starší autorita neobnovuje freshness.
+- Odmítnutí rozpočtem je jiné než cooldown/captcha nebo výpadek. Skutečný
+  hard refusal bez použitelného scoped snapshotu zavře všechny dispatches
+  do novějšího autoritativního ověření; starší souběžný read západku nesmaže.
+  Finální ARM včetně auto-resume ověřuje blocker nového rizika.
+- Worker-first display coverage vzniká teprve po validovaných Position a
+  Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
+  Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
+  Per-part sequence patří fyzickému requestu i jeho joinerům: starší completion
+  nesmí přepsat novější pozici. Heartbeat nezmění čas původních dat.
 - Poslední synchronní gate běží po token/scheduler awaits před fyzickým
   fetch/send. Počty dispatchů nejsou potvrzení přijetí brokerem. První
   prokazatelně neodeslaný příkaz lze odmítnout lokálně; dřívější nejistý

@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { readTradovatePenaltyBody } from '../lib/tradovatePenaltyBody.js';
-import { monotonicGrantDeadline, parseTradovateRequestPenalty, TRADOVATE_REQUEST_CONTROL_POLICY as POLICY,
+import { monotonicGrantDeadline, isTradovateControlSnapshot, parseTradovateRequestPenalty, TradovateRemoteControlError, TRADOVATE_REQUEST_CONTROL_POLICY as POLICY,
   type TradovateRequestControlRemote, type TradovateRequestControlSnapshot,
   type TradovateRequestGrant, type TradovateRequestPenalty, type TradovateRequestPurpose } from '../lib/tradovateRequestControl.js';
 
 /** Local admission failure is NOT an upstream 429 and must never extend it. */
-export class TradovateRequestControlError extends Error {
+export class TradovateRequestControlError extends TradovateRemoteControlError {
   readonly status = 503;
-  constructor(public readonly code: string, public readonly retryAfterMs: number | null = null,
-    public readonly snapshot?: TradovateRequestControlSnapshot, public readonly notDispatched = true) { super(code); this.name = 'TradovateRequestControlError'; }
+  constructor(code: string, retryAfterMs: number | null = null,
+    snapshot?: TradovateRequestControlSnapshot, public readonly notDispatched = true) { super(code, retryAfterMs, snapshot); this.name = 'TradovateRequestControlError'; }
 }
 
 type RpcResult = { allowed?: boolean; code?: string; retryAfterMs?: number; snapshot?: TradovateRequestControlSnapshot; grant?: TradovateRequestGrant };
@@ -22,15 +22,7 @@ export interface ServerTradovateRequestContext {
 }
 const validId = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const validTime = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 8.64e15;
-const validSnapshot = (value: unknown): value is TradovateRequestControlSnapshot => {
-  const x = value as TradovateRequestControlSnapshot | null;
-  return !!x && x.version === 1 && validId(x.brokerUserId) && validTime(x.serverNow) && Number.isSafeInteger(x.epoch) && x.epoch >= 0
-    && (x.blockedUntil === null || validTime(x.blockedUntil)) && typeof x.captchaRequired === 'boolean'
-    && (x.evidence === null || ['raw-429','retry-after','p-time','captcha'].includes(x.evidence))
-    && (x.reason === null || typeof x.reason === 'string' && x.reason.length <= 200)
-    && Number.isSafeInteger(x.backgroundReservedHour) && x.backgroundReservedHour >= 0
-    && Number.isSafeInteger(x.backgroundReservedMinute) && x.backgroundReservedMinute >= 0;
-};
+const validSnapshot = isTradovateControlSnapshot;
 
 export function createServerTradovateRequestControl(context: ServerTradovateRequestContext): TradovateRequestControlRemote {
   const rpc = async (mode: string, fields: Record<string, unknown> = {}): Promise<RpcResult> => {
@@ -42,7 +34,8 @@ export function createServerTradovateRequestControl(context: ServerTradovateRequ
     const result = data as RpcResult | null;
     if (!result || typeof result.allowed !== 'boolean') throw new TradovateRequestControlError('tradovate-request-control-invalid-response');
     if (result.snapshot && (!validSnapshot(result.snapshot) || result.snapshot.brokerUserId !== context.brokerUserId)) {
-      throw new TradovateRequestControlError('tradovate-request-control-invalid-scope');
+      throw new TradovateRequestControlError(!result.allowed && ['tradovate-request-cooldown','tradovate-request-captcha'].includes(result.code ?? '')
+        ? result.code! : 'tradovate-request-control-invalid-scope');
     }
     if (!result.allowed) throw new TradovateRequestControlError(result.code ?? 'tradovate-request-control-denied',
       typeof result.retryAfterMs === 'number' && Number.isFinite(result.retryAfterMs) ? Math.max(0,result.retryAfterMs) : null, result.snapshot);

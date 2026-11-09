@@ -1,4 +1,4 @@
-import { isTradovateRequestGrant, type TradovateRequestControlRemote, type TradovateRequestControlSnapshot } from '../lib/tradovateRequestControl';
+import { isTradovateRequestGrant, isTradovateControlSnapshot, TradovateRemoteControlError, type TradovateRequestControlRemote, type TradovateRequestControlSnapshot } from '../lib/tradovateRequestControl';
 
 export function createTradovateRequestControlRemote(options: {
   apiOrigin: string; connectionId: string; authorizationHeader(): Promise<string>; fetchImpl?: typeof fetch;
@@ -10,13 +10,26 @@ export function createTradovateRequestControlRemote(options: {
       method: 'POST', redirect: 'error', headers: { Authorization: authorization, 'Content-Type': 'application/json' },
       body: JSON.stringify({ connectionId: options.connectionId, scope: 'owner', ...body }), signal: AbortSignal.timeout(4_000),
     });
-    if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new Error(`request-control-remote-${response.status}`); }
-    return response.json() as Promise<Record<string, unknown>>;
+    const responseBody = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (!response.ok) {
+      // Never discard a real penalty or turn a local budget refusal into an outage.
+      if (responseBody && typeof responseBody.error === 'string' && responseBody.error.startsWith('tradovate-request-')) {
+        if (responseBody.snapshot !== undefined && !isTradovateControlSnapshot(responseBody.snapshot)) {
+          throw new TradovateRemoteControlError(['tradovate-request-cooldown', 'tradovate-request-captcha'].includes(responseBody.error)
+            ? responseBody.error : 'tradovate-request-control-invalid-response');
+        }
+        const retry = typeof responseBody.retryAfterMs === 'number' && Number.isFinite(responseBody.retryAfterMs) && responseBody.retryAfterMs >= 0
+          ? responseBody.retryAfterMs : null;
+        throw new TradovateRemoteControlError(responseBody.error, retry, responseBody.snapshot as TradovateRequestControlSnapshot | undefined);
+      }
+      throw new TradovateRemoteControlError(`request-control-remote-${response.status}`);
+    }
+    if (!responseBody || typeof responseBody !== 'object') throw new TradovateRemoteControlError('tradovate-request-control-invalid-response');
+    return responseBody;
   };
   const snapshot = (value: unknown): TradovateRequestControlSnapshot => {
     const row = value as TradovateRequestControlSnapshot;
-    if (!row || row.version !== 1 || !Number.isSafeInteger(row.brokerUserId) || row.brokerUserId <= 0 || !Number.isFinite(row.serverNow)
-      || !Number.isSafeInteger(row.epoch) || row.epoch < 0 || typeof row.captchaRequired !== 'boolean') throw new Error('request-control-remote-snapshot-invalid');
+    if (!isTradovateControlSnapshot(row)) throw new Error('request-control-remote-snapshot-invalid');
     return row;
   };
   return {

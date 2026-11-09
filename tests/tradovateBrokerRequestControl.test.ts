@@ -15,7 +15,7 @@ function deferred<T>() { let resolve!: (value: T) => void; return { promise: new
 function fixture() {
   let now = 1_000_000;
   let state: TradovateRequestControlSnapshot = { version: 1, brokerUserId: 77, serverNow: now, epoch: 0, blockedUntil: null, captchaRequired: false,
-    evidence: null, reason: null, backgroundReservedHour: 0, backgroundReservedMinute: 0 };
+    evidence: null, reason: null, backgroundReservedHour: 0, backgroundReservedMinute: 0, policyVersion: 2, riskReservedHour: 0, riskReservedMinute: 0, controlReservedHour: 0, controlReservedMinute: 0, totalReservedHour: 0 };
   const remote = {
     read: vi.fn(async () => ({ ...state, serverNow: now })),
     reserve: vi.fn(async (input: {grantId:string;purpose:'background'|'risk'|'entry'|'management'|'control';units:number;ttlMs:number}) => ({ version: 1 as const,
@@ -246,10 +246,61 @@ describe('Tradovate broker final request-control integration', () => {
       fetchImpl:async()=>response([]),clock:f.clock,webSocketFactory:()=>socket});
     const unsubscribe=broker.subscribe(()=>undefined);
     socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    expect(broker.streamCoverage?.(101)).toBeNull(); // ACK alone has no authoritative position baseline.
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
     const baseline=broker.streamCoverage?.(101); expect(baseline).toMatchObject({connectionId:'own-connection',synchronized:true,gap:false,backlog:false});
     expect(baseline?.sessionId).toBe(baseline?.currentSessionId);expect(broker.streamPositionSnapshot?.(101)?.positions).toEqual([]);
     expect(broker.streamCoverage?.(999)).toBeNull();f.advance(1000);socket.onmessage?.({data:'h'});await flush();
     expect(broker.streamCoverage?.(101)?.lastDataAt).toBe(baseline?.lastDataAt);
     socket.close();expect(broker.streamCoverage?.(101)?.socketLive).toBe(false);unsubscribe();
   });
+  it('a depleted background budget cannot prevent read-only socket recovery or risk refresh',async()=>{
+    const f=fixture();await f.governor.initialize();f.budget();f.advance(1);await f.governor.sync();const socket=new Socket();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      requestPurpose:tradovateRequestContext.current,runWithRecoveryRequests:tradovateRequestContext.recovery,runWithRiskRequests:tradovateRequestContext.risk,
+      fetchImpl:async input=>{const path=String(input);return response(path.includes('/currency/list')?[{id:1,name:'USD'}]:
+        path.includes('/cashBalance/list')?[{accountId:101,currencyId:1,amount:50000}]:[]);},clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    expect(broker.usage().phase).toBe('connected');
+    expect(f.remote.reserve.mock.calls.every(([input])=>input.purpose==='control')).toBe(true);
+    await broker.listAccountRiskSnapshots([101]);
+    expect(f.remote.reserve.mock.calls.some(([input])=>input.purpose==='risk')).toBe(true);unsubscribe();
+  });
+
+  it('parallel readback earns coverage after the slower orders complete; late trade ingress revokes it synchronously',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();let hold=false;const held=deferred<Response>();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async input=>String(input).includes('/order/list')&&hold?held.promise:response([]),clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    hold=true;const pair=Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);await flush();
+    expect(broker.streamCoverage?.(101)).toBeNull();held.resolve(response([]));await pair;
+    expect(broker.streamCoverage?.(101)).toMatchObject({synchronized:true,backlog:false,mergeInProgress:false});
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{accountId:101,contractId:77,netPos:1}}}]);
+    expect(broker.streamCoverage?.(101)).toBeNull();expect(broker.streamPositionSnapshot?.(101)).toBeNull();unsubscribe();
+  });
+
+  it.each([null,[{}],[{id:1,accountId:101,contractId:77,ordStatus:'Working'}]])('malformed authoritative orders %j cannot establish empty-account coverage',async rows=>{
+    const f=fixture();await f.governor.initialize();const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async input=>response(String(input).includes('/order/list')?rows:[]),clock:f.clock});
+    await expect(broker.listOrders(101,{fresh:true})).rejects.toThrow(/authoritative order baseline/);expect(broker.streamCoverage?.(101)).toBeNull();
+  });
+
+  it('late background completion and a late joiner cannot replace a newer management position proof',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();let hold=false;const held=deferred<Response>();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      requestPurpose:tradovateRequestContext.current,clock:f.clock,webSocketFactory:()=>socket,
+      fetchImpl:async input=>{const path=String(input);if(path.includes('/position/list')&&hold)return tradovateRequestContext.current()==='management'
+        ? response([{accountId:101,contractId:77,netPos:1}]):held.promise;
+        return response(path.includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]);}});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();hold=true;
+    const older=broker.listPositions(101);await flush();
+    await tradovateRequestContext.accepted(()=>Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]));
+    expect(broker.streamPositionSnapshot?.(101)?.positions).toEqual([{accountId:101,symbol:'MNQZ6',netQuantity:1}]);
+    const joiner=broker.listPositions(101);held.resolve(response([]));await Promise.all([older,joiner]);
+    expect(broker.streamPositionSnapshot?.(101)?.positions).toEqual([{accountId:101,symbol:'MNQZ6',netQuantity:1}]);unsubscribe();
+  });
+
 });

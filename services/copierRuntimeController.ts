@@ -23441,6 +23441,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
     if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
+    if (!shadowMode) {
+      const capacity = broker.newRiskRequestBlocker?.(group.leaderAccountId == null ? [] : [group.leaderAccountId, ...group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').map(follower => follower.accountId)]);
+      if (capacity) throw new Error(`ARM blokován: ${capacity}`);
+    }
     if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
       throw new Error('ARM TTL musí být kladný počet milisekund');
     }

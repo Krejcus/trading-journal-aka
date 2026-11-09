@@ -288,6 +288,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-09 — Codex: lokální oprava kapacity LIVE a datové kontinuity ověřena cíleně
+
+- Izolovaný balík `/private/tmp/at-live-reliability-20261109`, větev `codex/live-reliability-20261109`, základ `cbce5d1b`. Typed quota/cooldown/captcha refusals s okamžitým hard-fence a ochranou proti starší autoritě; oddělené BG/risk/recovery limity v nové neaplikované migraci `20261109162721`; demand-only rezervace, final ARM gate, lehký startup account directory a read-only recovery. Management, outbox/no-retry a skutečné brokerové zákazy zachované.
+- Stream coverage nyní vyžaduje validované Position+Order REST části. Trade ingress invaliduje ještě před semantic awaits; session/host/generation a monotónní pořadí fyzického requestu chrání proti starému výsledku i late joineru. Přibylo rozlišení budget/penalty od OAuth výpadku v UI. Sekvenční group-management IO/eventTail je vědomě samostatná další optimalizace, ne přepsaná bezpečnostní logika v tomto incident balíku.
+- Ověřeno: 166/166 cílených testů v 16 sadách; dočasný lokální PostgreSQL18 v1 14/14 + v2 18/18, po testech zastavený; esbuild worker bundle; cílený ESLint 0 errors/2 warningy. Celohodinový deterministický replay 8 účtů / 2 routes / 2 pokrytá UI: 2162 risk + 480 BG = 2642 fyzických čtení i rezervací, bez waste/refusal; jde o model, ne živou zátěž nebo broker SLA. Finální nezávislý kritik OK S VÝHRADAMI, bez blokujícího code nálezu.
+- **Neuzavřeno:** plný tsc narazil na výchozí 2GB heap; s vyšší pamětí, npm ci, plná sada, web/native build a instalace čekají na aktuální OFF/flat. Otázka uživateli na aktuální obchodování je stále bez odpovědi. Log ukazuje dřívější flat a DISARM, není to čerstvé broker potvrzení. Žádná produkční migrace, push, reinstall workeru/iPhonu, ARM ani brokerový zápis v této práci. Pro případnou produkční DB změnu nejprve samostatný export funkce/stavu/ACL, pak migration+advisories a server→worker pořadí.
+- Podrobný report `docs/reviews/live-reliability-20261109.md` v izolované větvi; důkazy mimo repo `/private/tmp/at-reliability-*`. Canonical Documents a Claudův worktree nebyly přepsané.
+
 ### 2026-11-09 — Ochranné kroky kopírky mimo rozpočet dotazů (Claude, incident skupiny Ahojda)
 
 - **Incident:** dvakrát (15:26 a 15:32) obchod na 4 Lucid účtech proběhl u brokera správně a skončil SL, potom kopírka fail-closed DISARM: úklid po flat, dozor nad flat leaderem a kontrola followera dostaly od společného řízení dotazů `request-control-remote-503` / „stale“ / „budget exhausted“; ARM pak padal na stejném 503. DB: Lucid broker user 6684649 měl 2 492/3 000 rezervovaných jednotek za hodinu, v minutách úklidu 118–120/120; v klidu 35–45/min.

@@ -14,6 +14,7 @@ function fixture() {
     version: 1, brokerUserId: 71000000, serverNow: wall, epoch: 0, blockedUntil: null,
     captchaRequired: false, evidence: null, reason: null,
     backgroundReservedHour: 0, backgroundReservedMinute: 0,
+    policyVersion: 2, riskReservedHour: 0, riskReservedMinute: 0, controlReservedHour: 0, controlReservedMinute: 0, totalReservedHour: 0,
   };
   const grants = new Map<string, TradovateRequestGrant>();
   const remote: TradovateRequestControlRemote = {
@@ -84,7 +85,7 @@ describe('shared worker request governor', () => {
     const restarted = f.make(); await restarted.initialize();
     const next = await restarted.prepare('background'); restarted.dispatch('background', next)();
     expect(f.grants.size).toBe(2);
-    expect([...f.grants.values()].reduce((sum, grant) => sum + grant.units, 0)).toBe(8);
+    expect([...f.grants.values()].reduce((sum, grant) => sum + grant.units, 0)).toBe(2);
   });
 
   it('six simultaneous background reads can reserve a second pool without false exhaustion', async () => {
@@ -92,7 +93,7 @@ describe('shared worker request governor', () => {
     const permits = await Promise.all(Array.from({ length: 6 }, () => governor.prepare('background')));
     const releases = permits.map(permit => governor.dispatch('background', permit));
     releases.forEach(release => release());
-    expect(f.grants.size).toBe(2);
+    expect([...f.grants.values()].reduce((n,g) => n + g.units, 0)).toBe(6);
     expect(governor.health().counts).toMatchObject({ dispatchAttempts: 6, blockedBeforeDispatch: 0 });
   });
 
@@ -179,7 +180,7 @@ describe('shared worker request governor', () => {
     await governor.penalize(parseTradovateRequestPenalty(429, null)!);
     f.wallJump(86_400_000);
     expect(() => governor.dispatch('management')).toThrow();
-    f.wallJump(-172_800_000);
+    f.wallJump(-86_400_000);
     const restarted = f.make(); await restarted.initialize();
     expect(() => restarted.dispatch('management')).toThrow();
     expect(f.persisted.get(71000000)?.remainingMs).toBeGreaterThan(0);
@@ -241,4 +242,19 @@ describe('shared worker request governor', () => {
     await expect(controlled('https://example.invalid/order/placeorder')).rejects.toBe(networkError);
     expect(governor.health().counts).toMatchObject({ dispatchAttempts: 1, transportUnknown: 1 });
   });
+  it('background exhaustion still admits bounded risk/recovery reads with purpose-bound permits',async()=>{
+    const f=fixture();f.setSnapshot({backgroundReservedHour:1200,backgroundReservedMinute:40});const g=f.make();await g.initialize();
+    for (const purpose of ['risk','control'] as const) {const permit=await g.prepare(purpose);expect(()=>g.dispatch('background',permit)).toThrow();g.dispatch(purpose,permit)();expect(()=>g.dispatch(purpose,permit)).toThrow();}
+    expect(()=>g.dispatch('management')()).not.toThrow();expect(g.newRiskBlocker()).toBeTruthy();
+  });
+  it('a full recovery lane does not stop an otherwise available background lane',async()=>{
+    const f=fixture();f.setSnapshot({controlReservedMinute:24});const g=f.make();await g.initialize();
+    g.dispatch('background',await g.prepare('background'))();expect(g.newRiskBlocker()).toBeTruthy();
+  });
+  it('priority reservation expiry releases capacity rather than accumulating abandoned slots',async()=>{
+    const f=fixture(),reserve=f.remote.reserve;f.remote.reserve=async input=>{const grant=await reserve(input);f.advance(5100);return grant;};
+    const g=f.make();await g.initialize();for(let i=0;i<5;i++){await expect(g.prepare('control')).rejects.toThrow();await g.sync();}
+    f.remote.reserve=reserve;const permit=await g.prepare('control');expect(()=>g.dispatch('control',permit)()).not.toThrow();
+  });
+
 });

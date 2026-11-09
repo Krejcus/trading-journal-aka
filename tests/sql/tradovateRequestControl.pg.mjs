@@ -8,6 +8,8 @@ import { readFile } from 'node:fs/promises';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 const psql=process.env.PSQL??'psql';
+const capacityV2=process.env.REQUEST_CAPACITY_VERSION==='2';
+const bgMinute=capacityV2?40:120,bgHour=capacityV2?1200:3000;
 if(!['/private/tmp','/tmp','localhost','127.0.0.1'].includes(process.env.PGHOST??''))throw new Error('Set an explicit local PGHOST for this test');
 const schema=`request_control_${randomUUID().replaceAll('-','')}`;
 const OWNER='11111111-1111-4111-8111-111111111111', OTHER='22222222-2222-4222-8222-222222222222';
@@ -25,7 +27,8 @@ class Session {
 }
 let a,b;
 before(async()=>{
- const migration=(await readFile(new URL('../../supabase/migrations/20261109100740_tradovate_request_control_v1.sql',import.meta.url),'utf8')).replaceAll('public.',`${schema}.`);
+ let migration=(await readFile(new URL('../../supabase/migrations/20261109100740_tradovate_request_control_v1.sql',import.meta.url),'utf8')).replaceAll('public.',`${schema}.`);
+ if(capacityV2)migration+='\n'+(await readFile(new URL('../../supabase/migrations/20261109162721_live_request_capacity_v2.sql',import.meta.url),'utf8')).replaceAll('public.',`${schema}.`);
  q(`do $$ begin if not exists(select 1 from pg_roles where rolname='anon')then create role anon;end if;if not exists(select 1 from pg_roles where rolname='authenticated')then create role authenticated;end if;if not exists(select 1 from pg_roles where rolname='service_role')then create role service_role bypassrls;end if;end $$;
  create schema ${schema};grant usage on schema ${schema} to anon,authenticated,service_role;
  create table ${schema}.tradovate_oauth_connections(id uuid primary key,user_id uuid,connection_status text,tradovate_user_id bigint);
@@ -37,15 +40,15 @@ before(async()=>{
 beforeEach(()=>q(`truncate ${schema}.tradovate_request_grants,${schema}.tradovate_request_control cascade;`));
 after(async()=>{if(a)await a.query('rollback;');if(b)await b.query('rollback;');a?.close();b?.close();q(`drop schema ${schema} cascade;`);});
 test('global identity merges two app owners/connections, separates a different broker',()=>{
- assert.equal(rpc('reserve',{id:randomUUID(),units:60}).allowed,true);
- assert.equal(rpc('reserve',{owner:OTHER,connection:C2,id:randomUUID(),units:60}).allowed,true);
- const denied=rpc('reserve',{id:randomUUID()});assert.equal(denied.code,'tradovate-request-budget');assert.equal(denied.snapshot.backgroundReservedMinute,120);
+ assert.equal(rpc('reserve',{id:randomUUID(),units:bgMinute/2}).allowed,true);
+ assert.equal(rpc('reserve',{owner:OTHER,connection:C2,id:randomUUID(),units:bgMinute/2}).allowed,true);
+ const denied=rpc('reserve',{id:randomUUID()});assert.equal(denied.code,'tradovate-request-budget');assert.equal(denied.snapshot.backgroundReservedMinute,bgMinute);
  assert.equal(rpc('reserve',{connection:C3,id:randomUUID()}).allowed,true);
 });
 test('owner+connection is verified before resolving broker identity',()=>{assert.throws(()=>rpc('read',{owner:OTHER,connection:C1}),/connection-forbidden/);assert.equal(rpc('reserve',{connection:C4,id:randomUUID()}).code,'tradovate-request-identity-unavailable');});
 test('grant UUID replay is idempotent; changed payload conflicts',()=>{const id=randomUUID();const first=rpc('reserve',{id,units:4});const replay=rpc('reserve',{id,units:4});assert.equal(first.grant.validUntil,replay.grant.validUntil);assert.equal(rpc('read').snapshot.backgroundReservedMinute,4);assert.throws(()=>rpc('reserve',{id,units:5}),/grant-conflict/);});
-test('expired grant cannot be revived and still consumes capacity through validUntil + window',()=>{const id=randomUUID();rpc('reserve',{id,units:64});q(`update ${schema}.tradovate_request_grants set issued_at=clock_timestamp()-interval '20 seconds',valid_until=clock_timestamp()-interval '10 seconds' where id='${id}';`);assert.equal(rpc('reserve',{id,units:64}).code,'tradovate-request-grant-expired');assert.equal(rpc('read').snapshot.backgroundReservedMinute,64);});
-test('hourly background budget remains charged beyond the minute window',()=>{rpc('read');q(`insert into ${schema}.tradovate_request_grants select gen_random_uuid(),42,'${OWNER}','${C1}','background',60,5000,clock_timestamp()-interval '30 minutes 5 seconds',clock_timestamp()-interval '30 minutes',0 from generate_series(1,50);`);assert.equal(rpc('read').snapshot.backgroundReservedHour,3000);assert.equal(rpc('read').snapshot.backgroundReservedMinute,0);assert.equal(rpc('reserve',{id:randomUUID()}).code,'tradovate-request-budget');assert.equal(rpc('reserve',{id:randomUUID(),purpose:'entry'}).allowed,true);});
+test('expired grant cannot be revived and still consumes capacity through validUntil + window',()=>{const id=randomUUID();rpc('reserve',{id,units:Math.min(64,bgMinute)});q(`update ${schema}.tradovate_request_grants set issued_at=clock_timestamp()-interval '20 seconds',valid_until=clock_timestamp()-interval '10 seconds' where id='${id}';`);assert.equal(rpc('reserve',{id,units:Math.min(64,bgMinute)}).code,'tradovate-request-grant-expired');assert.equal(rpc('read').snapshot.backgroundReservedMinute,Math.min(64,bgMinute));});
+test('hourly background budget remains charged beyond the minute window',()=>{rpc('read');q(`insert into ${schema}.tradovate_request_grants select gen_random_uuid(),42,'${OWNER}','${C1}','background',60,5000,clock_timestamp()-interval '30 minutes 5 seconds',clock_timestamp()-interval '30 minutes',0 from generate_series(1,${bgHour/60});`);assert.equal(rpc('read').snapshot.backgroundReservedHour,bgHour);assert.equal(rpc('read').snapshot.backgroundReservedMinute,0);assert.equal(rpc('reserve',{id:randomUUID()}).code,'tradovate-request-budget');assert.equal(rpc('reserve',{id:randomUUID(),purpose:'entry'}).allowed,true);});
 test('total soft4000 only gates new reservations; management grants are not offered',()=>{rpc('read');q(`insert into ${schema}.tradovate_request_grants select gen_random_uuid(),42,'${OWNER}','${C1}','entry',64,5000,clock_timestamp()-interval '30 minutes 5 seconds',clock_timestamp()-interval '30 minutes',0 from generate_series(1,62);`);assert.equal(rpc('reserve',{id:randomUUID(),units:32,purpose:'entry'}).allowed,true);assert.equal(rpc('reserve',{id:randomUUID(),purpose:'entry'}).code,'tradovate-request-budget');assert.throws(()=>rpc('reserve',{id:randomUUID(),purpose:'management'}),/invalid-request-control-reservation/);});
 test('raw429 minimum one hour and shorter evidence cannot reduce it',()=>{const first=rpc('penalize',{evidence:'raw-429',ms:1,minimum:1,fallback:3600000}).snapshot;assert.ok(first.blockedUntil-first.serverNow>=3600000);const shorter=rpc('penalize',{evidence:'p-time',ms:1000}).snapshot;assert.equal(shorter.blockedUntil,first.blockedUntil);assert.equal(shorter.evidence,'raw-429');assert.equal(shorter.epoch,first.epoch);});
 test('explicit broker minimum over24h is never shortened',()=>{const s=rpc('penalize',{evidence:'retry-after',ms:1000,minimum:172800000}).snapshot;assert.ok(s.blockedUntil-s.serverNow>=172800000);});
@@ -55,10 +58,44 @@ test('a new epoch invalidates a previously issued grant even when replayed',()=>
 test('invalid mode and oversized grant are rejected',()=>{assert.throws(()=>rpc(null),/invalid-request-control-mode/);assert.throws(()=>rpc('reserve',{id:randomUUID(),units:65}),/invalid-request-control-reservation/);assert.throws(()=>rpc('reserve',{id:randomUUID(),ttl:15001}),/invalid-request-control-reservation/);});
 test('anon/authenticated cannot execute RPC or read authority tables; function is invoker',()=>{for(const role of ['anon','authenticated']){assert.throws(()=>q(`set role ${role};${rpcSql('read')}`),/permission denied/);assert.throws(()=>q(`set role ${role};select * from ${schema}.tradovate_request_control;`),/permission denied/);}assert.equal(q(`select prosecdef from pg_proc join pg_namespace n on n.oid=pronamespace where n.nspname='${schema}' and proname='tradovate_request_control_v1'`),'f');});
 test('two held sessions serialize different owners on the same global broker row',async()=>{
- rpc('reserve',{id:randomUUID(),units:56});
- await a.query('begin;');const first=JSON.parse(await a.query(rpcSql('reserve',{id:randomUUID(),units:64})));assert.equal(first.allowed,true);
+ rpc('reserve',{id:randomUUID(),units:bgMinute-(capacityV2?8:64)});
+ await a.query('begin;');const first=JSON.parse(await a.query(rpcSql('reserve',{id:randomUUID(),units:capacityV2?8:64})));assert.equal(first.allowed,true);
  let finished=false;const second=b.query(rpcSql('reserve',{owner:OTHER,connection:C2,id:randomUUID()})).then(text=>{finished=true;return JSON.parse(text);});
  // Deterministic evidence that session B is actually waiting on a transaction lock.
  let waiting=false;for(let i=0;i<50;i++){if(q(`select count(*) from pg_stat_activity where wait_event_type='Lock' and query like '%${schema}.tradovate_request_control_v1%'`) !== '0'){waiting=true;break;}await new Promise(r=>setTimeout(r,10));}
- assert.equal(waiting,true);assert.equal(finished,false);await a.query('commit;');assert.equal((await second).code,'tradovate-request-budget');assert.equal(rpc('read').snapshot.backgroundReservedMinute,120);
+ assert.equal(waiting,true);assert.equal(finished,false);await a.query('commit;');assert.equal((await second).code,'tradovate-request-budget');assert.equal(rpc('read').snapshot.backgroundReservedMinute,bgMinute);
 });
+
+if(capacityV2){
+ test('display reservations do not consume risk/recovery lanes, aliases still share one limit',()=>{
+  assert.equal(rpc('reserve',{id:randomUUID(),units:40}).allowed,true);
+  assert.equal(rpc('reserve',{id:randomUUID()}).code,'tradovate-request-budget');
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'risk',units:64}).allowed,true);
+  assert.equal(rpc('reserve',{owner:OTHER,connection:C2,id:randomUUID(),purpose:'risk',units:16}).allowed,true);
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'risk'}).code,'tradovate-request-budget');
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'control',units:24}).allowed,true);
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'control'}).code,'tradovate-request-budget');
+  assert.deepEqual(Object.fromEntries(Object.entries(rpc('read').snapshot).filter(([k])=>['policyVersion','backgroundReservedMinute','riskReservedMinute','controlReservedMinute','totalReservedHour'].includes(k))),
+   {policyVersion:2,backgroundReservedMinute:40,riskReservedMinute:80,controlReservedMinute:24,totalReservedHour:144});
+ });
+ test('risk and recovery hourly reservations expire conservatively without resetting other lanes',()=>{
+  rpc('read');q(`insert into ${schema}.tradovate_request_grants select gen_random_uuid(),42,'${OWNER}','${C1}','risk',60,5000,clock_timestamp()-interval '30 minutes 5 seconds',clock_timestamp()-interval '30 minutes',0 from generate_series(1,40);
+   insert into ${schema}.tradovate_request_grants select gen_random_uuid(),42,'${OWNER}','${C1}','control',60,5000,clock_timestamp()-interval '30 minutes 5 seconds',clock_timestamp()-interval '30 minutes',0 from generate_series(1,4);`);
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'risk'}).code,'tradovate-request-budget');
+  assert.equal(rpc('reserve',{id:randomUUID(),purpose:'control'}).code,'tradovate-request-budget');
+  assert.equal(rpc('reserve',{id:randomUUID()}).allowed,true);
+ });
+ test('a real broker penalty fences every reservation lane including recovery',()=>{
+  rpc('penalize',{evidence:'p-time',ms:30000});
+  for(const purpose of ['background','risk','control','entry'])assert.equal(rpc('reserve',{id:randomUUID(),purpose}).code,'tradovate-request-cooldown');
+ });
+ test('upgrade retains reservations, penalty epoch and restricted execute privileges',async()=>{
+  const old=(await readFile(new URL('../../supabase/migrations/20261109100740_tradovate_request_control_v1.sql',import.meta.url),'utf8')).replaceAll('public.',`${schema}.`);
+  // Replace only the function; base table DDL is intentionally not replayed.
+  const fn=old.slice(old.indexOf('create function public.'.replace('public.',`${schema}.`)),old.indexOf('revoke all on function')).replace('create function','create or replace function');
+  q(fn);rpc('reserve',{id:randomUUID(),units:4});const before=rpc('penalize',{evidence:'p-time',ms:30000}).snapshot;
+  const upgrade=(await readFile(new URL('../../supabase/migrations/20261109162721_live_request_capacity_v2.sql',import.meta.url),'utf8')).replaceAll('public.',`${schema}.`);q(upgrade);
+  const after=rpc('read').snapshot;assert.equal(after.policyVersion,2);assert.equal(after.backgroundReservedHour,4);assert.equal(after.epoch,before.epoch);assert.equal(after.blockedUntil,before.blockedUntil);
+  assert.throws(()=>q(`set role authenticated;${rpcSql('read')}`),/permission denied/);
+ });
+}

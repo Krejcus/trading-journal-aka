@@ -2,10 +2,15 @@
 export const TRADOVATE_REQUEST_CONTROL_CAPABILITY = 'tradovate-request-control-v1';
 export const TRADOVATE_REQUEST_CONTROL_POLICY = Object.freeze({
   version: 1 as const,
-  backgroundHour: 3_000,
-  backgroundMinute: 120,
+  backgroundHour: 1_200,
+  backgroundMinute: 40,
+  riskHour: 2_400,
+  riskMinute: 80,
+  controlHour: 240,
+  controlMinute: 24,
+  capacityVersion: 2,
   totalSoftHour: 4_000,
-  grantPool: 4,
+  grantPool: 2,
   maxGrantUnits: 64,
   grantTtlMs: 5_000,
   maxGrantTtlMs: 15_000,
@@ -40,6 +45,13 @@ export interface TradovateRequestControlSnapshot {
   reason: string | null;
   backgroundReservedHour: number;
   backgroundReservedMinute: number;
+  /** Absent on the first authority version: priority lanes must then fail closed. */
+  policyVersion?: number;
+  riskReservedHour?: number;
+  riskReservedMinute?: number;
+  controlReservedHour?: number;
+  controlReservedMinute?: number;
+  totalReservedHour?: number;
 }
 
 export interface TradovateRequestGrant {
@@ -57,6 +69,33 @@ export interface TradovateRequestControlRemote {
   read(): Promise<TradovateRequestControlSnapshot>;
   reserve(input: { grantId: string; purpose: TradovateRequestPurpose; units: number; ttlMs: number }): Promise<TradovateRequestGrant>;
   penalize(penalty: TradovateRequestPenalty): Promise<TradovateRequestControlSnapshot>;
+}
+
+/** Shared authority refusal, distinct from a broker transport failure. */
+export class TradovateRemoteControlError extends Error {
+  readonly kind: 'budget' | 'cooldown' | 'captcha' | 'unavailable';
+  constructor(readonly code: string, readonly retryAfterMs: number | null = null,
+    readonly snapshot?: TradovateRequestControlSnapshot) {
+    super(code);
+    this.name = 'TradovateRemoteControlError';
+    this.kind = code === 'tradovate-request-budget' ? 'budget'
+      : code === 'tradovate-request-cooldown' ? 'cooldown'
+      : code === 'tradovate-request-captcha' ? 'captcha' : 'unavailable';
+  }
+}
+
+export function isTradovateControlSnapshot(value: unknown): value is TradovateRequestControlSnapshot {
+  const x = value as TradovateRequestControlSnapshot | null;
+  const time = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 8.64e15;
+  return !!x && x.version === 1 && Number.isSafeInteger(x.brokerUserId) && x.brokerUserId > 0
+    && time(x.serverNow) && Number.isSafeInteger(x.epoch) && x.epoch >= 0
+    && (x.blockedUntil === null || time(x.blockedUntil)) && typeof x.captchaRequired === 'boolean'
+    && (x.evidence === null || ['raw-429', 'retry-after', 'p-time', 'captcha'].includes(x.evidence))
+    && (x.reason === null || typeof x.reason === 'string' && x.reason.length <= 200)
+    && Number.isSafeInteger(x.backgroundReservedHour) && x.backgroundReservedHour >= 0
+    && Number.isSafeInteger(x.backgroundReservedMinute) && x.backgroundReservedMinute >= 0
+    && (x.policyVersion === undefined || x.policyVersion === 2 && [x.riskReservedHour, x.riskReservedMinute,
+      x.controlReservedHour, x.controlReservedMinute, x.totalReservedHour].every(v => Number.isSafeInteger(v) && v! >= 0));
 }
 
 export interface TradovateRequestDispatchCounts {

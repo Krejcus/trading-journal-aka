@@ -104,4 +104,10 @@ describe('server broker-user request control',()=>{
   await expect(createControlledTradovateServerFetch(f.context,next,'management',f.clock,f.monotonic)('https://broker.test/token')).rejects.toMatchObject({code:'tradovate-request-cooldown'});
   expect(next).not.toHaveBeenCalled(); finish(); await first;
  });
+ it('retains a hard-refusal classification even when its DB snapshot has an invalid principal',async()=>{
+  const f=fixture();f.rpc.mockResolvedValueOnce({data:{allowed:false,code:'tradovate-request-cooldown',snapshot:{...f.state,brokerUserId:99}},error:null} as never);
+  await expect(createServerTradovateRequestControl(f.context).reserve({grantId:'test',purpose:'control',units:1,ttlMs:5000}))
+   .rejects.toMatchObject({code:'tradovate-request-cooldown',snapshot:undefined,notDispatched:true});
+ });
+
 });

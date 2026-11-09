@@ -6,4 +6,6 @@ const purpose = new AsyncLocalStorage<TradovateRequestPurpose>();
 export const tradovateRequestContext = {
   current: () => purpose.getStore(),
   accepted<T>(run: () => Promise<T>): Promise<T> { return purpose.run('management', run); },
+  risk<T>(run: () => Promise<T>): Promise<T> { return purpose.getStore() === 'management' ? run() : purpose.run('risk', run); },
+  recovery<T>(run: () => Promise<T>): Promise<T> { return purpose.run('control', run); },
 };

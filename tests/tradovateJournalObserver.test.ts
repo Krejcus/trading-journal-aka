@@ -416,7 +416,7 @@ describe('passive journal observer', () => {
     const fetchImpl=vi.fn(async input=>{
       const url=new URL(String(input));
       if(url.pathname.endsWith('/fillFee/list')) return new Response('[]',{headers:{'content-length':'5000000'}});
-      if(url.pathname.endsWith('/fill/list')) return Response.json([{id:10,orderId:1},{id:20,orderId:2}]);
+      if(url.pathname.endsWith('/fill/list')) return Response.json([{id:10,orderId:1,contractId:50,qty:1,price:100},{id:20,orderId:2,contractId:50,qty:1,price:101}]);
       if(url.pathname.endsWith('/fillFee/ldeps')) return Response.json([{id:10,commission:1,commissionCurrencyId:840},{id:20,commission:2,commissionCurrencyId:840}]);
       return Response.json([]);
     });

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { tradovateApiBaseUrl } from '../../server/tradovateOAuth';
 import { loadTradovateAccountData } from '../../server/tradovateAccountData';
+import { loadTradovateAccountDirectory } from '../../server/tradovateAccountDirectory';
 import {
   createTradovateAdminClient,
   getValidTradovateAccessToken,
@@ -224,6 +225,7 @@ async function initializeRequestControl(context: PilotContext): Promise<void> {
 const brokerRequestOptions = (context: PilotContext) => ({
   connectionId: context.connectionId, requestControl: context.requestControl, resolveBrokerUserId: context.getBrokerUserId,
   requestPurpose: tradovateRequestContext.current, runWithAcceptedRequests: tradovateRequestContext.accepted,
+  runWithRiskRequests: tradovateRequestContext.risk, runWithRecoveryRequests: tradovateRequestContext.recovery,
 });
 
 /** Hlídání nových/odpojených propfirem za běhu (4. 10. 2026). */
@@ -414,9 +416,12 @@ async function runMultiConnectionAgent(): Promise<void> {
     // the worker down with it. Nothing is routed to it, so no order can reach
     // it; a group account that lived there is reported missing by the
     // routing/preflight and ARM stays blocked until it is visible again.
-    const data = await retryTransient(() => (async () => loadTradovateAccountData({
+    const directoryFetch = createTradovateControlledFetch(context.requestControl!, fetch, 'control', () => {
+      if (context.getBrokerUserId?.() !== context.requestControl!.brokerUserId) throw new BrokerRequestNotSentError('Tradovate broker identity changed before directory dispatch');
+    });
+    const data = await retryTransient(() => (async () => loadTradovateAccountDirectory({
       baseUrl: tradovateApiBaseUrl(context.environment, context.getApiHosts?.()),
-      accessToken: await context.getAccessToken(), fetchImpl: context.controlledFetch,
+      accessToken: await context.getAccessToken(), fetchImpl: directoryFetch,
     }))(), {
       ...STARTUP_RETRY,
       // Nově objevená propfirma nesmí start workeru zdržet o celých 10 min.
@@ -428,7 +433,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       if (loadOptions.strictDirectory) throw error;
       const message = error instanceof Error ? error.message : String(error);
       console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
-      return { accounts: [] as Awaited<ReturnType<typeof loadTradovateAccountData>>['accounts'] };
+      return { accounts: [] as Array<{id: number; name: string}> };
     });
     // 6. 10. 2026: FundedNext po breachi vracel autentizovaně `account/list = []`
     // a discovery to brala jako zdravé načtení (bez dalších pokusů). Prázdný

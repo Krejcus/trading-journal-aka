@@ -1,3 +1,5 @@
+import { tradovateRequestContext } from '../server/tradovateRequestContext';
+import { TRADOVATE_REQUEST_CONTROL_POLICY as POLICY, TradovateRemoteControlError } from '../lib/tradovateRequestControl';
 import { describe, expect, it } from 'vitest';
 import type { TradovateRequestControlRemote, TradovateRequestControlSnapshot } from '../lib/tradovateRequestControl';
 import { workerConnectionReadPlan, type WorkerConnectionDataset } from '../lib/tradovateWorkerCoverage';
@@ -6,18 +8,23 @@ import { createTradovateControlledFetch } from '../services/tradovateRequestCont
 import { createTradovateBroker } from '../services/tradovateBroker';
 
 describe('steady-state request replay, not a live broker stress test', () => {
-  it.each([4, 8])('%i accounts, two OAuth routes and two covered clients fit conservative read capacity', async accountCount => {
+  it.each([4, 8])('%i accounts, two OAuth routes and two covered clients fit a full hour without starvation', async accountCount => {
     const beganAt = Date.UTC(2026, 10, 9, 15);
     let now = beganAt, mono = 100, reserved = 0, sequence = 0;
+    const ledger: Array<{purpose:string; units:number; validUntil:number}>=[];
+    const sum=(purpose:string|undefined,window:number)=>ledger.filter(row=>(!purpose||row.purpose===purpose)&&row.validUntil>now-window).reduce((n,row)=>n+row.units,0);
     const snapshot = (): TradovateRequestControlSnapshot => ({
       version: 1, brokerUserId: 71000000, serverNow: now, epoch: 0,
       blockedUntil: null, captchaRequired: false, evidence: null, reason: null,
-      backgroundReservedHour: reserved, backgroundReservedMinute: reserved,
+      backgroundReservedHour: sum('background',3600000), backgroundReservedMinute: sum('background',60000),
+      policyVersion:2,riskReservedHour:sum('risk',3600000),riskReservedMinute:sum('risk',60000),controlReservedHour:sum('control',3600000),controlReservedMinute:sum('control',60000),totalReservedHour:sum(undefined,3600000),
     });
     const remote: TradovateRequestControlRemote = {
       read: async () => snapshot(),
       reserve: async input => {
-        reserved += input.units;
+        const limits=input.purpose==='risk'?[POLICY.riskHour,POLICY.riskMinute]:input.purpose==='control'?[POLICY.controlHour,POLICY.controlMinute]:[POLICY.backgroundHour,POLICY.backgroundMinute];
+        if(sum(input.purpose,3600000)+input.units>limits[0]||sum(input.purpose,60000)+input.units>limits[1]||sum(undefined,3600000)+input.units>POLICY.totalSoftHour)throw new TradovateRemoteControlError('tradovate-request-budget',1000,snapshot());
+        reserved += input.units;ledger.push({purpose:input.purpose,units:input.units,validUntil:now+input.ttlMs});
         return { version: 1, grantId: input.grantId, brokerUserId: 71000000, purpose: input.purpose,
           units: input.units, serverNow: now, validUntil: now + input.ttlMs, epoch: 0 };
       },
@@ -26,7 +33,7 @@ describe('steady-state request replay, not a live broker stress test', () => {
     const governor = createTradovateRequestGovernor({
       brokerUserId: 71000000, remote, store: { load: async () => null, save: async () => {} },
       clock: () => now, monotonic: () => mono, uuid: () => `capacity-grant-${++sequence}`,
-      wait: async ms => { now += ms; mono += ms; },
+      wait: async ms => { const target=now+ms; await new Promise<void>(resolve=>setImmediate(resolve)); const next=Math.max(now,target); mono+=next-now; now=next; },
     });
     await governor.initialize();
     const accounts = Array.from({ length: accountCount }, (_, i) => 100 + i);
@@ -45,10 +52,10 @@ describe('steady-state request replay, not a live broker stress test', () => {
       ids, connectionId: `login-${route}`,
       broker: createTradovateBroker({ environment: 'demo', accessToken: `test-token-${route}`,
         connectionId: `login-${route}`, routeAccountIds: ids, requestControl: governor,
-        fetchImpl: upstream, clock: () => now, webSocketFactory: () => { throw new Error('no socket in read replay'); } }),
+        fetchImpl: upstream, requestPurpose:tradovateRequestContext.current,runWithRiskRequests:tradovateRequestContext.risk,clock: () => now, webSocketFactory: () => { throw new Error('no socket in read replay'); } }),
     }));
     const displayFetch = createTradovateControlledFetch(governor, upstream);
-    for (let phase = 0; phase < 4; phase++) {
+    for (let phase = 0; phase < 240; phase++) {
       const scheduledAt = beganAt + phase * 15_000;
       const advance = Math.max(0, scheduledAt - now); now += advance; mono += advance;
       await governor.sync();
@@ -71,12 +78,14 @@ describe('steady-state request replay, not a live broker stress test', () => {
         for (let client = 0; client < 2; client++) expect(workerConnectionReadPlan(dataset, receipt, now).suppressFullTick).toBe(true);
       }
     }
-    expect(wire.filter(path => path.endsWith('/accountRiskStatus/deps') || path.endsWith('/userAccountAutoLiq/deps'))).toHaveLength(accountCount * 4);
-    expect(wire.filter(path => path.endsWith('/cashBalance/list'))).toHaveLength(4);
+    expect(wire.filter(path => path.endsWith('/accountRiskStatus/deps') || path.endsWith('/userAccountAutoLiq/deps'))).toHaveLength(accountCount * 240);
+    expect(wire.filter(path => path.endsWith('/cashBalance/list'))).toHaveLength(240);
     expect(wire.filter(path => path.endsWith('/currency/list'))).toHaveLength(2);
-    expect(wire).toHaveLength(accountCount * 4 + 14);
-    expect(reserved).toBe(accountCount === 4 ? 32 : 48); // Conservative pool waste is included.
-    expect(reserved * 60).toBeLessThan(3000);
+    expect(wire).toHaveLength(accountCount * 240 + 722);
+    expect(reserved).toBe(wire.length); // Every permit served actual queued work, no speculative expiry.
+    expect(sum('background',3600000)).toBe(480);
+    expect(sum('risk',3600000)).toBe(accountCount*240+242);
+    expect(reserved).toBeLessThan(POLICY.totalSoftHour);
     expect(governor.health().counts).toMatchObject({ dispatchAttempts: wire.length, blockedBeforeDispatch: 0 });
   });
 });

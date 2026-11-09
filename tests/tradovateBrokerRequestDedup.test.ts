@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { tradovateRequestContext } from '../server/tradovateRequestContext';
 import { createTradovateBroker } from '../services/tradovateBroker';
 
 /**
@@ -56,4 +57,18 @@ describe('in-flight dedup globálních čtení', () => {
       .reduce((total, [, count]) => total + count, 0);
     expect(positionHits).toBe(2);
   });
+  it.each(['positions','orders','accounts','risk'] as const)('accepted %s read never joins a held background read',async kind=>{
+    let release!:()=>void;let first=true;const held=new Promise<void>(r=>{release=r;});const hits:string[]=[];
+    const broker=createTradovateBroker({environment:'demo',accessToken:'token',requestPurpose:tradovateRequestContext.current,
+      fetchImpl:async input=>{const path=new URL(String(input)).pathname;hits.push(path);
+        if(first){first=false;await held;}
+        const rows=path.endsWith('/currency/list')?[{id:1,name:'USD'}]:path.endsWith('/cashBalance/list')?[{accountId:101,currencyId:1,amount:50000}]:[];
+        return Response.json(rows);}});
+    const read=():Promise<unknown>=>kind==='positions'?broker.listPositions(101):kind==='orders'?broker.listOrders(101,{fresh:true}):kind==='accounts'?broker.refreshAccountDirectory():broker.listAccountRiskSnapshots([101]);
+    const background=read();await Promise.resolve();await Promise.resolve();
+    let completed=false;const urgent=tradovateRequestContext.accepted(read).then(()=>{completed=true;});
+    for(let i=0;i<100;i++)await Promise.resolve();expect(completed).toBe(true);expect(hits.length).toBeGreaterThan(1);
+    release();await Promise.all([background,urgent]);
+  });
+
 });

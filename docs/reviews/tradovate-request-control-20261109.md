@@ -1,5 +1,7 @@
 # Tradovate request control — lokální návrh 9. 11. 2026
 
+> Tento dokument popisuje původní policy1 a její tehdejší měření. Následná lokální oprava kapacity a důkazů dat je v [live-reliability-20261109.md](live-reliability-20261109.md); ani jeden dokument sám nedokazuje aktuální nasazení.
+
 Základ f5e2f904. Běžící instalace a účty se nemění; migrace je pouze lokální návrh a vyžaduje před aplikací samostatnou zálohu/souhlas. Cílem je odstranit vzájemně nezávislé čtecí smyčky a sjednotit cooldown/budget, nikoli obcházet brokerovu penalizaci.
 
 ## Invarianty

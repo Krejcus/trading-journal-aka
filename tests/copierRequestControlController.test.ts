@@ -119,4 +119,10 @@ describe('request capacity changes do not replace copier safety', () => {
     expect(parents.every(order => order.status === 'canceled')).toBe(true);
     expect(ctx.controller.status().lastError).toBeNull();
   });
+  it('final ARM admission also blocks a direct caller when shared read capacity is unavailable',async()=>{
+    const ctx=await setup();ctx.controller.disarm();await ctx.controller.waitForIdle();ctx.limit();
+    expect(()=>ctx.controller.arm()).toThrow('ARM blokován');expect(ctx.controller.status().armed).toBe(false);
+    expect(ctx.broker.placedRequests()).toHaveLength(0);
+  });
+
 });
