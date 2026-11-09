@@ -339,6 +339,25 @@ describe('OrderVersion read primed at the write ACK', () => {
     t.unsubscribe();
   });
 
+  it('when the stream beats the HTTP response the frame read is the only read', async () => {
+    let releasePost: (() => void) | null = null;
+    const holder: { socket?: Socket } = {};
+    const t = await connected({ accepted: true, wire: path => {
+      if (path.endsWith('/order/placeorder')) return new Promise(resolve => { releasePost = () => resolve({ orderId: 905 }); });
+      if (path.endsWith('/orderVersion/deps')) return [{ id: 9905, orderId: 905, orderQty: 1, orderType: 'Market' }];
+      return [];
+    } });
+    holder.socket = t.socket;
+    t.paths.length = 0;
+    const placing = t.broker.runWithAcceptedRequests!(() => t.broker.placeOrder(order));
+    await flush();
+    t.socket.deliver(frame(905)); await flush();
+    expect(versionReads(t.paths)).toBe(1);
+    releasePost!(); await placing; await flush();
+    expect(versionReads(t.paths)).toBe(1);
+    t.unsubscribe();
+  });
+
   it('nothing is primed without a synced live socket', async () => {
     const paths: string[] = [];
     const broker = createTradovateBroker({ environment: 'demo', accessToken: 'token', accountSpecsByAccountId: { 101: 'DEMO' }, accountSpec: 'DEMO',

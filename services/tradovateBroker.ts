@@ -1150,6 +1150,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     stagedOrderVersionWaiters = new Map();
     stagedOrderVersions = new Map();
     primedOrderVersions.clear();
+    framePreparedOrderVersions.clear();
     activeSemanticFrameId = null;
   };
 
@@ -1197,9 +1198,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   // rámce, takže pořadí zpracování ani obsah execution cache se nemění. Chybný nebo starý
   // výsledek se zahodí a rámec si verzi přečte sám jako dřív.
   const PRIMED_ORDER_VERSION_TTL_MS = 5_000;
+  /** Id příkazů, pro které už čtení verze zahájil příchozí rámec (omezená paměť posledních id). */
+  const framePreparedOrderVersions = new Set<number>();
   const primedOrderVersions = new Map<number, { result: Promise<OrderVersionFetchResult>; at: number }>();
   const primeOrderVersion = (orderId: number) => {
     if (!Number.isSafeInteger(orderId) || orderId <= 0 || orderVersions.has(orderId) || primedOrderVersions.has(orderId)) return;
+    // Stream často předběhne HTTP odpověď: rámec už přišel a čte si verzi sám — druhé čtení by bylo zbytečné.
+    if (framePreparedOrderVersions.has(orderId) || rawOrders.has(orderId)) return;
     if (!syncReady || socketState !== 'connected') return;
     const now = clock();
     for (const [id, primed] of primedOrderVersions) if (now - primed.at >= PRIMED_ORDER_VERSION_TTL_MS) primedOrderVersions.delete(id);
@@ -1289,6 +1294,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (supplied.some(version => requiredVersionId == null || version.id === requiredVersionId)) continue;
         if (!isCurrent()) return;
         prepared.set(orderId, (entityType === 'order' ? takePrimedOrderVersion(orderId!) : null) ?? fetchOrderVersions(orderId!));
+        framePreparedOrderVersions.add(orderId!);
+        if (framePreparedOrderVersions.size > 256) framePreparedOrderVersions.delete(framePreparedOrderVersions.values().next().value as number);
       }
     };
     const visit = (message: unknown) => {

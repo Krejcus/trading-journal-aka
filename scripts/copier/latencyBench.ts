@@ -120,9 +120,15 @@ async function loopback(command: unknown): Promise<any> {
 async function flattenAndRearm(groupId: string): Promise<void> {
   const flat = await loopback({ type: 'copy-command', command: { type: 'flatten-account', groupId, accountId: ACCOUNT, operationId: `flatten-${crypto.randomUUID().replaceAll('-', '')}` } });
   if (flat?.result?.flat !== true) throw new Error(`Flatten nepotvrdil flat: ${JSON.stringify(flat?.result ?? flat?.error).slice(0, 300)}`);
-  await sleep(1500);
-  const reconciled = await loopback({ type: 'reconcile' });
+  // Flatten, kontrola pozic a zapnutí čtou z recovery pruhu (24/min): mezi kroky počkat a zkusit znovu.
+  let reconciled: any = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await sleep(attempt === 0 ? 20_000 : 15_000);
+    reconciled = await loopback({ type: 'reconcile' });
+    if (reconciled?.result?.authoritativelyClean === true) break;
+  }
   if (reconciled?.result?.authoritativelyClean !== true) throw new Error(`kontrola pozic není čistá: ${JSON.stringify(reconciled?.result ?? reconciled?.error).slice(0, 300)}`);
+  await sleep(10_000);
   const before = await status();
   const incident = before.controller.manualRecovery?.id;
   const armed = await loopback({ type: 'arm-live', ...(incident ? { acknowledgeIncidentId: incident } : {}) });
