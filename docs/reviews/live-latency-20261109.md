@@ -100,3 +100,33 @@ Třetí kolo oponentury (jen opravy): **OK S VÝHRADAMI**, nic neblokuje. Zapsan
 
 Outbox, WAL, no-retry, brány ARM/kill/day lock, REST ověření zavření, pořadí zpracování rámců, relay admission,
 rozestupy a idempotence, skupinové cesty, limity pruhů v DB.
+
+## Výsledek na DEMO (worker f34d0b4c, 9. 11. 23:01–23:07 UTC)
+
+Stejný nástroj, stejný účet, 1 MNQ. Po opravách šel vstup jako chráněný Limit položený přes trh (IB Gateway
+se ve 22:45 UTC sám odhlásil, takže worker neměl cenu a Market nejde); v obou případech jde o jeden `placeoso`.
+Časy „provedení“ jsou z logu workeru, „ve stavu workeru“ je od odeslání z měřicího skriptu včetně jeho ~0,5 s
+fronty bez push kanálu (produkční klient má frontu kratší).
+
+| | Před (cd530285) | Po (f34d0b4c) |
+|---|---|---|
+| Vstup — provedení ve workeru | 341 ms (264–1498, n=7) | 334 ms (296–429, n=4) |
+| Vstup — pozice ve stavu workeru od odeslání | 2033 ms (1796–2324) | 1469 ms (1179–1672) |
+| Dotažení verze příkazu (fill za ním čeká) | medián ~880 ms (234–1184, n=16) | medián ~150 ms (131–320, n=8) |
+| Posun SL — provedení | 317 ms (232–440, n=11) | 230 ms (208–481, n=5) |
+| Posun TP — provedení | 246 ms (216–378, n=12) | 228 ms (220–343, n=5) |
+| Zavření — provedení | 1982 ms (1260–2443, n=6) | 939 ms (925–1076, n=3) |
+| Zavření — flat ve stavu workeru od odeslání | 2025 ms (1626–2624) | 1173 ms (1158–1408) |
+| ACK relaye (cache klíče) | 161–245 ms | 121–186 ms |
+| Vstup odmítnutý rozpočtem | 3 ze 6 | 0 ze 6 |
+
+Malé vzorky, ne p95. Co zbývá mezi provedením vstupu a pozicí (~0,6 s): tři příkazy OSO se dotahují po sobě
+(3× GET ~150–250 ms). Další krok by byl znát tvar vlastních příkazů z odeslaného požadavku a REST vynechat.
+
+Neměřeno: držené spojení a zápisy po WebSocketu (denní strop 100 příkazů správy na uživatele se vyčerpal —
+55 ze 100 spotřebovalo měření), produkční cesta s push kanálem, klik→pixel v prohlížeči, skupina s followery,
+účinek dokladu pokrytí na čtení webu (doklad do cloudu chodí čerstvý, spotřeba na DEMO loginu neklesla —
+čtoucí klient zjevně není na obrazovce LIVE).
+
+Vedlejší nálezy z měření: po zavření pozice blokuje nový vstup krátké „leader event quiet window“
+(`group-busy`); IB Gateway se denně ve 23:45 SEČ odhlásí a bez ručního přihlášení worker nemá cenu.

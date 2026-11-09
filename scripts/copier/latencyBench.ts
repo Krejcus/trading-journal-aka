@@ -135,10 +135,14 @@ function guard(s: Status) {
   if (s.controller.lastError) throw new Error(`lastError: ${JSON.stringify(s.controller.lastError).slice(0, 200)}`);
 }
 
-function quote(s: Status, symbol: string): { price: number; at: number } {
+// Bez živé ceny workeru (IB Gateway neběží) jde měřit jen přes chráněný Limit položený přes
+// trh (`--estimate <cena>`): vyplní se hned za tržní cenu a další cykly berou cenu z fillu.
+let estimate = Number(flag('estimate', '0'));
+function quote(s: Status, symbol: string): { price: number; at: number; live: boolean } {
   const row = (s.marketPrices ?? []).find((entry: any) => entry.symbol === symbol);
-  if (!row || Date.now() - row.at > 3000) throw new Error('chybí čerstvá cena workeru');
-  return { price: row.price, at: row.at };
+  if (row && Date.now() - row.at <= 3000) return { price: row.price, at: row.at, live: true };
+  if (estimate > 0) return { price: estimate, at: Date.now(), live: false };
+  throw new Error('chybí čerstvá cena workeru (bez IBKR zadej --estimate <cena>)');
 }
 
 function entryCommand(s: Status, draft: Record<string, unknown>) {
@@ -192,21 +196,30 @@ async function cycle(index: number) {
     console.log(`${LABEL} c${index} převzat otevřený obchod ${entry.operationId} SL ${stop} TP ${target}`);
   } else {
     await ensureFlat(symbol);
-    stop = tick(q.price - DISTANCE);
-    target = tick(q.price + DISTANCE);
-    const placedEntry = entryCommand(s, { symbol, side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: q.price, quoteReceivedAt: q.at, stopLoss: stop, takeProfit: target });
+    // S odhadem: Limit 40 bodů nad odhadem (vyplní se za trh), SL/TP široce kolem odhadu.
+    const wide = q.live ? DISTANCE : Math.max(DISTANCE, 150);
+    stop = tick(q.price - wide);
+    target = tick(q.price + wide + (q.live ? 0 : 40));
+    const placedEntry = q.live
+      ? entryCommand(s, { symbol, side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: q.price, quoteReceivedAt: q.at, stopLoss: stop, takeProfit: target })
+      : entryCommand(s, { symbol, side: 'Buy', quantity: 1, orderType: 'Limit', price: tick(q.price + 40), stopLoss: stop, takeProfit: target });
     entry = placedEntry;
     started = performance.now();
     const positionWatch = until(started, current => leaderNet(current, symbol) !== 0);
     const placed = await send(placedEntry);
     const result = placed.payload.result;
     const positionMs = result?.status === 'acknowledged' ? await positionWatch : null;
-    record({ cycle: index, action: 'market-entry', responseMs: placed.ms, statusMs: positionMs, status: result?.status ?? 'no-result', commandId: placed.commandId });
+    record({ cycle: index, action: 'market-entry', responseMs: placed.ms, statusMs: positionMs, commandId: placed.commandId,
+      status: result?.status === 'acknowledged' ? 'acknowledged' : `${result?.status}: ${JSON.stringify(result?.blockers ?? result?.reason ?? '').slice(0, 300)}` });
     if (result?.status !== 'acknowledged') throw new Error(`vstup: ${JSON.stringify(result).slice(0, 500)}`);
     const manageableMs = await until(started, current => (current.controller.manageableLeaderTrades ?? []).some((trade: any) => trade.entryOperationId === placedEntry.operationId)
       && (current.controller.exposure?.orders ?? []).filter((order: any) => order.status === 'working').length >= 2, 10_000);
     record({ cycle: index, action: 'manage-ready', responseMs: 0, statusMs: manageableMs, status: manageableMs == null ? 'timeout' : 'ok' });
     if (index === 1 && OUT) writeFileSync(`${OUT}.status-open.json`, JSON.stringify(await status(), null, 1));
+    if (!q.live) {
+      const filled = ((await status()).controller.exposure?.positions ?? []).find((row: any) => row.symbol === symbol)?.avgPrice;
+      if (Number.isFinite(filled) && filled > 0) estimate = filled;
+    }
   }
 
   const manage = async (action: string, fields: Record<string, unknown>, done: (s: Status) => boolean) => {
@@ -240,6 +253,7 @@ async function cycle(index: number) {
   record({ cycle: index, action: 'close-flat', responseMs: 0, statusMs: flatMs, status: flatMs == null ? 'timeout' : 'ok' });
 
   if (WITH_LIMIT) {
+    if (!quote(await status(), symbol).live) return;
     await sleep(GAP + 1500);
     s = await status();
     guard(s);
@@ -279,7 +293,7 @@ const median = (values: number[]) => {
   let failure: unknown = null;
   for (let index = 1; index <= CYCLES; index += 1) {
     try { await cycle(index); } catch (reason) { failure = reason; break; }
-    await sleep(1500);
+    await sleep(Number(flag('pause', '8000')));
   }
   await sleep(1500);
   for (const sample of samples) if (sample.commandId) Object.assign(sample, workerTimes(sample.commandId));
