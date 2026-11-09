@@ -289,6 +289,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 ## Deník
 
 
+### 2026-11-09 (Codex — dokončení omezené obnovy + skutečný DEMO retest)
+
+Doplněn samostatný boundedrecovery callback přes BrokerPort/router/exposurecap
+jen na interní readtriplet resolve-before/flatpreflight/resolve-after; původní
+cache/receipt fences a incidentní brány zachovány. Frontmetadata3GET/5min používají
+control pouze s přesnými product/find a contractMaturity/deps navíc. Žádný
+management fallback ani zvýšení240h/24min, novýARM je přiBGfull dál blokovaný.
+Kritik OK;78cílených a8453celkem passed+1todo, root+pilot tsc0, webbuild i3bundly
+passed; scopedlint0errors/2staršíwarningy. Tento zápis předchází finálnímu nasazení.
+
+Na workeru eac261bf a webu5ccc83af již reálně ověřeno pouze DEMO8661118/61038658:
+Market611860534729 se vyplnil1MNQZ6 na27945.75, SL730/TP731 working; posunSL27926,
+TP27976 a close Market611860534764. Desktop skutečně zobrazil živéPnL−9→−8,
+posunutýSL a poté prázdnýgraf/OFF. Nezávislé brokerorders čtení potvrzuje filled
+vstup+výstup, canceled oběnohy a0positions/0working. Žádný Lucid/funded brokerwrite.
+Předchozí limit703 byl posunut a zrušen včetně704/705. Výsledky CLI nejsou
+telefonní tap→pixel ani dostatečnývzorek p95; iPhoneupdate instalován, fyzické
+vykreslení zatímneověřeno(zamčený). Lucid drží staré BGhodinové rezervace,
+bez skutečné penalizace(epoch0/cooldownnull); nerestovat počítadla. Finální
+normalgrouprestoreOFF, freshreconcile a verze se doplní po instalaci do release reportu.
+
+
 ### 2026-11-09 (Codex — hlavní skrytý producent: ActivityKit v relay pollu)
 
 Praktický test odhalil zásadní neúplnost předchozího kapacitního modelu:

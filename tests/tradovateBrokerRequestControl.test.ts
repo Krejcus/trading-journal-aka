@@ -38,6 +38,42 @@ afterEach(() => vi.useRealTimers());
 const order = { accountId: 101, tag: 'own-entry', symbol: 'MNQZ6', quantity: 1, side:'Buy' as const, orderType:'Market' as const };
 
 describe('Tradovate broker final request-control integration', () => {
+  it('front metadata uses exactly three bounded control reads while background is full', async () => {
+    const f=fixture(); await f.governor.initialize();f.budget();f.advance(1);await f.governor.sync();
+    const wire=vi.fn(async(input:string|URL|Request)=>{
+      const path=new URL(String(input)).pathname;
+      if(path.endsWith('/product/find'))return response({id:42,name:'MNQ'});
+      if(path.endsWith('/contractMaturity/deps'))return response([{id:8,productId:42,isFront:true,archived:false,expirationDate:'2026-12-18'}]);
+      if(path.endsWith('/contract/deps'))return response([{id:99,contractMaturityId:8,name:'MNQZ6'}]);
+      throw Error('Unexpected path '+path);
+    });
+    const broker=createTradovateBroker({environment:'demo',accessToken:'token',requestControl:f.governor,fetchImpl:wire,
+      requestPurpose:tradovateRequestContext.current,runWithRecoveryRequests:tradovateRequestContext.recovery});
+    await expect(broker.frontContract!('MNQ',101)).resolves.toEqual({contract:'MNQZ6',expiration:'2026-12-18'});
+    expect(wire).toHaveBeenCalledTimes(3);
+    expect(f.remote.reserve.mock.calls.map(call=>call[0].purpose)).toEqual(['control','control','control']);
+    expect(broker.newRiskRequestBlocker?.([101])).toContain('budget');
+    expect(tradovateRequestContext.current()).toBeUndefined();
+  });
+
+  it.each(['raw-429','captcha'] as const)('front recovery cannot cross actual%s arriving during token await', async evidence => {
+    const f=fixture();await f.governor.initialize();const token=deferred<string>(),wire=vi.fn(async()=>response({id:42,name:'MNQ'}));
+    const broker=createTradovateBroker({environment:'demo',getAccessToken:()=>token.promise,requestControl:f.governor,fetchImpl:wire,
+      requestPurpose:tradovateRequestContext.current,runWithRecoveryRequests:tradovateRequestContext.recovery});
+    const pending=broker.frontContract!('MNQ',101);await flush();
+    await f.governor.penalize({evidence,reason:'actual broker refusal',retryAfterMs:evidence==='raw-429'?3_600_000:0,...(evidence==='captcha'?{captchaRequired:true}:{})});
+    token.resolve('token');await expect(pending).rejects.toBeInstanceOf(BrokerRequestNotSentError);
+    expect(wire).not.toHaveBeenCalled();
+  });
+
+  it.each([0,2])('front recovery never selects an ambiguous isFront set of%i',async count=>{
+    const f=fixture();await f.governor.initialize();
+    const wire=vi.fn(async(input:string|URL|Request)=>response(String(input).includes('/product/find')?{id:42,name:'MNQ'}:Array.from({length:count},(_,i)=>({id:8+i,productId:42,isFront:true}))));
+    const broker=createTradovateBroker({environment:'demo',accessToken:'token',requestControl:f.governor,fetchImpl:wire,
+      requestPurpose:tradovateRequestContext.current,runWithRecoveryRequests:tradovateRequestContext.recovery});
+    await expect(broker.frontContract!('MNQ',101)).resolves.toBeNull();expect(wire).toHaveBeenCalledTimes(2);
+  });
+
   it('actual penalty during token await stops the current write before fetch and keeps dispatch count zero', async () => {
     const f = fixture(); await f.governor.initialize();
     const token = deferred<string>(), wire = vi.fn(async () => response({ orderId: 900 }));

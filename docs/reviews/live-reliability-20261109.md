@@ -147,3 +147,22 @@ flat recovery a periodický frontContract zatím používají BG (dostupnostní
 mezera, ne povolení obchodu). Veřejný reconcile má svou bounded recovery lane.
 
 Akutní serverový doplněk: plná sada8447passed+1todo, root tsc0, webbuildpassed, scopedlint0errors/1staršíunusedimport warning.
+
+## Samostatné dokončení bounded recovery
+
+Po akutní serverové opravě je doplněn i původně plánovaný omezený read scope
+pro interní automatickou flat obnovu. Přes BrokerPort, router a exposurecap
+se předá existing scoped recovery callback jen do trojice resolve-before /
+readFlatPreflightSnapshot / resolve-after. Původní cache/receipt generational
+fences a incidentní pravidla zůstávají. Success/recovery jobs jsou mimo scope.
+FrontContract použije stejný boundedmetadata helper pro3GET/5min; whitelist
+přidává jen product/find a contractMaturity/deps. Neexistuje management fallback
+při plném control rozpočtu. BGfull dál blokuje ARM a nové riziko.
+
+Kritik finálního diffu: OK. Cílené78/78: skutečný governor přes2routes+cap,
+BGfull+volnácontrol=>cleanDISARMED, novýARMblokovaný; opakované reconnecty
+nepřekročí24wire/min; front3controlGET, nejednoznačnýfront0/2=>null a
+actual429/captcha během tokenawait=>0wire. Plná sada a finální instalace se
+vykazují samostatně; žádné počítadlo ani broker cooldown se neresetuje.
+
+Finální boundedrecovery balík:8453passed+1todo (786souborůpassed,1skipped), root+pilot tsc0, webbuild i všechny3workerbundly passed. Scopedlint0errors/2staršíwarningy. DEMOprovedení viz finální provozní report; běhempsaní doplňku bránaOFF a brokerflat.

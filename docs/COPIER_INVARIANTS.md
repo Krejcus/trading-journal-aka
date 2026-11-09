@@ -1933,6 +1933,13 @@ existující ochranu.
   Broker-backed zámek nyní obnovuje minutový cron; finanční updatedAt vychází
   z capturedAt a otevřená pozice je po30s stale. Heartbeat otevřené pozice
   dovolí další minutový push i při stejném obsahu; staré PnL se neomlazuje.
+- Interní automatická flat obnova používá stejnou omezenou recovery klasifikaci
+  pouze nad resolve-before → flat preflight → resolve-after. Cache/receipt
+  commity uvnitř preflightu zachovávají původní generation/observation/config/
+  connection/route kontroly; následující recovery kroky zůstávají mimo scope.
+  Ověření MNQ frontu používá tři controlGET nejvýšpo5min; whitelist navíc povoluje
+  pouze /product/find a /contractMaturity/deps. Nejednoznačný isFront je null.
+  Sdílený control strop240/h a24/min ani blocker nového rizika se tím nezvyšují.
 - Worker-first display coverage vzniká teprve po validovaných Position a
   Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.

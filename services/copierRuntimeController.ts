@@ -15761,17 +15761,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (attempt > 0) await wait(500);
       if (!gate.connected || pendingConnectionRecovery) return;
       try {
-        const missingBefore = options.resolveMissingOptionalAccountIds
-          ? [...new Set(await options.resolveMissingOptionalAccountIds(group))]
-            .filter(accountId => group.followers.some(follower => follower.accountId === accountId))
-            .sort((left, right) => left - right)
-          : [];
-        const candidate = await readFlatPreflightSnapshot(missingBefore);
-        const missingAfter = options.resolveMissingOptionalAccountIds
-          ? [...new Set(await options.resolveMissingOptionalAccountIds(group))]
-            .filter(accountId => group.followers.some(follower => follower.accountId === accountId))
-            .sort((left, right) => left - right)
-          : [];
+        // Only the existing broker-read phase receives bounded recovery
+        // capacity. Its cache/receipt commit retains all generation fences;
+        // subsequent recovery mutations and queued jobs stay outside this scope.
+        const read = async () => {
+          const missingBefore = options.resolveMissingOptionalAccountIds
+            ? [...new Set(await options.resolveMissingOptionalAccountIds(group))]
+              .filter(accountId => group.followers.some(follower => follower.accountId === accountId))
+              .sort((left, right) => left - right)
+            : [];
+          const candidate = await readFlatPreflightSnapshot(missingBefore);
+          const missingAfter = options.resolveMissingOptionalAccountIds
+            ? [...new Set(await options.resolveMissingOptionalAccountIds(group))]
+              .filter(accountId => group.followers.some(follower => follower.accountId === accountId))
+              .sort((left, right) => left - right)
+            : [];
+          return { missingBefore, candidate, missingAfter };
+        };
+        const { missingBefore, candidate, missingAfter } = await (
+          broker.runWithRecoveryRequests ? broker.runWithRecoveryRequests(read) : read()
+        );
         const sameMissing = missingBefore.length === missingAfter.length
           && missingBefore.every((accountId, index) => accountId === missingAfter[index]);
         if (!sameMissing) {

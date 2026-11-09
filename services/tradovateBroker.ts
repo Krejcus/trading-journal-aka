@@ -730,7 +730,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       && !/^\/(?:cashBalance|accountRiskStatus|userAccountAutoLiq)\/deps$/.test(endpoint)) {
       throw new BrokerRequestNotSentError('Risk capacity is restricted to authoritative risk reads');
     }
-    if (purpose === 'control' && !/^\/(?:account|position|order|orderVersion|command|commandReport|executionReport|fill|contract)\/(?:list|item|items|deps|ldeps|find|suggest)$/.test(endpoint)) {
+    if (purpose === 'control' && !['/product/find', '/contractMaturity/deps'].includes(endpoint)
+      && !/^\/(?:account|position|order|orderVersion|command|commandReport|executionReport|fill|contract)\/(?:list|item|items|deps|ldeps|find|suggest)$/.test(endpoint)) {
       throw new BrokerRequestNotSentError('Recovery capacity is restricted to read-only synchronization');
     }
     const permit = config.requestControl && purpose !== 'management' && purpose !== 'entry' ? await config.requestControl.prepare(purpose) : null;
@@ -2851,6 +2852,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   return {
     environment: config.environment,
     runWithAcceptedRequests: config.runWithAcceptedRequests,
+    runWithRecoveryRequests: config.runWithRecoveryRequests,
     newRiskRequestBlocker: () => config.requestControl?.newRiskBlocker() ?? null,
     requestHealth: () => config.requestControl ? [config.requestControl.health()] : [],
     streamCoverage(accountId): TradovateWorkerAccountCoverage | null {
@@ -3021,6 +3023,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return confirmed ? { confirmedBy: confirmedCommands.has(commandId) ? 'stream-replaced' as const : 'stream-held' as const, order: { ...confirmed } } : undefined;
     },
     async frontContract(root) {
+      return readRecoveryMetadata(async () => {
       // Jen čtení: product → splatnosti (právě jedna `isFront`, nearchivovaná) → kontrakt.
       const product = await request<{ id?: number; name?: string }>(`/product/find?name=${encodeURIComponent(root)}`, { method: 'GET' }, true);
       if (!product?.id || product.name !== root) return null;
@@ -3036,6 +3039,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const names = (contracts ?? []).filter(item => (item.contractMaturityId == null || item.contractMaturityId === front[0].id)
         && typeof item.name === 'string' && pattern.test(item.name)).map(item => item.name!);
       return names.length === 1 ? { contract: names[0], expiration: front[0].expirationDate ?? null } : null;
+      });
     },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
       const entities = await listAccountEntities();

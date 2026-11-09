@@ -65,6 +65,7 @@ export function createExposureCappedBroker(
     newRiskRequestBlocker: broker.newRiskRequestBlocker ? accountIds => broker.newRiskRequestBlocker!(accountIds) : undefined,
     requestHealth: broker.requestHealth ? () => broker.requestHealth!() : undefined,
     runWithAcceptedRequests: broker.runWithAcceptedRequests ? run => broker.runWithAcceptedRequests!(run) : undefined,
+    runWithRecoveryRequests: broker.runWithRecoveryRequests ? run => broker.runWithRecoveryRequests!(run) : undefined,
     async placeOrder(request) {
       assertDispatchAllowed?.('place');
       try {
