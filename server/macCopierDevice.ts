@@ -1,6 +1,7 @@
 import { sanitizeTradovateApiHosts } from '../lib/tradovateApiHosts.js';
 import { execFile } from 'node:child_process';
 import { hostname } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -41,6 +42,9 @@ export interface MacCopierDevicePairing {
   deviceSecret: string;
   publicKey: string;
 }
+
+/** Hlavička relaye; `invalidate` zahodí klíč držený v paměti (odpověď 401). */
+export type MacCopierRelayAuthorization = (() => Promise<string>) & { invalidate?: () => void };
 
 export interface MacCopierSecretStore {
   read(deviceId: string): Promise<string>;
@@ -154,6 +158,8 @@ export function createMacCopierDeviceTokenProvider(options: {
   minimumValidityMs?: number;
   fallbackMinimumValidityMs?: number;
   requestTimeoutMs?: number;
+  /** Jak dlouho se klíč relaye drží v paměti (nejvýš 60 s; testy zkracují). */
+  relaySecretCacheMs?: number;
   /** In-process retry for transient lease failures (timeouts, 5xx); `deadlineMs: 0` disables it. */
   retry?: RetryTransientOptions;
 }) {
@@ -174,6 +180,9 @@ export function createMacCopierDeviceTokenProvider(options: {
   const retryOptions: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000, ...options.retry };
   let payload: TradovatePilotLeasePayload | null = null;
   let renewal: Promise<TradovatePilotLeasePayload> | null = null;
+  const RELAY_SECRET_CACHE_MS = Math.max(0, Math.min(60_000, options.relaySecretCacheMs ?? 60_000));
+  let relaySecret: { value: string; readAt: number } | null = null;
+  let relaySecretRead: Promise<string> | null = null;
   const hasUsableToken = () => payload != null && Date.parse(payload.expiresAt) - clock() > fallbackMinimumValidityMs;
   const providerError = (phase: string, reason: unknown): Error => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
@@ -272,19 +281,30 @@ export function createMacCopierDeviceTokenProvider(options: {
     return renewal;
   };
 
+  const authorizationHeader: MacCopierRelayAuthorization = Object.assign(async (): Promise<string> => {
+    // Každý relay požadavek (poll, heartbeat, ACK — v klidu ~170/min) dřív spouštěl
+    // `/usr/bin/security`. Klíč se drží v paměti procesu nejvýš minutu: výměna nebo
+    // smazání klíče v Keychainu se projeví do 60 s, selhané čtení se necachuje.
+    try {
+      const cached = relaySecret;
+      const secret = cached && performance.now() - cached.readAt < RELAY_SECRET_CACHE_MS ? cached.value
+        : await (relaySecretRead ??= (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId)
+          .then(value => { relaySecret = { value, readAt: performance.now() }; return value; })
+          .finally(() => { relaySecretRead = null; }));
+      return `Device ${options.config.deviceId}.${secret}`;
+    } catch (reason) {
+      relaySecret = null;
+      throw providerError('keychain', reason);
+    }
+  }, { invalidate: () => { relaySecret = null; } });
+
   return {
     refresh,
     getBrokerUserId: () => payload?.brokerUserId ?? null,
     /** Hosty organizace z posledního lease; null = výchozí hosty. */
     getApiHosts: () => sanitizeTradovateApiHosts(payload?.apiHosts),
-    async authorizationHeader(): Promise<string> {
-      try {
-        const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
-        return `Device ${options.config.deviceId}.${secret}`;
-      } catch (reason) {
-        throw providerError('keychain', reason);
-      }
-    },
+    /** Klíč v paměti nejvýš 60 s; `invalidate()` ho zahodí hned (server klíč odmítl). */
+    authorizationHeader,
     async getAccessToken(): Promise<string> {
       if (!payload || Date.parse(payload.expiresAt) - clock() <= minimumValidityMs) {
         try {

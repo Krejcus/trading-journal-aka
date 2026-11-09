@@ -67,7 +67,7 @@ describe('shared worker request governor', () => {
 
   it('allows accepted lifecycle writes at a soft limit while blocking new risk and background reads', async () => {
     const f = fixture();
-    f.setSnapshot({ backgroundReservedHour: 3000, backgroundReservedMinute: 120 });
+    f.setSnapshot({ backgroundReservedHour: 3000, backgroundReservedMinute: 120, totalReservedHour: 4000 });
     const governor = f.make(); await governor.initialize();
     expect(governor.newRiskBlocker()).toBeTruthy();
     await expect(governor.prepare('background')).rejects.toMatchObject({ beforeDispatch: true, controlReason: 'budget' });
@@ -245,7 +245,33 @@ describe('shared worker request governor', () => {
   it('background exhaustion still admits bounded risk/recovery reads with purpose-bound permits',async()=>{
     const f=fixture();f.setSnapshot({backgroundReservedHour:1200,backgroundReservedMinute:40});const g=f.make();await g.initialize();
     for (const purpose of ['risk','control'] as const) {const permit=await g.prepare(purpose);expect(()=>g.dispatch('background',permit)).toThrow();g.dispatch(purpose,permit)();expect(()=>g.dispatch(purpose,permit)).toThrow();}
-    expect(()=>g.dispatch('management')()).not.toThrow();expect(g.newRiskBlocker()).toBeTruthy();
+    expect(()=>g.dispatch('management')()).not.toThrow();
+    // 9. 11. 2026: zobrazovací pruh plní weby a telefony po strop už při otevřeném LIVE bez pozice.
+    // Jeho nasycení odkládá jen zobrazovací čtení; nové riziko hlídají pruhy risk/control a celkový strop.
+    expect(g.newRiskBlocker()).toBeNull();
+    await expect(g.prepare('background')).rejects.toMatchObject({ beforeDispatch: true, controlReason: 'budget' });
+  });
+  it.each([
+    ['risk hour', { riskReservedHour: 2400 }], ['risk minute', { riskReservedMinute: 80 }],
+    ['control hour', { controlReservedHour: 240 }], ['control minute', { controlReservedMinute: 24 }],
+    ['total soft cap', { totalReservedHour: 4000 }],
+  ] as const)('new risk stays blocked when %s capacity is exhausted', async (_label, patch) => {
+    const f = fixture(); f.setSnapshot(patch); const g = f.make(); await g.initialize();
+    expect(g.newRiskBlocker()).toBeTruthy();
+  });
+  it('locally counted management is added to the whole remote total, not only to background', async () => {
+    // Plný risk + control pod stropy pruhů; lokální zápisy a lifecycle čtení je dotáhnou přes 4000/h.
+    const f = fixture(); f.setSnapshot({ backgroundReservedHour: 1200, riskReservedHour: 2399, controlReservedHour: 239, totalReservedHour: 3838 });
+    const g = f.make(); await g.initialize();
+    expect(g.newRiskBlocker()).toBeNull();
+    for (let index = 0; index < 162; index += 1) g.dispatch('management')();
+    expect(g.newRiskBlocker()).toBeTruthy();
+  });
+  it('background plus locally counted management reaching the total soft cap blocks new risk', async () => {
+    const f = fixture(); f.setSnapshot({ backgroundReservedHour: 1200, backgroundReservedMinute: 40, totalReservedHour: 1200 }); const g = f.make(); await g.initialize();
+    expect(g.newRiskBlocker()).toBeNull();
+    for (let index = 0; index < 2800; index += 1) g.dispatch('management')();
+    expect(g.newRiskBlocker()).toBeTruthy();
   });
   it('a full recovery lane does not stop an otherwise available background lane',async()=>{
     const f=fixture();f.setSnapshot({controlReservedMinute:24});const g=f.make();await g.initialize();

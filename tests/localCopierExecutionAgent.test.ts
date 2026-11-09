@@ -1476,7 +1476,7 @@ describe('local copier execution agent', () => {
     running=await startLocalCopierExecutionAgent({controller:runtime,group:group(),port:0,prepareGroupAccounts:async()=>{await broker.refreshAccountDirectory();return {missingOptional:[]};}});
     expect((await post(running,running.status().nonce,{type:'reconcile'})).status).toBe(200);
     expect(reserve).toHaveBeenCalledTimes(6);expect(wire).toHaveBeenCalledTimes(6);expect(runtime.arm).not.toHaveBeenCalled();
-    expect(governor.newRiskBlocker()).toBeTruthy();expect(tradovateRequestContext.current()).toBeUndefined();
+    expect(governor.newRiskBlocker()).toBeNull();expect(tradovateRequestContext.current()).toBeUndefined();
   });
 
   it('scopes maintenance read priority to reconciliation, including deferred descendants', async () => {

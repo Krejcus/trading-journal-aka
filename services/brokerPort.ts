@@ -374,6 +374,11 @@ export interface BrokerPort {
   runWithAcceptedRequests?<T>(run: () => Promise<T>): Promise<T>;
   /** Bounded broker-read recovery classification only; never trade authorization. */
   runWithRecoveryRequests?<T>(run: () => Promise<T>): Promise<T>;
+  /**
+   * Ohraničené stavové čtení třídou accepted, jen když volající nemá vlastní třídu;
+   * po doběhnutí vyhasne (časovače založené uvnitř výjimku z rozpočtu nedědí).
+   */
+  runWithLifecycleReads?<T>(run: () => Promise<T>): Promise<T>;
   /** Optional local admission assertion; throws only before a copier write is attempted. */
   assertDispatchAllowed?: (operation: 'place' | 'oco' | 'oso' | 'modify' | 'cancel') => void;
   readonly environment: BrokerEnvironment;

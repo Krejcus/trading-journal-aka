@@ -40,7 +40,8 @@ describe('request authority refusal is not a broker outage', () => {
     await governor.initialize();
     await expect(governor.prepare('background')).rejects.toMatchObject({ controlReason: kind, beforeDispatch: true });
     expect(governor.health().state).toBe(kind === 'budget' ? 'budget-limited' : kind);
-    expect(governor.newRiskBlocker()).toBeTruthy();
+    // Odmítnutí zobrazovacího (background) rozpočtu samo nové riziko neblokuje; cooldown a captcha ano.
+    if (kind === 'budget') expect(governor.newRiskBlocker()).toBeNull(); else expect(governor.newRiskBlocker()).toBeTruthy();
     if (kind === 'budget') { expect(() => governor.dispatch('management')()).not.toThrow(); expect(saved).toBeNull(); }
     else { expect(() => governor.dispatch('management')).toThrow(); expect(saved).toMatchObject({ brokerUserId: 77, blockedUntil: 160_000 }); }
   });

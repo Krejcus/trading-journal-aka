@@ -26,7 +26,7 @@ function fixture() {
     }),
   };
   const governor = createTradovateRequestGovernor({ brokerUserId: 77, remote, store: { load: async () => null, save: async () => undefined }, clock: () => now, monotonic: () => now, wait: async ms => { now += ms; await Promise.resolve(); } });
-  return { governor, remote, clock: () => now, advance: (ms:number) => { now += ms; }, budget: () => { state.backgroundReservedHour = 3000; } };
+  return { governor, remote, clock: () => now, advance: (ms:number) => { now += ms; }, budget: () => { state.backgroundReservedHour = 3000; }, totalBudget: () => { state.totalReservedHour = 4000; } };
 }
 class Socket implements WebSocketLike {
   readyState = 0; onopen: (()=>void)|null = null; onmessage: ((event:{data:unknown})=>void)|null=null;
@@ -52,7 +52,7 @@ describe('Tradovate broker final request-control integration', () => {
     await expect(broker.frontContract!('MNQ',101)).resolves.toEqual({contract:'MNQZ6',expiration:'2026-12-18'});
     expect(wire).toHaveBeenCalledTimes(3);
     expect(f.remote.reserve.mock.calls.map(call=>call[0].purpose)).toEqual(['control','control','control']);
-    expect(broker.newRiskRequestBlocker?.([101])).toContain('budget');
+    expect(broker.newRiskRequestBlocker?.([101])).toBeNull();
     expect(tradovateRequestContext.current()).toBeUndefined();
   });
 
@@ -107,13 +107,16 @@ describe('Tradovate broker final request-control integration', () => {
     expect(f.governor.health().counts).toMatchObject({dispatchAttempts:1,responses:1,blockedBeforeDispatch:2});
   });
 
-  it('soft read budget blocks new risk but accepted management and its verification read still dispatch', async () => {
+  it('total soft budget blocks new risk but accepted management and its verification read still dispatch', async () => {
     const f=fixture(); await f.governor.initialize(); f.budget(); await f.governor.sync();
     const wire=vi.fn(async(input:string|URL|Request)=>response(String(input).includes('/order/placeorder')?{orderId:900}:[]));
     const broker=createTradovateBroker({environment:'demo',accountSpec:'DEMO',accessToken:'token',requestControl:f.governor,fetchImpl:wire,
       requestPurpose:tradovateRequestContext.current,runWithAcceptedRequests:tradovateRequestContext.accepted});
-    expect(broker.newRiskRequestBlocker?.([101])).toContain('budget');
+    // Plný zobrazovací pruh odmítá jen background čtení; nové riziko blokuje až celkový strop.
+    expect(broker.newRiskRequestBlocker?.([101])).toBeNull();
     await expect(broker.listPositions(101)).rejects.toBeInstanceOf(BrokerRequestNotSentError);
+    f.totalBudget(); f.advance(1); await f.governor.sync();
+    expect(broker.newRiskRequestBlocker?.([101])).toContain('budget');
     await expect(broker.runWithAcceptedRequests!(async()=>{await broker.placeOrder(order);return broker.listPositions(101);})).resolves.toEqual([]);
     expect(wire).toHaveBeenCalledTimes(2);
   });

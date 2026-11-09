@@ -66,6 +66,7 @@ export function createExposureCappedBroker(
     requestHealth: broker.requestHealth ? () => broker.requestHealth!() : undefined,
     runWithAcceptedRequests: broker.runWithAcceptedRequests ? run => broker.runWithAcceptedRequests!(run) : undefined,
     runWithRecoveryRequests: broker.runWithRecoveryRequests ? run => broker.runWithRecoveryRequests!(run) : undefined,
+    runWithLifecycleReads: broker.runWithLifecycleReads ? run => broker.runWithLifecycleReads!(run) : undefined,
     async placeOrder(request) {
       assertDispatchAllowed?.('place');
       try {

@@ -5,6 +5,7 @@ import { createTradovateRequestControlFileStore } from '../../server/tradovateRe
 import { createTradovateRequestControlRemote } from '../../server/tradovateRequestControlRemote';
 import { createServerTradovateRequestControl } from '../../server/tradovateServerRequestControl';
 import { tradovateRequestContext } from '../../server/tradovateRequestContext';
+import { createKeepAliveFetch } from '../../server/tradovateKeepAliveFetch';
 import { sanitizeTradovateApiHosts, type TradovateApiHosts } from '../../lib/tradovateApiHosts';
 import { fileRelayDeliveryStore } from '../../server/copierRelayDeliveryStore.js';
 import { createCopierSnapshotDelivery, snapshotDeliveryId } from '../../server/copierSnapshotDelivery';
@@ -196,6 +197,11 @@ interface PilotContext {
   discovered?: boolean;
 }
 
+// Držené spojení k REST brokera (instalační volba `--tradovate-keepalive on`): ušetří TLS
+// handshake u příkazu po pauze. Jen execution adaptéry; výchozí je vestavěný fetch.
+const tradovateKeepAliveFetch = process.env.ALPHATRADE_TRADOVATE_KEEPALIVE?.trim().toLowerCase() === 'on'
+  ? createKeepAliveFetch() : null;
+
 // Principal-wide, outside group state: all adapters, discovery and raw display share it.
 const requestControls = createTradovateRequestControlRegistry();
 const requestControlStore = createTradovateRequestControlFileStore(resolve(homedir(), 'Library/Application Support/AlphaTrade/copier'));
@@ -226,6 +232,9 @@ const brokerRequestOptions = (context: PilotContext) => ({
   connectionId: context.connectionId, requestControl: context.requestControl, resolveBrokerUserId: context.getBrokerUserId,
   requestPurpose: tradovateRequestContext.current, runWithAcceptedRequests: tradovateRequestContext.accepted,
   runWithRiskRequests: tradovateRequestContext.risk, runWithRecoveryRequests: tradovateRequestContext.recovery,
+  runWithLifecycleReads: tradovateRequestContext.lifecycleRead,
+  // Vypnutí: ALPHATRADE_DISPLAY_COVERAGE=off (instalace `--display-coverage off`).
+  displayCoverageRebaseline: process.env.ALPHATRADE_DISPLAY_COVERAGE?.trim().toLowerCase() !== 'off',
 });
 
 /** Hlídání nových/odpojených propfirem za běhu (4. 10. 2026). */
@@ -379,6 +388,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
         && stringFlag('manual-only', false) === 'true',
+      ...(tradovateKeepAliveFetch ? { fetchImpl: tradovateKeepAliveFetch } : {}),
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
@@ -449,6 +459,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       promoteHeldModify: accountId => pendingLegsGate.current(accountId),
       preferWebSocketOrderWrites: process.env.ALPHATRADE_TRADOVATE_WS_WRITES?.trim().toLowerCase() === 'on'
         && stringFlag('manual-only', false) === 'true',
+      ...(tradovateKeepAliveFetch ? { fetchImpl: tradovateKeepAliveFetch } : {}),
       syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,

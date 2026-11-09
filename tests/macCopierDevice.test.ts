@@ -71,6 +71,41 @@ describe('mac copier device', () => {
     expect((await loadMacCopierDevice(configPath)).paired).toBe(true);
   });
 
+  it('klíč relaye se drží v paměti: jedno čtení při souběhu, znovu až po vypršení, chyba se necachuje, invalidate ho zahodí', async () => {
+    root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
+    const secrets = new Map<string, string>();
+    let reads = 0; let fail = false;
+    const secretStore: MacCopierSecretStore = {
+      read: async id => { reads += 1; await new Promise(resolveRead => setTimeout(resolveRead, 5)); if (fail) throw new Error('keychain locked'); return secrets.get(id) ?? Promise.reject(new Error('missing')); },
+      write: async (id, value) => { secrets.set(id, value); },
+    };
+    const config = await createMacCopierDevice({
+      configPath: resolve(root, 'device.json'), connectionId: crypto.randomUUID(), apiOrigin: 'https://alpha.example', deviceName: 'Test Mac', secretStore,
+    });
+    const provider = createMacCopierDeviceTokenProvider({ config, secretStore, fetchImpl: (async () => new Response('{}')) as typeof fetch, relaySecretCacheMs: 80 });
+    const expected = `Device ${config.deviceId}.${secrets.get(config.deviceId)}`;
+    expect(await Promise.all([provider.authorizationHeader(), provider.authorizationHeader(), provider.authorizationHeader()])).toEqual([expected, expected, expected]);
+    expect(reads).toBe(1);
+    expect(await provider.authorizationHeader()).toBe(expected);
+    expect(reads).toBe(1);
+    // Výměna klíče v Keychainu se projeví nejpozději po vypršení.
+    secrets.set(config.deviceId, 'rotated-secret');
+    await new Promise(resolveWait => setTimeout(resolveWait, 100));
+    expect(await provider.authorizationHeader()).toBe(`Device ${config.deviceId}.rotated-secret`);
+    expect(reads).toBe(2);
+    // Server klíč odmítl (401): další požadavek čte Keychain hned.
+    provider.authorizationHeader.invalidate?.();
+    expect(await provider.authorizationHeader()).toBe(`Device ${config.deviceId}.rotated-secret`);
+    expect(reads).toBe(3);
+    // Selhané čtení se necachuje a starý klíč se po vypršení nepoužije.
+    await new Promise(resolveWait => setTimeout(resolveWait, 100));
+    fail = true;
+    await expect(provider.authorizationHeader()).rejects.toThrow(/keychain/);
+    fail = false;
+    expect(await provider.authorizationHeader()).toBe(`Device ${config.deviceId}.rotated-secret`);
+    expect(reads).toBe(5);
+  });
+
   it('vynucená obnova pošle forceRenewal a nahradí token i při jinak platném leasu (mrtvá session 18. 9. 2026)', async () => {
     root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
     const secrets = new Map<string, string>();

@@ -116,6 +116,7 @@ export function createBrokerRouter(
     environment,
     runWithAcceptedRequests: run => fixedBrokers.find(owner => owner.runWithAcceptedRequests)?.runWithAcceptedRequests?.(run) ?? run(),
     runWithRecoveryRequests: run => fixedBrokers.find(owner => owner.runWithRecoveryRequests)?.runWithRecoveryRequests?.(run) ?? run(),
+    runWithLifecycleReads: run => fixedBrokers.find(owner => owner.runWithLifecycleReads)?.runWithLifecycleReads?.(run) ?? run(),
     newRiskRequestBlocker(accountIds) {
       // Optional read proof must not replace the existing missing-OAuth admission gates.
       // An absent route is unknown, never an empty/flat account or a status exception.

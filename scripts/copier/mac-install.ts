@@ -255,6 +255,15 @@ async function install(): Promise<void> {
     throw new Error('--tradovate-ws-writes on je povolený jen s --manual-only');
   }
   const webSocketWritesEnabled = manualOnly && webSocketWritesFlag === 'on';
+  const keepAliveFlag = flags.get('tradovate-keepalive')?.trim().toLowerCase();
+  if (keepAliveFlag && keepAliveFlag !== 'on' && keepAliveFlag !== 'off') {
+    throw new Error('--tradovate-keepalive musí být on nebo off');
+  }
+  const keepAliveEnabled = keepAliveFlag === 'on';
+  const displayCoverageFlag = flags.get('display-coverage')?.trim().toLowerCase();
+  if (displayCoverageFlag && displayCoverageFlag !== 'on' && displayCoverageFlag !== 'off') {
+    throw new Error('--display-coverage musí být on nebo off');
+  }
   const groupLimitsFlag = flags.get('group-limits')?.trim().toLowerCase();
   if (groupLimitsFlag && groupLimitsFlag !== 'on' && groupLimitsFlag !== 'off') throw new Error('--group-limits musí být on nebo off');
   if (groupLimitsFlag === 'on' && manualOnly) throw new Error('--group-limits on vyžaduje běžnou skupinu s followery');
@@ -528,6 +537,8 @@ async function install(): Promise<void> {
     ${groupLimitsEnabled ? '<key>ALPHATRADE_GROUP_LIMITS</key><string>on</string>' : ''}
     ${pendingLegsEnabled ? '<key>ALPHATRADE_PENDING_LEGS</key><string>on</string>' : ''}
     ${webSocketWritesEnabled ? '<key>ALPHATRADE_TRADOVATE_WS_WRITES</key><string>on</string>' : ''}
+    ${keepAliveEnabled ? '<key>ALPHATRADE_TRADOVATE_KEEPALIVE</key><string>on</string>' : ''}
+    ${displayCoverageFlag === 'off' ? '<key>ALPHATRADE_DISPLAY_COVERAGE</key><string>off</string>' : ''}
   </dict>
 </dict></plist>
 `;

@@ -1897,9 +1897,25 @@ existující ochranu.
   řádku. DB transakce nečeká na broker síť; granty se konzervativně účtují
   až do svého konce plus příslušné časové okno. Nevyužité kredity se nevracejí
   a po restartu se znovu nepoužije původní plný grant.
-- Soft budget se uplatní na background čtení a před přijetím nového rizika.
-  Již přijatý fanout, jeho stavové ověření, ochrany a nouzové zápisy nemají
-  novou kreditovou frontu. `BrokerPort.runWithAcceptedRequests` mění jen
+- Soft budget se uplatní na background čtení. Nové riziko (vstup, ARM,
+  auto-resume) blokuje vyčerpaný pruh risk nebo control, celkový strop
+  4000/h (vzdálený součet všech pruhů + lokálně počítaný management),
+  neplatná či stará autorita, cooldown a captcha. Samotné nasycení pruhu
+  background nové riziko neblokuje (9. 11. 2026): pruh plní zobrazovací
+  čtení webů a telefonů až po strop už při otevřeném LIVE bez pozice
+  (měřeno 1193–1197/1200 na obou loginech, vstupy odmítané napůl); jeho
+  nasycení znamená jen odložené zobrazení, rezervu k penalizaci drží
+  celkový strop. Již přijatý fanout, jeho stavové ověření, ochrany a nouzové zápisy nemají
+  novou kreditovou frontu. Patří sem i dotažení OrderVersion k příkazu ze
+  streamu (fill za ním čeká v sériové frontě): jde třídou accepted v lokálním
+  přídělu 90/min a 900/h na adaptér, nad něj původní recovery rezervací.
+  Stavová čtení pozic a příkazů, která řadič dělá mimo explicitní třídu
+  (události ze streamu, časovače, úklid po vypnutí), jdou přes fasádu
+  `services/lifecycleReadBroker.ts` třídou accepted s vyhasínajícím scope,
+  jen když kopírka nese nebo může nést expozici (ostrý ARM, pozice, otevřený
+  příkaz, rozpracovaná událost, Flatten, obnova po výpadku); v klidu a nad
+  lokální strop 120/min a 1200/h zůstávají background.
+  `BrokerPort.runWithAcceptedRequests` mění jen
   třídu spotřeby; nenahrazuje ARM, risk, freshness, routing ani durable outbox.
   Skutečná brokerová penalizace stále zastaví všechny nové dispatches.
 - Kapacitní policy2 odděluje background (1200/h,40/min), risk (2400/h,80/min)
@@ -1941,7 +1957,12 @@ existující ochranu.
   pouze /product/find a /contractMaturity/deps. Nejednoznačný isFront je null.
   Sdílený control strop240/h a24/min ani blocker nového rizika se tím nezvyšují.
 - Worker-first display coverage vzniká teprve po validovaných Position a
-  Order REST čteních se stejnou socket/route/ingress generací. ACK není baseline.
+  Order REST čteních se stejnou socket/route/ingress generací. Adaptér si tuto
+  baseline obnovuje sám, jen když neeviduje žádnou pozici ani pracující příkaz
+  (3 s klidu, nejvýš jednou za 30 s, vždy background třída, nikdy recovery;
+  `displayCoverageRebaseline`), jinak by doklad po první události zmizel a weby
+  četly brokera dál samy. S expozicí se nečte: čtení grafu příkazů by správě
+  obchodu vzalo rychlý snímek streamu. ACK není baseline.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
   Per-part sequence patří fyzickému requestu i jeho joinerům: starší completion
   nesmí přepsat novější pozici. Heartbeat nezmění čas původních dat.
@@ -2397,7 +2418,11 @@ existující ochranu.
   který stream ještě nedohnal, zruší stejně jako dřív s REST pre-readem (závod existoval
   i tehdy). Testy: `tests/manualOrderManage.test.ts` (snímek nesedí → REST, změna route
   epochy → `not-sent`). Snímek nikdy pro ARM, reconcile,
-  důkaz flat/no-working ani Flatten. Třetí důkaz úspěchu posunu: potvrzení
+  důkaz flat/no-working ani Flatten. Od 9. 11. 2026 smí adaptér vzít z dohnaného
+  streamu (plot `coverageReadQuiet`) jen `contractId` nenulové pozice pro
+  `liquidateposition`, a to u všech volajících včetně Flattenu; nikdy z něj neodvodí
+  „už flat“ (to dál dává jen čerstvé REST čtení) a ověření stavem po zápisu se nemění
+  (`tests/tradovateBrokerLifecycleLatency.test.ts`). Třetí důkaz úspěchu posunu: potvrzení
   adaptéru z `modifyOrder` (Replaced přesně odeslaného commandu + otevřený
   příkaz v odeslaném tvaru), které controller přijme jen pro stejné id, účet
   leadera, typ, qty a novou cenu; do cache controlleru ani read modelu se

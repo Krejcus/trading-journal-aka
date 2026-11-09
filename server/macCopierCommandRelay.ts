@@ -445,6 +445,8 @@ export function startMacCopierCommandRelay(options: {
         if (requestAbort?.signal.aborted) throw requestAbort.signal.reason ?? error;
         body = {};
       }
+      // Server klíč odmítl: klíč držený v paměti se zahodí, další požadavek ho přečte z Keychainu znovu.
+      if (response.status === 401) (options.authorizationHeader as { invalidate?: () => void }).invalidate?.();
       if (!response.ok) throw new Error((body as { error?: string }).error || `copier-relay-http-${response.status}`);
       return body as Record<string, unknown>;
     } finally {

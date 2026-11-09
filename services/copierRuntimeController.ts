@@ -171,6 +171,7 @@ import {
   type ManualFlattenTarget,
 } from './copierManualActions';
 import { CopierDispatchRevokedError, createExposureCappedBroker } from './exposureCappedBroker';
+import { withLifecycleReads } from './lifecycleReadBroker';
 import {
   pendingEntryAutoCancelAt,
   pendingEntryNeedsLegOwnershipProof,
@@ -1297,6 +1298,10 @@ export class AccountPositionsCache extends Map<number, Map<string, number>> {
 
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
+  // Stavová čtení pro přijatou expozici mimo zobrazovací rozpočet (viz lifecycleReadBroker).
+  // Podmínka se doplní níže, až existují cache pozic a příkazů; do té doby je vypnutá.
+  let lifecycleReadsActive: () => boolean = () => false;
+  options = { ...options, broker: withLifecycleReads(options.broker, () => lifecycleReadsActive()) };
   const clock = options.clock ?? Date.now;
   const durableStore: CopierStore = {
     load: () => options.store.load(),
@@ -5922,8 +5927,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const streamFlat = () => (positionsByAccount.get(leader)?.get(symbol) ?? null) === 0
       && ![...(liveOrdersByAccount.get(leader)?.values() ?? [])].some(order => order.symbol === symbol && isOpenOrderStatus(order.status));
     const streamWaitStartedAt = clock();
-    while (outcome.status === 'submitted' && !streamFlat() && Date.now() + 100 < verifyDeadline - 1_000) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+    // Krok 20 ms (dřív 100 ms): jen čtení paměti, flat ze streamu se pozná o desítky ms dřív.
+    while (outcome.status === 'submitted' && !streamFlat() && Date.now() + 20 < verifyDeadline - 1_000) {
+      await new Promise(resolve => setTimeout(resolve, 20));
     }
     timing.streamFlatMs = streamFlat() ? clock() - streamWaitStartedAt : undefined;
     // První skutečný flat z broker streamu je okamžik, kdy graf smí zmizet.
@@ -12022,6 +12028,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Právě běžící Flatteny (mapa výše je i idempotenční cache dokončených). */
   let runningEmergencyFlattens = 0;
   let emergencyFlattenTail: Promise<void> = Promise.resolve();
+  lifecycleReadsActive = () => {
+    // Shadow ARM nové riziko nenese; rozpracovaná obnova po restartu/výpadku ano (durable
+    // záznam o expozici existuje dřív, než se naplní cache pozic a příkazů).
+    if ((gate.armed && !gate.shadowMode) || pendingConnectionRecovery || pendingBrokerEvents > 0 || runningEmergencyFlattens > 0) return true;
+    for (const positions of positionsByAccount.values()) for (const net of positions.values()) if (net !== 0) return true;
+    for (const orders of liveOrdersByAccount.values()) for (const order of orders.values()) if (isOpenOrderStatus(order.status)) return true;
+    return false;
+  };
   const emergencyFlatten = (
     accountIds: readonly number[],
     operationId: string,
@@ -19752,11 +19766,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (bracketFollowerPositionProven(follower.accountId, pair.symbol, expected)) return;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        // Povinné ověření už přijaté kopie před ochranným OCO: třída accepted (INV-TRAD-09).
+        // Jako background čtení by ho nasycený zobrazovací pruh odmítl a follower by zůstal
+        // bez ochrany s DISARM (nález review 9. 11. 2026).
+        const readFollowerState = () => Promise.all([
+          broker.listPositions(follower.accountId),
+          broker.listOrders(follower.accountId, { fresh: true }),
+        ]);
         const [positions, orders] = await Promise.race([
-          Promise.all([
-            broker.listPositions(follower.accountId),
-            broker.listOrders(follower.accountId, { fresh: true }),
-          ]),
+          broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(readFollowerState) : readFollowerState(),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error('bracket position read deadline 1500 ms')), 1_500);
           }),

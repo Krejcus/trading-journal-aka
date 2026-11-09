@@ -89,12 +89,23 @@ export function createTradovateRequestGovernor(options: {
   const admissionProblem = (newRisk = false): string | null => {
     const hard = hardProblem(); if (hard) return hard.message;
     if (!snapshot || mono() >= controlDeadline) return 'Shared request-control state is stale or unavailable';
-    if (snapshot.backgroundReservedHour >= POLICY.backgroundHour || snapshot.backgroundReservedMinute >= POLICY.backgroundMinute
-      || newRisk && ((snapshot.riskReservedHour ?? 0) >= POLICY.riskHour || (snapshot.riskReservedMinute ?? 0) >= POLICY.riskMinute
-        || (snapshot.controlReservedHour ?? 0) >= POLICY.controlHour || (snapshot.controlReservedMinute ?? 0) >= POLICY.controlMinute)
-      || snapshot.totalReservedHour != null && snapshot.totalReservedHour >= POLICY.totalSoftHour
-      || snapshot.backgroundReservedHour + management.snapshot().hour >= POLICY.totalSoftHour) return 'Application request budget exhausted; accepted management remains available';
-    return null;
+    const exhausted = 'Application request budget exhausted; accepted management remains available';
+    // Lokálně počítané zápisy a lifecycle čtení (management) se přičítají k celému vzdálenému
+    // součtu všech pruhů, ne jen k background: jinak by plný risk + control + management
+    // prošel pod stropem, o který se brána nového rizika opírá.
+    if (snapshot.totalReservedHour != null && snapshot.totalReservedHour >= POLICY.totalSoftHour
+      || (snapshot.totalReservedHour ?? snapshot.backgroundReservedHour) + management.snapshot().hour >= POLICY.totalSoftHour) return exhausted;
+    if (newRisk) {
+      // Nové riziko potřebuje dohled (risk) a obnovu (control); ty mají vlastní pruhy.
+      // Zobrazovací pruh background plní weby a telefony až po strop už při otevřeném
+      // LIVE bez pozice (9. 11. 2026: oba loginy 1193–1197/1200 celou hodinu, vstupy
+      // odmítané napůl). Jeho nasycení znamená jen odložená zobrazovací čtení — sám
+      // strop je lokální a k penalizaci brokera má rezervu celkový limit výše.
+      return (snapshot.riskReservedHour ?? 0) >= POLICY.riskHour || (snapshot.riskReservedMinute ?? 0) >= POLICY.riskMinute
+        || (snapshot.controlReservedHour ?? 0) >= POLICY.controlHour || (snapshot.controlReservedMinute ?? 0) >= POLICY.controlMinute
+        ? exhausted : null;
+    }
+    return snapshot.backgroundReservedHour >= POLICY.backgroundHour || snapshot.backgroundReservedMinute >= POLICY.backgroundMinute ? exhausted : null;
   };
   const applyRemote = (value: TradovateRequestControlSnapshot, started: number) => {
     if (!isTradovateControlSnapshot(value) || value.brokerUserId !== options.brokerUserId) throw new Error('request-control-identity-or-snapshot-invalid');

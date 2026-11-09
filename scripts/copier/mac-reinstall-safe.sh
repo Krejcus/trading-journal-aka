@@ -176,6 +176,11 @@ INSTALLED_WS_WRITES="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:A
 if [[ "${COPIER_TRADOVATE_WS_WRITES:-$INSTALLED_WS_WRITES}" == "on" ]]; then
   TV_STREAM_ARGS+=(--tradovate-ws-writes on)
 fi
+# Držené spojení k REST brokera: zachová se nainstalovaná volba, přepsat jde COPIER_TRADOVATE_KEEPALIVE=on|off.
+INSTALLED_KEEPALIVE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:ALPHATRADE_TRADOVATE_KEEPALIVE' "$HOME/Library/LaunchAgents/com.alphatrade.copier.plist" 2>/dev/null || true)"
+if [[ "${COPIER_TRADOVATE_KEEPALIVE:-$INSTALLED_KEEPALIVE}" == "on" ]]; then
+  TV_STREAM_ARGS+=(--tradovate-keepalive on)
+fi
 GROUP_ARGS=()
 if [[ "$MANUAL_ONLY" == "1" ]]; then
   GROUP_ARGS+=(--manual-only)

@@ -12,6 +12,7 @@ export function createTradovateRequestControlRemote(options: {
     });
     const responseBody = await response.json().catch(() => null) as Record<string, unknown> | null;
     if (!response.ok) {
+      if (response.status === 401) (options.authorizationHeader as { invalidate?: () => void }).invalidate?.();
       // Never discard a real penalty or turn a local budget refusal into an outage.
       if (responseBody && typeof responseBody.error === 'string' && responseBody.error.startsWith('tradovate-request-')) {
         if (responseBody.snapshot !== undefined && !isTradovateControlSnapshot(responseBody.snapshot)) {

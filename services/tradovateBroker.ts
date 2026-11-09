@@ -188,6 +188,13 @@ export interface TradovateBrokerConfig {
   runWithRecoveryRequests?<T>(run: () => Promise<T>): Promise<T>;
   runWithAcceptedRequests?: <T>(run: () => Promise<T>) => Promise<T>;
   /**
+   * Po obchodním rámci sám obnoví REST baseline pokrytí streamem (jen zobrazení): bez ní
+   * doklad `streamCoverage` po první události zmizí a weby čtou brokera dál samy.
+   */
+  displayCoverageRebaseline?: boolean;
+  /** Ohraničené lifecycle čtení třídou accepted, které po doběhnutí vyhasne (dotažení OrderVersion). */
+  runWithLifecycleReads?: <T>(run: () => Promise<T>) => Promise<T>;
+  /**
    * Smí se držený Modify pozastavené nohy (OnHold) projevit na tomto účtu? Výchozí ne: bez zapnutého
    * posunu nohou (`--pending-legs on`, sólo DEMO) se chování proti followerům nemění (INV-TRAD-02).
    */
@@ -1145,8 +1152,35 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     activeSemanticFrameId = null;
   };
 
+  // Dotažení OrderVersion k příkazu, který už u brokera existuje, je stavové ověření
+  // přijatého lifecycle (INV-TRAD-09): fill stojí v sériové frontě za ním. Vzdálená
+  // rezervace recovery kapacity (worker → Vercel → DB) přidávala 0,5–1,5 s ke každému
+  // fillu (měřeno 9. 11. 2026). Omezený lokální příděl jde proto třídou „accepted“ s vyhasínajícím scope
+  // (počítá se do celkového stropu, skutečná penalizace dál blokuje vše); nad příděl
+  // se vrací původní recovery cesta s rezervací, takže záplava cizích událostí
+  // nezíská neomezené čtení mimo rozpočet.
+  // Příděl musí pokrýt aktivní správu skupiny (vstup OSO = 3 příkazy na účet, každý posun
+  // novou verzi na účet). Při vyčerpání recovery pruhu (24/min) hydratace selhala, rámec
+  // skončil chybou, socket se shodil a kopírka se uprostřed obchodu vypnula (DEMO 9. 11.
+  // 2026 21:26 UTC: „Priority read budget exhausted“ → socket-message-error → FAIL-CLOSED).
+  const LIFECYCLE_HYDRATION_PER_MINUTE = 90;
+  const LIFECYCLE_HYDRATION_PER_HOUR = 900;
+  const lifecycleHydrations: number[] = [];
+  const takeLifecycleHydration = (): boolean => {
+    const now = clock();
+    while (lifecycleHydrations.length && now - lifecycleHydrations[0] >= 3_600_000) lifecycleHydrations.shift();
+    if (lifecycleHydrations.length >= LIFECYCLE_HYDRATION_PER_HOUR) return false;
+    let lastMinute = 0;
+    for (let index = lifecycleHydrations.length - 1; index >= 0 && now - lifecycleHydrations[index] < 60_000; index -= 1) lastMinute += 1;
+    if (lastMinute >= LIFECYCLE_HYDRATION_PER_MINUTE) return false;
+    lifecycleHydrations.push(now);
+    return true;
+  };
+  const readOrderVersionLifecycle = <T>(read: () => Promise<T>): Promise<T> => (
+    config.runWithLifecycleReads && takeLifecycleHydration() ? config.runWithLifecycleReads(read) : readRecoveryMetadata(read)
+  );
   const fetchOrderVersions = (orderId: number): Promise<OrderVersionFetchResult> => (
-    readRecoveryMetadata(() => request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`))
+    readOrderVersionLifecycle(() => request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`))
       .then(versions => ({ ok: true as const, versions: versions ?? [] }))
       // Prefetch zacina uz pri prijeti ramce a muze cekat za predchozim
       // semantickym ramcem. Zachycena chyba zabrani unhandled rejection;
@@ -2299,6 +2333,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
         // redundantní `connected: true` je neškodné a srovná heartbeat.
         if (renewalInProgress) finishRenewal();
+        scheduleCoverageRebaseline();
         emit({
           type: 'connection', connected: true, at: clock(),
           ...(wasRenewal ? { resynced: true, resync } : {}),
@@ -2622,7 +2657,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
               candidate,
             );
           });
+          const coverageGenerationBefore = streamReadProof.generation();
           observeTradeIngress(messages);
+          if (streamReadProof.generation() !== coverageGenerationBefore) scheduleCoverageRebaseline();
           if (messages.length === 0) return;
           // Correlated write ACKs are transport-only. They must not create a
           // hole between adjacent semantic frames: otherwise an available next
@@ -2849,10 +2886,66 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }, 500);
   }
 
-  return {
+  // Obnova baseline pokrytí streamem (jen zobrazení, INV-TRAD-09). Doklad vzniká jen REST
+  // čtením pozic + příkazů v klidu a každý obchodní rámec ho ruší; bez dalšího čtení by
+  // zůstal prázdný a web/telefon by brokera četly dál samy (9. 11. 2026: pruh background
+  // trvale na stropu už při LIVE bez pozice).
+  //
+  // Čte se JEN když adaptér neeviduje žádnou pozici ani pracující příkaz: čtení grafu
+  // příkazů dělá na chvíli `streamOrderSnapshot` nedostupný a posun SL/TP nebo zavření by
+  // spadly na pomalejší REST předčtení. Bez expozice žádná taková správa neběží. Po 3 s
+  // klidu, nejvýš jednou za 30 s, vždy běžnou background třídou (žádná záloha jinou
+  // třídou); po selhání se rozestup zdvojnásobuje až na 10 min.
+  const COVERAGE_REBASELINE_QUIET_MS = 3_000;
+  const COVERAGE_REBASELINE_MIN_GAP_MS = 30_000;
+  const COVERAGE_REBASELINE_MAX_BACKOFF_MS = 600_000;
+  let coverageRebaselineTimer: ReturnType<typeof setTimeout> | null = null;
+  let coverageRebaselineBusy = false;
+  let lastCoverageRebaselineAt = -Infinity;
+  let coverageRebaselineBackoffMs = 0;
+  let coverageRebaselineRead: ((accountId: number) => Promise<unknown>) | null = null;
+  const coverageMissing = () => [...accountSpecsByAccountId.keys()].filter(accountId => !streamReadProof.get(accountId));
+  const coverageExposureFree = () => {
+    for (const position of streamPositions.values()) if (position.netPos !== 0) return false;
+    for (const raw of rawOrders.values()) if (!terminalOrderStatus(raw.ordStatus)) return false;
+    return pendingSocketWrites.size === 0;
+  };
+  const scheduleCoverageRebaseline = (delayMs = COVERAGE_REBASELINE_QUIET_MS) => {
+    if (!config.displayCoverageRebaseline || listeners.size === 0) return;
+    if (coverageRebaselineTimer) clearTimeouts(coverageRebaselineTimer);
+    coverageRebaselineTimer = timeouts(() => { coverageRebaselineTimer = null; void runCoverageRebaseline(); }, Math.max(1, delayMs));
+    (coverageRebaselineTimer as { unref?: () => void }).unref?.();
+  };
+  const runCoverageRebaseline = async () => {
+    if (!coverageRebaselineRead || listeners.size === 0 || coverageRebaselineBusy) return;
+    const missing = coverageMissing();
+    if (missing.length === 0) { coverageRebaselineBackoffMs = 0; return; }
+    // S expozicí se nečte vůbec; další pokus vyvolá až obchodní rámec, který ji ukončí.
+    if (!coverageExposureFree()) return;
+    if (!syncReady || socketState !== 'connected') return;
+    if (!coverageReadQuiet()) { scheduleCoverageRebaseline(); return; }
+    const wait = lastCoverageRebaselineAt + Math.max(COVERAGE_REBASELINE_MIN_GAP_MS, coverageRebaselineBackoffMs) - clock();
+    if (wait > 0) { scheduleCoverageRebaseline(wait); return; }
+    coverageRebaselineBusy = true;
+    lastCoverageRebaselineAt = clock();
+    try {
+      await Promise.all(missing.map(accountId => coverageRebaselineRead!(accountId)));
+    } catch {
+      // Jen zobrazení: bez baseline zůstává web u vlastního čtení jako dosud.
+    } finally {
+      coverageRebaselineBusy = false;
+    }
+    if (coverageMissing().length === 0) { coverageRebaselineBackoffMs = 0; return; }
+    coverageRebaselineBackoffMs = Math.min(COVERAGE_REBASELINE_MAX_BACKOFF_MS,
+      Math.max(COVERAGE_REBASELINE_MIN_GAP_MS * 2, coverageRebaselineBackoffMs * 2));
+    if (coverageExposureFree()) scheduleCoverageRebaseline(coverageRebaselineBackoffMs);
+  };
+
+  const port: TradovateBrokerPort = {
     environment: config.environment,
     runWithAcceptedRequests: config.runWithAcceptedRequests,
     runWithRecoveryRequests: config.runWithRecoveryRequests,
+    runWithLifecycleReads: config.runWithLifecycleReads,
     newRiskRequestBlocker: () => config.requestControl?.newRiskBlocker() ?? null,
     requestHealth: () => config.requestControl ? [config.requestControl.health()] : [],
     streamCoverage(accountId): TradovateWorkerAccountCoverage | null {
@@ -2903,12 +2996,30 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // ContractId vybíráme z čerstvé brokerové Position entity, ne ze stale
       // lokální quantity. Pokud je účet už flat, jde o úspěšný stavový no-op
       // a žádný opačný Market se nesmí vytvořit.
-      const entities = await listPositionEntities();
-      const accountPositions = (entities ?? []).filter(item => (
-        item.accountId === requestBody.accountId && item.netPos !== 0
-      ));
-      await hydrateContracts(accountPositions.map(item => item.contractId));
-      const position = accountPositions.find(item => contracts.get(item.contractId) === requestBody.symbol);
+      // Živý synchronizovaný stream už Position entitu s contractId drží — REST
+      // /position/list před zápisem přidával ~0,2 s ke každému zavření. Endpoint
+      // je stavový (broker likviduje svoji skutečnou pozici, ne zadané množství),
+      // takže případně zastaralý záznam nemůže otevřít opačnou pozici. Když stream
+      // pozici neukazuje (nebo není živý), platí původní čerstvé REST čtení včetně
+      // stavového no-opu „už flat“.
+      // Plot stejný jako u pokrytí streamem (`coverageReadQuiet`): živý a nedávno slyšený
+      // socket, hotový sync bez obnovy, stejný REST host, prázdná sémantická fronta a žádný
+      // rozpracovaný merge. Pozice čekající ve frontě (např. flat po vyplněném SL) tak
+      // nikdy nevybere cíl; pak rozhoduje čerstvé REST čtení. Stream určuje jen contractId,
+      // nikdy důkaz flat.
+      const streamed = coverageReadQuiet()
+        ? [...streamPositions.values()].find(item => item.accountId === requestBody.accountId
+          && item.netPos !== 0 && contracts.get(item.contractId) === requestBody.symbol)
+        : undefined;
+      let position: Pick<TradovatePositionEntity, 'contractId'> | undefined = streamed;
+      if (!position) {
+        const entities = await listPositionEntities();
+        const accountPositions = (entities ?? []).filter(item => (
+          item.accountId === requestBody.accountId && item.netPos !== 0
+        ));
+        await hydrateContracts(accountPositions.map(item => item.contractId));
+        position = accountPositions.find(item => contracts.get(item.contractId) === requestBody.symbol);
+      }
       if (!position) {
         return { status: 'already-flat' as const };
       }
@@ -3434,4 +3545,6 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       };
     },
   };
+  coverageRebaselineRead = accountId => Promise.all([port.listPositions(accountId), port.listOrders(accountId)]);
+  return port;
 }

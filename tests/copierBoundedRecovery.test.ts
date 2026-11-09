@@ -12,12 +12,12 @@ let runtime: CopierRuntimeController | undefined;
 afterEach(()=>runtime?.stop());
 
 describe('automatic flat recovery is a bounded broker read',()=>{
-  it('two routes share control capacity through cap/router, while BG-full still blocks new ARM',async()=>{
+  it('two routes share control capacity through cap/router, while an exhausted total cap still blocks new ARM',async()=>{
     let now=Date.UTC(2026,10,9,15),sequence=0;
     const grants:Array<{at:number;units:number}>=[],wire:Array<{path:string;purpose:string|undefined}>=[];
     const snapshot=():TradovateRequestControlSnapshot=>({version:1,brokerUserId:77,serverNow:now,epoch:0,blockedUntil:null,captchaRequired:false,evidence:null,reason:null,
       policyVersion:2,backgroundReservedHour:1200,backgroundReservedMinute:40,riskReservedHour:0,riskReservedMinute:0,
-      controlReservedHour:grants.reduce((n,g)=>n+g.units,0),controlReservedMinute:grants.filter(g=>g.at>now-60000).reduce((n,g)=>n+g.units,0),totalReservedHour:1200+grants.length});
+      controlReservedHour:grants.reduce((n,g)=>n+g.units,0),controlReservedMinute:grants.filter(g=>g.at>now-60000).reduce((n,g)=>n+g.units,0),totalReservedHour:4000+grants.length});
     const governor=createTradovateRequestGovernor({brokerUserId:77,clock:()=>now,monotonic:()=>now,uuid:()=>`recovery-${++sequence}`,store:{load:async()=>null,save:async()=>{}},
       remote:{read:async()=>snapshot(),penalize:async()=>{throw Error('no penalty fixture');},reserve:async input=>{
         if(input.purpose!=='control'||snapshot().controlReservedMinute!+input.units>24)throw new TradovateRemoteControlError('tradovate-request-budget',60000,snapshot());
