@@ -14,6 +14,7 @@ import {
   shouldRetryProviderCost,
   validateEstimatedCost,
   validateRequestedRange,
+  historicalProviderEnd,
 } from './shared.ts';
 
 const DATABENTO_API_KEY = Deno.env.get('DATABENTO_API_KEY');
@@ -89,6 +90,16 @@ Deno.serve(async (req: Request) => {
     }, 409);
   }
   const end = new Date(Math.min(requestedEnd.getTime(), historicalCutoff));
+  const providerEnd = new Date(historicalProviderEnd(end.getTime()));
+  const closedIntervals = providerEnd < end ? [{
+    start: new Date(Math.max(requestedStart.getTime(), providerEnd.getTime())).toISOString(),
+    end: end.toISOString(), reason: 'regular-cme-weekend',
+  }] : [];
+  if (providerEnd <= requestedStart) return json({
+    provider: 'databento', dataset: DATASET, schema, symbol, sourceSymbol: symbol,
+    start: requestedStart.toISOString(), end: end.toISOString(), providerEnd: providerEnd.toISOString(),
+    closedIntervals, estimatedCostUsd: 0, candles: [],
+  });
   const stypeIn = symbol.includes('.') ? 'continuous' : 'raw_symbol';
   const auth = `Basic ${btoa(`${DATABENTO_API_KEY}:`)}`;
   const costParams = new URLSearchParams({
@@ -97,7 +108,7 @@ Deno.serve(async (req: Request) => {
     schema,
     stype_in: stypeIn,
     start: requestedStart.toISOString(),
-    end: end.toISOString(),
+    end: providerEnd.toISOString(),
     limit: String(MAX_CANDLE_RECORDS),
   });
   const costUrl = 'https://hist.databento.com/v0/metadata.get_cost';
@@ -158,7 +169,7 @@ Deno.serve(async (req: Request) => {
     schema,
     stype_in: stypeIn,
     start: requestedStart.toISOString(),
-    end: end.toISOString(),
+    end: providerEnd.toISOString(),
     encoding: 'json',
     compression: 'none',
     pretty_px: 'true',
@@ -203,6 +214,7 @@ Deno.serve(async (req: Request) => {
 
   return json({
     provider: 'databento', dataset: DATASET, schema, symbol, sourceSymbol: parsed.sourceSymbol,
-    start: requestedStart.toISOString(), end: end.toISOString(), estimatedCostUsd, candles: parsed.candles,
+    start: requestedStart.toISOString(), end: end.toISOString(), providerEnd: providerEnd.toISOString(),
+    closedIntervals, estimatedCostUsd, candles: parsed.candles,
   });
 });

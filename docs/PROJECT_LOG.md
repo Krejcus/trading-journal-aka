@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-09 — Codex: zrychlení skupinové správy a obnova LIVE historie připravené lokálně
+
+- Zdroj z přesně nasazeného `cd530285`, větev `codex/live-speed-history-20261109`, trvalý worktree `~/alphatrade-worktrees/live-speed-history-20261109`; canonical rozpracované kódy a Claude checkout zachované. Skupinové preflight/guard/close reads běží v nových dávkách nejvýš 4 účtů; všechny původní ownership/shape/route/config/brake/ingress kontroly zůstaly, WAL a brokerové zápisy jsou nadále postupné. Chybné read batch se dočte a nepokračuje. Nový `MANAGE TIMING` měří monotónně queue/prepare/execute/total podle operationId, bez účtů a bez rozhodovací autority.
+- Stejný controller/runner mock scénář 3 účty 2/4/2, prodleva všech read endpointů 20 ms, n=3 na akci: SL medián 581→259 ms, TP 583→254 ms (zkrácení 55–56 %). Jde o model, NIKOLI živé click/tap→pixel nebo důkaz 150–250 ms celé kopírky. Širší a pak užší readonly sonda studeného Lucid adaptéru se zastavily na pevném stropu čtení metadat; žádná nová živá latence z nich nebyla odvozena.
+- Produkční logy svíček potvrdily store409→legacy502, Databento206 partial i504timeout. Klient na publication edge již nezaokrouhluje konec na budoucí půlnoc; úspěšné úplné chunky uloží i při chybě druhého. Edge provider request ořezává jen uzavřený konec víkendu CME a vrací explicitní providerEnd/closedIntervals; neakceptuje206 ani nevyrábí bary. DST pátku ověřeno. Omezený visible-only retry přechodných chyb 5/15/60s, bez auto-retry partial/payment/penalty; staré svíčky/záběr zůstávají. Skutečný důvod chyby je nyní v podrobnostech.
+- Finální celá sada **8477 passed+1todo**, 789 souborů passed+1skipped; root i pilot typecheck, web/native build+verify, worker bundle, cap sync, iOS doctor a podepsaný Xcode build passed. Cílený lint0errors/staršíwarningy, diffcheck čistý. Export původní produkční market-candles v11 do chráněného souboru mimo repo. **Bez commitu/pushe/Edge deploye/restartu/instalace iPhonu/ARM/broker write.** Samostatný souhlas s tímto konkrétním web/worker/iPhone/Edge balíkem a DEMO retestem je vyžádán a zatím neobdržen. Žádná DB migrace není potřeba. Detail `docs/reviews/live-speed-history-20261109.md`.
+
 
 ### 2026-11-09 (Codex — dokončení omezené obnovy + skutečný DEMO retest)
 

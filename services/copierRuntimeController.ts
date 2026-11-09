@@ -3,6 +3,7 @@ import { isRetiredDurableGroup } from './copierRetiredGroup';
 import type { GroupLimitTradeState } from '../lib/groupLimitProtocol';
 import { groupLimitsEnabled, groupProtectedLimitMoveProblem, projectGroupLimitTrade, mergeGroupLimitMembers, type GroupLimitMemberRecord } from './groupLimitLifecycle';
 import { executeGroupLimitManagement, type GroupLimitMemberSnapshot } from './groupLimitLifecycleExecution';
+import { readGroupManagementRound } from './groupManagementReadRound';
 import { stableHash64 } from './copierKeys';
 import {
   brokerRiskEquity,
@@ -1057,6 +1058,12 @@ export interface BootstrapCopierOptions {
   episodeIdFactory?: () => string;
   risk?: Partial<RiskGateContext>;
   onAudit?: (entries: readonly CopierAuditEntry[]) => void;
+  /** Diagnostic only; durations are monotonic, contain no account identities,
+   * and must never authorize an action or change its result. */
+  onManagementTiming?: (timing: {
+    operationId: string; action: LeaderOrderManageCommand['action'];
+    queueMs: number; prepareMs: number; executeMs: number; totalMs: number;
+  }) => void;
   /**
    * Okamžitá notifikační cesta: zavolá se hned po přidání trade eventu do
    * deníku. Pilot přes ni šťouchne relay, aby server poslal push bez čekání
@@ -6392,9 +6399,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const generation = safetyGeneration;
     const snapshots = new Map<number, GroupLimitMemberSnapshot>();
     const entryBaseline = new Map<number, BrokerOrder>();
-    for (const member of trade.accounts) {
-      if (member.state === 'unknown' || !member.entry || member.openQuantity == null || member.entry.state === 'pending' || member.entry.state === 'working') return manageBlocked(command, 'group-shape', 'Čekající remainder musí být před správou zrušený a ověřený.');
-      const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(member.accountId, { fresh: true }), options.broker.listPositions(member.accountId), boundedManagedOrderLookup(member.accountId, member.entry.brokerOrderId)]);
+    if (trade.accounts.some(member => member.state === 'unknown' || !member.entry || member.openQuantity == null || member.entry.state === 'pending' || member.entry.state === 'working')) return manageBlocked(command, 'group-shape', 'Čekající remainder musí být před správou zrušený a ověřený.');
+    const initialReads = await readGroupManagementRound(trade.accounts.map(member => ({ accountId: member.accountId, entryId: member.entry!.brokerOrderId })), options.broker, boundedManagedOrderLookup);
+    for (const [index, { orders, positions, entryRead }] of initialReads.entries()) {
+      const member = trade.accounts[index];
+      // Validated before the read round; the captured projection is immutable.
+      if (!member.entry || member.openQuantity == null) return manageBlocked(command, 'group-shape', 'Vlastní vstup není ověřený.');
       const entry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
       const net = positions.filter(row => row.symbol === trade.symbol).reduce((sum, row) => sum + row.netQuantity, 0);
       if (net !== 0 && !groupMemberOwnsPosition(own, member.accountId, member.entry.brokerOrderId, net, orders)) return manageBlocked(command, 'group-lineage', `Účet ${member.accountId}: aktuální pozice není prokázaná jako tento vlastní obchod.`);
@@ -6449,8 +6459,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped || runningEmergencyFlattens > 0 || configFence() !== configAtAdmission || clock() >= deadlineAt || (!cleanup && (generation !== safetyGeneration || !underBrake && (!gate.armed || gate.killSwitch || gate.shadowMode)))) return 'Změnil se stav, konfigurace nebo spojení skupiny.';
       if (!gate.connected || gate.sequenceBroken || source.needsReconciliation()) return 'Spojení nebo pořadí dat není ověřené.';
       if (!cleanup) { const problem = priceProblem(); if (problem) return problem; }
-      for (const [accountId, wanted] of expected) {
-        const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(accountId, { fresh: true }), options.broker.listPositions(accountId), boundedManagedOrderLookup(accountId, entryBaseline.get(accountId)!.brokerOrderId)]);
+      const reads = await readGroupManagementRound([...expected.keys()].map(accountId => ({ accountId, entryId: entryBaseline.get(accountId)!.brokerOrderId })), options.broker, boundedManagedOrderLookup);
+      for (const { accountId, orders, positions, entryRead } of reads) {
+        const wanted = expected.get(accountId)!;
         const currentEntry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
         const baseline = entryBaseline.get(accountId)!;
         const currentOwn = manualEntryRecords().find(record => record.operationId === own.operationId)!;
@@ -6521,8 +6532,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             },
             beforeWrite: async ({ accountId, symbol, kind, brokerOrderId }) => {
               if (symbol !== trade.symbol || !accountIds.includes(accountId) || configFence() !== configAtAdmission || stopped || clock() >= deadlineAt) throw new Error('Změnil se scope nebo spojení skupinového zavření.');
-              for (const member of members) {
-                const [orders, positions, entryRead] = await Promise.all([options.broker.listOrders(member.accountId, { fresh: true }), options.broker.listPositions(member.accountId), boundedManagedOrderLookup(member.accountId, member.entryId)]);
+              const reads = await readGroupManagementRound(members, options.broker, boundedManagedOrderLookup);
+              for (const [index, { orders, positions, entryRead }] of reads.entries()) {
+                const member = members[index];
                 const net = positions.filter(position => position.symbol === trade.symbol).reduce((sum, position) => sum + position.netQuantity, 0);
                 const original = snapshots.get(member.accountId)!;
                 const entry = entryRead?.completeness === 'authoritative' ? entryRead.order : null;
@@ -23722,10 +23734,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!Number.isFinite(deadlineAt) && !existing) return manageBlocked(command, 'no-deadline', 'Příkaz nemá platnost — nic se neodeslalo.');
       let started = false;
       let abandonedStart = false;
+      const queuedAtMono = performance.now();
+      let preparedStartedAtMono = queuedAtMono;
       const queuedFence = manualEntryQueueFence();
       const prepared = eventTail.then(async () => {
         if (abandonedStart || stopped) return null;
         started = true;
+        preparedStartedAtMono = performance.now();
         return broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(() => prepareManualOrderAction(command, deadlineAt, queuedFence)) : prepareManualOrderAction(command, deadlineAt, queuedFence);
       });
       eventTail = prepared.then(() => undefined).catch(reason => failClosed(errorOf(reason), { autoClose: false }));
@@ -23744,11 +23759,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (typeof first !== 'function') return first;
       // Zápis MIMO frontu controlleru (P7): replace eventy leadera se zatím zrcadlí normálně.
+      const executionStartedAtMono = performance.now();
       const job = broker.runWithAcceptedRequests ? broker.runWithAcceptedRequests(first) : first();
       const tracked = job.then(() => undefined, () => undefined);
       manualOrderActionJobs.add(tracked);
       void tracked.finally(() => manualOrderActionJobs.delete(tracked));
-      return job;
+      return job.finally(() => {
+        try {
+          const finishedAtMono = performance.now();
+          options.onManagementTiming?.({ operationId: command.operationId, action: command.action,
+            queueMs: Math.round(preparedStartedAtMono - queuedAtMono), prepareMs: Math.round(executionStartedAtMono - preparedStartedAtMono),
+            executeMs: Math.round(finishedAtMono - executionStartedAtMono), totalMs: Math.round(finishedAtMono - queuedAtMono) });
+        } catch { /* Observability cannot change the execution outcome. */ }
+      });
     },
     async placeLeaderEntry(command, { deadlineAt }) {
       const existing = manualEntryRecords().find(record => record.operationId === command.operationId);

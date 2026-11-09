@@ -96,7 +96,7 @@ export const splitCandleFetchRange = (
   schema === 'ohlcv-1h' ? splitAtUtcMonths(range) : splitRange(range, FETCH_CHUNK_DAYS * DAY_MS);
 
 export class MarketDataError extends Error {
-  constructor(message: string, public readonly code = 'market-data-error') {
+  constructor(message: string, public readonly code = 'market-data-error', public readonly httpStatus?: number) {
     super(message);
     this.name = 'MarketDataError';
   }
@@ -112,7 +112,7 @@ const parseFunctionError = async (error: any): Promise<MarketDataError> => {
     const response = error?.context;
     if (response instanceof Response) {
       const payload = await response.clone().json();
-      if (payload?.error) return new MarketDataError(String(payload.message || payload.error), String(payload.error));
+      if (payload?.error) return new MarketDataError(String(payload.message || payload.error), String(payload.error), response.status);
     }
   } catch {
     // Supabase can return a non-JSON gateway response. The generic message below is clearer.
@@ -280,12 +280,18 @@ export async function loadMarketCandles(params: {
     const missing = days.filter(day => !buckets.has(day));
     if (missing.length) {
       const chunks = contiguousRanges(missing)
+        // Full old UTC days remain reusable buckets. At the publication edge,
+        // rounding a partial day up to midnight would ask the store for future
+        // data (409) and force a large, partially resolved legacy query.
+        .map(range => ({ ...range, endMs: range.endMs > Date.now() - DAY_COMPLETE_MARGIN_MS ? Math.min(range.endMs, endMs) : range.endMs }))
         .flatMap(range => splitCandleFetchRange(schema, range));
-      const results = await Promise.all(chunks.map(chunk =>
+      const results = await Promise.allSettled(chunks.map(chunk =>
         fetchCandleRange(params.symbol, schema, chunk.startMs, chunk.endMs)));
       const now = Date.now();
       const toStore: Array<[string, StoredDayBucket]> = [];
-      results.forEach((result, index) => {
+      results.forEach((outcome, index) => {
+        if (outcome.status !== 'fulfilled') return;
+        const result = outcome.value;
         estimatedCostUsd += result.estimatedCostUsd;
         sourceSymbol ??= result.sourceSymbol;
         const chunk = chunks[index];
@@ -308,6 +314,11 @@ export async function loadMarketCandles(params: {
       } catch {
         // A full/blocked browser cache must never make the chart itself fail.
       }
+      // Preserve independently completed days even when another chunk failed.
+      // Still reject this whole requested window: a failed chunk must never be
+      // represented as an empty day or as verified complete coverage.
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
     }
 
     const startSec = Math.floor(startMs / 1000);

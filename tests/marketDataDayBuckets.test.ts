@@ -47,6 +47,45 @@ beforeEach(() => {
 });
 
 describe('denní kbelíky svíček', () => {
+  it('does not round a LIVE historical cutoff into unpublished data or bypass the store', async () => {
+    const day = MONDAY + DAY_MS;
+    vi.setSystemTime(new Date(day + DAY_MS + 12 * 3600_000));
+    const end = day + 11 * 3600_000 + 40 * 60_000;
+    invoke.mockImplementation(async (name, options) => {
+      if (Date.parse(options.body.end) > Date.now() - DAY_MS) return {
+        data: null, error: { context: new Response(JSON.stringify({ error: 'data-not-yet-historical' }), { status: 409 }) },
+      };
+      return { ...serveCandles(options.body), data: { ...serveCandles(options.body).data, end: options.body.end } };
+    });
+    const response = await loadMarketCandles({ symbol: 'MNQM6', start: new Date(day - DAY_MS), end: new Date(end) });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0][0]).toBe('market-candle-store');
+    expect(invoke.mock.calls[0][1].body.end).toBe(new Date(end).toISOString());
+    expect(response.end).toBe(new Date(end).toISOString());
+    expect(response.candles.at(-1)!.time * 1000).toBeLessThan(end);
+    expect([...idbStore.keys()].some(key => key.endsWith(new Date(day).toISOString().slice(0, 10)))).toBe(false);
+  });
+
+  it('keeps successful closed chunks on failure, retries only missing days and never caches a failed chunk as empty', async () => {
+    const start = Date.UTC(2025, 11, 1), end = start + 20 * DAY_MS;
+    let fail = true;
+    invoke.mockImplementation(async (_name, options) => {
+      if (fail && Date.parse(options.body.start) >= start + 14 * DAY_MS) return {
+        data: null, error: { context: new Response(JSON.stringify({ error: 'provider-partial', message: 'Symbol is only partially resolved.' }), { status: 400 }) },
+      };
+      return { ...serveCandles(options.body), data: { ...serveCandles(options.body).data, end: options.body.end } };
+    });
+    const request = { symbol: 'MNQZ5', start: new Date(start), end: new Date(end) };
+    await expect(loadMarketCandles(request)).rejects.toMatchObject({ code: 'provider-partial' });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(idbStore.size).toBe(14);
+    fail = false;
+    const response = await loadMarketCandles(request);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke.mock.calls[2][1].body.start).toBe(new Date(start + 14 * DAY_MS).toISOString());
+    expect(response.end).toBe(new Date(end).toISOString());
+    expect(response.candles[0].time).toBe(start / 1000);
+  });
   it('doplní tentýž částečně zveřejněný den i při stejném okně požadavku', async () => {
     const day = MONDAY + DAY_MS;
     vi.setSystemTime(new Date(day + DAY_MS + DAY_MS / 2));

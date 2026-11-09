@@ -1534,6 +1534,7 @@ async function runLocalAgent(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
+      onManagementTiming: timing => { console.log(`${new Date().toISOString()} MANAGE TIMING ${JSON.stringify(timing)}`); },
       onError: logControllerError,
       // Post-connect recovery musí vidět stejný optional-skip jako ruční
       // Kontrola pozic, jinak zmizelý breached follower shodí recovery.
@@ -2579,6 +2580,7 @@ async function runRuntime(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
+      onManagementTiming: timing => { console.log(`${new Date().toISOString()} MANAGE TIMING ${JSON.stringify(timing)}`); },
       onError: logControllerError,
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');

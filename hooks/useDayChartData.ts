@@ -10,6 +10,7 @@ import { useLiveCandles } from './useLiveCandles';
 import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
 import { perfDuration } from '../lib/perfTrace';
 import { chartDataQuality } from '../lib/chartDataQuality';
+import { createChartHistoryRefresh } from '../services/chartHistoryRefresh';
 
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
@@ -76,15 +77,18 @@ export function useDayChartData(
       setHistorical({ day, key: historicalKey, candles: response?.candles ?? [], symbol: response?.symbol ?? 'MNQ' });
       if (useTail && response) void writeDayTail({ day, anchorKey, capKey, symbol: response.symbol, candles: response.candles }, response.end);
     };
-    load()
-      .catch(reason => {
+    const refresh = createChartHistoryRefresh({ load, isVisible: () => document.visibilityState !== 'hidden',
+      onError: reason => {
         if (cancelled) return;
         // Neúspěšné obnovení stejného dne nechá dosavadní svíčky na místě.
         setHistorical(previous => previous?.day === day && previous.candles.length
           ? { ...previous, key: historicalKey, error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo obnovit.' }
           : { day, key: historicalKey, candles: [], symbol: 'MNQ', error: reason instanceof Error ? reason.message : 'Tržní data se nepodařilo načíst.' });
-      });
-    return () => { cancelled = true; };
+      } });
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh.refresh(); };
+    void refresh.refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; refresh.stop(); document.removeEventListener('visibilitychange', onVisible); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
   }, [historicalKey, detailsReady, perfScope]);
 

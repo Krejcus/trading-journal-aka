@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BrokerAccountRiskSnapshot } from '../services/brokerPort';
-import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
+import { bootstrapCopierRuntime, type BootstrapCopierOptions, type CopierRuntimeController } from '../services/copierRuntimeController';
 import { createMemoryCopierStore } from '../services/copierStore';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker, type MockBrokerOptions, type MockBroker } from '../services/mockBroker';
@@ -18,7 +18,7 @@ const config = (): CopyGroupConfig => ({ id: 'group-limit', name: 'Group', enabl
 let active: CopierRuntimeController | null = null;
 afterEach(() => { active?.stop(); active = null; });
 
-async function setup(options: { on?: boolean; quantity?: number; bare?: boolean; behavior?: MockBrokerOptions['behavior']; patchBroker?: (broker: MockBroker) => void } = {}) {
+async function setup(options: { on?: boolean; quantity?: number; bare?: boolean; behavior?: MockBrokerOptions['behavior']; patchBroker?: (broker: MockBroker) => void; onManagementTiming?: BootstrapCopierOptions['onManagementTiming'] } = {}) {
   const clock = { now: START };
   const risks = [100, 200, 300].map(accountId => {
     const row = { accountId, realizedPnlUsd: 0, openPnlUsd: 0, netLiq: 50_000, minNetLiq: 45_000, dailyLossAutoLiq: 5_000, trailingMaxDrawdown: 5_000 } as BrokerAccountRiskSnapshot;
@@ -41,6 +41,7 @@ async function setup(options: { on?: boolean; quantity?: number; bare?: boolean;
   options.patchBroker?.(broker);
   const controller = await bootstrapCopierRuntime({ broker, store, group: config(), clock: () => clock.now,
     manualGroupLimits: options.on ?? true, osoCorrelationWindowMs: 30, flattenConfirmationAttempts: 2, flattenConfirmationPollMs: 1,
+    onManagementTiming: options.onManagementTiming,
     manualEntryQuote: () => ({ contract: SYMBOL, last: 29_520, bid: 29_520, ask: 29_520.25, quoteAt: clock.now, lastAt: clock.now }),
     manualEntryTimingsMs: { post: 300, start: 500, legWait: 300, manage: 300, settle: 50, verify: 150 } });
   active = controller; broker.setConnected(true); await controller.waitForIdle(); await controller.reconcile(); controller.arm();
@@ -89,6 +90,33 @@ async function setup(options: { on?: boolean; quantity?: number; bare?: boolean;
 }
 
 describe('group LIMIT lifecycle (real controller and runner)', () => {
+  it('a failed timing collector cannot change an acknowledged group action', async () => {
+    let samples = 0;
+    const ctx = await setup({ onManagementTiming: timing => { samples++; expect(timing.totalMs).toBeGreaterThanOrEqual(0); throw new Error('diagnostics failed'); } });
+    await ctx.fill(100); await ctx.fill(200); await ctx.fill(300); ctx.clock.now += 1_000;
+    expect((await ctx.action('move-stop', 'manage:grouptimingfail', { newPrice: SL + 1 })).status).toBe('acknowledged');
+    expect(samples).toBe(1); expect(ctx.writes).toHaveLength(3); expect(ctx.controller.status().lastError).toBeNull();
+  });
+  it.each(['move-stop', 'move-target'] as const)('measures complete group %s with identical delayed broker reads', async action => {
+    const ctx = await setup();
+    await ctx.fill(100); await ctx.fill(200); await ctx.fill(300); ctx.clock.now += 1_000;
+    const orders = ctx.broker.listOrders.bind(ctx.broker);
+    const positions = ctx.broker.listPositions.bind(ctx.broker);
+    const lookup = ctx.broker.findOrderById!.bind(ctx.broker);
+    ctx.broker.listOrders = async (...args) => { await sleep(20); return orders(...args); };
+    ctx.broker.listPositions = async (...args) => { await sleep(20); return positions(...args); };
+    ctx.broker.findOrderById = async (...args) => { await sleep(20); return lookup(...args); };
+    const samples: number[] = [];
+    for (let index = 1; index <= 3; index++) {
+      const startedAt = performance.now();
+      const result = await ctx.action(action, `manage:groupbench${action}${index}`, { newPrice: (action === 'move-stop' ? SL : TP) + index });
+      samples.push(Math.round(performance.now() - startedAt));
+      expect(result.status).toBe('acknowledged');
+      await ctx.controller.waitForIdle();
+    }
+    expect(ctx.writes).toHaveLength(9);
+    if (process.env.AT_SPEED_BENCH) process.stdout.write(JSON.stringify({ benchmark: 'group-management', action, accounts: 3, readDelayMs: 20, samplesMs: samples }) + '\n');
+  });
   it('protected 2/4/2 contracts: exactly one parent Modify per account through existing cascade', async () => {
     const ctx = await setup();
     expect(ctx.controller.status().groupLimitTrades?.[0]).toMatchObject({ state: 'pending', accounts: [{ expectedQuantity: 2 }, { expectedQuantity: 4 }, { expectedQuantity: 2 }] });

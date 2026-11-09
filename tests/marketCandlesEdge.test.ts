@@ -12,9 +12,24 @@ import {
   shouldRetryProviderCost,
   validateEstimatedCost,
   validateRequestedRange,
+  historicalProviderEnd,
 } from '../supabase/functions/market-candles/shared';
 
 describe('market-candles Edge Function helpers', () => {
+  it.each([
+    // Normal winter, summer and both US DST weekends use Friday's own offset.
+    ['2026-11-08T19:15:00Z', '2026-11-06T22:00:00Z'],
+    ['2026-07-26T18:00:00Z', '2026-07-24T21:00:00Z'],
+    ['2026-11-01T22:59:59Z', '2026-10-30T21:00:00Z'],
+    ['2026-03-08T21:59:59Z', '2026-03-06T22:00:00Z'],
+    ['2026-11-08T23:00:00Z', '2026-11-06T22:00:00Z'],
+    ['2026-11-07T03:00:00Z', '2026-11-06T22:00:00Z'],
+  ])('trims only the closed weekend tail (%s)', (end, expected) => {
+    expect(new Date(historicalProviderEnd(Date.parse(end))).toISOString()).toBe(new Date(expected).toISOString());
+  });
+  it.each(['2026-11-08T23:00:00.001Z', '2026-11-09T18:00:00Z', '2026-11-06T21:59:59Z', '2026-11-06T22:00:00Z'])('does not remove even one trading instant or infer a weekday holiday (%s)', end => {
+    expect(historicalProviderEnd(Date.parse(end))).toBe(Date.parse(end));
+  });
   it('allows only exact and continuous NQ/MNQ symbols', () => {
     expect(isAllowedSymbol('MNQU6')).toBe(true);
     expect(isAllowedSymbol('NQZ26')).toBe(true);

@@ -4,6 +4,35 @@ export const MAX_RANGE_MS = 16 * 24 * 60 * 60 * 1000;
 export const MAX_HTF_RANGE_MS = 370 * 24 * 60 * 60 * 1000;
 export const MAX_CANDLE_RECORDS = 25_000;
 
+const nyClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+});
+const nyParts = (at: number) => Object.fromEntries(nyClock.formatToParts(at).map(part => [part.type, part.value]));
+
+/** Only trim a CLOSED trailing weekend, never a trading interval or a holiday.
+ * CME NQ/MNQ: Friday 17:00 ET to Sunday 18:00 ET is closed.
+ * https://www.cmegroup.com/articles/faqs/micro-e-mini-equity-index-futures-frequently-asked-questions.html
+ * A continuous mapping need not exist for the unpublished Sunday business day.
+ * Asking for that mapping can turn an otherwise valid history into HTTP 206.
+ * The response must disclose the excluded closed interval; no bars are filled. */
+export function historicalProviderEnd(endMs: number): number {
+  if (!Number.isFinite(endMs)) return endMs;
+  // Exclusive end: Sunday 18:00:00.000 still ends BEFORE the reopening.
+  const parts = nyParts(endMs - 1);
+  const backDays = parts.weekday === 'Sat' ? 1 : parts.weekday === 'Sun' && Number(parts.hour) < 18 ? 2
+    : parts.weekday === 'Fri' && Number(parts.hour) >= 17 ? 0 : null;
+  if (backDays === null) return endMs;
+  const wall = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) - backDays, 17);
+  // Compute Friday's own offset, not Sunday's: US DST can change mid-weekend.
+  let at = wall;
+  for (let pass = 0; pass < 2; pass++) {
+    const p = nyParts(at);
+    at += wall - Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
+  }
+  return Math.min(endMs, at);
+}
+
 export interface ParsedMarketCandle {
   time: number;
   open: number;

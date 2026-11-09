@@ -47,7 +47,7 @@ export function chartDataQuality(input: {
   let missingMinutes = 0;
   // Only the selected day, not its full 14-day indicator context. Never fill gaps.
   for (let t = start; t < end; t += 60) if (!times.has(t) && regularNasdaqSession(t * 1000)) missingMinutes++;
-  if (input.historicalError) reasons.push('Historická data se nepodařilo obnovit. Případná dříve načtená historie zůstává zobrazená.');
+  if (input.historicalError) reasons.push(`Historická data se nepodařilo obnovit: ${input.historicalError} Případná dříve načtená historie zůstává zobrazená.`);
   else if (input.historicalLoading) reasons.push('Historie se ještě načítá; dostupný rozsah zatím není konečný.');
   if (input.needsLive) {
     if (input.liveProblem) reasons.push(PROBLEMS[input.liveProblem]);
