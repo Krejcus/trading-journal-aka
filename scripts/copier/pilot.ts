@@ -433,7 +433,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       if (loadOptions.strictDirectory) throw error;
       const message = error instanceof Error ? error.message : String(error);
       console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
-      return { accounts: [] as Array<{id: number; name: string}> };
+      return { accounts: [] as Awaited<ReturnType<typeof loadTradovateAccountDirectory>>['accounts'] };
     });
     // 6. 10. 2026: FundedNext po breachi vracel autentizovaně `account/list = []`
     // a discovery to brala jako zdravé načtení (bez dalších pokusů). Prázdný
