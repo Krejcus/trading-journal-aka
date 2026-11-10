@@ -38,10 +38,17 @@ export interface LiveChartPositionSummary {
   rows: readonly LiveChartPositionAccountRow[];
   /**
    * Aspoň jeden účet je jen ze zobrazovací projekce workeru bez dokladu kontinuity
-   * (`lib/liveChartExposureProjection.ts`): čáry se kreslí se štítkem „neověřeno“,
-   * bez ovládání, a desk z takového stavu nic neodešle. Nikdy autorizace.
+   * (`lib/liveChartExposureProjection.ts`) nebo držený stav: čáry tlumené se štítkem
+   * „neověřeno“; projdou jen akce snižující riziko (`lib/liveChartRiskPolicy.ts`). Nikdy autorizace.
    */
   unverified?: boolean;
+  /**
+   * Skluz Market vstupu (DEMO 10. 11.): fill horší než cena, kterou uživatel viděl, takže SL ze
+   * šablony je blíž fillu, než plán čekal. Jen text ke štítku SL — nic neposílá ani neposouvá.
+   */
+  fillNote?: string;
+  /** Ověřeno jen kotvou kontinuity streamu (ne plným dokladem): zobrazení ověřené, akce zvětšující ztrátu ne. */
+  continuityOnly?: boolean;
 }
 
 export interface LiveChartPositionAccountRow {
@@ -80,6 +87,13 @@ export interface LiveChartPosition {
   summary: LiveChartPositionSummary | null;
   /** Proč čísla nejsou (neověřené čtení, dobíhající kopie, rozjetí…). */
   issue: string | null;
+  /**
+   * Strojový druh `issue` (text je jen pro člověka): `stale` / `orders-stale` = čtení neověřené
+   * (jen tehdy smí graf krátce podržet poslední stav), ostatní = skutečný stav skupiny.
+   */
+  issueKind?: JournalLiveView['issue'] | 'mismatch' | 'unknown';
+  /** Flat pohled ověřený jen kotvou kontinuity (ne plným dokladem): nový vstup brána nepustí. */
+  continuityOnly?: boolean;
 }
 
 export const NO_LIVE_CHART_POSITION: LiveChartPosition = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
@@ -205,11 +219,11 @@ export function leaderManageBasis(summary: LiveChartPositionSummary | null | und
 export function liveChartPosition(view: JournalLiveView, requested: JournalLiveTarget): LiveChartPosition {
   // Pohled tiše spadlý na skupinu (účet zmizel) nesmí ukázat cizí pozici.
   if (view.target !== requested) {
-    return { key: `mismatch:${requested}`, symbol: null, lines: [], summary: null, issue: 'Pozice vybraného účtu není v datech' };
+    return { key: `mismatch:${requested}`, symbol: null, lines: [], summary: null, issue: 'Pozice vybraného účtu není v datech', issueKind: 'mismatch' };
   }
   if (!view.verified) {
     const issue = journalLiveIssueLabel(view) ?? 'Pozice neověřené';
-    return { key: `issue:${issue}`, symbol: null, lines: [], summary: null, issue };
+    return { key: `issue:${issue}`, symbol: null, lines: [], summary: null, issue, issueKind: view.issue ?? 'unknown' };
   }
   const model = view.model;
   if (!model) return NO_LIVE_CHART_POSITION;
@@ -254,4 +268,28 @@ export function liveChartPosition(view: JournalLiveView, requested: JournalLiveT
   // Klíč bez polí, která se mění každým tickem bez změny obrazu PC grafu (kotva P&L, poplatky, $ úrovní).
   const keyRows = summary.rows.map(({ openPnlAsOf: _asOf, fees: _fees, stopUsd: _stopUsd, targetUsd: _targetUsd, ...row }) => row);
   return { key: JSON.stringify([model.symbol, { ...summary, rows: keyRows }, lines.map(line => [line.id, line.price, line.title])]), symbol: model.symbol, lines, summary, issue: null };
+}
+
+/**
+ * Poznámka ke štítku SL, když Market vstup dostal horší fill než viděnou cenu (`referencePrice`):
+ * SL ze šablony se počítal od reference, takže je od skutečného fillu blíž. Ukazuje fakta —
+ * skluz a skutečnou vzdálenost SL od fillu; ochranu NEPOSOUVÁ (to by byl nový zápis k brokerovi).
+ * null = nic hlásit (odchylka fillu < 1 tick, chybí data, jiná strana).
+ */
+export function liveFillSlippageNote(
+  summary: Pick<LiveChartPositionSummary, 'kind' | 'side' | 'stop'> | null | undefined,
+  entry: { orderType?: string; side: 'Buy' | 'Sell'; referencePrice?: number; fillAvg?: number } | null | undefined,
+  tick = MNQ_TICK,
+): string | null {
+  if (!summary || summary.kind !== 'position' || !entry || entry.orderType !== 'Market') return null;
+  if ((entry.side === 'Buy') !== (summary.side === 'long')) return null;
+  const { referencePrice, fillAvg } = entry;
+  if (referencePrice == null || fillAvg == null || !Number.isFinite(referencePrice) || !Number.isFinite(fillAvg)) return null;
+  const direction = summary.side === 'long' ? 1 : -1;
+  const slip = (fillAvg - referencePrice) * direction;
+  if (Math.abs(slip) < tick - 1e-9) return null;
+  const stopText = summary.stop != null && Number.isFinite(summary.stop)
+    ? ` — SL je ${Math.abs(fillAvg - summary.stop).toFixed(2)} b od fillu (od viděné ceny ${Math.abs(referencePrice - summary.stop).toFixed(2)} b)`
+    : '';
+  return `fill o ${Math.abs(slip).toFixed(2)} b ${slip > 0 ? 'horší' : 'lepší'}${stopText}`;
 }

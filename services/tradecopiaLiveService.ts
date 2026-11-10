@@ -170,6 +170,8 @@ export interface LiveOrder {
   placedAt: string | null;
   updatedAt: string | null;
   working: boolean;
+  /** Noha bracketu (má OSO rodiče nebo OCO pár) — nikdy čekající vstup. Jen zobrazení. */
+  bracketLeg?: boolean;
 }
 
 export interface LiveEvent {

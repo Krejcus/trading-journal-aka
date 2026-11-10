@@ -1,5 +1,6 @@
 import { breakEvenStop, leaderManageBasis, type LiveChartPositionSummary } from './liveChartPosition';
 import { liveLineMoveBlockReason } from './liveChartOrderLines';
+import { liveUnverifiedActionBlock } from './liveChartRiskPolicy';
 import type { TicketBracketUnits } from './liveOrderTicket';
 
 /**
@@ -302,6 +303,9 @@ export function planBreakEven(
   if (price == null) return blocked('Cenu BE nejde spočítat.');
   const label = variantLabel(variant);
   if (price === summary.stop) return blocked(`SL už je na ${label} (${priceText(price)}).`, price);
+  // Neověřená pozice: BE varianta jen jako utažení SL, jinak zašedlé s důvodem.
+  const policy = liveUnverifiedActionBlock(summary, { kind: 'move-stop', newPrice: price });
+  if (policy) return blocked(policy, price);
   const reason = liveLineMoveBlockReason(summary, 'stopLoss', price);
   if (reason) return blocked(reason, price);
   return { ok: true, intent: intentFor(summary, 'stopLoss', variant.kind, summary.stop, price, `SL na ${label} ${priceText(price)}`) };

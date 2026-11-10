@@ -1963,6 +1963,28 @@ existující ochranu.
   `displayCoverageRebaseline`), jinak by doklad po první události zmizel a weby
   četly brokera dál samy. S expozicí se nečte: čtení grafu příkazů by správě
   obchodu vzalo rychlý snímek streamu. ACK není baseline.
+  Kontinuita pro graf (10. 11. 2026, DEMO: s otevřenou pozicí se doklad nikdy neobnovil a graf
+  zůstal „neověřeno“): spolu s dokladem vzniká per-účet kotva kontinuity (stejná REST baseline
+  a session). Obchodní událost téhož účtu ji NEzruší (mění data, ne kontinuitu); zruší ji nová
+  socket session, globální zneplatnění (vadná nebo neurčitelná událost, změna REST zdroje,
+  vadné čtení). `streamContinuity` / `exposure.streamContinuity` mají stejné příznaky a kontroly
+  jako doklad (socket, sync, gap, backlog včetně nezpracovaných událostí controlleru, merge, shoda
+  snímku streamu s cache). Používá je JEN zobrazení: graf a od 10. 11. 2026 (Filipovo zadání,
+  nález 4 review 9aa17b7) také vykreslení řádků účtů v LIVE přehledu a mobilní detail účtu
+  (`overlayWorkerContinuityForDisplay` → `rowDisplaySnapshot`/`rowDisplayOrders`, pozice
+  i příkazy ze stejných dat). ARM předkontrola, výrok „flat“, náhled Flatten, ostrov, záložka
+  Risk, způsobilost i řízení REST čtení (`streamCoverage`, `workerConnectionReadPlan`) dál stojí
+  výhradně na dokladu (`tests/liveCopyRowDisplaySnapshot.test.ts`). Předpoklad (NEOVĚŘENO conformance
+  testem): Tradovate stream v rámci živé session nevynechá entitu Position ani Order; vynechání
+  by kotva nepoznala (proti tomu stojí jen shoda snímku streamu s cache controlleru).
+  Chybějící kotva (restart workeru, nová WS session) se obnovuje i S EXPOZICÍ: jen když chybí,
+  bez rozpracovaného zápisu, po 0,5 s klidu, nejvýš jednou za 5 s, backoff do 60 s, background
+  třída. Během toho čtení může správa spadnout na pomalejší REST předčtení (vědomá cena).
+  `exposure.streamCoverageGaps` nese u každého nepokrytého účtu explicitní důvod.
+  `verifiedAt` zůstává časem autoritativního čtení (klidový režim `nativeIdleBrokerSnapshot`);
+  atestace kontinuity všech účtů skupiny (živý synchronizovaný stream bez mezery, backlogu
+  a neshody snímku s cache) je zvlášť v `continuityAttestedAt`. Test
+  `tests/tradovateBrokerRequestControl.test.ts`, `tests/copierRequestControlController.test.ts`.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
   Per-part sequence patří fyzickému requestu i jeho joinerům: starší completion
   nesmí přepsat novější pozici. Heartbeat nezmění čas původních dat.
@@ -2212,14 +2234,20 @@ existující ochranu.
   Stav „neověřeno“ nesou VŠECHNY cesty zobrazení: čáry pozice (tlumené, štítek), druhý kanál čar
   (pracující příkazy, `liveChartWorkingSource.unverified`), karta ochrany (text krytí, řádky účtů
   `unverified` a nikdy `protectedFully`; PC panel i telefonní list) a skupina v hlavičce grafu.
-  Ovládání po fillu NEMIZÍ (review Codexu 10. 11.): × a „+ SL/TP“ zůstávají, BE je zašedlé
-  s důvodem, jen tažení je vypnuté. Autorizace stojí jen na platném dokladu / ověřeném čtení:
+  Ovládání po fillu NEMIZÍ (review Codexu 10. 11.): ×, „+ SL/TP“, BE i tažení SL (jen utažení)
+  zůstávají; co z neověřené pozice odejít smí, rozhoduje JEN politika níže (žádné plošné
+  zamčení). Autorizace stojí jen na platném dokladu / ověřeném čtení:
   `isLiveAccountReadVerified` projekci vždy odmítá (kreslí jen výslovná zobrazovací kopie
-  `liveChartDisplayAccounts` uvnitř hooku) a každé odeslání z neověřené pozice grafu — správa,
-  doplnění SL/TP, holé nohy, × holé pozice, přikoupení — odmítne `lib/liveChartCommandGuard.ts`
-  chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz. Obyčejný vstup,
-  Flatten, OFF a Kill brána neblokuje (INV-UI-02). Desková data (`overlayWorkerExposure` v desku,
-  způsobilost, plán REST čtení) dál vyžadují doklad.
+  `liveChartDisplayAccounts` uvnitř hooku). Každé odeslání z grafu jde přes
+  `lib/liveChartCommandGuard.ts` (`gateFor`), který na neověřené pozici odmítne akce zvyšující
+  riziko chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz; akce
+  snižující riziko pustí. Vstup na jiném kontraktu,
+  Flatten, OFF a Kill brána neblokuje (INV-UI-02). Neznámé ≠ flat: pohled bez pozice stojící na
+  neověřené projekci (`markUnverifiedFlat`) nese `issueKind: 'stale'` a nový vstup z něj brána
+  odmítne (kontrakt neznáme). Paměť držené pozice má klíč s uživatelem, OAuth připojením
+  a prostředím každého účtu pohledu. Desková autorizační data (`overlayWorkerExposure` v desku,
+  ARM/flat předkontrola, způsobilost, plán REST čtení) dál vyžadují doklad; kontinuita smí jen
+  do vykreslení řádků přehledu (viz kotva kontinuity výše).
   Pořadí REST vs. worker: podle SEKVENCE ZAHÁJENÍ REST požadavku v prohlížeči
   (`lib/tradovateClientReadOrder.ts`, přidělí `useTradovateLiveData` při startu čtení, účet ji
   převezme jen když čtení změnilo jeho `positionsAsOf`/`ordersAsOf`), NE podle času příchodu ani
@@ -2230,7 +2258,35 @@ existující ochranu.
   plot nevynuluje. Plot je PRVNÍ krok projekce (`guardStaleRestReads`), před jakýmkoli overlayem,
   zkratkou dokladu nebo návratem, takže platí na všech cestách. Stav workeru (s dokladem
   i bez) graf kreslí jen z čerstvého, neobnoveného statusu této instance (`trusted &&
-  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity. Pořadí workeru samotného dál řeší fence pollu
+  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity.
+  Účet s platným řádkem `exposure.streamContinuity` (tytéž kontroly jako doklad, ≤ 8 s) je
+  z čerstvého neobnoveného statusu OVĚŘENÝ pro zobrazení i s otevřenou pozicí. Autorizačně je to
+  mezistupeň (`summary.continuityOnly`, review Codexu 5e9b2aef): kotva nepozná vynechanou událost
+  (předpoklad NEOVĚŘEN conformance testem), proto z ní brána grafu nepustí akce zvětšující možnou
+  ztrátu — rozšíření nebo odebrání SL, přikoupení, nový vstup na kontraktu. Zavřít, zrušit vstup,
+  utáhnout SL / BE, přidat SL/TP, posun/odebrání TP a posun limitu jdou (posun limitu přes trh je
+  v praxi okamžitý vstup — vědomá výjimka, množství se nemění). Značí se podle VŠECH účtů pohledu
+  (leader + kopírující followeři), ne jen řádků s pozicí; i flat pohled z kotvy (`position.
+  continuityOnly`) zablokuje JAKÝKOLI nový vstup, dokud plný doklad nevznikne znovu (po uzavření
+  obchodu adaptér obnoví baseline po 3 s klidu, nejvýš 1× za 30 s). Neznámý druh akce = blok.
+  Mezistupeň NEPLATÍ, když nezávislé čerstvé REST čtení (surové, před plotem — plot se posouvá
+  každým renderem a jen řídí kreslení; ≤ 20 s, víc než klidové čtení ve flatu 15 s) se s kontinuitou shoduje: stejný net na každém kontraktu
+  a stejné pracující příkazy (id, kusy, ceny) → plně ověřeno (`restConfirmsContinuity`; review
+  f63859c2: doklad se s expozicí ani s cizí expozicí na loginu neobnoví, kontinuita nesmí být
+  přísnější než REST na mainu). Neshoda nebo staré čtení = mezistupeň (fail-closed). Plný doklad (`streamCoverage`)
+  odemyká vše. Pojistka téhož ve workeru je samostatný úkol (změna jádra + DEMO conformance). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
+  návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 5 s
+  (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.; review
+  6bb8ef7 zkrátilo 15 s → 5 s, aby neznámý stop-out nezakrývala stará pozice). Nikdy přes ověřený
+  flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl. Paměť žije v modulu
+  (přežije remount grafu) pod klíčem IDENTITY pohledu: id skupiny, leader, množina followerů
+  a požadovaný cíl — přepnutí skupiny ani změna vlastníka účtů nepodrží pozici jiného leadera.
+  **Neověřená pozice a příkazy (checklist 10. 11. 2026, Filip):** nezamyká se vše kromě
+  Flattenu. `lib/liveChartRiskPolicy.ts` povolí akce snižující riziko — zavřít (i pozici z víc
+  ticketů), zrušit vstup, utáhnout SL / BE (jen směrem k trhu proti brokerově SL), přidat SL/TP.
+  Odmítne rozšíření i odebrání SL, posun TP nebo limitu, odebrání TP, přikoupení a nový vstup
+  na tomtéž kontraktu (`LiveCommandNotSentError`, srozumitelný důvod). Táž politika platí pro
+  bránu odeslání, plánovače panelu, čáry i zkratky; worker vše ověří znovu u brokera. Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
@@ -2242,7 +2298,12 @@ existující ochranu.
   s jiným `operationId` = neznámý; pozdní odpověď po vypršení (45 s odesílání) nic neoživí.
   Čekající vstup se „potvrdí“ jen důkazem workeru se SHODNÝM `operationId` (příkaz u brokera nebo
   fill: `manualEntries[].entryBrokerOrderId` / `timing.orderAt|fillAt|positionAt`) nebo změnou tvaru
-  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
+  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark. Záměr
+  zmizí jen, když ho NAHRADÍ kreslitelná pozice (známá cena vstupu, týž kontrakt a strana; review
+  6bb8ef7) — bez ní drží. Během odesílání ho nahradí jen změna tvaru (nezdvojí už nakreslenou
+  pozici), správa (SL/TP/limit) během odesílání nemizí nikdy. Pozor: „změna tvaru“ nemusí
+  pocházet z tohoto záměru (částečné zavření, příkaz z jiného zařízení) — záměr pak zmizí dřív;
+  je to jen čára, nic podle úložiště záměrů nepovoluje ani neblokuje odeslání.
   „Neodesláno“ v celém LIVE UI (runner správy, „Zrušit čekající“, × holé pozice, panel vstupu,
   telefon, náhled) rozhoduje jen `lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z klienta
   před relayem, nebo relay odmítnutí HTTP 400/409 s přesným kódem z těla odpovědi

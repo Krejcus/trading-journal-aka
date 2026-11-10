@@ -507,6 +507,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let activeRestSource = '';
   let socketSessionSequence = 0;
   const streamReadProof = createTradovateStreamReadProof<TradovatePositionEntity[]>(() => activeSession, clock);
+  /**
+   * Kotva kontinuity streamu účtu (10. 11. 2026, DEMO test grafu): vzniká SPOLU s dokladem
+   * (REST baseline pozic i příkazů v klidu, `seedCoveragePositions`) a na rozdíl od dokladu ji
+   * obchodní událost téhož účtu NEZRUŠÍ — událost mění data, ne kontinuitu. Zruší ji nový socket
+   * / session, globální zneplatnění (nejasná nebo vadná událost, změna REST zdroje) a vadné
+   * čtení. Jen zobrazení (`streamContinuity`): řízení REST čtení dál stojí výhradně na dokladu.
+   */
+  const continuityAnchors = new Map<number, { session: string; baselineAt: number }>();
+  const invalidateAllStreamEvidence = () => {
+    streamReadProof.invalidate();
+    continuityAnchors.clear();
+  };
   const coverageSemanticQuiet = () => pendingSemanticFrames.length === 0 && pendingCommandReports.size === 0;
   const coverageReadQuiet = () => activeRestSource === hostsFor().rest && syncReady && socketState === 'connected' && !renewalInProgress
     && !!socket && socket.readyState === 1 && clock() - lastSocketMessageAt <= STREAM_SNAPSHOT_MAX_SILENCE_MS
@@ -517,16 +529,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (!proof || !coverageReadQuiet()) return;
     for (const [key, row] of streamPositions) if (row.accountId === accountId) streamPositions.delete(key);
     for (const row of proof.positions) streamPositions.set(`${row.accountId}:${row.contractId}`, { ...row });
+    continuityAnchors.set(accountId, { session: activeSession, baselineAt: proof.at });
   };
   const observeTradeIngress = (messages: unknown[], depth = 0): void => {
-    if (depth > 16) { streamReadProof.invalidate(); return; }
+    if (depth > 16) { invalidateAllStreamEvidence(); return; }
     for (const value of messages) {
-      if (!value || typeof value !== 'object') { streamReadProof.invalidate(); continue; }
+      if (!value || typeof value !== 'object') { invalidateAllStreamEvidence(); continue; }
       const row = value as { e?: unknown; d?: unknown; entityType?: unknown; entity?: unknown };
       if (typeof row.entityType === 'string' && /^(position|order|fill|orderversion|command|commandreport|executionreport)$/i.test(row.entityType)) {
         const entity = row.entity as { accountId?: number; orderId?: number } | null;
         const accountId = entity?.accountId ?? (entity?.orderId != null ? rawOrders.get(entity.orderId)?.accountId : undefined);
-        streamReadProof.invalidate(Number.isSafeInteger(accountId) && accountId! > 0 ? accountId : undefined);
+        if (Number.isSafeInteger(accountId) && accountId! > 0) streamReadProof.invalidate(accountId);
+        // Účet události nejde určit: nejistota pro všechny účty (doklad i kotva kontinuity).
+        else invalidateAllStreamEvidence();
       } else if (row.e === 'props' || Array.isArray(row.d)) {
         observeTradeIngress(Array.isArray(row.d) ? row.d : [row.d], depth + 1);
       }
@@ -1783,14 +1798,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     ]);
     if (selectedOrderId == null && (!Array.isArray(rawResult) || !Array.isArray(versionResult)
       || !Array.isArray(commandResult) || !Array.isArray(fillResult))) {
-      streamReadProof.invalidate();
+      invalidateAllStreamEvidence();
       throw new TradovateTransportError('Incomplete authoritative order baseline');
     }
     const rawList = Array.isArray(rawResult) ? rawResult : rawResult ? [rawResult] : [];
     if (selectedOrderId == null && rawList.some(row => !row || !Number.isSafeInteger(row.id) || row.id <= 0
       || !Number.isSafeInteger(row.accountId) || row.accountId <= 0 || !Number.isSafeInteger(row.contractId) || row.contractId <= 0
       || (row.action !== 'Buy' && row.action !== 'Sell') || typeof row.ordStatus !== 'string' || row.ordStatus.trim() === '')) {
-      streamReadProof.invalidate();
+      invalidateAllStreamEvidence();
       throw new TradovateTransportError('Malformed authoritative order baseline');
     }
 
@@ -1800,7 +1815,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       || (commandResult ?? []).some(row => !row || !idOk(row.id) || row.orderId != null && !idOk(row.orderId))
       || (fillResult ?? []).some(row => !row || !idOk(row.id) || !idOk(row.orderId) || !idOk(row.contractId)
         || !Number.isFinite(row.qty) || row.qty <= 0 || !Number.isFinite(row.price)))) {
-      streamReadProof.invalidate();
+      invalidateAllStreamEvidence();
       throw new TradovateTransportError('Malformed authoritative order graph');
     }
     for (const raw of rawList) rememberRawOrder(raw);
@@ -2433,7 +2448,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         // Transport ACK alone is not a complete Position baseline. Explicit empty array is valid; missing/malformed payload is not.
         // A sync ACK never proves complete per-account Position/Order state.
         // Coverage is earned by fenced authoritative reads after synchronization.
-        streamReadProof.invalidate();
+        invalidateAllStreamEvidence();
         hasSyncedOnce = true;
         gapKnownFillIds = null;
         socketState = 'connected';
@@ -2684,6 +2699,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     activeSession = `${clock()}-${++socketSessionSequence}`;
     activeRestSource = hosts.rest;
     streamPositions.clear();
+    continuityAnchors.clear();
     syncReady = false;
     socketMessageTail = Promise.resolve();
     pendingSemanticFrames = [];
@@ -2800,7 +2816,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           stagedVersionsForFrame = stageOrderVersions(messages, semanticFrameId);
         }
       } catch (reason) {
-        streamReadProof.invalidate();
+        invalidateAllStreamEvidence();
         parseError = reason;
         // Invalid data is still a semantic barrier and must close in order;
         // only successfully correlated transport-only ACKs may be skipped.
@@ -3023,32 +3039,63 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const raw of rawOrders.values()) if (!terminalOrderStatus(raw.ordStatus)) return false;
     return pendingSocketWrites.size === 0;
   };
-  const scheduleCoverageRebaseline = (delayMs = COVERAGE_REBASELINE_QUIET_MS) => {
+  // Obnova chybějící KOTVY kontinuity (10. 11. 2026, checklist obchodovatelnosti): po restartu
+  // workeru nebo výpadku WS s otevřenou pozicí by bez ní graf zůstal „neověřeno“ až do flatu.
+  // Proto se kotva obnovuje i s expozicí — jen když chybí (obchodní událost ji neruší, takže
+  // běžné obchodování žádné čtení navíc nespouští), bez rozpracovaného zápisu u brokera, po
+  // 0,5 s klidu, nejvýš jednou za 5 s, backoff do 60 s, vždy background třídou. Čtení grafu
+  // příkazů může správě na chvíli vzít rychlý snímek streamu → správa spadne na REST předčtení
+  // (pomalejší, ne nebezpečnější); to je cena za ověřitelnost po výpadku.
+  const COVERAGE_ANCHOR_QUIET_MS = 500;
+  const COVERAGE_ANCHOR_MIN_GAP_MS = 5_000;
+  const COVERAGE_ANCHOR_MAX_BACKOFF_MS = 60_000;
+  let coverageAnchorBackoffMs = 0;
+  let lastCoverageAnchorReadAt = -Infinity;
+  const anchorMissing = () => [...accountSpecsByAccountId.keys()].filter(accountId => {
+    const anchor = continuityAnchors.get(accountId);
+    return !anchor || anchor.session !== activeSession;
+  });
+  const scheduleCoverageRebaseline = (delayMs?: number) => {
     if (!config.displayCoverageRebaseline || listeners.size === 0) return;
+    const delay = delayMs ?? (anchorMissing().length > 0 ? COVERAGE_ANCHOR_QUIET_MS : COVERAGE_REBASELINE_QUIET_MS);
     if (coverageRebaselineTimer) clearTimeouts(coverageRebaselineTimer);
-    coverageRebaselineTimer = timeouts(() => { coverageRebaselineTimer = null; void runCoverageRebaseline(); }, Math.max(1, delayMs));
+    coverageRebaselineTimer = timeouts(() => { coverageRebaselineTimer = null; void runCoverageRebaseline(); }, Math.max(1, delay));
     (coverageRebaselineTimer as { unref?: () => void }).unref?.();
   };
   const runCoverageRebaseline = async () => {
     if (!coverageRebaselineRead || listeners.size === 0 || coverageRebaselineBusy) return;
     const missing = coverageMissing();
-    if (missing.length === 0) { coverageRebaselineBackoffMs = 0; return; }
-    // S expozicí se nečte vůbec; další pokus vyvolá až obchodní rámec, který ji ukončí.
-    if (!coverageExposureFree()) return;
+    if (missing.length === 0) { coverageRebaselineBackoffMs = 0; coverageAnchorBackoffMs = 0; return; }
+    const exposureFree = coverageExposureFree();
+    // Bez expozice: doklad (i řízení REST čtení) jako dosud. S expozicí: jen chybějící kotva.
+    const targets = exposureFree ? missing : anchorMissing().filter(accountId => missing.includes(accountId));
+    if (targets.length === 0) return;
     if (!syncReady || socketState !== 'connected') return;
-    if (!coverageReadQuiet()) { scheduleCoverageRebaseline(); return; }
-    const wait = lastCoverageRebaselineAt + Math.max(COVERAGE_REBASELINE_MIN_GAP_MS, coverageRebaselineBackoffMs) - clock();
+    if (!exposureFree && pendingSocketWrites.size > 0) { scheduleCoverageRebaseline(COVERAGE_ANCHOR_QUIET_MS); return; }
+    if (!coverageReadQuiet()) { scheduleCoverageRebaseline(exposureFree ? COVERAGE_REBASELINE_QUIET_MS : COVERAGE_ANCHOR_QUIET_MS); return; }
+    const anchorPath = !exposureFree || anchorMissing().length > 0;
+    const last = anchorPath ? lastCoverageAnchorReadAt : lastCoverageRebaselineAt;
+    const gap = anchorPath ? Math.max(COVERAGE_ANCHOR_MIN_GAP_MS, coverageAnchorBackoffMs) : Math.max(COVERAGE_REBASELINE_MIN_GAP_MS, coverageRebaselineBackoffMs);
+    const wait = last + gap - clock();
     if (wait > 0) { scheduleCoverageRebaseline(wait); return; }
     coverageRebaselineBusy = true;
     lastCoverageRebaselineAt = clock();
+    if (anchorPath) lastCoverageAnchorReadAt = clock();
     try {
-      await Promise.all(missing.map(accountId => coverageRebaselineRead!(accountId)));
+      await Promise.all(targets.map(accountId => coverageRebaselineRead!(accountId)));
     } catch {
       // Jen zobrazení: bez baseline zůstává web u vlastního čtení jako dosud.
     } finally {
       coverageRebaselineBusy = false;
     }
-    if (coverageMissing().length === 0) { coverageRebaselineBackoffMs = 0; return; }
+    const stillAnchorMissing = anchorMissing().length > 0;
+    if (coverageMissing().length === 0) { coverageRebaselineBackoffMs = 0; coverageAnchorBackoffMs = 0; return; }
+    if (stillAnchorMissing) {
+      coverageAnchorBackoffMs = Math.min(COVERAGE_ANCHOR_MAX_BACKOFF_MS, Math.max(COVERAGE_ANCHOR_MIN_GAP_MS * 2, coverageAnchorBackoffMs * 2));
+      scheduleCoverageRebaseline(coverageAnchorBackoffMs);
+      return;
+    }
+    coverageAnchorBackoffMs = 0;
     coverageRebaselineBackoffMs = Math.min(COVERAGE_REBASELINE_MAX_BACKOFF_MS,
       Math.max(COVERAGE_REBASELINE_MIN_GAP_MS * 2, coverageRebaselineBackoffMs * 2));
     if (coverageExposureFree()) scheduleCoverageRebaseline(coverageRebaselineBackoffMs);
@@ -3070,6 +3117,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         synchronized: syncReady && socketState === 'connected' && !renewalInProgress && activeRestSource === hostsFor().rest,
         gap: !syncReady || renewalInProgress || activeRestSource !== hostsFor().rest,
         backlog: pendingSemanticFrames.length > 0 || pendingCommandReports.size > 0, mergeInProgress: orderGraphMerges > 0 || orderGraphInFlight.size > 0 || freshOrderGraphInFlight.size > 0 };
+    },
+    streamContinuity(accountId): TradovateWorkerAccountCoverage | null {
+      const anchor = continuityAnchors.get(accountId);
+      if (!config.connectionId || !anchor || anchor.session !== activeSession || !accountSpecsByAccountId.has(accountId)) return null;
+      const now = clock();
+      // Poslední skutečná data účtu ze streamu (ne čas heartbeatu); nikdy před baseline.
+      const lastDataAt = Math.min(now, Math.max(anchor.baselineAt, lastAccountDataAt.get(accountId) ?? anchor.baselineAt));
+      return { accountId, connectionId: config.connectionId, environment: config.environment, routeEpoch: socketSessionSequence, currentRouteEpoch: socketSessionSequence,
+        sessionId: anchor.session, currentSessionId: activeSession, baselineAt: anchor.baselineAt, lastDataAt, observedAt: now,
+        socketLive: !!socket && socket.readyState === 1 && now - lastSocketMessageAt <= STREAM_SNAPSHOT_MAX_SILENCE_MS,
+        synchronized: syncReady && socketState === 'connected' && !renewalInProgress && activeRestSource === hostsFor().rest,
+        gap: !syncReady || renewalInProgress || activeRestSource !== hostsFor().rest,
+        backlog: pendingSemanticFrames.length > 0 || pendingCommandReports.size > 0, mergeInProgress: orderGraphMerges > 0 || orderGraphInFlight.size > 0 || freshOrderGraphInFlight.size > 0 };
+    },
+    streamContinuityPositionSnapshot(accountId) {
+      const anchor = continuityAnchors.get(accountId);
+      if (!anchor || anchor.session !== activeSession || !coverageReadQuiet()) return null;
+      const positions: BrokerPosition[] = [];
+      for (const position of streamPositions.values()) {
+        if (position.accountId !== accountId) continue;
+        const symbol = contracts.get(position.contractId);
+        if (!symbol) return null;
+        if (position.netPos !== 0) positions.push({ accountId, symbol, netQuantity: position.netPos });
+      }
+      return { positions, observedAt: clock() };
     },
     streamPositionSnapshot(accountId) {
       if (!streamReadProof.get(accountId) || !coverageReadQuiet()) return null;
@@ -3347,10 +3419,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const entities = await pending;
       if (!Array.isArray(entities) || entities.some(row => !row || !Number.isSafeInteger(row.accountId) || row.accountId <= 0
         || !Number.isSafeInteger(row.contractId) || row.contractId <= 0 || !Number.isInteger(row.netPos))) {
-        streamReadProof.invalidate();
+        invalidateAllStreamEvidence();
         throw new TradovateTransportError('Incomplete authoritative position baseline');
       }
-      if (readSource !== hostsFor().rest) { streamReadProof.invalidate(); throw new TradovateTransportError('Tradovate position source changed during read'); }
+      if (readSource !== hostsFor().rest) { invalidateAllStreamEvidence(); throw new TradovateTransportError('Tradovate position source changed during read'); }
       const selected = entities.filter(item => item.accountId === accountId);
       await hydrateContracts(selected.map(item => item.contractId));
       if (startedQuiet && provenance?.quiet && coverageSemanticQuiet() && syncReady && readSource === hostsFor().rest && activeRestSource === readSource) {
@@ -3395,7 +3467,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const provenance = readOrigins.get(pending);
       const fence = streamReadProof.capture(accountId, provenance?.origin);
       const rawList = await pending;
-      if (readSource !== hostsFor().rest) { streamReadProof.invalidate(); throw new TradovateTransportError('Tradovate order source changed during read'); }
+      if (readSource !== hostsFor().rest) { invalidateAllStreamEvidence(); throw new TradovateTransportError('Tradovate order source changed during read'); }
       const selected = rawList.filter(item => item.accountId === accountId);
       const result = (await Promise.all(selected.map(async item => {
         const order = await composeOrder(item.id);

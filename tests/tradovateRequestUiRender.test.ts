@@ -1,3 +1,4 @@
+import { tradovateRequestHealthDisplay } from '../lib/tradovateRequestHealthDisplay';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,10 +26,14 @@ afterEach(() => vi.restoreAllMocks());
 describe('request health and exact display PnL rendered without broker calls', () => {
   it('renders distinct 429, terminal captcha and budget explanations with no command controls', () => {
     for (const [row, text] of [[health({ state: 'cooldown', evidence: 'raw-429' }), 'HTTP 429'],
-      [health({ state: 'captcha', evidence: 'captcha' }), 'captcha'], [health({ state: 'budget-limited' }), 'Lokální rozpočet']] as const) {
+      [health({ state: 'captcha', evidence: 'captcha' }), 'captcha']] as const) {
       const html = renderToStaticMarkup(React.createElement(TradovateRequestHealthNotice, { rows: [row], now: NOW, floating: true }));
       expect(html).toContain(text); expect(html).toContain('role="status"'); expect(html).not.toContain('<button');
     }
+    // Lokální rozpočet (DEMO 10. 11., bez spamu): text existuje, ale první snímek ho ještě neukáže
+    // — až po souvislém vyčerpání (`stabilizeTradovateHealthNotices`, vlastní test).
+    expect(tradovateRequestHealthDisplay([health({ state: 'budget-limited' })], NOW)?.[0].text).toContain('Lokální rozpočet');
+    expect(renderToStaticMarkup(React.createElement(TradovateRequestHealthNotice, { rows: [health({ state: 'budget-limited' })], now: NOW, floating: true }))).toBe('');
     expect(renderToStaticMarkup(React.createElement(TradovateRequestHealthNotice, { rows: [health()], now: NOW }))).toBe('');
   });
   it('renders direct signed IBKR position PnL despite missing broker-anchor legs and preserves the anchor object', () => {

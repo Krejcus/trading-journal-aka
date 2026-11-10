@@ -33,14 +33,24 @@ const send = (name: string, ms: number) => {
   void alphaTradeNativePlugin.perfTrace({ name, ms }).catch(() => undefined);
 };
 
+let bridgeSent = 0;
+let bridgeResumeSent = 0;
+let bridgeList: PerfEntry[] | null = null;
 const record = (entry: PerfEntry) => {
   if (typeof window === 'undefined') return;
   const list = (window.__atPerf ??= []);
-  // Běžné dotazy strop vyčerpají za pár minut (6. 11.). Návrat z pozadí se měří dál, je vzácný;
-  // ostatní značky po stropu nejdou nikam, ať appka v produkci nezatěžuje most a log.
-  const resume = entry.name.startsWith('live:resume:');
-  if (list.length >= MAX_ENTRIES && !(resume && list.length < MAX_ENTRIES + MAX_RESUME_ENTRIES)) return;
+  // Nové pole (vyčištěné měření) = nový běh: strop mostu se počítá znovu.
+  if (bridgeList !== list) { bridgeList = list; bridgeSent = 0; bridgeResumeSent = 0; }
+  // `window.__atPerf` je kruhový buffer (DEMO 10. 11.: po pár minutách byl plný a nové značky
+  // chyběly): vždy posledních MAX_ENTRIES, nejstarší vypadávají.
   list.push(entry);
+  if (list.length > MAX_ENTRIES) list.splice(0, list.length - MAX_ENTRIES);
+  // Most do nativní appky a jejího logu má dál strop: běžné dotazy ho vyčerpají za pár minut
+  // (6. 11.); návrat z pozadí se měří dál (vzácný) s vlastním stropem.
+  const resume = entry.name.startsWith('live:resume:');
+  if (bridgeSent < MAX_ENTRIES) bridgeSent += 1;
+  else if (resume && bridgeResumeSent < MAX_RESUME_ENTRIES) bridgeResumeSent += 1;
+  else return;
   if (!originSent) {
     originSent = true;
     // Zarovnání s časy systémového logu: začátek načtení v ms od půlnoci UTC.

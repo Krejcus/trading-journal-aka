@@ -288,6 +288,126 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 (večer) — Claude: dokončení větve claude/chart-worker-projection-20261110 (od 184ffdd)
+
+- Nálezy Codexu 9aa17b7: 1–3 byly v 184ffdd už opravené. Bod 4: přehled LIVE kreslí řádky účtů
+  ze stejné kontinuity streamu jako graf (`rowDisplaySnapshot`/`rowDisplayOrders`). ARM/flat
+  předkontrola, Flatten náhled, ostrov, Risk a způsobilost zůstávají na dokladu. Bod 5: test
+  závodu fill × REST při obnově kotvy.
+- Smyčka review: Codex kolo 1 (0a468e20) 2× P1, kolo 2 (a09c4176) 3× P1, kolo 3 (5e9b2aef) 1× P1.
+  Vše ověřeno a opraveno. Kolo 4 nedoběhlo: limit Codexu do 13. 11. Critic 2 kola (OPRAVIT PŘED
+  COMMITEM, opraveno v 5e9b2aef a a432fd58).
+- Klíčové rozhodnutí (Filip přenechal volbu Claudovi, „nejkvalitnější“): kotva kontinuity je
+  MEZISTUPEŇ autorizace (`continuityOnly`), ne doklad. Kotva nepozná vynechanou událost Tradovate.
+  - Z pozice: nejde rozšířit ani odebrat SL ani přikoupit.
+  - Z flat pohledu z kotvy: nejde žádný nový vstup, dokud adaptér neobnoví plný doklad
+    (~3 s klidu, nejvýš 1× za 30 s).
+  - TP, limit, zavření, BE a utažení SL jdou.
+  - Cena: přikoupení z grafu během obchodu nepůjde, po uzavření až ~30 s žádný nový vstup.
+- Dále: neznámé ≠ flat (`markUnverifiedFlat` + brána vstupu na každém pohledu s issue). Klíč
+  paměti držené pozice obsahuje uživatele, připojení i prostředí. Přehled stárne každou sekundu
+  a má stejný plot proti starším REST čtením jako graf.
+- Místo Codex kola 4 nezávislé review Claude agentem (f63859c2): bez P1, ale 2× P2 obchodovatelnost.
+  Plný doklad se s otevřenou pozicí ani s cizí expozicí na loginu neobnoví, takže mezistupeň
+  blokoval přikoupení a vstupy natrvalo. Oprava (`restConfirmsContinuity`): když se surové REST
+  čtení (před plotem, ≤ 20 s) shoduje s kontinuitou v netu a pracujících příkazech, stav je plně
+  ověřený. Re-review 7bfca14c: P2 vyřešené, merge ANO; P3 okno 15 → 20 s (> klidové čtení 15 s).
+- Výsledek: viz poslední commit větve. tsc OK, celá sada 8681/8681 (1 todo). Nic na main, nic nenasazeno.
+- Merge pozor: main obsahuje revert 97774d38 (DEMO session pushla revert f465880 na main proti
+  zadání). Merge větve musí revert vrátit.
+- Restart workeru po merge NUTNÝ: větev mění `tradovateBroker` a controller status
+  (`streamContinuity`, obnova kotvy, `streamCoverageGaps`). Reinstall z čistého release worktree.
+- Otevřené: pojistka „jen snižovat riziko“ i ve WORKERU (změna jádra + DEMO conformance
+  vynechané události). Kolo 4 Codexu po 13. 11.
+
+### 2026-11-10 — LIVE graf: 7. kolo, review Codexu 6bb8ef7 (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; RESTART WORKERU nutný kvůli změnám z 6. kola)
+- **P1 risk-redukce:** politika z 6. kola (`lib/liveChartRiskPolicy.ts`) už rozhodovala bránu i
+  plánovače; odstraněn pozůstatek plošné blokace (`liveChartProjectionManageBlock`,
+  `LIVE_CHART_UNVERIFIED_MANAGE_TEXT`) a INV-UI-03 přepsán podle checklistu (žádné „zamčení vše
+  kromě Flattenu“).
+- **P2 držená pozice:** klíč paměti v `useLiveChartData` = id skupiny + leader + followeři +
+  požadovaný cíl — přepnutí skupiny/vlastníka nepodrží pozici jiného leadera.
+- **P2 záměr bez náhrady:** `intentLanded` vyžaduje kreslitelnou náhradu (`summary.entry`); během
+  odesílání vstup zmizí jen při změně tvaru (nezdvojí nakreslenou pozici), správa nikdy.
+- **Poznámka stop-out:** držení poslední pozice 15 s → 5 s.
+- Kritik (copier-design-critic): OK S VÝHRADAMI → zapracováno: klíč jako čistá funkce
+  `liveChartDrawnMemoryKey` s testem chování, paměť maže záznamy starší než okno držení,
+  komentář 5 s, poznámka v INV-UI-03 o cizí změně tvaru, testy stavu `sending` a pozdního výsledku.
+- Testy: `tests/liveChartChecklist.test.ts` (+7), `liveCommandErrors` (fixture s cenou vstupu).
+  tsc bez nových chyb, build OK, `npm test` 8663 OK / 3 známé selhání (i na čistém main).
+
+### 2026-11-10 — LIVE graf: 6. kolo, checklist obchodovatelnosti (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; nutný RESTART WORKERU)
+
+- Filipův závazný checklist a Codexovo review proti f465880. Přednost měly ★ položky a P1.
+- **Worker:**
+  - chybějící kotva kontinuity (restart, nová WS session) se obnoví sama i s otevřenou pozicí,
+    za 0,5 s klidu (test: do ~1 s);
+  - běžné obchodování žádné čtení navíc nespouští;
+  - `exposure.streamCoverageGaps` nese u každého účtu explicitní důvod, místo mlčení `[]`;
+  - `verifiedAt` zůstává časem autoritativního čtení (klidový režim cronu); atestace kontinuity
+    všech účtů je zvlášť v `continuityAttestedAt`.
+- **Politika neověřené pozice (změna podle Filipa):** povoleno zavřít (i víc ticketů), zrušit
+  vstup, utáhnout SL / BE a přidat SL/TP. Odmítnuto rozšířit nebo odebrat SL, posunout TP nebo
+  limit, přikoupit a nový vstup. Platí to pro bránu, panel, čáry i zkratky
+  (`lib/liveChartRiskPolicy.ts`).
+- **Graf:** paměť držení posledního stavu je v modulu, takže remount grafu neblikne na flat.
+  Klíč paměti obsahuje id skupiny; vypnutý graf paměť maže.
+- copier-design-critic: „OPRAVIT PŘED COMMITEM“, pět bodů, všechny zapracované:
+  1. `verifiedAt` posouvaný atestací by vypnul klidový režim cronu, proto je atestace zvlášť;
+  2. utažení SL se posuzuje proti `expectPrice`, ne proti zastaralému souhrnu;
+  3. klíč paměti držení obsahuje skupinu;
+  4. typ `current` u nohy;
+  5. text `remove-leg`.
+- **Riziko:** pravidlo „jen utáhnout“ vynucuje UI, worker ověřuje jen `expect` (shodu s brokerem).
+  Vynutit ho i ve workeru je samostatná změna.
+- Druhé kolo kritika: „OK s výhradami“. Chybí test REST pozadu za streamem (fill těsně před
+  obnovou kotvy) a test odložení obnovy čekajícím zápisem.
+- Ověření: tsc 0 nových chyb proti baseline. Celá sada 8656 testů prošla, 3 selhaly (tytéž jako
+  na `main` f4a9d6b). Build prošel. DEMO až po Filipově souhlasu.
+- **Nesplněno v kódu (rozhodnutí / DEMO):**
+  - posun šablonového SL od fill ceny (byl by to nový zápis k brokerovi; zatím jen poznámka
+    na štítku SL);
+  - Flatten do 1 s, relay POST p95 pod 1 s, kopírka a výkon pro 10+ účtů a 30min DEMO
+    ověří až DEMO.
+
+### 2026-11-10 — LIVE graf: opravy po DEMO testu na produkci (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; nutný RESTART WORKERU)
+
+- DEMO (DEMO8661118, MNQ) na produkci: f465880 krátce na main, revert 97774d38. Klik → čekající
+  čára 14–16 ms (cíl splněn). Relay POST 0,7–3,0 s, pozice v grafu 1,2–2,8 s po kliku.
+- **Blokující 1, pozice se nikdy neověřila.** Příčina: doklad kontinuity se obnovuje jen
+  REST baseline v klidu a `runCoverageRebaseline` s expozicí záměrně nečte. Doklad se tak
+  s otevřenou pozicí nikdy nevrátí (`streamCoverage: []`). Oprava je ve workeru: kotva
+  kontinuity vzniká s dokladem a přežije obchodní událost téhož účtu. Nově
+  `streamContinuity` / `exposure.streamContinuity` se stejnými kontrolami. Graf z ní ověří účet
+  do ~1 s. Řízení REST čtení beze změny. **Worker je nutné restartovat**; starý worker pole
+  nemá, takže graf zůstane u „neověřeno“ jako dosud.
+- **Blokující 2, bliknutí na flat po přijetí příkazu.** Záměr vstupu zmizí, až ho nahradí
+  nakreslená pozice téže strany (i „neověřeno“). Samotný důkaz workeru už nestačí.
+- **Blokující 3, bliknutí na flat po návratu na tab.** Krátce neznámý stav drží poslední
+  nakreslenou pozici jako neověřenou (nejvýš 15 s — v 7. kole zkráceno na 5 s, nikdy přes ověřený flat).
+- **Bod 4:** BE / BE+ / BE + poplatky a posun v panelu jsou u neověřené pozice zašedlé s důvodem.
+- **Bod 5:** nohy bracketu (OSO rodič / OCO pár; od workeru `exposure.orders.parentOrderId/ocoId`,
+  jinak z REST téhož příkazu) nejsou čekající vstup. Zbylý TP po stop-outu už se nekreslí jako
+  „SELL LIMIT“. Osamělá noha bez vazby (SL/TP po jedné) zůstává nejednoznačná.
+- **Bod 6:** `exitReason` u vlastních nohou (OSO z grafu, attach, SL/TP po jedné, posun) podle
+  durable záznamů → `sl`/`tp`. Flatten zůstává `manual`.
+- **Bod 7:** SL se po fillu automaticky NEposouvá (byl by to nový zápis k brokerovi, rozhodnutí
+  pro Filipa). Štítek SL ukáže odchylku fillu a skutečnou vzdálenost SL od fillu.
+- **Bod 8:** místo kódu `tradovate-request-budget` lidský text. Hláška o rozpočtu v grafu se ukáže
+  až po 5 s souvislého vyčerpání a znovu nejdřív za 60 s.
+- **Bod 9:** `window.__atPerf` je kruhový buffer (posledních 400); strop mostu do nativní appky
+  beze změny.
+- **Bod 10 (jen poznámka):** na preview chybí `TV_PRICE_CHANNEL_SECRET` a
+  `COPIER_PUSH_SIGNING_SECRET` (jsou jen v Production), takže tam nejde živá cena. Env jsem
+  neměnil.
+- copier-design-critic: první verdikt „OPRAVIT PŘED COMMITEM“. Kotva kontinuity podle něj
+  neoslabuje autorizaci ani řízení REST čtení, ale držení pozice platilo pro jakékoli `issue`,
+  tedy i pro rozjetou skupinu nebo dobíhající kopii. Opraveno: drží se jen `stale` /
+  `orders-stale` (`LiveChartPosition.issueKind`). Doplněné testy: deterministický reconnect
+  (nová session = bez kontinuity), vadný rámec, příznaky backlog/merge/sync/gap/socket
+  v projekci, držení u divergent/settling/missing-account/mismatch. Předpoklad kotvy
+  (stream v živé session nevynechá Position/Order) je zapsaný jako NEOVĚŘENO.
+
 ### 2026-11-10 — LIVE graf: čtvrté kolo — sekvenční plot jako první krok projekce (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - Codex k `77423f7`: P2 OK, P1 přetrvával u cache s dokladem kontinuity. `overlayWorkerExposure`

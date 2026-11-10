@@ -135,6 +135,11 @@ export function overlayWorkerAccount(
       previousPrice: previous?.previousPrice ?? null,
     };
   });
+  const restOrderById = new Map(account.orders.map(order => [order.id, order] as const));
+  const linkId = (value: string | undefined, fallback: number | null | undefined) => {
+    const parsed = value != null ? Number(value) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback ?? null;
+  };
   const orders: TradovateAccountOrder[] = exposure.orders
     ? (ordersByAccount.get(account.id) ?? []).map(order => ({
       id: Number(order.brokerOrderId),
@@ -148,8 +153,9 @@ export function overlayWorkerAccount(
       stopPrice: order.stopPrice,
       status: tradovateOrderStatus(order.status),
       admin: null,
-      ocoId: null,
-      parentId: null,
+      // Vazby bracketu: od workeru, jinak z REST téhož příkazu (noha SL/TP ≠ čekající vstup).
+      ocoId: linkId((order as { ocoId?: string }).ocoId, restOrderById.get(Number(order.brokerOrderId))?.ocoId),
+      parentId: linkId((order as { parentOrderId?: string }).parentOrderId, restOrderById.get(Number(order.brokerOrderId))?.parentId),
       linkedId: null,
     }))
     : account.orders;

@@ -135,18 +135,34 @@ describe('čekající záměr v LIVE grafu', () => {
     expect(intents.snapshot()).toEqual([]);
   });
 
-  it('čekající vstup potvrdí důkaz workeru se SHODNÝM operationId (příkaz u brokera / fill), cizí operationId ne', async () => {
+  it('čekající vstup: důkaz workeru se SHODNÝM operationId sám nestačí — záměr zmizí až s nakreslenou pozicí, která ho nahradí', async () => {
     const intents = store();
     const old = position();
     await trackLiveChartIntent(intents, entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh3', liveChartPositionBaseline(old)),
       sent(intents, 'entry:abcdefgh3', () => Promise.resolve(ack('entry:abcdefgh3'))));
     const evidence = (entries: Parameters<typeof liveChartWorkerEntryEvidence>[0]) => ({ workerEntryOperationIds: liveChartWorkerEntryEvidence(entries) });
     intents.prune(clock, position({ openPnl: 99 }), evidence([{ operationId: 'entry:other0001', entryBrokerOrderId: '77' }]));
-    intents.prune(clock, old, evidence([{ operationId: 'entry:abcdefgh3' }]));
-    expect(intents.snapshot()).toHaveLength(1);
     intents.prune(clock, old, evidence([{ operationId: 'entry:abcdefgh3', entryBrokerOrderId: '42' }]));
+    // Stará pozice téže strany je pořád stejná: důkaz workeru záměr nesmaže (přikoupení ještě není vidět).
+    expect(intents.snapshot()).toHaveLength(1);
+    intents.prune(clock, position({ quantity: 2 }), evidence([{ operationId: 'entry:abcdefgh3', entryBrokerOrderId: '42' }]));
     expect(intents.snapshot()).toEqual([]);
     expect([...liveChartWorkerEntryEvidence([{ operationId: 'a', timing: { fillAt: 1 } }, { operationId: 'b', timing: { orderAt: 1 } }, { operationId: 'c', timing: {} }])]).toEqual(['a', 'b']);
+  });
+
+  it('DEMO 10. 11. bliknutí na flat: ACK + důkaz workeru, ale graf pozici ještě nekreslí → záměr zůstává; zmizí až s pozicí (i neověřenou)', async () => {
+    const intents = store();
+    await trackLiveChartIntent(intents, entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100, stopLoss: 90, takeProfit: 120 }, 'entry:blink0001', null),
+      sent(intents, 'entry:blink0001', () => Promise.resolve(ack('entry:blink0001'))));
+    const evidence = { workerEntryOperationIds: new Set(['entry:blink0001']) };
+    const flat: LiveChartPosition = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
+    // Fill už je u workeru, graf má ještě prázdno (202–247 ms na DEMO): čáry záměru nesmí zmizet.
+    for (const shown of [flat, { ...flat, key: 'issue:stale', issue: 'Pozice neověřené' }, position({ side: 'short' })]) {
+      intents.prune(clock, shown, evidence);
+      expect(liveChartIntentLines(intents.snapshot(), 'MNQZ6')).toHaveLength(3);
+    }
+    intents.prune(clock, position({ unverified: true }), evidence);
+    expect(intents.snapshot()).toEqual([]);
   });
 
   it('vstup bez pozice při kliku: objeví-li se pozice / čekající příkaz téže strany, je potvrzen; opakovaný begin neztratí „odesláno“', async () => {

@@ -25,3 +25,40 @@ export function tradovateRequestHealthDisplay(rows: readonly TradovateRequestHea
     return [];
   });
 }
+
+/** Lidsky čitelný text místo surového kódu chyby Tradovate čtení (jen zobrazení). */
+export function tradovateHumanErrorMessage(message: string): string {
+  if (message === 'tradovate-request-budget') return 'Aplikace teď šetří dotazy na Tradovate (lokální rozpočet požadavků) — data se doplní za chvilku samy.';
+  if (/^tradovate-request-/.test(message)) return 'Dotazy na Tradovate jsou dočasně omezené — data se doplní za chvilku samy.';
+  return message;
+}
+
+/** Hláška o lokálním rozpočtu až po souvislém vyčerpání; po zmizení nejdřív znovu za tolik. */
+export const BUDGET_NOTICE_SHOW_AFTER_MS = 5_000;
+export const BUDGET_NOTICE_REPEAT_AFTER_MS = 60_000;
+export interface BudgetNoticeMemory { since: number | null; shown: boolean; hiddenAt: number | null }
+export const BUDGET_NOTICE_INITIAL: BudgetNoticeMemory = { since: null, shown: false, hiddenAt: null };
+
+/**
+ * Proti spamu (DEMO 10. 11.: hláška o rozpočtu v grafu se opakovala): `budget-limited`
+ * (kapacitní brána aplikace, ne penalizace brokera) se ukáže až po souvislém vyčerpání
+ * `BUDGET_NOTICE_SHOW_AFTER_MS` a po zmizení se nevrátí dřív než za `BUDGET_NOTICE_REPEAT_AFTER_MS`.
+ * Captcha, penalizace a neověřený stav jdou beze změny hned. Jen zobrazení.
+ */
+export function stabilizeTradovateHealthNotices(
+  notices: readonly TradovateRequestHealthDisplayNotice[] | null,
+  memory: BudgetNoticeMemory,
+  now: number,
+): { notices: TradovateRequestHealthDisplayNotice[]; memory: BudgetNoticeMemory } {
+  const isBudget = (notice: TradovateRequestHealthDisplayNotice) => notice.text === 'Lokální rozpočet požadavků je dočasně vyčerpaný.';
+  const all = notices ?? [];
+  const budget = all.filter(isBudget);
+  const others = all.filter(notice => !isBudget(notice));
+  if (budget.length === 0) {
+    return { notices: others, memory: { since: null, shown: false, hiddenAt: memory.shown ? now : memory.hiddenAt } };
+  }
+  const since = memory.since ?? now;
+  const show = memory.shown || (now - since >= BUDGET_NOTICE_SHOW_AFTER_MS
+    && (memory.hiddenAt == null || now - memory.hiddenAt >= BUDGET_NOTICE_REPEAT_AFTER_MS));
+  return { notices: show ? [...others, ...budget] : others, memory: { since, shown: show, hiddenAt: memory.hiddenAt } };
+}

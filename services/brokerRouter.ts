@@ -139,6 +139,15 @@ export function createBrokerRouter(
       const epoch = routeEpochByBroker.get(owner) ?? 0;
       return { ...row, routeEpoch: epoch, currentRouteEpoch: epoch };
     },
+    streamContinuity(accountId) {
+      const owner = byAccount.get(accountId);
+      if (!owner) return null;
+      const row = owner.streamContinuity?.(accountId);
+      if (!row) return null;
+      const epoch = routeEpochByBroker.get(owner) ?? 0;
+      return { ...row, routeEpoch: epoch, currentRouteEpoch: epoch };
+    },
+    streamContinuityPositionSnapshot: accountId => byAccount.get(accountId)?.streamContinuityPositionSnapshot?.(accountId) ?? null,
     replaceRoutes(nextRoutes) {
       const validated = validateRoutes(nextRoutes, true);
       // Přepnutí je synchronní a atomické: při jediné validační chybě zůstane

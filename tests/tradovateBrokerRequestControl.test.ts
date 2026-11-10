@@ -326,6 +326,123 @@ describe('Tradovate broker final request-control integration', () => {
     await expect(broker.listOrders(101,{fresh:true})).rejects.toThrow(/authoritative order baseline/);expect(broker.streamCoverage?.(101)).toBeNull();
   });
 
+  it('DEMO 10. 11.: trade ingress drops the proof, but stream continuity since the baseline survives for the chart; new session or unknown account ends it',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async input=>response(String(input).includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]),clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    // Bez REST baseline není ani doklad, ani kontinuita (ACK/heartbeat nic nedokazuje).
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    const baseline=broker.streamCoverage?.(101);expect(baseline).not.toBeNull();
+    expect(broker.streamContinuity?.(101)).toMatchObject({baselineAt:baseline?.baselineAt,synchronized:true,gap:false,backlog:false});
+    f.advance(500);
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{accountId:101,contractId:77,netPos:1}}}]);
+    // Doklad (řízení REST čtení) po obchodní události zmizí hned — beze změny.
+    expect(broker.streamCoverage?.(101)).toBeNull();
+    await flush();
+    const continuity=broker.streamContinuity?.(101);
+    expect(continuity).toMatchObject({baselineAt:baseline?.baselineAt,sessionId:baseline?.sessionId,backlog:false,synchronized:true});
+    expect(continuity!.lastDataAt).toBeGreaterThanOrEqual(continuity!.baselineAt);
+    // Událost bez určitelného účtu = nejistota pro všechny účty.
+    socket.deliver([{e:'props',d:{entityType:'order',eventType:'Updated',entity:{orderId:999999}}}]);
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    unsubscribe();
+  });
+
+  it('stream continuity never survives a new socket session (deterministic reconnect)',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},
+      fetchImpl:async()=>response([]),reconnectDelayMs:1_000,reconnectJitterRatio:0,closeTimeoutMs:1_000,
+      webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const handshake=async(socket:Socket)=>{socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+      socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();};
+    const unsubscribe=broker.subscribe(()=>undefined);await handshake(sockets[0]);
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    const before=broker.streamContinuity?.(101);expect(before).not.toBeNull();
+    sockets[0].close();
+    expect(broker.streamContinuity?.(101)?.socketLive).toBe(false);
+    for(let i=0;i<10&&sockets.length<2;i++){await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(sockets.length).toBeGreaterThan(1);
+    await handshake(sockets[sockets.length-1]);
+    // Nová session bez nové REST baseline: kontinuita z předchozí session neplatí.
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    // Nová baseline v nové session ji obnoví (s novou session).
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    expect(broker.streamContinuity?.(101)?.sessionId).not.toBe(before?.sessionId);
+    unsubscribe();
+  });
+
+  it('checklist ★: after a worker restart / WS reconnect WITH an open position the continuity anchor restores itself within ~1 s; ordinary trade events cause no extra reads',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];const reads:string[]=[];
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},displayCoverageRebaseline:true,
+      fetchImpl:async input=>{const path=String(input);if(path.includes('/position/list')||path.includes('/order/list'))reads.push(path);
+        return response(path.includes('/position/list')?[{id:1,accountId:101,contractId:77,netPos:1}]:path.includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]);},
+      reconnectDelayMs:1_000,reconnectJitterRatio:0,webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const unsubscribe=broker.subscribe(()=>undefined);const socket=sockets[0];
+    socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();
+    // Sync přinese otevřenou pozici (expozice) — dřív by obnova s expozicí vůbec nečetla.
+    socket.deliver([{i:1,s:200,d:{positions:[{id:1,accountId:101,contractId:77,netPos:1}]}}]);await flush();
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);await flush();
+    expect(broker.streamContinuity?.(101)).toMatchObject({backlog:false,synchronized:true});
+    const readsAfterBaseline=reads.length;
+    // Běžná obchodní událost kotvu nezruší a žádné čtení navíc nespustí (ani po 30 s).
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{id:1,accountId:101,contractId:77,netPos:2}}}]);await flush();
+    // Živý socket (heartbeaty serveru) 30 s.
+    for(let i=0;i<15;i++){socket.onmessage?.({data:'h'});await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(sockets).toHaveLength(1);
+    expect(broker.streamContinuity?.(101)).not.toBeNull();
+    expect(reads.length).toBe(readsAfterBaseline);
+    unsubscribe();
+  });
+
+  it('race: a fill arriving while the anchor-restore REST read is in flight never anchors continuity on the older REST snapshot',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];
+    // REST pozic: první obnova kotvy visí, dokud ji test nepustí, a vrátí STARŠÍ stav (netPos 1).
+    let restNetPos=1;let holdPositions:((value:Response)=>void)|null=null;let positionReads=0;
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},displayCoverageRebaseline:true,
+      fetchImpl:async input=>{const path=String(input);
+        if(path.includes('/position/list')){positionReads+=1;const body=[{id:1,accountId:101,contractId:77,netPos:restNetPos}];
+          if(positionReads===1)return new Promise<Response>(resolve=>{holdPositions=()=>resolve(response(body));});
+          return response(body);}
+        return response(path.includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]);},
+      reconnectDelayMs:1_000,reconnectJitterRatio:0,webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const unsubscribe=broker.subscribe(()=>undefined);const socket=sockets[0];
+    socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();
+    socket.deliver([{i:1,s:200,d:{positions:[{id:1,accountId:101,contractId:77,netPos:1}]}}]);await flush();
+    await vi.advanceTimersByTimeAsync(600);await flush();
+    expect(positionReads).toBe(1);
+    // Fill dorazí streamem dřív, než se vrátí REST čtení zahájené před ním.
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{id:1,accountId:101,contractId:77,netPos:2}}}]);await flush();
+    holdPositions!(response([]));await flush();await vi.advanceTimersByTimeAsync(0);await flush();
+    // Starší REST snímek kotvu nezaloží a stav streamu nepřepíše.
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    // Další pokus už čte nový stav: kotva vznikne a snímek streamu nese pozici z fillu.
+    restNetPos=2;
+    for(let i=0;i<12&&!broker.streamContinuity?.(101);i++){socket.onmessage?.({data:'h'});await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(positionReads).toBeGreaterThanOrEqual(2);
+    expect(broker.streamContinuity?.(101)).toMatchObject({backlog:false,synchronized:true});
+    expect(broker.streamContinuityPositionSnapshot?.(101)?.positions).toEqual([{accountId:101,symbol:'MNQZ6',netQuantity:2}]);
+    unsubscribe();
+  });
+
+  it('a malformed trade frame ends stream continuity for every account',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async()=>response([]),clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    expect(broker.streamContinuity?.(101)).not.toBeNull();
+    socket.deliver([null]);
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    unsubscribe();
+  });
+
   it('late background completion and a late joiner cannot replace a newer management position proof',async()=>{
     const f=fixture();await f.governor.initialize();const socket=new Socket();let hold=false;const held=deferred<Response>();
     const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,

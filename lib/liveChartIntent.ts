@@ -170,19 +170,29 @@ const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => 
  * množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
  */
 export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined, evidence: LiveChartIntentEvidence = {}): boolean {
-  if (intent.state === 'sending') return false;
-  // Vstup: důkaz workeru se SHODNÝM operationId (příkaz u brokera / fill) stačí sám.
-  if (intent.kind === 'entry' && evidence.workerEntryOperationIds?.has(intent.operationId) === true) return true;
   if (!position || position.issue != null) return false;
   const summary = position.summary;
+  // Náhrada musí být KRESLITELNÁ (čáry pozice potřebují cenu vstupu): bez ní záměr drží.
+  const drawable = summary != null && summary.entry != null && Number.isFinite(summary.entry);
+  // Vstup (DEMO 10. 11.: čáry záměru mizely 200–250 ms před pozicí): záměr zmizí, až když ho
+  // NAHRADÍ nakreslená pozice / čekající příkaz téže strany na tomtéž kontraktu (i „neověřeno“
+  // — čáry jsou vidět) A zároveň je tu důkaz workeru se shodným operationId nebo změna tvaru
+  // pozice. Samotný důkaz workeru bez nakreslené pozice záměr nesmaže.
+  if (intent.kind === 'entry') {
+    if (!drawable || position.symbol !== intent.symbol || summary!.side !== intent.side || intent.baselinePosition === undefined) return false;
+    const shape = shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
+    // Změna tvaru proti stavu při kliku smí záměr nahradit i během odesílání (jinak by čára
+    // zdvojila už nakreslenou pozici); důkaz workeru až po výsledku.
+    if (intent.state === 'sending') return shape;
+    const workerEvidence = evidence.workerEntryOperationIds?.has(intent.operationId) === true;
+    return shape || (workerEvidence && intent.baselinePosition == null);
+  }
+  if (intent.state === 'sending') return false;
   if (summary?.unverified === true) return false;
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
+  if (!drawable) return false;
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
-    // Jen změna tvaru pozice (druh / strana / množství) proti stavu při kliku — P&L, mark ani
-    // jiná cenová pole vstup nikdy nepotvrdí; bez známého výchozího tvaru jen důkaz workeru.
-    case 'entry': return summary.side === intent.side && intent.baselinePosition !== undefined
-      && shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
     case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));
     case 'move-target': case 'add-target': return samePrice(summary.target, legPrice(intent, 'takeProfit'));
     case 'attach': return samePrice(summary.stop, legPrice(intent, 'stopLoss')) && samePrice(summary.target, legPrice(intent, 'takeProfit'));
@@ -337,7 +347,7 @@ export function manageIntentDraft(action: string, input: {
 /** Záměr SL a TP po jedné (`manual-order-single-leg-v1`): přidat, posunout, odebrat. */
 export function bareLegIntentDraft(
   seen: { symbol: string; side: 'Buy' | 'Sell'; quantity: number },
-  intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number; stop?: number | null; target?: number | null },
+  intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number; current?: number; stop?: number | null; target?: number | null },
   operationId: string,
 ): LiveChartIntentDraft {
   const stop = intent.leg === 'stopLoss';

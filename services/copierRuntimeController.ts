@@ -500,6 +500,25 @@ export interface CopierControllerStatus {
   exposure?: {
     verifiedAt: number;
     streamCoverage?: TradovateWorkerAccountCoverage[];
+    /**
+     * Kontinuita streamu účtu od poslední REST baseline (`BrokerPort.streamContinuity`), kterou
+     * obchodní události nezruší; stejné kontroly jako `streamCoverage` (backlog, merge, shoda
+     * snímku streamu s cache). JEN zobrazení grafu — řízení REST čtení ji nepoužívá.
+     */
+    streamContinuity?: TradovateWorkerAccountCoverage[];
+    /**
+     * Proč účet nemá řádek dokladu / kontinuity, nebo proč je jeho řádek nepoužitelný
+     * (`no-baseline-proof`, `no-continuity-anchor`, `stream-positions-unavailable`,
+     * `stream-orders-unavailable`, `controller-positions-unknown`, `controller-orders-unknown`,
+     * `stream-cache-mismatch`, `trade-ingress-pending`, `error:…`). Jen diagnostika a zobrazení.
+     */
+    streamCoverageGaps?: Array<{ accountId: number; source: 'proof' | 'continuity'; reason: string }>;
+    /**
+     * Kdy worker naposledy atestoval kontinuitu VŠECH účtů skupiny (živý synchronizovaný stream,
+     * bez mezery, backlogu a neshody snímku s cache, stejná session). Při zdravém streamu se
+     * obnovuje s každým statusem; `verifiedAt` zůstává časem autoritativního čtení. Jen zobrazení.
+     */
+    continuityAttestedAt?: number;
     /** `avgPrice` = průměrný vstup (broker `netPrice` ze streamu, jinak z fillů), jen když sedí na kusy (zobrazení). */
     positions: Array<{ accountId: number; symbol: string; netQuantity: number; avgPrice?: number }>;
     followers: Array<{ accountId: number; ok: boolean; detail: string | null }>;
@@ -519,6 +538,9 @@ export interface CopierControllerStatus {
       stopPrice: number | null;
       status: string;
       updatedAt: number;
+      /** Vazby bracketu (OSO rodič, OCO pár) — jen zobrazení. */
+      parentOrderId?: string;
+      ocoId?: string;
     }>;
   } | null;
   lastError: string | null;
@@ -1791,6 +1813,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    *  a odfiltrování šumu (OCO auto-cancel druhé nohy po výstupu). */
   const leaderStopOrderIds = new Set<string>();
   const leaderTargetOrderIds = new Set<string>();
+  /**
+   * Role vlastní ochranné nohy z durable záznamů ručních vstupů a správy (OSO z grafu, attach,
+   * SL/TP po jedné, posun) — korelátor bracketu je nevidí, a stop-out pak končil jako „manual“
+   * (DEMO 10. 11.). Jen reporting/zobrazení (exitReason), execution stav se nemění.
+   */
+  const manualProtectiveRole = (orderId: string | null | undefined): 'sl' | 'tp' | null => {
+    if (!orderId) return null;
+    const safety = currentRuntime().state.safety;
+    for (const entry of safety.manualEntries ?? []) {
+      if (entry.stopBrokerOrderId === orderId) return 'sl';
+      if (entry.targetBrokerOrderId === orderId) return 'tp';
+    }
+    for (const action of safety.manualOrderActions ?? []) {
+      if (action.newStopId === orderId) return 'sl';
+      if (action.newTargetId === orderId) return 'tp';
+      if (action.targetBrokerOrderId === orderId && action.action === 'move-stop') return 'sl';
+      if (action.targetBrokerOrderId === orderId && action.action === 'move-target') return 'tp';
+    }
+    return null;
+  };
+  const leaderExitReason = (orderId: string | null | undefined): 'sl' | 'tp' | 'manual' => (orderId && leaderStopOrderIds.has(orderId)
+    ? 'sl' : orderId && leaderTargetOrderIds.has(orderId) ? 'tp' : manualProtectiveRole(orderId) ?? 'manual');
   /** Poslední leader fill per symbol — spojí flat přechod s objednávkou. */
   const lastLeaderFillOrderId = new Map<string, string>();
   /**
@@ -1943,9 +1987,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // uzavřeného obchodu už leží v durable recentClosedTrades.
       const closed = currentRuntime().state.safety.dailyStats?.recentClosedTrades
         ?.find(trade => trade.symbol === symbol);
-      const exitReason: 'sl' | 'tp' | 'manual' = lastFill && leaderStopOrderIds.has(lastFill)
-        ? 'sl'
-        : lastFill && leaderTargetOrderIds.has(lastFill) ? 'tp' : 'manual';
+      const exitReason: 'sl' | 'tp' | 'manual' = leaderExitReason(lastFill);
       // Vyplněná noha už svoji roli splnila — bez úklidu by sety rostly
       // o jednu položku na každý uzavřený obchod až do restartu.
       if (lastFill) {
@@ -10314,9 +10356,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           followerCount: group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').length,
           openedAt: lot.openedAt ?? null,
           closedAt: at,
-          exitReason: leaderStopOrderIds.has(fill.brokerOrderId)
-            ? 'sl'
-            : leaderTargetOrderIds.has(fill.brokerOrderId) ? 'tp' : 'manual',
+          exitReason: leaderExitReason(fill.brokerOrderId),
           avgEntryPrice: lot.avgPrice,
           avgExitPrice: fill.price,
           ...(lot.entryOrderIds?.length ? { leaderEntryOrderIds: [...lot.entryOrderIds] } : {}),
@@ -25119,27 +25159,63 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               stopPrice: order.stopPrice ?? null,
               status: order.status,
               updatedAt: order.updatedAt,
+              // Vazby bracketu (jen zobrazení): noha SL/TP se nesmí ukázat jako čekající vstup.
+              ...(order.parentOrderId ? { parentOrderId: order.parentOrderId } : {}),
+              ...(order.ocoId ? { ocoId: order.ocoId } : {}),
             }))
             : []));
+          // Read-only coverage is earned per account: stream baseline plus controller cache agreement.
+          // A heartbeat cannot prove that a queued trade event was merged or that an omitted account is flat.
+          // Proč účet NEMÁ řádek (checklist: „[]“ nesmí skrýt důvod). Jen diagnostika a zobrazení.
+          const coverageGaps: Array<{ accountId: number; source: 'proof' | 'continuity'; reason: string }> = [];
+          const coverageRows = (source: 'proof' | 'continuity', proofOf: (accountId: number) => TradovateWorkerAccountCoverage | null,
+            positionsOf: (accountId: number) => { positions: Array<{ symbol: string; netQuantity: number }> } | null) => [...members].flatMap(accountId => {
+            const gap = (reason: string): TradovateWorkerAccountCoverage[] => { coverageGaps.push({ accountId, source, reason }); return []; };
+            try {
+              const proof = proofOf(accountId);
+              if (!proof) return gap(source === 'proof' ? 'no-baseline-proof' : 'no-continuity-anchor');
+              const streamedPositions = positionsOf(accountId);
+              if (!streamedPositions) return gap('stream-positions-unavailable');
+              const streamedOrders = broker.streamOrderSnapshot?.(accountId);
+              if (!streamedOrders) return gap('stream-orders-unavailable');
+              const cachedPositions = positionsByAccount.get(accountId), cachedOrders = liveOrdersByAccount.get(accountId);
+              if (!cachedPositions) return gap('controller-positions-unknown');
+              if (!cachedOrders) return gap('controller-orders-unknown');
+              const positionKey = (rows: Array<{ symbol: string; netQuantity: number }>) => JSON.stringify(rows.filter(row => row.netQuantity !== 0).map(row => [row.symbol, row.netQuantity]).sort());
+              const orderKey = (rows: BrokerOrder[]) => JSON.stringify(rows.filter(row => isOpenOrderStatus(row.status)).map(row => [row.brokerOrderId, row.symbol, row.side, row.status, row.orderType, row.quantity, row.filledQuantity, row.limitPrice ?? null, row.stopPrice ?? null]).sort());
+              const agrees = positionKey(streamedPositions.positions) === positionKey([...cachedPositions].map(([symbol, netQuantity]) => ({ symbol, netQuantity })))
+                && orderKey(streamedOrders.orders) === orderKey([...cachedOrders.values()]);
+              const ingress = (pendingTradeIngressByAccount.get(accountId) ?? 0) > 0;
+              if (!agrees) coverageGaps.push({ accountId, source, reason: 'stream-cache-mismatch' });
+              if (ingress) coverageGaps.push({ accountId, source, reason: 'trade-ingress-pending' });
+              return [{ ...proof, backlog: proof.backlog || ingress,
+                mergeInProgress: proof.mergeInProgress || !agrees, synchronized: proof.synchronized && agrees }];
+            } catch (error) {
+              // Optional display proof failure keeps the normal authoritative REST fallback.
+              return gap(`error:${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+            }
+          });
+          const streamCoverage = coverageRows('proof', accountId => broker.streamCoverage?.(accountId) ?? null,
+            accountId => broker.streamPositionSnapshot?.(accountId) ?? null);
+          const streamContinuity = coverageRows('continuity', accountId => broker.streamContinuity?.(accountId) ?? null,
+            accountId => broker.streamContinuityPositionSnapshot?.(accountId) ?? null);
+          // Ověřeno = živý synchronizovaný stream bez mezery, nezpracovaných událostí a se shodou
+          // snímku s cache u VŠECH účtů skupiny (session/baseline/backlog), ne heartbeat. Živost
+          // (socketLive/observedAt) a stáří dat (lastDataAt) zůstávají v řádcích zvlášť.
+          const attested = streamContinuity.length === members.size && streamContinuity.every(row => row.socketLive && row.synchronized
+            && !row.gap && !row.backlog && !row.mergeInProgress && row.sessionId === row.currentSessionId);
+          const attestedAt = attested ? Math.min(...streamContinuity.map(row => row.observedAt)) : 0;
           return {
             verifiedAt: Math.max(lastAuthoritativeReadAt, lastBrokerPositionAt ?? 0),
+            // Atestace kontinuity zvlášť (živost/ověření ≠ čas autoritativního čtení): `verifiedAt`
+            // zůstává čtením, aby klidový režim (`nativeIdleBrokerSnapshot`) dál fungoval.
+            ...(attestedAt > 0 ? { continuityAttestedAt: attestedAt } : {}),
             // Read-only coverage is earned per account: stream baseline plus controller cache agreement.
             // A heartbeat cannot prove that a queued trade event was merged or that an omitted account is flat.
-            streamCoverage: [...members].flatMap(accountId => {
-              try {
-                const proof = broker.streamCoverage?.(accountId);
-                const streamedPositions = broker.streamPositionSnapshot?.(accountId);
-                const streamedOrders = broker.streamOrderSnapshot?.(accountId);
-                const cachedPositions = positionsByAccount.get(accountId), cachedOrders = liveOrdersByAccount.get(accountId);
-                if (!proof || !streamedPositions || !streamedOrders || !cachedPositions || !cachedOrders) return [];
-                const positionKey = (rows: Array<{ symbol: string; netQuantity: number }>) => JSON.stringify(rows.filter(row => row.netQuantity !== 0).map(row => [row.symbol, row.netQuantity]).sort());
-                const orderKey = (rows: BrokerOrder[]) => JSON.stringify(rows.filter(row => isOpenOrderStatus(row.status)).map(row => [row.brokerOrderId, row.symbol, row.side, row.status, row.orderType, row.quantity, row.filledQuantity, row.limitPrice ?? null, row.stopPrice ?? null]).sort());
-                const agrees = positionKey(streamedPositions.positions) === positionKey([...cachedPositions].map(([symbol, netQuantity]) => ({ symbol, netQuantity })))
-                  && orderKey(streamedOrders.orders) === orderKey([...cachedOrders.values()]);
-                return [{ ...proof, backlog: proof.backlog || (pendingTradeIngressByAccount.get(accountId) ?? 0) > 0,
-                  mergeInProgress: proof.mergeInProgress || !agrees, synchronized: proof.synchronized && agrees }];
-              } catch { return []; } // Optional display proof failure keeps the normal authoritative REST fallback.
-            }),
+            streamCoverage,
+            // Graf: kontinuita od baseline přežije obchodní událost (ne řízení REST čtení).
+            streamContinuity,
+            ...(coverageGaps.length ? { streamCoverageGaps: coverageGaps } : {}),
             positions,
             followers,
             orders,

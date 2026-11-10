@@ -100,6 +100,8 @@ import {
 } from '../lib/tradovateCopyTradeBridge';
 import { workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
+import { guardStaleRestReads, overlayWorkerContinuityForDisplay } from '../lib/liveChartExposureProjection';
+import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   copyTradeAccountName,
@@ -158,7 +160,7 @@ import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, liv
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
-import { leaderManageBasis, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
+import { leaderManageBasis, liveFillSlippageNote, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
 import {
@@ -757,6 +759,24 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
     ));
   }, [liveData, live.profiles, live.profilesLoaded]);
+  // Přehled LIVE (review Codexu 9aa17b7, bod 4): vykreslení řádků účtů stojí na stejné kontinuitě
+  // streamu jako graf. `liveData` / `copyTradeSnapshot` (doklad) dál řídí kopírku, způsobilost,
+  // ARM/flat předkontrolu, Flatten náhled a záložku Risk; tohle čtou jen řádky přehledu a mobilní
+  // detail účtu. Stejný sekvenční plot jako graf (krok 1): REST zahájený dřív, než se naposledy
+  // ukázal stav workeru, ho nepřepíše (žádný problik na starší flat). Stáří 8 s se hlídá každou
+  // sekundu (`freshnessNow`), ne jen při novém statusu (INV-UI-03).
+  const overviewLiveData = useMemo(
+    () => overlayWorkerContinuityForDisplay(guardStaleRestReads(liveData, tradovateWorkerShownSeq()), agentStatus, agentStatusObservedAt,
+      freshnessNow, coverageOwners, { statusFresh: agentStatusFresh, trusted: !agentStatusRestored }),
+    [liveData, agentStatus, agentStatusObservedAt, freshnessNow, coverageOwners, agentStatusFresh, agentStatusRestored],
+  );
+  useEffect(() => {
+    if (!overviewLiveData || !liveData || overviewLiveData === liveData) return;
+    const shown = overviewLiveData.accounts
+      .filter(account => account.readState?.displayStreamCoverage && !liveData.accounts.some(source => source.id === account.id && source.readState?.displayStreamCoverage))
+      .map(account => account.id);
+    if (shown.length) noteTradovateWorkerShown(shown, currentTradovateClientReadSeq());
+  }, [overviewLiveData, liveData]);
   const copyTradeSnapshot = useMemo(
     () => liveData ? tradovateCopyTradeSnapshot(liveData, live.profiles) : null,
     [liveData, live.profiles],
@@ -789,9 +809,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ) }));
   }, [displayFeedReceipt, displayMembership, agentStatusObservedAt, userId]);
   const displayVouches = displayVouchState.userId === userId ? displayVouchState.values : EMPTY_DISPLAY_VOUCHES;
-  const displaySnapshot = useMemo(() => {
-    if (!copyTradeSnapshot) return null;
-    return { ...copyTradeSnapshot, accounts: copyTradeSnapshot.accounts.map(account => {
+  const decorateDisplaySnapshot = useCallback((base: typeof copyTradeSnapshot) => {
+    if (!base) return null;
+    return { ...base, accounts: base.accounts.map(account => {
       const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
       const owner = owners.length === 1 ? owners[0] : null;
       const values = owner && displayCache.userId === userId
@@ -810,7 +830,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}`,
       };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, displayVouches, live.dataEnrichmentByConnection, userId, restoredDisplay]);
+  }, [displayMembership, displayCache, displayVouches, live.dataEnrichmentByConnection, userId, restoredDisplay]);
+  const displaySnapshot = useMemo(() => decorateDisplaySnapshot(copyTradeSnapshot), [decorateDisplaySnapshot, copyTradeSnapshot]);
+  // Jen vykreslení přehledu / rizika / detailu účtu: pozice a příkazy z kontinuity streamu jako graf.
+  const overviewSnapshot = useMemo(() => (overviewLiveData === liveData
+    ? displaySnapshot
+    : decorateDisplaySnapshot(overviewLiveData ? tradovateCopyTradeSnapshot(overviewLiveData, live.profiles) : null)),
+  [overviewLiveData, liveData, displaySnapshot, decorateDisplaySnapshot, live.profiles]);
   useEffect(() => {
     // Wait for every connected account list before replacing the persisted view.
     // A partial bootstrap must not erase amounts for connections still loading.
@@ -861,6 +887,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const copyTradeOrders = useMemo(
     () => liveData ? tradovateCopyTradeOrders(liveData) : [],
     [liveData],
+  );
+  // Příkazy ze stejných dat jako `overviewSnapshot` — štít ochrany nesmí kombinovat
+  // čerstvé „ověřeno“ se starším seznamem příkazů.
+  const overviewOrders = useMemo(
+    () => overviewLiveData === liveData ? copyTradeOrders : overviewLiveData ? tradovateCopyTradeOrders(overviewLiveData) : [],
+    [overviewLiveData, liveData, copyTradeOrders],
   );
   // Skutečné poplatky z fillů pro kartu obchodu (jen zobrazení).
   const tradeFeeRates = useMemo(
@@ -1160,6 +1192,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     root: 'MNQ',
     target: chartTarget,
     now: freshnessNow,
+    userId,
   });
   // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
   // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
@@ -1426,6 +1459,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartWorkingWithIntents = useMemo(() => withLiveChartIntentLines(chartWorkingView, chartIntents,
     chartPositionSymbol ?? chartIntents[chartIntents.length - 1]?.symbol ?? entryFrontContract), [chartWorkingView, chartIntents, chartPositionSymbol, entryFrontContract]);
   const chartWorkingOrders = useKeyedValue(chartWorkingWithIntents);
+  // Skluz Market vstupu (bod 7, DEMO 10. 11.): poznámka ke štítku SL, nic se neposouvá.
+  const chartSlipEntry = useMemo(() => (agentStatus?.controller.manualEntries ?? [])
+    .filter(entry => entry.symbol === chartPositionSymbol && entry.open !== false && entry.timing?.fillAvg != null)
+    .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null, [agentStatus?.controller.manualEntries, chartPositionSymbol]);
+  const chartPositionShown = useMemo(() => {
+    const summary = chartData.position.summary;
+    const note = liveFillSlippageNote(summary, chartSlipEntry ? { orderType: chartSlipEntry.orderType, side: chartSlipEntry.side,
+      referencePrice: chartSlipEntry.referencePrice, fillAvg: chartSlipEntry.timing?.fillAvg } : null);
+    return note && summary ? { ...chartData.position, key: `${chartData.position.key}|${note}`, summary: { ...summary, fillNote: note } } : chartData.position;
+  }, [chartData.position, chartSlipEntry]);
   // Splněné (read model brokera ukazuje cíl) a prošlé záměry pryč; tik desku je 1 s.
   // Vstup potvrdí jen důkaz workeru se shodným operationId nebo změna tvaru pozice (ne cena/P&L).
   const chartEntryEvidence = useMemo(() => liveChartWorkerEntryEvidence(agentStatus?.controller.manualEntries), [agentStatus?.controller.manualEntries]);
@@ -2126,7 +2169,7 @@ acceptAgentStatus((await executeAgent({
       </div>
     );
   }
-  const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
+  const selectedLiveAccount = (overviewSnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
   const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
 
   const priceAlertWatch = priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
@@ -2161,7 +2204,7 @@ acceptAgentStatus((await executeAgent({
           liveExposurePaint={liveExposurePaint}
           group={chartData.group}
           groupKey={chartData.groupKey}
-          position={chartData.position}
+          position={chartPositionShown}
           disarm={liveChartDisarmDuringArm(chartData.disarm, armFlowActive)}
           onDisarm={disarmFromChart}
           onTargetChange={setChartTarget}
@@ -2227,7 +2270,7 @@ acceptAgentStatus((await executeAgent({
               onPick={id => { setPhoneMenuOpen(false); navigateToTab(id); }}
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
-            position: chartData.position,
+            position: chartPositionShown,
             // Karty obchodů vlevo dole jako na PC (stejná brána `runtimeAvailable` vč. krátké grace obnoveného stavu).
             copyEvents: runtimeAvailable ? chartLive.status?.controller.recentCopyEvents : undefined,
             copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,
@@ -2426,6 +2469,10 @@ acceptAgentStatus((await executeAgent({
               userId={userId}
               owner={cardOwner}
               snapshot={displaySnapshot ?? copyTradeSnapshot}
+              // Jen vykreslení řádků (pozice + příkazy z téhož zdroje): kontinuita streamu jako graf.
+              // ARM předkontrola, „flat“, Flatten náhled a ostrov zůstávají na `snapshot`/`orders` (doklad).
+              rowDisplaySnapshot={overviewSnapshot ?? undefined}
+              rowDisplayOrders={overviewOrders}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
               // C7: Dashboard „Zrušit“ jen přes `dashboardCancelTarget` (vlastní čekající vstup leadera);
@@ -2606,7 +2653,7 @@ acceptAgentStatus((await executeAgent({
           }}
         />
       ) : null}
-      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetailSlot key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
+      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetailSlot key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={overviewOrders}
         dailyPnlPending={false} leader={selectedMembership?.leaderAccountId === selectedAccountId}
         multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
         onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
