@@ -100,7 +100,8 @@ import {
 } from '../lib/tradovateCopyTradeBridge';
 import { workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
-import { overlayWorkerContinuityForDisplay } from '../lib/liveChartExposureProjection';
+import { guardStaleRestReads, overlayWorkerContinuityForDisplay } from '../lib/liveChartExposureProjection';
+import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   copyTradeAccountName,
@@ -758,14 +759,24 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
     ));
   }, [liveData, live.profiles, live.profilesLoaded]);
-  // Přehled LIVE (review Codexu 9aa17b7, bod 4): zobrazení pozic stojí na stejné kontinuitě
+  // Přehled LIVE (review Codexu 9aa17b7, bod 4): vykreslení řádků účtů stojí na stejné kontinuitě
   // streamu jako graf. `liveData` / `copyTradeSnapshot` (doklad) dál řídí kopírku, způsobilost,
-  // skupiny a widgety; tohle čte jen vykreslení přehledu, rizika a detailu účtu.
+  // ARM/flat předkontrolu, Flatten náhled a záložku Risk; tohle čtou jen řádky přehledu a mobilní
+  // detail účtu. Stejný sekvenční plot jako graf (krok 1): REST zahájený dřív, než se naposledy
+  // ukázal stav workeru, ho nepřepíše (žádný problik na starší flat). Stáří 8 s se hlídá každou
+  // sekundu (`freshnessNow`), ne jen při novém statusu (INV-UI-03).
   const overviewLiveData = useMemo(
-    () => overlayWorkerContinuityForDisplay(liveData, agentStatus, agentStatusObservedAt, Date.now(), coverageOwners,
-      { statusFresh: agentStatusFresh, trusted: !agentStatusRestored }),
-    [liveData, agentStatus, agentStatusObservedAt, coverageOwners, agentStatusFresh, agentStatusRestored],
+    () => overlayWorkerContinuityForDisplay(guardStaleRestReads(liveData, tradovateWorkerShownSeq()), agentStatus, agentStatusObservedAt,
+      freshnessNow, coverageOwners, { statusFresh: agentStatusFresh, trusted: !agentStatusRestored }),
+    [liveData, agentStatus, agentStatusObservedAt, freshnessNow, coverageOwners, agentStatusFresh, agentStatusRestored],
   );
+  useEffect(() => {
+    if (!overviewLiveData || !liveData || overviewLiveData === liveData) return;
+    const shown = overviewLiveData.accounts
+      .filter(account => account.readState?.displayStreamCoverage && !liveData.accounts.some(source => source.id === account.id && source.readState?.displayStreamCoverage))
+      .map(account => account.id);
+    if (shown.length) noteTradovateWorkerShown(shown, currentTradovateClientReadSeq());
+  }, [overviewLiveData, liveData]);
   const copyTradeSnapshot = useMemo(
     () => liveData ? tradovateCopyTradeSnapshot(liveData, live.profiles) : null,
     [liveData, live.profiles],

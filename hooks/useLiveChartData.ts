@@ -132,7 +132,8 @@ export function useLiveChartData(input: {
   const computedPosition = useMemo(() => {
     if (!enabled || !viewGroup) return NO_LIVE_CHART_POSITION;
     const viewIds = requested === 'group'
-      ? [viewGroup.leaderAccountId, ...viewGroup.followers.map(follower => follower.accountId)]
+      // Leader a kopírující followeři (ručně vypnutý follower s vlastní pozicí vstup leadera neblokuje).
+      ? [viewGroup.leaderAccountId, ...viewGroup.followers.filter(follower => follower.mode !== 'off' && follower.enabled !== false).map(follower => follower.accountId)]
       : [requested];
     return markUnverifiedFlat(markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds), viewIds, unverifiedIds);
   }, [enabled, viewGroup, view, requested, unverifiedIds]);

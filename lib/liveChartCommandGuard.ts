@@ -83,7 +83,9 @@ export function createLiveChartCommandGuard(deps: LiveChartGuardDeps) {
     entry<R extends Result>(draft: Parameters<typeof entryIntentDraft>[0], operationId: string, scaleIn: boolean, send: () => Promise<R>): Promise<R> {
       const position = deps.position();
       // Neznámé ≠ flat: bez souhrnu a s neověřeným čtením nevíme kontrakt ani velikost → žádný vstup.
-      const unknown = !position.summary && (position.issueKind === 'stale' || position.issueKind === 'orders-stale')
+      // Každý pohled bez souhrnu s issue (neověřené čtení, chybějící účet/připojení, rozjetí, neznámo)
+      // je neznámý stav, ne flat (critic 0a7f6ff3).
+      const unknown = !position.summary && position.issue != null
         ? new LiveCommandNotSentError('Pozice není ověřená — nový vstup se neodeslal.') : null;
       const blocked = unknown ?? (scaleIn ? gateFor({ kind: 'scale-in' })
         : position.symbol === draft.symbol ? gateFor({ kind: 'entry' }) : null);

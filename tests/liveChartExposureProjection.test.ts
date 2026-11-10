@@ -401,6 +401,13 @@ describe('autorizace dál vyžaduje doklad', () => {
       expect(overlayWorkerContinuityForDisplay(proven, current, NOW - 1_000, NOW, owners, input)).toBe(proven);
     }
     expect(overlayWorkerContinuityForDisplay(proven, current, NOW - 9_000, NOW, owners, { statusFresh: true, trusted: true })).toBe(proven);
+    // Odpojený worker ani chybějící příkazy v expozici nic neověří (critic 0a7f6ff3).
+    const disconnected = { ...current, controller: { ...current.controller, connected: false } };
+    expect(overlayWorkerContinuityForDisplay(proven, disconnected as never, NOW - 1_000, NOW, owners, { statusFresh: true, trusted: true })).toBe(proven);
+    const noOrders = { ...current, controller: { ...current.controller, exposure: { ...current.controller.exposure, orders: undefined } } };
+    expect(overlayWorkerContinuityForDisplay(proven, noOrders as never, NOW - 1_000, NOW, owners, { statusFresh: true, trusted: true })).toBe(proven);
+    // Účet s dokladem se nepřepíše: druhý průchod nic nemění.
+    expect(overlayWorkerContinuityForDisplay(shown, current, NOW - 1_000, NOW, owners, { statusFresh: true, trusted: true })).toBe(shown);
   });
 
   it('neověřená projekce není ověřené čtení pozic ani příkazů', () => {

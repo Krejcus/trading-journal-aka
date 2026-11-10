@@ -141,7 +141,7 @@ describe('callbacky grafu: autorizace jen na platném dokladu', () => {
 
 describe('neznámé ≠ flat (review Codexu a09c4176)', () => {
   it('pohled bez pozice s neověřeným čtením: nový vstup na žádném kontraktu neodejde', async () => {
-    for (const issueKind of ['stale', 'orders-stale'] as const) {
+    for (const issueKind of ['stale', 'orders-stale', 'missing-account', 'mismatch', 'unknown'] as const) {
       const { store, guard } = setup({ key: 'u', symbol: null, lines: [], summary: null, issue: 'Pozice neověřeno', issueKind });
       const send = relay(store, operationId => Promise.resolve({ status: 'acknowledged', operationId }));
       const result = guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh9', false, () => send('entry:abcdefgh9'));
