@@ -157,3 +157,24 @@ describe('neznámé ≠ flat (review Codexu a09c4176)', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('pozice ověřená jen kotvou kontinuity (review Codexu 5e9b2aef)', () => {
+  it('neprojde rozšíření/odebrání SL, přikoupení ani vstup na kontraktu; ostatní správa jde', async () => {
+    const { store, guard } = setup(position({ continuityOnly: true, side: 'long', stop: 90 }));
+    const send = relay(store, operationId => Promise.resolve({ status: 'acknowledged', operationId }));
+    const seen = { symbol: 'MNQZ6', side: 'Buy' as const, quantity: 1, referencePrice: 100 };
+    await expect(guard.manage({ action: 'move-stop', symbol: 'MNQZ6', expectPrice: 90, newPrice: 85 }, send)).rejects.toSatisfy(isLiveCommandNotSent);
+    await expect(guard.manage({ action: 'remove-leg', symbol: 'MNQZ6', expectPrice: 90 }, send)).rejects.toSatisfy(isLiveCommandNotSent);
+    await expect(guard.bareLeg(seen, { kind: 'remove', leg: 'stopLoss' } as never, send)).rejects.toSatisfy(isLiveCommandNotSent);
+    await expect(guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh3', true, () => send('entry:abcdefgh3'))).rejects.toSatisfy(isLiveCommandNotSent);
+    await expect(guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh4', false, () => send('entry:abcdefgh4'))).rejects.toSatisfy(isLiveCommandNotSent);
+    expect(send).not.toHaveBeenCalled();
+    await guard.manage({ action: 'move-stop', symbol: 'MNQZ6', expectPrice: 90, newPrice: 95 }, send); // utažení
+    await guard.manage({ action: 'move-stop', symbol: 'MNQZ6', expectPrice: 90, newPrice: 100 }, send); // BE
+    await guard.manage({ action: 'move-target', symbol: 'MNQZ6', expectPrice: 120, newPrice: 130 }, send);
+    await guard.bareLeg(seen, { kind: 'remove', leg: 'takeProfit' } as never, send);
+    await guard.manage({ action: 'close-position', symbol: 'MNQZ6', expectPrice: 100 }, send);
+    await guard.entry({ symbol: 'MNQH7', side: 'Sell', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh5', false, () => send('entry:abcdefgh5'));
+    expect(send).toHaveBeenCalledTimes(6);
+  });
+});

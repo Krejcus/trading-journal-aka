@@ -2260,8 +2260,12 @@ existující ochranu.
   i bez) graf kreslí jen z čerstvého, neobnoveného statusu této instance (`trusted &&
   statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity.
   Účet s platným řádkem `exposure.streamContinuity` (tytéž kontroly jako doklad, ≤ 8 s) je
-  z čerstvého neobnoveného statusu OVĚŘENÝ i s otevřenou pozicí — správa z grafu jde (worker vše
-  ověří u brokera). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
+  z čerstvého neobnoveného statusu OVĚŘENÝ pro zobrazení i s otevřenou pozicí. Autorizačně je to
+  mezistupeň (`summary.continuityOnly`, review Codexu 5e9b2aef): kotva nepozná vynechanou událost
+  (předpoklad NEOVĚŘEN conformance testem), proto z ní brána grafu nepustí akce zvětšující možnou
+  ztrátu — rozšíření nebo odebrání SL, přikoupení, nový vstup na kontraktu. Zavřít, zrušit vstup,
+  utáhnout SL / BE, přidat SL/TP, posun/odebrání TP a posun limitu jdou. Plný doklad (`streamCoverage`)
+  odemyká vše. Pojistka téhož ve workeru je samostatný úkol (změna jádra + DEMO conformance). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
   návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 5 s
   (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.; review
   6bb8ef7 zkrátilo 15 s → 5 s, aby neznámý stop-out nezakrývala stará pozice). Nikdy přes ověřený

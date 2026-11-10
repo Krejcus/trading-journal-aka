@@ -13,7 +13,7 @@ import {
 } from '../lib/liveWorkingOrderLines';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
-import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, liveChartDrawnMemory, liveChartDrawnMemoryKey, markLiveChartPositionProjection, markUnverifiedFlat, projectLiveChartExposure, rememberLiveChartDrawn } from '../lib/liveChartExposureProjection';
+import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, liveChartDrawnMemory, liveChartDrawnMemoryKey, markLiveChartContinuityOnly, markLiveChartPositionProjection, markUnverifiedFlat, projectLiveChartExposure, rememberLiveChartDrawn } from '../lib/liveChartExposureProjection';
 import { LIVE_UNVERIFIED_LINE_COLOR } from '../lib/liveChartOrderLines';
 import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
@@ -79,6 +79,9 @@ export function useLiveChartData(input: {
     noteTradovateWorkerShown(projected.workerShown, currentTradovateClientReadSeq());
   }, [projected]);
   const projectedAccounts = useMemo(() => (chartData ? tradovateCopyTradeSnapshot(chartData, profiles).accounts : []), [chartData, profiles]);
+  // Účty ověřené jen kotvou kontinuity: zobrazení ověřené, brána nepustí akce zvětšující ztrátu.
+  const continuityKey = (projected?.continuityOnly ?? []).slice().sort((a, b) => a - b).join(',');
+  const continuityIds = useMemo<ReadonlySet<number>>(() => new Set(continuityKey ? continuityKey.split(',').map(Number) : []), [continuityKey]);
   const unverifiedKey = projectedAccounts.filter(account => account.displayProjection === 'worker-unverified').map(account => account.id).join(',');
   // Jedna množina pro všechny cesty zobrazení (pozice, karta ochrany, skupina, pracující příkazy).
   const unverifiedIds = useMemo<ReadonlySet<number>>(() => new Set(unverifiedKey ? unverifiedKey.split(',').map(Number) : []), [unverifiedKey]);
@@ -135,8 +138,11 @@ export function useLiveChartData(input: {
       // Leader a kopírující followeři (ručně vypnutý follower s vlastní pozicí vstup leadera neblokuje).
       ? [viewGroup.leaderAccountId, ...viewGroup.followers.filter(follower => follower.mode !== 'off' && follower.enabled !== false).map(follower => follower.accountId)]
       : [requested];
-    return markUnverifiedFlat(markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds), viewIds, unverifiedIds);
-  }, [enabled, viewGroup, view, requested, unverifiedIds]);
+    return markLiveChartContinuityOnly(
+      markUnverifiedFlat(markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds), viewIds, unverifiedIds),
+      continuityIds,
+    );
+  }, [enabled, viewGroup, view, requested, unverifiedIds, continuityIds]);
   // Návrat na tab / krátce neznámý stav: podržet poslední nakreslenou pozici jako neověřenou,
   // dokud nepřijde nová (nejdéle `LIVE_CHART_HOLD_LAST_DRAWN_MS` = 5 s); ověřený flat hned (DEMO 10. 11., bod 3).
   // Paměť žije v MODULU (checklist: remount grafu nesmí bliknout na flat), klíč = cíl pohledu.

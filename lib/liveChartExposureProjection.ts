@@ -108,6 +108,12 @@ export interface LiveChartProjectionResult<T> {
   data: T | null;
   /** Účty, které teď kreslí stav workeru (s dokladem i bez) — pro `lastWorkerShownSeq`. */
   workerShown: number[];
+  /**
+   * Účty ověřené JEN kotvou kontinuity (ne plným dokladem). Kotva nepozná vynechanou událost
+   * (NEOVĚŘENO conformance testem) → z nich neprojdou akce zvětšující možnou ztrátu
+   * (`summary.continuityOnly`, `lib/liveChartRiskPolicy.ts`; review Codexu 5e9b2aef).
+   */
+  continuityOnly?: number[];
 }
 
 /**
@@ -215,6 +221,7 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   const known = workerLive ? workerKnownAccounts(status) : new Set<number>();
   const context = workerLive && exposure ? workerExposureOverlayContext(proven, exposure) : null;
   const workerShown: number[] = [];
+  const continuityOnly: number[] = [];
   let changed = false;
   const accounts = proven.accounts.map((account): TradovateAccountDataAccount => {
     if (account.readState?.displayStreamCoverage) { workerShown.push(account.id); return account; }
@@ -222,6 +229,7 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
     if (context && continuous) {
       changed = true;
       workerShown.push(account.id);
+      continuityOnly.push(account.id);
       return overlayWorkerAccount(account, proven, context, continuous.lastDataAt, continuous);
     }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).
@@ -232,7 +240,7 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
     }
     return account;
   });
-  return { data: changed ? { ...proven, accounts } : proven, workerShown };
+  return { data: changed ? { ...proven, accounts } : proven, workerShown, continuityOnly };
 }
 
 /** Pozice grafu stojí aspoň na jednom účtu z neověřené projekce workeru → označit. */
@@ -270,6 +278,23 @@ export function markUnverifiedFlat(
   if (position.summary || position.issue != null || unverifiedAccountIds.size === 0) return position;
   if (!viewAccountIds.some(id => id != null && unverifiedAccountIds.has(id))) return position;
   return { ...position, key: `${position.key}|flat-${LIVE_CHART_UNVERIFIED_NOTE}`, issue: `Pozice ${LIVE_CHART_UNVERIFIED_NOTE}`, issueKind: 'stale' };
+}
+
+/**
+ * Pozice stojí aspoň na jednom účtu ověřeném jen kotvou kontinuity → `summary.continuityOnly`.
+ * Zobrazení beze změny (pozice je ověřená, bez štítku); brána odmítne jen akce zvětšující možnou
+ * ztrátu (rozšířit/odebrat SL, přikoupit, nový vstup na kontraktu). Neověřená pozice má přednost.
+ */
+export function markLiveChartContinuityOnly(
+  position: LiveChartPosition,
+  continuityAccountIds: ReadonlySet<number>,
+): LiveChartPosition {
+  const summary = position.summary;
+  if (!summary || summary.unverified === true || continuityAccountIds.size === 0) return position;
+  const touched = summary.rows.some(row => continuityAccountIds.has(row.accountId))
+    || (summary.leader != null && continuityAccountIds.has(summary.leader.accountId));
+  if (!touched) return position;
+  return { ...position, key: `${position.key}|kontinuita`, summary: { ...summary, continuityOnly: true } };
 }
 
 /** Jediný text stavu „neověřeno“ pro všechny cesty zobrazení grafu. */

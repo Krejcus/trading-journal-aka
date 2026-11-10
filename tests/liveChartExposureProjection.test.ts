@@ -554,3 +554,22 @@ describe('review Codexu a09c4176', () => {
     expect(liveChartDrawnMemoryKey(group, 'group', { userId: 'u1', owners: owners('demo', 'c1') })).toBe(base);
   });
 });
+
+describe('kontinuita = mezistupeň autorizace (review Codexu 5e9b2aef)', () => {
+  it('projekce vrací účty ověřené jen kotvou; doklad mezi ně nepatří', () => {
+    const current = status();
+    (current.controller.exposure as { streamContinuity?: unknown }).streamContinuity = [100, 200].map(id => ({ ...proof(id), observedAt: NOW - 500 }));
+    const result = projectLiveChartExposure(restFlat(), current, NOW - 1_000, NOW, owners, fresh);
+    expect(result.continuityOnly).toEqual([100, 200]);
+  });
+
+  it('značka continuityOnly: jen ověřená pozice dotčená kotvou', async () => {
+    const { markLiveChartContinuityOnly } = await import('../lib/liveChartExposureProjection');
+    const summary = { leader: { accountId: 100, quantity: 1, entry: 1 }, rows: [] } as never;
+    const pos = { key: 'p', symbol: 'MNQZ6', lines: [], summary, issue: null };
+    expect(markLiveChartContinuityOnly(pos, new Set([100])).summary?.continuityOnly).toBe(true);
+    expect(markLiveChartContinuityOnly(pos, new Set([300]))).toBe(pos);
+    const unverified = { ...pos, summary: { ...(summary as object), unverified: true } as never };
+    expect(markLiveChartContinuityOnly(unverified, new Set([100]))).toBe(unverified);
+  });
+});

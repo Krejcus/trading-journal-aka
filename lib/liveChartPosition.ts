@@ -47,6 +47,8 @@ export interface LiveChartPositionSummary {
    * šablony je blíž fillu, než plán čekal. Jen text ke štítku SL — nic neposílá ani neposouvá.
    */
   fillNote?: string;
+  /** Ověřeno jen kotvou kontinuity streamu (ne plným dokladem): zobrazení ověřené, akce zvětšující ztrátu ne. */
+  continuityOnly?: boolean;
 }
 
 export interface LiveChartPositionAccountRow {

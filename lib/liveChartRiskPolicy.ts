@@ -34,10 +34,10 @@ export function liveStopTightens(side: 'long' | 'short', currentStop: number | n
 
 /** null = akce smí dál (u ověřené pozice vždy); jinak důvod, proč z neověřené pozice neodejde. */
 export function liveUnverifiedActionBlock(
-  summary: Pick<LiveChartPositionSummary, 'unverified' | 'side' | 'stop'> | null | undefined,
+  summary: Pick<LiveChartPositionSummary, 'unverified' | 'continuityOnly' | 'side' | 'stop'> | null | undefined,
   action: LiveChartRiskAction,
 ): string | null {
-  if (summary?.unverified !== true) return null;
+  if (summary?.unverified !== true) return summary?.continuityOnly === true ? continuityOnlyBlock(summary, action) : null;
   switch (action.kind) {
     case 'close':
     case 'cancel-entry':
@@ -55,6 +55,29 @@ export function liveUnverifiedActionBlock(
     case 'scale-in': return reject('přikoupit');
     case 'entry': return reject('nový vstup na tomto kontraktu');
     default: return reject('tahle akce');
+  }
+}
+
+/**
+ * Pozice ověřená jen kotvou kontinuity (review Codexu 5e9b2aef): kotva nepozná vynechanou
+ * událost Tradovate, proto neprojde nic, co zvětší možnou ztrátu — rozšíření nebo odebrání SL,
+ * přikoupení a nový vstup na kontraktu. TP, limit vstupu, zavření, BE a utažení SL dál jdou.
+ */
+function continuityOnlyBlock(
+  summary: Pick<LiveChartPositionSummary, 'side' | 'stop'>,
+  action: LiveChartRiskAction,
+): string | null {
+  const block = (what: string) => `Pozice není plně ověřená u brokera — ${what} teď nejde (zavřít, utáhnout SL, BE a TP jdou). Nic se neodeslalo.`;
+  switch (action.kind) {
+    case 'move-stop': {
+      const current = action.currentStop !== undefined ? action.currentStop : summary.stop;
+      if (current == null) return block('posun SL bez jedné známé ceny SL');
+      return liveStopTightens(summary.side, current, action.newPrice) ? null : block('rozšířit SL');
+    }
+    case 'remove-stop': return block('odebrat SL');
+    case 'scale-in': return block('přikoupit');
+    case 'entry': return block('nový vstup na tomto kontraktu');
+    default: return null;
   }
 }
 
