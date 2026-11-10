@@ -557,11 +557,17 @@ describe('studený start LIVE: jedno úplné čtení a trvalá nápověda připo
     // Data jsou venku, i když probe ještě visí.
     expect(view('cold-probe').connectionData.c.historicalSync.status).toBe('not-checked');
     expect(view('cold-probe').data?.accounts).toHaveLength(1);
+    // Účty po úplném čtení (včetně sekvence zahájení čtení, `lib/tradovateClientReadOrder.ts`).
+    const beforeProbe = view('cold-probe').connectionData.c.accounts;
     probe.resolve({ connectionId: 'c', historicalSync: { status: 'available' } as TradovatePreflightResult['historicalSync'] });
     await settle();
     const after = view('cold-probe').connectionData.c;
     expect(after.historicalSync.status).toBe('available');
-    expect(after.accounts).toEqual(unchecked.accounts);
+    expect(after.accounts).toBe(beforeProbe);
+    // Obsah účtů je přesně ze čtení; navíc jen pořadové číslo jeho zahájení.
+    expect(after.accounts.map(({ readState, ...rest }) => ({ ...rest, readState: { ...readState, clientPositionsReadSeq: undefined, clientOrdersReadSeq: undefined } })))
+      .toEqual(unchecked.accounts.map(({ readState, ...rest }) => ({ ...rest, readState: { ...readState, clientPositionsReadSeq: undefined, clientOrdersReadSeq: undefined } })));
+    expect(after.accounts[0].readState?.clientPositionsReadSeq).toBeGreaterThan(0);
   });
 
   it('neúspěšný probe se zkusí právě jednou znovu a pak zůstane „neověřeno“', async () => {

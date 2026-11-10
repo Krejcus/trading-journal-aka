@@ -136,6 +136,17 @@ export interface TradovateAccountDataAccount {
   readState?: {
     /** Current stream continuity is display evidence, separate from data capture time. */
     displayStreamCoverage?: TradovateWorkerAccountCoverage;
+    /**
+     * Jen zobrazovací projekce grafu (`lib/liveChartExposureProjection.ts`): pozice a příkazy
+     * jsou ze stavu workeru BEZ dokladu kontinuity. Nikdy autorizace, risk ani způsobilost.
+     */
+    displayProjection?: 'worker-unverified';
+    /**
+     * Sekvence ZAHÁJENÍ REST čtení v prohlížeči (`lib/tradovateClientReadOrder.ts`), které
+     * naposledy změnilo pozice / příkazy účtu. Jen pořadí zobrazení vůči stavu workeru.
+     */
+    clientPositionsReadSeq?: number;
+    clientOrdersReadSeq?: number;
     positions: TradovateSourceCoverage;
     orders: TradovateSourceCoverage;
     positionsAsOf: string | null;

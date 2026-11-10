@@ -1,3 +1,4 @@
+import { liveCommandNotSentReason } from './liveCommandErrors';
 import type { LeaderEntryPreviewOrder, LeaderEntryPreviewResult, LiveEntryPreviewDraft } from './leaderEntryPreview';
 
 /**
@@ -52,9 +53,10 @@ export function livePreviewAge(receivedAt: number, now: number): { seconds: numb
   return { seconds: Math.max(0, Math.round((now - receivedAt) / 1000)), stale: now - receivedAt > LIVE_PREVIEW_FRESH_MS };
 }
 
-/** Text chyby náhledu (relay `copier-relay-preview-busy` = jeden náhled na zařízení, rozestup 3 s). */
-export function livePreviewErrorText(message: string): string {
-  return /preview-busy/.test(message) ? 'Náhled už běží, zkus to za 3 s.' : message;
+/** Text chyby náhledu podle KÓDU relay odmítnutí (`copier-relay-preview-busy`), ne podle textu. */
+export function livePreviewErrorText(reason: unknown): string {
+  if (liveCommandNotSentReason(reason) === 'preview-busy') return 'Náhled už běží, zkus to za 3 s.';
+  return reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'Náhled se nepodařil.';
 }
 
 /** Tlačítko náhledu: nikdy nic neodešle, proto to říká i v popisku. */

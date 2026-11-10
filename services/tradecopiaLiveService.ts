@@ -46,6 +46,8 @@ export interface LivePosition {
 export interface LiveAccount {
   /** Display continuity proof; never execution/risk authority or a new broker value timestamp. */
   displayStreamCoverage?: TradovateWorkerAccountCoverage;
+  /** Chart projection from worker state WITHOUT continuity proof; display only, never authority. */
+  displayProjection?: 'worker-unverified';
   /** Presentation only; never consumed as risk/execution evidence. */
   displayValues?: AccountDisplayValues;
   /** Presentation only: částky, za které worker právě ručí (stream bez změny). */

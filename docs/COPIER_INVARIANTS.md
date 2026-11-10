@@ -2203,6 +2203,60 @@ existující ochranu.
   porovnání, „drží X, očekáváno Y“ nebo záznam pozice) — zlikvidovaný účet,
   denní limit, příkazy mimo kopii, vypnutý režim, rozjetí čekající na
   reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE.
+  **Zobrazovací projekce LIVE grafu (10. 11. 2026, `lib/liveChartExposureProjection.ts`):** od
+  dd393f72 bere `overlayWorkerExposure` stav workeru jen s dokladem kontinuity a worker ho ruší
+  každou obchodní událostí (`observeTradeIngress`) — graf pak spadl na starší REST. Jen graf (PC
+  i telefon, `useLiveChartData`) proto kreslí účty, které worker prokazatelně zná (pravidlo výše)
+  a jejichž připojení má živý socket (`connectionUsage`: `streamConnected`, fáze `connected`),
+  i bez dokladu: jen čerstvý NEOBNOVENÝ stav ≤ 8 s, značka `displayProjection: 'worker-unverified'`.
+  Stav „neověřeno“ nesou VŠECHNY cesty zobrazení: čáry pozice (tlumené, štítek), druhý kanál čar
+  (pracující příkazy, `liveChartWorkingSource.unverified`), karta ochrany (text krytí, řádky účtů
+  `unverified` a nikdy `protectedFully`; PC panel i telefonní list) a skupina v hlavičce grafu.
+  Ovládání po fillu NEMIZÍ (review Codexu 10. 11.): × a „+ SL/TP“ zůstávají, BE je zašedlé
+  s důvodem, jen tažení je vypnuté. Autorizace stojí jen na platném dokladu / ověřeném čtení:
+  `isLiveAccountReadVerified` projekci vždy odmítá (kreslí jen výslovná zobrazovací kopie
+  `liveChartDisplayAccounts` uvnitř hooku) a každé odeslání z neověřené pozice grafu — správa,
+  doplnění SL/TP, holé nohy, × holé pozice, přikoupení — odmítne `lib/liveChartCommandGuard.ts`
+  chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz. Obyčejný vstup,
+  Flatten, OFF a Kill brána neblokuje (INV-UI-02). Desková data (`overlayWorkerExposure` v desku,
+  způsobilost, plán REST čtení) dál vyžadují doklad.
+  Pořadí REST vs. worker: podle SEKVENCE ZAHÁJENÍ REST požadavku v prohlížeči
+  (`lib/tradovateClientReadOrder.ts`, přidělí `useTradovateLiveData` při startu čtení, účet ji
+  převezme jen když čtení změnilo jeho `positionsAsOf`/`ordersAsOf`), NE podle času příchodu ani
+  hodin serveru. Dokud worker žije, jeho stav má přednost. Když zmlkne, REST čtení zahájené dřív,
+  než graf naposledy kreslil stav workeru (i kdyby dorazilo později), ho nepřepíše — účet je
+  neutrálně neověřený bez čar, nikdy flat. Evidence „kdy graf naposledy kreslil stav workeru“
+  žije v modulu `tradovateClientReadOrder` (stejná životnost jako čítač), takže remount grafu
+  plot nevynuluje. Plot je PRVNÍ krok projekce (`guardStaleRestReads`), před jakýmkoli overlayem,
+  zkratkou dokladu nebo návratem, takže platí na všech cestách. Stav workeru (s dokladem
+  i bez) graf kreslí jen z čerstvého, neobnoveného statusu této instance (`trusted &&
+  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity. Pořadí workeru samotného dál řeší fence pollu
+  (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
+  `tests/liveChartCommandGuard.test.ts`.
+  **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
+  BE, zavření, zrušení vstupu) desk synchronně založí záměr pod `operationId`, které vznikne PŘED
+  odesláním na všech cestách a jde i do příkazu; graf PC i telefonu ho kreslí tlumenou tečkovanou
+  čarou přes kanál pracujících příkazů (`live-working`, `displayOnly`, nic se z ní neodesílá).
+  Relay obal desku záměr označí `markSent` těsně před požadavkem: výjimka předtím (nebo s kódem
+  `not-sent`) = čára zmizí, výjimka potom = neznámý výsledek — nikdy podle textu chyby. Výsledek
+  s jiným `operationId` = neznámý; pozdní odpověď po vypršení (45 s odesílání) nic neoživí.
+  Čekající vstup se „potvrdí“ jen důkazem workeru se SHODNÝM `operationId` (příkaz u brokera nebo
+  fill: `manualEntries[].entryBrokerOrderId` / `timing.orderAt|fillAt|positionAt`) nebo změnou tvaru
+  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
+  „Neodesláno“ v celém LIVE UI (runner správy, „Zrušit čekající“, × holé pozice, panel vstupu,
+  telefon, náhled) rozhoduje jen `lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z klienta
+  před relayem, nebo relay odmítnutí HTTP 400/409 s přesným kódem z těla odpovědi
+  (`TradovateRequestError.code`) ze seznamu kódů vrácených PŘED zařazením do fronty, nebo 405
+  read-only localhostu — HTTP stav a kód ale rozhodují JEN u chyby samotného POST odeslání
+  (relay klient ji označí `relayPhase: 'submit'`). Chyba po přijetí POSTu (poll výsledku,
+  výsledek workeru, timeout; `relayPhase: 'accepted'`) je vždy neznámý výsledek, ať je stav
+  jakýkoli. Text chyby nerozhoduje nikde; obyčejná chyba = neznámý výsledek.
+  Odmítnutí/blokace = hned zmizí;
+  ACK ji NEPOTVRDÍ jako ochranu (zůstává tlumená „přijato · čekám na stav brokera“ do potvrzení
+  read modelem, nejvýš 20 s); neznámý výsledek 20 s „výsledek neznámý“, nic se neopakuje.
+  Skutečné čáry SL/TP/vstupu zůstávají během posunu i odebrání na ceně z read modelu (štítek
+  „mění se“), dokud broker změnu nepotvrdí. Záměr je jen v instanci desku (ne mezi zařízeními).
+  Testy `tests/liveChartIntent.test.ts`.
   Průměrná cena po změně velikosti pozice (30. 10. 2026, oponentura):
   přednost má průměr z REST pro tutéž `netPosition`; jinak průměr od workeru
   (`exposure.positions[].avgPrice`): broker `netPrice` ze streamu Position
