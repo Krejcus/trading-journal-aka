@@ -307,7 +307,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Dále: neznámé ≠ flat (`markUnverifiedFlat` + brána vstupu na každém pohledu s issue). Klíč
   paměti držené pozice obsahuje uživatele, připojení i prostředí. Přehled stárne každou sekundu
   a má stejný plot proti starším REST čtením jako graf.
-- Výsledek: a432fd58. tsc OK, celá sada 8680/8680 (1 todo). Nic na main, nic nenasazeno.
+- Místo Codex kola 4 nezávislé review Claude agentem (f63859c2): bez P1, ale 2× P2 obchodovatelnost.
+  Plný doklad se s otevřenou pozicí ani s cizí expozicí na loginu neobnoví, takže mezistupeň
+  blokoval přikoupení a vstupy natrvalo. Oprava (`restConfirmsContinuity`): když se surové REST
+  čtení (před plotem, ≤ 20 s) shoduje s kontinuitou v netu a pracujících příkazech, stav je plně
+  ověřený. Re-review 7bfca14c: P2 vyřešené, merge ANO; P3 okno 15 → 20 s (> klidové čtení 15 s).
+- Výsledek: viz poslední commit větve. tsc OK, celá sada 8681/8681 (1 todo). Nic na main, nic nenasazeno.
 - Merge pozor: main obsahuje revert 97774d38 (DEMO session pushla revert f465880 na main proti
   zadání). Merge větve musí revert vrátit.
 - Restart workeru po merge NUTNÝ: větev mění `tradovateBroker` a controller status

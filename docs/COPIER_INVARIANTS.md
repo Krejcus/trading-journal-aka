@@ -2270,7 +2270,7 @@ existující ochranu.
   continuityOnly`) zablokuje JAKÝKOLI nový vstup, dokud plný doklad nevznikne znovu (po uzavření
   obchodu adaptér obnoví baseline po 3 s klidu, nejvýš 1× za 30 s). Neznámý druh akce = blok.
   Mezistupeň NEPLATÍ, když nezávislé čerstvé REST čtení (surové, před plotem — plot se posouvá
-  každým renderem a jen řídí kreslení; ≤ 15 s) se s kontinuitou shoduje: stejný net na každém kontraktu
+  každým renderem a jen řídí kreslení; ≤ 20 s, víc než klidové čtení ve flatu 15 s) se s kontinuitou shoduje: stejný net na každém kontraktu
   a stejné pracující příkazy (id, kusy, ceny) → plně ověřeno (`restConfirmsContinuity`; review
   f63859c2: doklad se s expozicí ani s cizí expozicí na loginu neobnoví, kontinuita nesmí být
   přísnější než REST na mainu). Neshoda nebo staré čtení = mezistupeň (fail-closed). Plný doklad (`streamCoverage`)

@@ -199,7 +199,7 @@ const workingOrderPrint = (order: TradovateAccountDataAccount['orders'][number])
   `${order.id}|${order.quantity ?? ''}|${order.price ?? ''}|${order.stopPrice ?? ''}`;
 
 /** Jak staré REST čtení smí kontinuitu potvrdit (kratší než obecných 45 s; review b174135a). */
-export const LIVE_CHART_REST_CONFIRM_MAX_AGE_MS = 15_000;
+export const LIVE_CHART_REST_CONFIRM_MAX_AGE_MS = 20_000; // > klidové čtení ve flatu (15 s), jinak by potvrzení blikalo
 
 /**
  * Čerstvé ověřené REST čtení pozic i příkazů (≤ `LIVE_CHART_REST_CONFIRM_MAX_AGE_MS`) se shoduje s kontinuitou:

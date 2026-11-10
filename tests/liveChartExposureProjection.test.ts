@@ -581,8 +581,8 @@ describe('kontinuita = mezistupeň autorizace (review Codexu 5e9b2aef)', () => {
     expect(projectLiveChartExposure(matching(NOW - 2_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([]);
     // SL u brokera jinde než ve streamu (vynechaná událost) → mezistupeň.
     expect(projectLiveChartExposure(matching(NOW - 2_000, 28_800), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100]);
-    // Staré čtení (> 15 s) nic nepotvrdí.
-    expect(projectLiveChartExposure(matching(NOW - 16_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100, 200]);
+    // Staré čtení (> 20 s) nic nepotvrdí.
+    expect(projectLiveChartExposure(matching(NOW - 21_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100, 200]);
     // Sled renderů: graf po každém renderu posune plot nad všechna přidělená čtení — potvrzení
     // ze shodného čtení musí vydržet i další přepočty (review b174135a).
     const rest = matching(NOW - 2_000);
