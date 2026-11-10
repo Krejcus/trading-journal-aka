@@ -288,6 +288,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: kreslí ze stavu workeru i bez dokladu + čekající čáry (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
+
+- **Problém:** od dd393f72 bral graf stav workeru jen s dokladem kontinuity. Worker ho ale ruší
+  každou obchodní událostí (`observeTradeIngress`), takže graf hned po fillu nebo posunu SL spadl
+  na starší REST (s dokladem byly plné REST tiky navíc potlačené). Čáry pozice/SL/TP pak přišly
+  za 5–22 s, nebo zmizely.
+- **Rozhodnutí:** zobrazení se oddělilo od autorizace. `lib/liveChartExposureProjection.ts` (jen
+  `useLiveChartData`, PC i telefon) kreslí účty, které worker zná a mají živý socket svého
+  připojení (`connectionUsage`), i bez dokladu. Platí to jen pro čerstvý neobnovený stav ≤ 8 s
+  a čáry jsou tlumené, se štítkem „neověřeno“, `displayOnly` a bez ovládání. Autorizace se
+  nezměnila: `isLiveAccountReadVerified` projekci odmítá a desk z neověřené pozice nenabídne
+  správu ani přikoupení (`chartManageSummary`). Pět callbacků správy navíc odmítne „nic se
+  neodeslalo“. Desková data a plán REST čtení dál vyžadují doklad. Worker, relay ani execution
+  se neměnily.
+- **Pořadí:** dokud worker žije, má přednost jeho stav. Když zmlkne, starší REST (porovnává se
+  místní čas příchodu, NE hodiny serveru, protože skew ±s by vrátil původní chybu) ukáže
+  neutrální „neověřeno“, nikdy flat.
+- **Čekající záměry:** `lib/liveChartIntent.ts`. Po kliku vznikne synchronně tlumená čára vázaná
+  na `operationId` (vstup, posun/přidání/odebrání SL/TP, BE, zavření, zrušení). Na PC i telefonu
+  jde přes kanál pracujících příkazů. Reject = hned zmizí. ACK nepotvrzuje ochranu: čára zůstane
+  „přijato · čekám na stav brokera“ do potvrzení read modelem, nejvýš 20 s. Skutečné čáry
+  zůstávají během posunu i odebrání na ceně brokera („mění se“). Záměr žije jen v instanci desku,
+  ne napříč zařízeními.
+- **copier-design-critic:** 1. kolo „OPRAVIT PŘED COMMITEM“ (6 bodů: projekce prošla jako ověřené
+  čtení, obnovená cache, neznámo jako flat při více připojeních, hodiny serveru, 15 s místo 8 s,
+  neúplná brána včetně přikoupení). Vše zapracováno, 2. kolo na diffu „OK s výhradami“.
+  Zbývající výhrady: plot počítá s časem příchodu REST, ne s časem odeslání; `NOT_SENT` je regex
+  textu; brána čte pozici z posledního renderu; chybí testy desku na úrovni callbacků.
+- Ověřeno: typecheck bez nových chyb proti baseline, celá sada testů a build. Dvě rodiny selhání
+  (`tradovateBrokerReconnect`, `tradovateRequestControlFileStore`) padají stejně i na čistém
+  `main` v tomto kontejneru. Na DEMO NEOVĚŘENO. Nasazení (web) rozhodne Filip po review od Codexu.
+
 ### 2026-11-09 — Codex: zrychlení skupinové správy a obnova LIVE historie připravené lokálně
 
 - Zdroj z přesně nasazeného `cd530285`, větev `codex/live-speed-history-20261109`, trvalý worktree `~/alphatrade-worktrees/live-speed-history-20261109`; canonical rozpracované kódy a Claude checkout zachované. Skupinové preflight/guard/close reads běží v nových dávkách nejvýš 4 účtů; všechny původní ownership/shape/route/config/brake/ingress kontroly zůstaly, WAL a brokerové zápisy jsou nadále postupné. Chybné read batch se dočte a nepokračuje. Nový `MANAGE TIMING` měří monotónně queue/prepare/execute/total podle operationId, bez účtů a bez rozhodovací autority.

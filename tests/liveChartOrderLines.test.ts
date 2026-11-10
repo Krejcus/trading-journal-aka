@@ -1,3 +1,4 @@
+import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_ATTACH_SEND_ACTION, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
@@ -89,9 +90,23 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(lines.slice(1).every(line => !line.draggable && /čeká na vstup/.test(line.label))).toBe(true);
   });
 
-  it('odeslaný posun: čára drží novou cenu se štítkem „odesílám“ a netáhne se', () => {
+  it('odeslaný posun: skutečná čára zůstává na ceně brokera, netáhne se a říká „mění se“ (novou cenu kreslí záměr desku)', () => {
+    const live = livePositionChartLines(summary(), controls)[1];
     const stop = livePositionChartLines(summary(), { ...controls, pending: { stopLoss: 28980 } })[1];
-    expect(stop).toMatchObject({ price: 28980, draggable: false, label: expect.stringMatching(/odesílám/) });
+    expect(stop).toMatchObject({ price: live.price, draggable: false, color: live.color, label: expect.stringMatching(/mění se/) });
+    expect(stop.price).not.toBe(28980);
+  });
+
+  it('neověřená projekce workeru: čáry se kreslí, ale tlumeně, jen pro zobrazení a bez ovládání', () => {
+    const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(line).toMatchObject({ draggable: false, cancellable: false, color: '#64748b' });
+      expect(line.label).toMatch(/neověřeno/);
+      expect(line.actions).toBeUndefined();
+      expect(line.addableBrackets).toBeUndefined();
+      expect(isLiveDisplayOnlyLine(line as never)).toBe(true);
+    }
   });
 
   it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {

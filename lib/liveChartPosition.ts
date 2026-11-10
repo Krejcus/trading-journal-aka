@@ -36,6 +36,12 @@ export interface LiveChartPositionSummary {
   leader: { accountId: number; quantity: number; entry: number | null } | null;
   /** Účty v obchodu pro rozbalení karty pozice (jen zobrazení; leader první). */
   rows: readonly LiveChartPositionAccountRow[];
+  /**
+   * Aspoň jeden účet je jen ze zobrazovací projekce workeru bez dokladu kontinuity
+   * (`lib/liveChartExposureProjection.ts`): čáry se kreslí se štítkem „neověřeno“,
+   * bez ovládání, a desk z takového stavu nic neodešle. Nikdy autorizace.
+   */
+  unverified?: boolean;
 }
 
 export interface LiveChartPositionAccountRow {

@@ -489,7 +489,7 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
   it('zdroj: desk kontroluje čerstvý stav PŘED relayem; panel konečnost odvozuje z tónu', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     // C8 (4. 11. 2026): relay volá jen sdílený `sendLeaderManage` (správa, attach, × holé pozice, C7).
-    const attach = between(desk, 'const attachBrackets = useCallback(', '// C8 (4. 11. 2026):');
+    const attach = between(desk, 'const sendAttachBrackets = useCallback(', '// C8 (4. 11. 2026):');
     const fresh = attach.indexOf('if (!armStatusRef.current.fresh');
     const relay = attach.indexOf('sendLeaderManage(');
     const groupRelay = attach.indexOf('manageGroupLimitPosition(');

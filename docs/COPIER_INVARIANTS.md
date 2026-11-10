@@ -2203,6 +2203,32 @@ existující ochranu.
   porovnání, „drží X, očekáváno Y“ nebo záznam pozice) — zlikvidovaný účet,
   denní limit, příkazy mimo kopii, vypnutý režim, rozjetí čekající na
   reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE.
+  **Zobrazovací projekce LIVE grafu (10. 11. 2026, `lib/liveChartExposureProjection.ts`):** od
+  dd393f72 bere `overlayWorkerExposure` stav workeru jen s dokladem kontinuity a worker ho ruší
+  každou obchodní událostí (`observeTradeIngress`) — graf pak spadl na starší REST. Jen graf (PC
+  i telefon, `useLiveChartData`) proto kreslí účty, které worker prokazatelně zná (pravidlo výše)
+  a jejichž připojení má živý socket (`connectionUsage`: `streamConnected`, fáze `connected`),
+  i bez dokladu: jen čerstvý NEOBNOVENÝ stav ≤ 8 s, značka `displayProjection: 'worker-unverified'`.
+  Takové čáry jsou tlumené, se štítkem „neověřeno“, `displayOnly` (handlery je ignorují), bez
+  tažení, ×, BE a „+ SL/TP“. `isLiveAccountReadVerified` projekci vždy odmítá (kreslí jen
+  výslovná zobrazovací kopie `liveChartDisplayAccounts` uvnitř hooku); desk z neověřené pozice
+  nenabídne správu, přikoupení ani holé zavření (`chartManageSummary`) a callbacky správy,
+  doplnění SL/TP, holých nohou, × holé pozice a přikoupení odmítnou „nic se neodeslalo“
+  (`liveChartProjectionManageBlock`). Flatten, OFF a Kill se to netýká (INV-UI-02). Desková data
+  (`overlayWorkerExposure` v desku, způsobilost, plán REST čtení) dál vyžadují doklad.
+  Pořadí: dokud worker žije, jeho stav má přednost; když zmlkne, REST čtení, které dorazilo
+  (místní hodiny prohlížeče, ne hodiny serveru) dřív, než graf naposledy kreslil stav workeru, je
+  starší — účet je neutrálně neověřený bez čar, nikdy flat. Pořadí workeru samotného dál řeší
+  fence pollu (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`.
+  **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
+  BE, zavření, zrušení vstupu) desk synchronně založí záměr vázaný na `operationId` a graf PC
+  i telefonu ho kreslí tlumenou tečkovanou čarou přes kanál pracujících příkazů (`live-working`,
+  `displayOnly`, nic se z ní neodesílá). Odmítnutí/blokace/„nic se neodeslalo“ = hned zmizí;
+  ACK ji NEPOTVRDÍ jako ochranu (zůstává tlumená „přijato · čekám na stav brokera“ do potvrzení
+  read modelem, nejvýš 20 s); neznámý výsledek 20 s „výsledek neznámý“, nic se neopakuje.
+  Skutečné čáry SL/TP/vstupu zůstávají během posunu i odebrání na ceně z read modelu (štítek
+  „mění se“), dokud broker změnu nepotvrdí. Záměr je jen v instanci desku (ne mezi zařízeními).
+  Testy `tests/liveChartIntent.test.ts`.
   Průměrná cena po změně velikosti pozice (30. 10. 2026, oponentura):
   přednost má průměr z REST pro tutéž `netPosition`; jinak průměr od workeru
   (`exposure.positions[].avgPrice`): broker `netPrice` ze streamu Position
