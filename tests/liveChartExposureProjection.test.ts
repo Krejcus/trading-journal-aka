@@ -563,6 +563,28 @@ describe('kontinuita = mezistupeň autorizace (review Codexu 5e9b2aef)', () => {
     expect(result.continuityOnly).toEqual([100, 200]);
   });
 
+  it('čerstvé REST čtení shodné s kontinuitou = plně ověřeno; neshoda nebo staré čtení = mezistupeň (review f63859c2)', () => {
+    const current = status();
+    (current.controller.exposure as { streamContinuity?: unknown }).streamContinuity = [100, 200].map(id => ({ ...proof(id), observedAt: NOW - 500 }));
+    const matching = (restAt: number, stopPrice = 28_790): TradovateAccountDataResult => {
+      const data = restFlat(restAt);
+      const pos = (accountId: number) => ({ id: accountId, contractId: 7, symbol: 'MNQZ6', timestamp: iso(restAt), tradeDate: null, netPosition: -2,
+        bought: null, boughtValue: null, sold: null, soldValue: null, previousPosition: null, averagePrice: 28_768.5, previousPrice: null });
+      data.accounts = [
+        account(100, restAt, { positions: [pos(100)] as never, orders: [{ id: 9, contractId: 7, symbol: 'MNQZ6', timestamp: iso(restAt), action: 'Buy',
+          orderType: 'Stop', quantity: 2, price: null, stopPrice, status: 'Working', admin: null, ocoId: null, parentId: null, linkedId: null }] as never }),
+        account(200, restAt, { positions: [pos(200)] as never }),
+      ];
+      for (const item of data.accounts) item.readState = { ...item.readState!, positions: coverage(1), orders: coverage(item.orders.length) };
+      return data;
+    };
+    expect(projectLiveChartExposure(matching(NOW - 2_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([]);
+    // SL u brokera jinde než ve streamu (vynechaná událost) → mezistupeň.
+    expect(projectLiveChartExposure(matching(NOW - 2_000, 28_800), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100]);
+    // Staré čtení nic nepotvrdí.
+    expect(projectLiveChartExposure(matching(NOW - 60_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100, 200]);
+  });
+
   it('značka continuityOnly: jen ověřená pozice dotčená kotvou', async () => {
     const { markLiveChartContinuityOnly } = await import('../lib/liveChartExposureProjection');
     const summary = { leader: { accountId: 100, quantity: 1, entry: 1 }, rows: [] } as never;

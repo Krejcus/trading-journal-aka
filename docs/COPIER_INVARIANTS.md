@@ -2268,7 +2268,12 @@ existující ochranu.
   v praxi okamžitý vstup — vědomá výjimka, množství se nemění). Značí se podle VŠECH účtů pohledu
   (leader + kopírující followeři), ne jen řádků s pozicí; i flat pohled z kotvy (`position.
   continuityOnly`) zablokuje JAKÝKOLI nový vstup, dokud plný doklad nevznikne znovu (po uzavření
-  obchodu adaptér obnoví baseline po 3 s klidu, nejvýš 1× za 30 s). Neznámý druh akce = blok. Plný doklad (`streamCoverage`)
+  obchodu adaptér obnoví baseline po 3 s klidu, nejvýš 1× za 30 s). Neznámý druh akce = blok.
+  Mezistupeň NEPLATÍ, když nezávislé čerstvé REST čtení (≤ 45 s, zahájené po posledním zobrazení
+  stavu workeru — starší odfiltruje plot) se s kontinuitou shoduje: stejný net na každém kontraktu
+  a stejné pracující příkazy (id, kusy, ceny) → plně ověřeno (`restConfirmsContinuity`; review
+  f63859c2: doklad se s expozicí ani s cizí expozicí na loginu neobnoví, kontinuita nesmí být
+  přísnější než REST na mainu). Neshoda nebo staré čtení = mezistupeň (fail-closed). Plný doklad (`streamCoverage`)
   odemyká vše. Pojistka téhož ve workeru je samostatný úkol (změna jádra + DEMO conformance). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
   návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 5 s
   (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.; review

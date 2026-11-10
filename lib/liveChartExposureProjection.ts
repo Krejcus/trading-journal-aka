@@ -3,6 +3,7 @@ import type { TradovateAccountDataAccount, TradovateAccountDataResult } from './
 import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
 import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
 import { tradovateAccountReadState } from './tradovateLiveReadState';
+import { LIVE_READ_MAX_AGE_MS, verifiedReadAvailability } from './liveReadFreshness';
 import {
   overlayWorkerAccount,
   overlayWorkerExposure,
@@ -193,6 +194,35 @@ export function guardStaleRestReads<T extends TradovateAccountDataResult>(
   return changed ? { ...data, accounts } : data;
 }
 
+/** Pracující příkaz jako porovnatelný otisk (id, kusy, ceny). */
+const workingOrderPrint = (order: TradovateAccountDataAccount['orders'][number]) =>
+  `${order.id}|${order.quantity ?? ''}|${order.price ?? ''}|${order.stopPrice ?? ''}`;
+
+/**
+ * Čerstvé ověřené REST čtení pozic i příkazů (≤ `LIVE_READ_MAX_AGE_MS`) se shoduje s kontinuitou:
+ * stejný net na každém kontraktu a stejné pracující příkazy (id, kusy, ceny). Jinak fail-closed.
+ */
+export function restConfirmsContinuity(
+  rest: TradovateAccountDataAccount,
+  shown: TradovateAccountDataAccount,
+  data: TradovateAccountDataResult,
+  now: number,
+): boolean {
+  const state = tradovateAccountReadState(rest, data);
+  const fresh = (asOf: string | null | undefined) => {
+    const at = Date.parse(asOf ?? '');
+    return Number.isFinite(at) && at <= now + 1_000 && now - at <= LIVE_READ_MAX_AGE_MS;
+  };
+  if (!verifiedReadAvailability(state.positions.availability) || !verifiedReadAvailability(state.orders.availability)) return false;
+  if (!fresh(state.positionsAsOf) || !fresh(state.ordersAsOf)) return false;
+  const nets = (account: TradovateAccountDataAccount) => account.positions
+    .filter(position => position.netPosition !== 0)
+    .map(position => `${position.symbol ?? position.contractId}:${position.netPosition}`).sort().join(',');
+  const working = (account: TradovateAccountDataAccount) => account.orders
+    .filter(order => order.status === 'Working').map(workingOrderPrint).sort().join(',');
+  return nets(rest) === nets(shown) && working(rest) === working(shown);
+}
+
 export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   data: T | null,
   status: LocalCopierAgentStatus | null | undefined,
@@ -229,8 +259,13 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
     if (context && continuous) {
       changed = true;
       workerShown.push(account.id);
-      continuityOnly.push(account.id);
-      return overlayWorkerAccount(account, proven, context, continuous.lastDataAt, continuous);
+      const shown = overlayWorkerAccount(account, proven, context, continuous.lastDataAt, continuous);
+      // Nezávislé čerstvé REST čtení od brokera (zahájené po posledním zobrazení stavu workeru —
+      // starší odfiltroval plot v kroku 1), které se s kontinuitou shoduje, vynechanou událost
+      // vylučuje → plně ověřeno, ne mezistupeň (review 5e9b2aef/f63859c2: kontinuita nesmí být
+      // přísnější než REST na mainu; jinak by přikoupení a vstupy stály po celou pozici).
+      if (!restConfirmsContinuity(account, shown, proven, now)) continuityOnly.push(account.id);
+      return shown;
     }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).
     if (context && observed != null && known.has(account.id) && workerConnectionStreamLive(status, owners.get(account.id))) {
