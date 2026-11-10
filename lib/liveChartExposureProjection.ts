@@ -137,6 +137,40 @@ export function workerContinuityAccounts(
   return result;
 }
 
+/**
+ * Přehled LIVE (review Codexu 9aa17b7, bod 4): zobrazení pozic a příkazů stojí na STEJNÉ
+ * kontinuitě streamu jako graf (`workerContinuityAccounts`), aby přehled neukazoval „Pozice
+ * neověřeny“, když graf tentýž účet už ověřil. Jen účty, které už nemají doklad z
+ * `overlayWorkerExposure` (data předaná sem už ho mají započtený), jen z čerstvého neobnoveného
+ * statusu této instance. JEN ZOBRAZENÍ: řízení REST čtení, kopírka, způsobilost účtů ani
+ * příkazy tento výsledek nečtou, ty dál stojí výhradně na dokladu (INV-UI-01/03).
+ */
+export function overlayWorkerContinuityForDisplay<T extends TradovateAccountDataResult>(
+  data: T | null,
+  status: LocalCopierAgentStatus | null | undefined,
+  observedAtMs: number | null | undefined,
+  now: number,
+  owners: ReadonlyMap<number, WorkerCoverageOwner>,
+  input: { statusFresh: boolean; trusted: boolean },
+): T | null {
+  if (!data || !input.statusFresh || !input.trusted) return data;
+  const exposure = status?.controller?.exposure;
+  const observed = observedAtMs != null && Number.isFinite(observedAtMs) && observedAtMs <= now + 5_000 ? observedAtMs : null;
+  if (observed == null || status?.controller?.connected !== true || !exposure?.orders || now - observed > LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS) return data;
+  const continuity = workerContinuityAccounts(status, observedAtMs, owners, now);
+  if (!continuity.size) return data;
+  const context = workerExposureOverlayContext(data, exposure);
+  let changed = false;
+  const accounts = data.accounts.map((account): TradovateAccountDataAccount => {
+    if (account.readState?.displayStreamCoverage) return account;
+    const continuous = continuity.get(account.id);
+    if (!continuous) return account;
+    changed = true;
+    return overlayWorkerAccount(account, data, context, continuous.lastDataAt, continuous);
+  });
+  return changed ? { ...data, accounts } : data;
+}
+
 export function guardStaleRestReads<T extends TradovateAccountDataResult>(
   data: T | null,
   lastWorkerShownSeq: ReadonlyMap<number, number>,

@@ -4,7 +4,7 @@ import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';
-import {
+import { overlayWorkerContinuityForDisplay,
   liveChartDisplayAccounts, markLiveChartPositionProjection,
   projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS, liveChartDrawnMemory, liveChartDrawnMemoryKey, rememberLiveChartDrawn, resetLiveChartDrawnMemoryForTests,
 } from '../lib/liveChartExposureProjection';
@@ -384,6 +384,25 @@ describe('stav „neověřeno“ ve všech cestách zobrazení', () => {
 });
 
 describe('autorizace dál vyžaduje doklad', () => {
+  it('přehled LIVE: kontinuita jako graf ověří pozice pro zobrazení, doklad kopírky se nemění (review 9aa17b7, bod 4)', () => {
+    const current = status();
+    (current.controller.exposure as { streamContinuity?: unknown }).streamContinuity = [100, 200].map(id => ({ ...proof(id), observedAt: NOW - 500 }));
+    const rest = restFlat();
+    const proven = overlayWorkerExposure(rest, current, NOW - 1_000, NOW, owners)!;
+    // Kopírka, způsobilost a REST plán: bez dokladu beze změny.
+    expect(proven).toBe(rest);
+    expect(workerConnectionReadPlan({ ...rest, ...owner }, { status: current, observedAt: NOW - 1_000 }, NOW).suppressFullTick).toBe(false);
+    const shown = overlayWorkerContinuityForDisplay(proven, current, NOW - 1_000, NOW, owners, { statusFresh: true, trusted: true })!;
+    const leader = tradovateCopyTradeSnapshot(shown, []).accounts.find(item => item.id === 100)!;
+    expect(isLiveAccountReadVerified(leader, 'positions', NOW)).toBe(true);
+    expect(isLiveAccountReadVerified(leader, 'orders', NOW)).toBe(true);
+    // Stejně jako graf: obnovená cache, nečerstvý status ani starý řádek nic neověří.
+    for (const input of [{ statusFresh: true, trusted: false }, { statusFresh: false, trusted: true }]) {
+      expect(overlayWorkerContinuityForDisplay(proven, current, NOW - 1_000, NOW, owners, input)).toBe(proven);
+    }
+    expect(overlayWorkerContinuityForDisplay(proven, current, NOW - 9_000, NOW, owners, { statusFresh: true, trusted: true })).toBe(proven);
+  });
+
   it('neověřená projekce není ověřené čtení pozic ani příkazů', () => {
     const { data } = projectLiveChartExposure(restFlat(), status(), NOW - 1_000, NOW, owners, fresh);
     const leader = tradovateCopyTradeSnapshot(data!, []).accounts.find(item => item.id === 100)!;

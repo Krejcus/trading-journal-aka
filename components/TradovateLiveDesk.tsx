@@ -100,6 +100,7 @@ import {
 } from '../lib/tradovateCopyTradeBridge';
 import { workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
+import { overlayWorkerContinuityForDisplay } from '../lib/liveChartExposureProjection';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   copyTradeAccountName,
@@ -757,6 +758,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
     ));
   }, [liveData, live.profiles, live.profilesLoaded]);
+  // Přehled LIVE (review Codexu 9aa17b7, bod 4): zobrazení pozic stojí na stejné kontinuitě
+  // streamu jako graf. `liveData` / `copyTradeSnapshot` (doklad) dál řídí kopírku, způsobilost,
+  // skupiny a widgety; tohle čte jen vykreslení přehledu, rizika a detailu účtu.
+  const overviewLiveData = useMemo(
+    () => overlayWorkerContinuityForDisplay(liveData, agentStatus, agentStatusObservedAt, Date.now(), coverageOwners,
+      { statusFresh: agentStatusFresh, trusted: !agentStatusRestored }),
+    [liveData, agentStatus, agentStatusObservedAt, coverageOwners, agentStatusFresh, agentStatusRestored],
+  );
   const copyTradeSnapshot = useMemo(
     () => liveData ? tradovateCopyTradeSnapshot(liveData, live.profiles) : null,
     [liveData, live.profiles],
@@ -789,9 +798,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ) }));
   }, [displayFeedReceipt, displayMembership, agentStatusObservedAt, userId]);
   const displayVouches = displayVouchState.userId === userId ? displayVouchState.values : EMPTY_DISPLAY_VOUCHES;
-  const displaySnapshot = useMemo(() => {
-    if (!copyTradeSnapshot) return null;
-    return { ...copyTradeSnapshot, accounts: copyTradeSnapshot.accounts.map(account => {
+  const decorateDisplaySnapshot = useCallback((base: typeof copyTradeSnapshot) => {
+    if (!base) return null;
+    return { ...base, accounts: base.accounts.map(account => {
       const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
       const owner = owners.length === 1 ? owners[0] : null;
       const values = owner && displayCache.userId === userId
@@ -810,7 +819,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}`,
       };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, displayVouches, live.dataEnrichmentByConnection, userId, restoredDisplay]);
+  }, [displayMembership, displayCache, displayVouches, live.dataEnrichmentByConnection, userId, restoredDisplay]);
+  const displaySnapshot = useMemo(() => decorateDisplaySnapshot(copyTradeSnapshot), [decorateDisplaySnapshot, copyTradeSnapshot]);
+  // Jen vykreslení přehledu / rizika / detailu účtu: pozice a příkazy z kontinuity streamu jako graf.
+  const overviewSnapshot = useMemo(() => (overviewLiveData === liveData
+    ? displaySnapshot
+    : decorateDisplaySnapshot(overviewLiveData ? tradovateCopyTradeSnapshot(overviewLiveData, live.profiles) : null)),
+  [overviewLiveData, liveData, displaySnapshot, decorateDisplaySnapshot, live.profiles]);
   useEffect(() => {
     // Wait for every connected account list before replacing the persisted view.
     // A partial bootstrap must not erase amounts for connections still loading.
@@ -2136,7 +2151,7 @@ acceptAgentStatus((await executeAgent({
       </div>
     );
   }
-  const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
+  const selectedLiveAccount = (overviewSnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
   const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
 
   const priceAlertWatch = priceAlertWatchLabel({ fresh: agentStatusFresh && !agentStatusRestored, watch: agentStatus?.priceAlertWatch,
@@ -2435,7 +2450,7 @@ acceptAgentStatus((await executeAgent({
               journalHistory={journalHistory}
               userId={userId}
               owner={cardOwner}
-              snapshot={displaySnapshot ?? copyTradeSnapshot}
+              snapshot={overviewSnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
               // C7: Dashboard „Zrušit“ jen přes `dashboardCancelTarget` (vlastní čekající vstup leadera);
@@ -2549,7 +2564,7 @@ acceptAgentStatus((await executeAgent({
             <LiveRiskTabSlot
               runtimeAvailable={runtimeAvailable}
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
-              snapshot={displaySnapshot ?? copyTradeSnapshot}
+              snapshot={overviewSnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               group={workerGroup}
               status={agentStatus?.controller ?? null}

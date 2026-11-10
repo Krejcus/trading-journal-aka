@@ -399,6 +399,37 @@ describe('Tradovate broker final request-control integration', () => {
     unsubscribe();
   });
 
+  it('race: a fill arriving while the anchor-restore REST read is in flight never anchors continuity on the older REST snapshot',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];
+    // REST pozic: první obnova kotvy visí, dokud ji test nepustí, a vrátí STARŠÍ stav (netPos 1).
+    let restNetPos=1;let holdPositions:((value:Response)=>void)|null=null;let positionReads=0;
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},displayCoverageRebaseline:true,
+      fetchImpl:async input=>{const path=String(input);
+        if(path.includes('/position/list')){positionReads+=1;const body=[{id:1,accountId:101,contractId:77,netPos:restNetPos}];
+          if(positionReads===1)return new Promise<Response>(resolve=>{holdPositions=()=>resolve(response(body));});
+          return response(body);}
+        return response(path.includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]);},
+      reconnectDelayMs:1_000,reconnectJitterRatio:0,webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const unsubscribe=broker.subscribe(()=>undefined);const socket=sockets[0];
+    socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();
+    socket.deliver([{i:1,s:200,d:{positions:[{id:1,accountId:101,contractId:77,netPos:1}]}}]);await flush();
+    await vi.advanceTimersByTimeAsync(600);await flush();
+    expect(positionReads).toBe(1);
+    // Fill dorazí streamem dřív, než se vrátí REST čtení zahájené před ním.
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{id:1,accountId:101,contractId:77,netPos:2}}}]);await flush();
+    holdPositions!(response([]));await flush();await vi.advanceTimersByTimeAsync(0);await flush();
+    // Starší REST snímek kotvu nezaloží a stav streamu nepřepíše.
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    // Další pokus už čte nový stav: kotva vznikne a snímek streamu nese pozici z fillu.
+    restNetPos=2;
+    for(let i=0;i<12&&!broker.streamContinuity?.(101);i++){socket.onmessage?.({data:'h'});await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(positionReads).toBeGreaterThanOrEqual(2);
+    expect(broker.streamContinuity?.(101)).toMatchObject({backlog:false,synchronized:true});
+    expect(broker.streamContinuityPositionSnapshot?.(101)?.positions).toEqual([{accountId:101,symbol:'MNQZ6',netQuantity:2}]);
+    unsubscribe();
+  });
+
   it('a malformed trade frame ends stream continuity for every account',async()=>{
     const f=fixture();await f.governor.initialize();const socket=new Socket();
     const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
