@@ -108,8 +108,6 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
   // Neznámé ≠ žádné: „bez SL“ jen u ověřených příkazů bez krytí (INV-UI-03).
   const level = (label: 'SL' | 'TP', price: number | null, value: number | null, coverage: number, color: string) => {
     if (!row.ordersVerified) return <span title="Příkazy účtu nejsou ověřené">{label} ?</span>;
-    // Neověřená projekce workeru: cena ano, ale tlumeně — není to potvrzená ochrana.
-    if (row.unverified) color = 'var(--dj-muted)';
     // Krytí ≠ kusy (málo i moc — zdvojený SL by pozici při zásahu otočil) = vždy podíl, jantarově.
     const mismatch = coverage !== row.quantity;
     const ratio = mismatch ? <span style={{ color: '#fbbf24' }}> ({coverage}/{row.quantity})</span> : null;
@@ -127,7 +125,6 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
           <span>{side} {row.quantity}{row.entry != null ? ` @ ${formatLivePrice(row.entry)}` : ''}</span>
           {level('SL', row.stop, row.stopUsd, row.stopCoverage, '#f87171')}
           {level('TP', row.target, row.targetUsd, row.targetCoverage, '#2dd4bf')}
-          {row.unverified && <span title="Stav workeru bez dokladu — ochrana zatím nepotvrzená">neověřeno</span>}
         </div>
       </div>
       <div className="dj-mono" style={{ textAlign: 'right', fontSize: 14.5, fontWeight: 800 }}>

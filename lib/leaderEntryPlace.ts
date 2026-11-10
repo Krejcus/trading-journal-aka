@@ -1,4 +1,3 @@
-import { LiveCommandNotSentError } from './liveCommandErrors.js';
 import { stableHash64 } from '../services/copierKeys.js';
 import {
   validateLeaderEntryPreview,
@@ -63,7 +62,7 @@ export function leaderEntryPayloadHash(command: Omit<LeaderEntryPlaceCommand, 'p
  * Vyhodí `invalid-relay-command-payload`.
  */
 export function validateLeaderEntryPlace(value: unknown): LeaderEntryPlaceCommand {
-  const fail = () => { throw new LiveCommandNotSentError('invalid-relay-command-payload', 'invalid-payload'); };
+  const fail = () => { throw new Error('invalid-relay-command-payload'); };
   if (!value || typeof value !== 'object') fail();
   const { type, payloadHash, operationId, ...rest } = value as Record<string, unknown>;
   if (type !== 'place-leader-entry') fail();

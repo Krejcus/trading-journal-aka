@@ -7,8 +7,6 @@ export const verifiedReadAvailability = (availability: string | undefined) =>
 
 export function isLiveAccountReadVerified(account: LiveAccount, source: 'positions' | 'orders' | 'cash', now = Date.now()): boolean {
   const availability = account[`${source}Availability`];
-  // Zobrazovací projekce grafu bez dokladu nikdy není ověřené čtení (INV-UI-01/03).
-  if (source !== 'cash' && account.displayProjection === 'worker-unverified') return false;
   const proof = account.displayStreamCoverage;
   if (source !== 'cash' && proof) return verifiedReadAvailability(availability) && workerAccountCoverageUsable(proof, proof, account.id, now);
   // Legacy shadow accounts do not carry the OAuth read-state contract.

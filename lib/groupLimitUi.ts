@@ -1,4 +1,3 @@
-import { LiveCommandNotSentError } from './liveCommandErrors';
 import { supportsCopierGroupLimitBare, supportsCopierGroupLimitManage, supportsCopierGroupLimitMove } from './copierWorkerCapabilities';
 import { GROUP_LIMIT_CONTRACT, GROUP_LIMIT_STATE_HASH_PATTERN, type GroupLimitCommandFields, type GroupLimitTradeState } from './groupLimitProtocol';
 import type { BareLeaderTrade } from './manualBareClose';
@@ -141,7 +140,7 @@ export function groupLimitCommandFields(trade: GroupLimitTradeState): GroupLimit
 export function groupLimitCancelExpect(trade: GroupLimitTradeState, seenPrice: number): LeaderOrderManageCommand['expect'] {
   const entry = trade.accounts.find(row => row.role === 'leader')?.entry;
   if (!entry || !quantity(entry.quantity) || !Number.isSafeInteger(entry.filledQuantity) || entry.filledQuantity < 0
-    || entry.filledQuantity >= entry.quantity) throw new LiveCommandNotSentError('Čekající zbytek není ověřený — nic se neodeslalo.');
+    || entry.filledQuantity >= entry.quantity) throw new Error('Čekající zbytek není ověřený — nic se neodeslalo.');
   return { price: seenPrice, quantity: entry.quantity, ...(entry.filledQuantity > 0 ? { filledQuantity: entry.filledQuantity } : {}) };
 }
 

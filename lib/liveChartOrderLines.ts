@@ -28,11 +28,7 @@ export interface LivePositionLineControls {
   canClose?: boolean;
   /** Průměrný vstup leadera od workeru — podklad pro BE. */
   entryAvg: number | null;
-  /**
-   * Odeslaný posun čekající na potvrzení (10. 11. 2026): skutečná čára ZŮSTÁVÁ na ceně
-   * z read modelu brokera (ochrana tam dál je), netáhne se a má štítek „mění se“. Tlumenou
-   * čekající čáru na nové ceně kreslí záměr desku (`lib/liveChartIntent.ts`), jen zobrazení.
-   */
+  /** Odeslaný posun čekající na potvrzení: čára drží novou cenu se štítkem „odesílám“. */
   pending?: { entry?: number; stopLoss?: number; takeProfit?: number };
   /**
    * Worker umí posunout SL/TP nevyplněného vstupu a TP blíž k trhu
@@ -127,36 +123,7 @@ export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: numbe
   return { price, blocked: tightenBlockReason(summary.side, summary.stop, price, summary.mark) };
 }
 
-/** Štítek čar pozice z neověřené projekce workeru (bez dokladu kontinuity). */
-export const LIVE_UNVERIFIED_LINE_NOTE = 'neověřeno';
-/** Tlumená barva všeho, co stojí na neověřeném stavu (čáry pozice i pracující příkazy). */
-export const LIVE_UNVERIFIED_LINE_COLOR = MUTED_COLOR;
-/** Proč akce z neověřené pozice neodejde (BE zašedlé, text u ostatních vrátí brána desku). */
-export const LIVE_UNVERIFIED_ACTION_TITLE = 'Neověřeno — čekám na doklad workeru nebo čtení brokera; zavřít hned jde Flattenem.';
-
-/**
- * Čáry z neověřené projekce workeru (10. 11. 2026, review Codexu): ovládání po fillu NEMIZÍ —
- * × i „+ SL/TP“ zůstávají a BE je zašedlé s důvodem, aby uživatel viděl, co půjde. Autorizace
- * ale stojí jen na platném dokladu: tažení je vypnuté a každé odeslání z takové pozice odmítne
- * brána desku (`liveChartProjectionManageBlock`, „nic se neodeslalo“). Čáry jsou tlumené
- * a se štítkem „neověřeno“ — SL/TP nesmí vypadat jako potvrzená ochrana (INV-UI-01/03).
- */
-function unverifiedLines(lines: BacktestChartOrderLine[]): BacktestChartOrderLine[] {
-  return lines.map(line => ({
-    ...line,
-    draggable: false,
-    color: LIVE_UNVERIFIED_LINE_COLOR,
-    label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
-    ...(line.actions ? { actions: line.actions.map(action => ({ ...action, disabled: true, title: LIVE_UNVERIFIED_ACTION_TITLE })) } : {}),
-  }));
-}
-
 export function livePositionChartLines(summary: LiveChartPositionSummary, controls: LivePositionLineControls): BacktestChartOrderLine[] {
-  const lines = positionLines(summary, controls);
-  return summary.unverified === true ? unverifiedLines(lines) : lines;
-}
-
-function positionLines(summary: LiveChartPositionSummary, controls: LivePositionLineControls): BacktestChartOrderLine[] {
   const entry = summary.entry;
   if (entry == null || !Number.isFinite(entry)) return [];
   const long = summary.side === 'long';
@@ -174,8 +141,7 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
   const openPnl = liveShownOpenPnl(summary, controls.displayOpenPnl);
   // Fill wins immediately: a pending move must never overwrite the actual position entry.
   const pendingEntry = position ? undefined : controls.pending?.entry;
-  // Skutečný příkaz zůstává na ceně brokera; novou cenu kreslí tlumená čára záměru.
-  const displayEntry = entry;
+  const displayEntry = pendingEntry ?? entry;
   const entryLabel = position
     ? `${long ? 'LONG' : 'SHORT'} ${summary.quantity}${scope}  ${entry.toFixed(2)}${openPnl != null ? ` · ${signedUsd(openPnl)}` : ''}`
     : `${long ? 'BUY' : 'SELL'} ${summary.quantity} ${(summary.entryType ?? '').toUpperCase()}${scope}  ${displayEntry.toFixed(2)} · čeká na vyplnění`;
@@ -186,7 +152,7 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
     price: displayEntry,
     ...(controls.groupLimitStateHash ? { groupLimitStateHash: controls.groupLimitStateHash } : {}),
     color: position ? (openPnl == null ? (long ? LONG_COLOR : SHORT_COLOR) : openPnl >= 0 ? '#059669' : SL_COLOR) : MUTED_COLOR,
-    label: `${entryLabel}${pendingEntry != null ? ' · mění se' : ''}`,
+    label: `${entryLabel}${pendingEntry != null ? ' · odesílám' : ''}`,
     draggable: controls.manageable && !position && pendingEntry == null && (controls.moveBareEntry === true && summary.stop == null && summary.target == null
       // Stop až po ověření na DEMO (worker `BARE_STOP_MOVE_VERIFIED`).
       ? summary.entryType?.toLowerCase() === 'limit'
@@ -212,15 +178,14 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
   for (const kind of ['stopLoss', 'takeProfit'] as const) {
     const live = kind === 'stopLoss' ? summary.stop : summary.target;
     const pendingPrice = kind === 'stopLoss' ? controls.pending?.stopLoss : controls.pending?.takeProfit;
-    // Čára stojí na ceně brokera i během posunu (ochrana tam dál je, dokud broker nepotvrdí).
-    const at = live;
+    const at = pendingPrice ?? live;
     if (at == null) continue;
     lines.push({
       id: `${LIVE_POSITION_OWNER}:${kind}`, ownerId: LIVE_POSITION_OWNER, ownerType: position ? 'position' : 'order', kind,
       price: at,
       ...(controls.groupLimitStateHash ? { groupLimitStateHash: controls.groupLimitStateHash } : {}),
-      color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
-      label: levelLabel(kind, at, pendingPrice != null ? 'mění se' : position ? undefined : 'čeká na vstup'),
+      color: pendingPrice != null ? MUTED_COLOR : kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
+      label: levelLabel(kind, at, pendingPrice != null ? 'odesílám' : position ? undefined : 'čeká na vstup'),
       labelAt: next => levelLabel(kind, next),
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.

@@ -1,7 +1,3 @@
-import { withLiveRelayPhase } from '../lib/liveCommandErrors';
-import { isLiveCommandNotSent, liveCommandNotSentText } from '../lib/liveCommandErrors';
-import { TradovateRequestError } from '../services/tradovateOAuthConnection';
-import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_ATTACH_SEND_ACTION, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
@@ -93,27 +89,9 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(lines.slice(1).every(line => !line.draggable && /čeká na vstup/.test(line.label))).toBe(true);
   });
 
-  it('odeslaný posun: skutečná čára zůstává na ceně brokera, netáhne se a říká „mění se“ (novou cenu kreslí záměr desku)', () => {
-    const live = livePositionChartLines(summary(), controls)[1];
+  it('odeslaný posun: čára drží novou cenu se štítkem „odesílám“ a netáhne se', () => {
     const stop = livePositionChartLines(summary(), { ...controls, pending: { stopLoss: 28980 } })[1];
-    expect(stop).toMatchObject({ price: live.price, draggable: false, color: live.color, label: expect.stringMatching(/mění se/) });
-    expect(stop.price).not.toBe(28980);
-  });
-
-  it('neověřená projekce workeru: čáry tlumeně se štítkem, ovládání po fillu zůstává vidět (BE zašedlé), tažení vypnuté', () => {
-    const verified = livePositionChartLines(summary(), { ...controls, canClose: true });
-    const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
-    expect(lines.map(line => line.id)).toEqual(verified.map(line => line.id));
-    for (const [index, line] of lines.entries()) {
-      expect(line).toMatchObject({ draggable: false, color: '#64748b' });
-      expect(line.cancellable).toBe(verified[index].cancellable);
-      expect(line.label).toMatch(/neověřeno/);
-      // Ovládání se neschová: × zůstává (odeslání zastaví brána desku), BE je vidět, ale zašedlé.
-      expect(isLiveDisplayOnlyLine(line as never)).toBe(false);
-    }
-    const be = lines[0].actions?.find(action => action.id === 'break-even');
-    expect(be).toMatchObject({ disabled: true, title: expect.stringMatching(/Neověřeno/) });
-    expect(verified[0].actions?.find(action => action.id === 'break-even')).toBeDefined();
+    expect(stop).toMatchObject({ price: 28980, draggable: false, label: expect.stringMatching(/odesílám/) });
   });
 
   it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {
@@ -209,10 +187,8 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/\{!draft && sentFlash && <div[\s\S]{0,200}<div role="status"/);
     expect(ticket).toMatch(/if \(placedResult\.status === 'acknowledged'\) onAcknowledged\?\.\(\);/);
   });
-  it('read-only localhost (HTTP 405) je „neodesláno“, ne neznámý výsledek — podle stavu, ne textu', () => {
-    expect(liveCommandNotSentText(withLiveRelayPhase(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405), 'submit'))).toMatch(/z localhostu se k brokerovi nezapisuje/);
-    expect(isLiveCommandNotSent(new Error('Localhost je pro Tradovate pouze read-only.'))).toBe(false);
-    expect(ticket).toMatch(/isLiveCommandNotSent\(reason\)/);
+  it('read-only localhost je „neodesláno“, ne neznámý výsledek', () => {
+    expect(ticket).toMatch(/worker-disconnected\|pouze read-only/);
   });
 });
 

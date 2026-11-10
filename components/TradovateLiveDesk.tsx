@@ -35,7 +35,7 @@ import { mergeTradovateAccountDisplay, nextTradovateDisplayVouches, type Account
 import type { TradovateAccountDisplayFeedState } from '../lib/tradovateAccountDisplayTypes';
 import { tradovateAccountReadState, hasCompleteTradovateRead } from '../lib/tradovateLiveReadState';
 import { LIVE_READ_MAX_AGE_MS, LIVE_READ_STALE_MS, formatReadAge } from '../lib/liveReadFreshness';
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
 import LiveSafetyControls from './LiveSafetyControls';
 import { LIVE_SAFETY_BAR_GRACE_MS, assertSameSafetyTarget, copierOffVerifiedForMenu, createFlattenGroupCoordinator, liveSafetyBarNeed, liveSafetyBarVisible, liveSafetyFailureMessage, liveSafetyGraceAfterNeed, liveSafetyReceipt, routeDashboardCommand, type LiveOverviewSlotState, type LiveSafetyAction, type LiveSafetyNotice, type LiveSafetyTarget } from '../lib/liveSafetyAction';
@@ -107,9 +107,6 @@ import {
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
 import { liveChartFills, liveChartWorkingOrders, useKeyedValue, useLiveChartData, type LiveChartWorkingOrders } from '../hooks/useLiveChartData';
-import { createLiveChartCommandGuard } from '../lib/liveChartCommandGuard';
-import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
-import { createLiveChartIntentStore, liveChartWorkerEntryEvidence, withLiveChartIntentLines } from '../lib/liveChartIntent';
 import { newestOpenBareEntry } from '../lib/liveBareEntry';
 import { GROUP_TARGET, type LiveTradeTarget } from '../lib/liveTradeTarget';
 import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
@@ -158,7 +155,7 @@ import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, liv
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
-import { leaderManageBasis, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
+import { leaderManageBasis, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
 import {
@@ -948,7 +945,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const status = current.status;
     const executionGroup = copierWorkerExecutionGroup(status);
     if (!current.fresh || !status || !executionGroup || executionGroup.leaderAccountId == null) {
-      throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — náhled teď nejde.');
+      throw new Error('Stav kopírky není čerstvě ověřený — náhled teď nejde.');
     }
     const draft = withScaleInIntent(rawDraft, status);
     const command = buildLeaderEntryPreviewCommand(draft, {
@@ -965,24 +962,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const response = route.agentTransport === 'local'
       ? await route.agentClient.execute(wrapped)
       : route.relayConnectionId ? await executeTradovateCopierRelayCommand(route.relayConnectionId, wrapped) : null;
-    if (!response) throw new LiveCommandNotSentError('Chybí cesta k Mac workeru.');
+    if (!response) throw new Error('Chybí cesta k Mac workeru.');
     const result = (response as { result?: unknown }).result as LeaderEntryPreviewResult | undefined;
-    if (!result || result.type !== 'leader-entry-preview') throw new LiveCommandNotSentError('Worker náhled neumí (starší verze) — nic se neodeslalo.');
+    if (!result || result.type !== 'leader-entry-preview') throw new Error('Worker náhled neumí (starší verze) — nic se neodeslalo.');
     return result;
   }, []);
-  // Čekající záměry grafu (10. 11. 2026): tlumené čáry hned po kliku, PC i telefon téhož desku.
-  // Jen zobrazení (INV-UI-01/03) — nic z nich se neodesílá; výsledek příkazu je jen uzavře.
-  const chartIntentStore = useMemo(() => createLiveChartIntentStore(), []);
-  const chartIntents = useSyncExternalStore(chartIntentStore.subscribe, chartIntentStore.snapshot, chartIntentStore.snapshot);
-  // Pozice grafu z posledního renderu: brána „neověřená projekce nic nepovolí“ v callbacích.
-  // Ovládání po fillu NEMIZÍ (je vidět s „neověřeno“); autorizace stojí jen na platném dokladu.
-  const chartPositionRef = useRef<LiveChartPosition>(NO_LIVE_CHART_POSITION);
-  // Brána, operationId předem a čekající čára pro každé odeslání z grafu (čistá továrna, testy).
-  const chartGuard = useMemo(() => createLiveChartCommandGuard({
-    position: () => chartPositionRef.current,
-    store: chartIntentStore,
-    newOperationId: () => `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
-  }), [chartIntentStore]);
   // Fáze 1b: SKUTEČNÉ odeslání ručního vstupu na leadera. Jen přes relay
   // (idempotence, platnost 15 s, brzda, denní strop); worker loopback odmítne.
   // Záměr (zapnutí kopírky, otisk skupiny) z čerstvého stavu — worker ho
@@ -994,11 +978,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const status = current.status;
     const executionGroup = copierWorkerExecutionGroup(status);
     if (!current.fresh || !status || !executionGroup || executionGroup.leaderAccountId == null) {
-      throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
+      throw new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
     }
     const draft = withScaleInIntent(rawDraft, status);
-    // Přikoupení zvyšuje riziko: nikdy nad pozicí z neověřené projekce grafu (brána v `chartGuard.entry`).
-    return chartGuard.entry(draft, operationId, draft.position != null, async () => {
     const preview = buildLeaderEntryPreviewCommand(draft, {
       group: executionGroup,
       ...(supportsCopierGroupLimitBare(status) && draft.orderType === 'Limit' && !draft.position
@@ -1010,9 +992,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     });
     const command = buildLeaderEntryPlaceCommand(preview, operationId);
     const route = previewRouteRef.current;
-    if (!route.relayConnectionId) throw new LiveCommandNotSentError('Odeslání jde jen přes relay — chybí připojení k workeru.');
-    // Od teď mohl příkaz odejít: výjimka už neznamená „neodesláno“ (čekající čára = neznámý výsledek).
-    chartIntentStore.markSent(operationId);
+    if (!route.relayConnectionId) throw new Error('Odeslání jde jen přes relay — chybí připojení k workeru.');
     const response = await executeTradovateCopierRelayCommand(route.relayConnectionId, { type: 'copy-command', command });
     const result = (response as { result?: unknown }).result as LeaderEntryPlaceResult | undefined;
     // Nový stav (příkaz v grafu, karta) hned, ne až v dalším kole čtení.
@@ -1022,8 +1002,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       throw new Error('Výsledek odeslání chybí — zkontroluj leadera v Tradovate, než to zkusíš znovu.');
     }
     return result;
-    });
-  }, [chartIntentStore, chartGuard]);
+  }, []);
   const executeSafetyCommand = useCallback(async (command:
     | { type: 'disarm' }
     | { type: 'kill-switch' }
@@ -1152,8 +1131,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     agentStatusObservedAt,
     exposureObservedAt: chartLive.exposureObservedAt,
     statusFresh: agentStatusFresh && !agentStatusRestored,
-    // Obnovená cache se do grafu jako stav workeru nepromítá (INV-FRESH-03, INV-UI-01).
-    statusTrusted: !agentStatusRestored,
     displayAccounts: (displaySnapshot ?? copyTradeSnapshot)?.accounts ?? EMPTY_LIVE_ACCOUNTS,
     group: workerGroup,
     nameOf: chartAccountName,
@@ -1165,17 +1142,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.
   // Fáze 2a/2b: spravovatelný obchod = právě jeden na symbolu a straně pozice v grafu.
   chartTradeRef.current = chartData.position?.summary != null;
-  chartPositionRef.current = chartData.position;
-  // Neověřená projekce workeru (bez dokladu) se jen kreslí: správa, přikoupení ani holé zavření
-  // se z ní nenabízí (INV-UI-01/03) — rozhoduje až doklad nebo ověřené REST čtení.
-  // Review Codexu (10. 11.): ovládání po fillu se neschovává — nabídky stojí i na neověřené pozici
-  // (čáry a panel ji označí „neověřeno“), ale každé odeslání z ní odmítne brána `chartGuard` (lib/liveChartCommandGuard.ts).
-  const chartManageSummary = chartData.position?.summary ?? null;
   const chartPositionSymbol = chartData.position?.symbol ?? null;
   const chartPositionSide = chartData.position?.summary?.side ?? null;
   // Správa jen nad skutečným leaderem skupiny workeru: pohled jednoho followera
   // (nebo vypnutá kopírka s expozicí jen u followera) nesmí ovládat leadera.
-  const chartLeaderBasis = leaderManageBasis(chartManageSummary, workerGroup?.leaderAccountId);
+  const chartLeaderBasis = leaderManageBasis(chartData.position?.summary, workerGroup?.leaderAccountId);
   // Přikoupení (3. 11. 2026): pozice leadera složená z vlastních lístků — jen s capability workeru.
   const scaleInPosition = useMemo(() => {
     if (!chartLeaderBasis || !supportsCopierManualEntryScaleIn(agentStatus)) return null;
@@ -1236,42 +1207,37 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const deskCommands = useMemo(() => createLiveDeskCommands({
     status: () => armStatusRef.current,
     relayId: () => previewRouteRef.current.relayConnectionId,
-    relay: (relayId, command) => {
-      // Čekající čára grafu: požadavek s tímto operationId opravdu odchází.
-      chartIntentStore.markSent(command.operationId);
-      return executeTradovateCopierRelayCommand(relayId, { type: 'copy-command', command });
-    },
+    relay: (relayId, command) => executeTradovateCopierRelayCommand(relayId, { type: 'copy-command', command }),
     afterSend: () => statusPollKickRef.current?.(),
     newOperationId: () => `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
-  }), [chartIntentStore]);
+  }), []);
   const sendLeaderManage = deskCommands.sendLeaderManage;
   const manageGroupLimitPosition = deskCommands.manageGroupLimitPosition;
-  const sendManageLeaderEntry = useCallback(async (operationId: string, action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string): Promise<LeaderOrderManageResult> => {
+  const manageLeaderEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string): Promise<LeaderOrderManageResult> => {
     const current = armStatusRef.current;
     const executionGroup = copierWorkerExecutionGroup(current.status);
     const entry = ownManualEntryRef.current;
     // Worker porovnává s příkazem leadera — součet skupiny by vždy neseděl.
-    // Týž snímek pozice jako brána `chartGuard` (ne closure z jiného renderu).
-    const quantity = leaderManageBasis(chartPositionRef.current.summary, executionGroup?.leaderAccountId)?.quantity ?? null;
+    const quantity = leaderManageBasis(chartData.position?.summary, executionGroup?.leaderAccountId)?.quantity ?? null;
     const barePartial = entry?.bare === true ? current.status?.controller.barePartial ?? null : null;
     if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !entry || quantity == null) {
-      throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.');
+      throw new Error('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.');
     }
-    if (!previewRouteRef.current.relayConnectionId) throw new LiveCommandNotSentError('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
+    if (!previewRouteRef.current.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
     // Celá pozice (přikoupení): posun SL/TP a zavření celé pozice; zrušení čekajícího přikoupení
     // jde přes jeho vlastní lístek a jeho qty (ne qty pozice).
     if (entry.source === 'position' && action === 'cancel-entry') {
       const pending = scaleInPositionRef.current?.pendingAdd ?? null;
-      if (!pending) throw new LiveCommandNotSentError('Čekající přikoupení už není — obnov panel.');
+      if (!pending) throw new Error('Čekající přikoupení už není — obnov panel.');
       const cancel = buildLeaderOrderManageCommand({
-        groupId: executionGroup.id, operationId,
+        groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
         leaderAccountId: executionGroup.leaderAccountId, entryOperationId: pending.operationId, symbol: entry.symbol,
         action, expect: { price: expectPrice, quantity: pending.quantity },
       });
       return sendLeaderManage(cancel, 'Výsledek zrušení chybí — zkontroluj leadera v Tradovate.');
     }
     if (entry.source === 'position' && action !== 'move-stop' && action !== 'move-target' && action !== 'close-position') {
-      throw new LiveCommandNotSentError('U pozice s přikoupením jde z čar jen posun SL/TP, zavření a zrušení čekajícího přikoupení.');
+      throw new Error('U pozice s přikoupením jde z čar jen posun SL/TP, zavření a zrušení čekajícího přikoupení.');
     }
     const groupPath = executionGroup.manualOnly !== true && (supportsCopierGroupLimitMove(current.status) || supportsCopierGroupLimitManage(current.status));
     const ownOperationId = entry.source === 'own' ? entry.entryOperationId : null;
@@ -1283,19 +1249,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const seenGroup = action === 'move-limit' ? groupLimitMoveTrade
       : action === 'cancel-entry' ? groupLimitCancelView : groupLimitPositionTrade;
     if ((seenGroup && !groupPath) || (groupPath && (!groupTrade || groupTrade.stateHash !== (seenGroupLimitStateHash ?? seenGroup?.stateHash)))) {
-      throw new LiveCommandNotSentError('Stav příkazu není čerstvě ověřený pro všechny účty — nic se neodeslalo.');
+      throw new Error('Stav příkazu není čerstvě ověřený pro všechny účty — nic se neodeslalo.');
     }
     if (action === 'move-limit' && (entry.source !== 'own' || (!groupPath && !supportsCopierManualOrderMoveLimit(current.status)))) {
-      throw new LiveCommandNotSentError('Worker posun limitu nepodporuje — nic se neodeslalo.');
+      throw new Error('Worker posun limitu nepodporuje — nic se neodeslalo.');
     }
     if (groupTrade && action === 'close-position') {
       return manageGroupLimitPosition({ entryOperationId: groupTrade.entryOperationId, symbol: groupTrade.symbol,
-        groupLimitStateHash: groupTrade.stateHash, action, operationId });
+        groupLimitStateHash: groupTrade.stateHash, action });
     }
     const groupLeader = groupTrade?.accounts.find(row => row.role === 'leader');
     const groupQuantity = action === 'move-limit' ? groupLeader?.entry?.quantity : groupLeader?.openQuantity;
     const command = buildLeaderOrderManageCommand({
-      groupId: executionGroup.id, operationId,
+      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
       leaderAccountId: executionGroup.leaderAccountId,
       ...((entry.source === 'own' || entry.source === 'position') && entry.entryOperationId ? { entryOperationId: entry.entryOperationId } : { leaderEntryOrderId: entry.leaderEntryOrderId }),
       symbol: entry.symbol,
@@ -1312,49 +1278,36 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
     });
     return sendLeaderManage(command, 'Výsledek změny chybí — zkontroluj leadera v Tradovate.');
-  }, [groupLimitMoveTrade?.stateHash, groupLimitPositionTrade?.stateHash, groupLimitCancelView?.stateHash, sendLeaderManage, manageGroupLimitPosition]);
-  // Vstup každé správy leadera z grafu (čáry, panel, zkratky, telefon): brána neověřené projekce,
-  // pak záměr (tlumená čára) synchronně před odesláním, vázaný na operationId příkazu.
-  const manageLeaderEntry = useCallback((action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string): Promise<LeaderOrderManageResult> => {
-    return chartGuard.manage({ action, symbol: ownManualEntryRef.current?.symbol, expectPrice, newPrice },
-      operationId => sendManageLeaderEntry(operationId, action, expectPrice, newPrice, seenGroupLimitStateHash));
-  }, [chartGuard, sendManageLeaderEntry]);
+  }, [chartData.position?.summary, groupLimitMoveTrade?.stateHash, groupLimitPositionTrade?.stateHash, groupLimitCancelView?.stateHash, sendLeaderManage, manageGroupLimitPosition]);
 
   // Telefon (2. 11. 2026): stejné odeslání a správa jako PC graf, žádná druhá execution cesta.
-  const sendAttachBrackets = useCallback(async (operationId: string, input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number; groupLimitStateHash?: string | null }): Promise<LeaderOrderManageResult> => {
+  const attachBrackets = useCallback(async (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number; groupLimitStateHash?: string | null }): Promise<LeaderOrderManageResult> => {
     const executionGroup = copierWorkerExecutionGroup(armStatusRef.current.status);
     if (!armStatusRef.current.fresh || !executionGroup || executionGroup.leaderAccountId == null) {
-      throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
+      throw new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
     }
-    if (!previewRouteRef.current.relayConnectionId) throw new LiveCommandNotSentError('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
+    if (!previewRouteRef.current.relayConnectionId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
     const requiredGroupPath = input.groupLimitStateHash !== undefined || groupLimitPositionTrade != null
       || executionGroup.manualOnly !== true && supportsCopierGroupLimitManage(armStatusRef.current.status);
     const groupTrade = requiredGroupPath ? groupLimitPositionManageTrade(armStatusRef.current.status, input.entryOperationId, input.symbol) : null;
     if (requiredGroupPath && (!supportsCopierGroupLimitManage(armStatusRef.current.status) || !groupTrade
-      || groupTrade.stateHash !== (input.groupLimitStateHash !== undefined ? input.groupLimitStateHash : groupLimitPositionTrade?.stateHash))) throw new LiveCommandNotSentError('Stav všech účtů se změnil — nic se neodeslalo.');
+      || groupTrade.stateHash !== (input.groupLimitStateHash !== undefined ? input.groupLimitStateHash : groupLimitPositionTrade?.stateHash))) throw new Error('Stav všech účtů se změnil — nic se neodeslalo.');
     if (groupTrade) return manageGroupLimitPosition({ entryOperationId: input.entryOperationId, symbol: input.symbol,
-      groupLimitStateHash: groupTrade.stateHash, action: 'attach-brackets', stopLoss: input.stopLoss, takeProfit: input.takeProfit, operationId });
+      groupLimitStateHash: groupTrade.stateHash, action: 'attach-brackets', stopLoss: input.stopLoss, takeProfit: input.takeProfit });
     const command = buildLeaderOrderManageCommand({
-      groupId: executionGroup.id, operationId,
+      groupId: executionGroup.id, operationId: `manage:${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
       leaderAccountId: executionGroup.leaderAccountId, entryOperationId: input.entryOperationId, symbol: input.symbol,
       ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
       action: 'attach-brackets', expect: { price: input.expectPrice, quantity: input.quantity }, stopLoss: input.stopLoss, takeProfit: input.takeProfit,
     });
     return sendLeaderManage(command, 'Výsledek chybí — zkontroluj pozici v Tradovate.');
   }, [groupLimitPositionTrade?.stateHash, sendLeaderManage, manageGroupLimitPosition]);
-  const attachBrackets = useCallback((input: Parameters<typeof sendAttachBrackets>[1]): Promise<LeaderOrderManageResult> => {
-    return chartGuard.attach(input, operationId => sendAttachBrackets(operationId, input));
-  }, [chartGuard, sendAttachBrackets]);
   // C8 (4. 11. 2026): × zavřít vlastní holý Market bez SL/TP a C7 „Zrušit čekající“ / Dashboard
   // „Zrušit“ — tatáž cesta správy leadera (`sendLeaderManage`). Odejde JEN obchod / sada, kterou
   // uživatel viděl, a jen když ji čerstvý status hlásí beze změny; C7 drží jednu trasu relaye pro
   // celou sekvenci. Worker vše ověří znovu (sólo skupina, ARMED, tvar u brokera, lot deníku).
-  const closeBareLeader = useCallback((seen: Parameters<typeof deskCommands.closeBareLeader>[0]): Promise<LeaderOrderManageResult> => {
-    return chartGuard.closeBare(seen, operationId => deskCommands.closeBareLeader(seen, { operationId }));
-  }, [chartGuard, deskCommands]);
-  const manageBareLeg = useCallback((seen: Parameters<typeof deskCommands.manageBareLeg>[0], intent: Parameters<typeof deskCommands.manageBareLeg>[1]): Promise<LeaderOrderManageResult> => {
-    return chartGuard.bareLeg(seen, intent, operationId => deskCommands.manageBareLeg(seen, intent, { operationId }));
-  }, [chartGuard, deskCommands]);
+  const closeBareLeader = deskCommands.closeBareLeader;
+  const manageBareLeg = deskCommands.manageBareLeg;
   const cancelPendingEntries = deskCommands.cancelPendingEntries;
   // Sdílený zámek jednoho příkazu desku (PC: čáry, panel — vstup, Přidat SL/TP, × holé pozice —,
   // Shift+E/X/C, lišta „Zrušit čekající“; telefon: lišta, čáry, list správy, vstup, attach, čip C7;
@@ -1384,8 +1337,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     : null), [chartLeaderBasis, agentStatus?.controller.manualEntries, chartPositionSymbol]);
   // Pozice leadera skupiny workeru na symbolu grafu (lišta telefonu, „Přidat SL/TP“ na PC i telefonu).
   const chartLeaderPosition = useMemo(
-    () => livePhonePosition(chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry?.operationId ?? null),
-    [chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry],
+    () => livePhonePosition(chartData.position?.summary ?? null, chartLeaderBasis, chartPositionSymbol, chartBareEntry?.operationId ?? null),
+    [chartData.position?.summary, chartLeaderBasis, chartPositionSymbol, chartBareEntry],
   );
   // C8: nabídka × u vlastní holé pozice (PC čára + panel, telefon) — jen zobrazení a záměr
   // (INV-UI-01/03); bez capability, mimo pohled leadera nebo s neověřenou pozicí nic (unknown ≠ flat).
@@ -1422,14 +1375,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     frontContract: entryFrontContract,
     pointValue: 2,
   }), [chartData.working, scaleInPendingAdd, entryFrontContract]);
-  // Záměry jako tlumené čáry jen pro zobrazení přes týž kanál (PC i telefon, handlery je ignorují).
-  const chartWorkingWithIntents = useMemo(() => withLiveChartIntentLines(chartWorkingView, chartIntents,
-    chartPositionSymbol ?? chartIntents[chartIntents.length - 1]?.symbol ?? entryFrontContract), [chartWorkingView, chartIntents, chartPositionSymbol, entryFrontContract]);
-  const chartWorkingOrders = useKeyedValue(chartWorkingWithIntents);
-  // Splněné (read model brokera ukazuje cíl) a prošlé záměry pryč; tik desku je 1 s.
-  // Vstup potvrdí jen důkaz workeru se shodným operationId nebo změna tvaru pozice (ne cena/P&L).
-  const chartEntryEvidence = useMemo(() => liveChartWorkerEntryEvidence(agentStatus?.controller.manualEntries), [agentStatus?.controller.manualEntries]);
-  useEffect(() => { chartIntentStore.prune(Date.now(), chartData.position, { workerEntryOperationIds: chartEntryEvidence }); }, [chartIntentStore, chartData.position, chartEntryEvidence, freshnessNow]);
+  const chartWorkingOrders = useKeyedValue(chartWorkingView);
   const phoneTrade = useMemo<LivePhoneTradeBridge | null>(() => {
     if (!phoneChartAvailable || !workerGroup) return null;
     const controller = agentStatus?.controller;

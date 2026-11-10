@@ -1,4 +1,3 @@
-import { isLiveCommandNotSent, liveCommandNotSentText, liveCommandUnknownText } from '../lib/liveCommandErrors';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Lock, Star, X } from 'lucide-react';
 import {
@@ -189,17 +188,16 @@ const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummar
       <span className={`absolute top-0 h-full w-[2px] rounded transition-[left] duration-500 ${isDark ? 'bg-white' : 'bg-slate-900'}`} style={{ left: `calc(${progress * 100}% - 1px)` }} />
     </div>}
     <div className={`flex gap-3 font-mono text-[10px] ${ink}`}>
-      {/* Neověřená projekce workeru: ceny ochrany tlumeně, text krytí nese „neověřeno“ (INV-UI-03). */}
-      <span className={summary.unverified ? muted : 'text-rose-500'}>SL {price(summary.stop)}</span><span className={summary.unverified ? muted : 'text-emerald-500'}>TP {price(summary.target)}</span>
+      <span className="text-rose-500">SL {price(summary.stop)}</span><span className="text-emerald-500">TP {price(summary.target)}</span>
       <span className={`flex-1 text-right font-sans font-bold ${muted}`}>{summary.protection}</span>
     </div>
     {canExpand && <div className={`live-ticket-accounts ${expanded ? 'is-open' : ''}`}>
       <div>
         {summary.rows.map(row => <div key={row.accountId} className={`grid grid-cols-[8px_minmax(0,1fr)_auto_68px] items-center gap-1.5 border-t py-1.5 text-[10.5px] ${isDark ? 'border-white/[0.08]' : 'border-slate-900/[0.08]'}`}>
-          <i className={`h-[7px] w-[7px] rounded-full ${row.unverified ? 'bg-slate-400' : row.protectedFully ? 'bg-emerald-500' : 'bg-amber-500'}`} title={row.unverified ? 'Neověřeno — stav workeru bez dokladu' : row.protectedFully ? 'SL i TP kryjí celou pozici' : 'Ochrana nekryje celou pozici'} />
+          <i className={`h-[7px] w-[7px] rounded-full ${row.protectedFully ? 'bg-emerald-500' : 'bg-amber-500'}`} title={row.protectedFully ? 'SL i TP kryjí celou pozici' : 'Ochrana nekryje celou pozici'} />
           <span className="min-w-0">
             <b className={`block truncate font-extrabold ${ink}`}>{row.name}{row.isLeader && <span className="ml-1 rounded-[3px] border border-indigo-400/45 px-[3px] align-[1px] text-[8px] font-black uppercase tracking-[0.06em] text-indigo-400">leader</span>}</b>
-            <small className={`block font-mono text-[9.5px] ${muted}`}>@ {price(row.entry)} · SL {price(row.stop)} · TP {price(row.target)}{row.unverified ? ' · neověřeno' : ''}</small>
+            <small className={`block font-mono text-[9.5px] ${muted}`}>@ {price(row.entry)} · SL {price(row.stop)} · TP {price(row.target)}</small>
           </span>
           <span className={`text-right font-mono text-[10.5px] font-bold ${muted}`}>{row.quantity}×</span>
           <b className={`text-right font-mono text-[11px] font-extrabold ${row.openPnl == null ? muted : row.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(row.openPnl)}</b>
@@ -230,16 +228,16 @@ const placedResultView = (entry: LeaderEntryPlaceResult): { tone: 'ok' | 'bad' |
 export const liveDirectResultLocks = (result: Pick<LeaderEntryPlaceResult, 'status'>): boolean => (
   !['acknowledged', 'rejected', 'blocked', 'abandoned'].includes(result.status)
 );
-export const liveDirectErrorLocks = (reason: unknown): boolean => placeErrorView(reason).tone === 'warn';
+export const liveDirectErrorLocks = (message: string): boolean => placeErrorView(message).tone === 'warn';
 
-/** „Neodesláno“ jen podle typu/kódu chyby (`lib/liveCommandErrors.ts`), nikdy podle textu. */
-const placeErrorView = (reason: unknown): { tone: 'bad' | 'warn'; text: string } => (
-  isLiveCommandNotSent(reason)
-    ? { tone: 'bad', text: liveCommandNotSentText(reason, 400, {
-      'entry-busy': 'Neodesláno: jiný ruční vstup se právě zpracovává.',
-      'entry-daily-cap': 'Neodesláno: dosažen denní strop ručních vstupů.',
-    }) }
-    : { tone: 'warn', text: liveCommandUnknownText(reason, 'zkontroluj leadera v Tradovate, než to zkusíš znovu.') }
+const placeErrorView = (message: string): { tone: 'bad' | 'warn'; text: string } => (
+  /entry-busy|entry-daily-cap|manage-daily-cap|entry-conflict|entry-superseded|entry-not-admitted|invalid-relay-command-payload|není čerstvě ověřený|jen přes relay|Chybí cesta k Mac workeru|worker-disconnected|pouze read-only|Přikoupení musí mít SL a TP pozice|nic se neodeslalo/.test(message)
+    ? { tone: 'bad', text: /entry-busy/.test(message) ? 'Neodesláno: jiný ruční vstup se právě zpracovává.'
+      : /entry-daily-cap/.test(message) ? 'Neodesláno: dosažen denní strop ručních vstupů.'
+        : /entry-superseded/.test(message) ? 'Neodesláno: tento pokus zastavila brzda (vypnutí kopírky).'
+          : /entry-not-admitted/.test(message) ? 'Neodesláno: tento pokus server nepřijal.'
+        : /pouze read-only/.test(message) ? 'Neodesláno: z localhostu se k brokerovi nezapisuje (jen na produkci).' : `Neodesláno: ${message}` }
+    : { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate, než to zkusíš znovu.` }
 );
 
 /**
@@ -308,7 +306,8 @@ const PreviewSection: React.FC<{
       setPlaced(null);
       setNow(Date.now());
     } catch (reason) {
-      setState({ key, error: livePreviewErrorText(reason) });
+      const message = reason instanceof Error ? reason.message : 'Náhled se nepodařil.';
+      setState({ key, error: livePreviewErrorText(message) });
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -362,7 +361,7 @@ const PreviewSection: React.FC<{
       setPlaced({ key, result: placedResult, operationId: shown!.operationId!, receivedPerformanceAt: performance.now() });
       if (placedResult.status === 'acknowledged') onAcknowledged?.();
     } catch (reason) {
-      const view = placeErrorView(reason);
+      const view = placeErrorView(reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.');
       setPlaced({ key, ...(view.tone === 'bad' ? { error: view.text.replace(/^Neodesláno: /, '') } : { unknown: view.text }) });
     } finally {
       placingRef.current = false;
@@ -500,7 +499,7 @@ export function liveAttachDefaultLegs(
 export const attachErrorNotice = (reason: unknown, at: number): LiveManageNotice => {
   const notice = liveManageErrorNotice(reason, at);
   if (notice.tone === 'bad') return notice;
-  const place = placeErrorView(reason);
+  const place = placeErrorView(reason instanceof Error ? reason.message : 'chyba');
   return place.tone === 'bad' ? { tone: 'bad', text: place.text, at } : { ...notice, text: `${notice.text} Nic neopakuj.` };
 };
 
@@ -1093,8 +1092,9 @@ const LiveOrderTicket: React.FC<Props> = ({
         onDraft(null);
       }
     } catch (reason) {
-      setDirect({ key: sentKey, view: placeErrorView(reason) });
-      if (liveDirectErrorLocks(reason)) setDirectLock(sentLockKey);
+      const message = reason instanceof Error ? reason.message : 'Odeslání se nepodařilo.';
+      setDirect({ key: sentKey, view: placeErrorView(message) });
+      if (liveDirectErrorLocks(message)) setDirectLock(sentLockKey);
     } finally {
       directBusyRef.current = false;
       setDirectBusy(false);

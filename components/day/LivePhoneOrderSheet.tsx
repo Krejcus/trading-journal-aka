@@ -390,7 +390,7 @@ export default function LivePhoneOrderSheet({
       // Stáří od přijetí v tomto zařízení — hodiny telefonu a Macu se můžou lišit.
       setSnapshot({ key, result, receivedAt: Date.now() });
     } catch (reason) {
-      setSnapshot({ key, error: livePreviewErrorText(reason) });
+      setSnapshot({ key, error: livePreviewErrorText(reason instanceof Error ? reason.message : 'Náhled se nepodařil.') });
     } finally {
       previewBusyRef.current = false;
       setPreviewBusy(false);

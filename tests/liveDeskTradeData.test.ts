@@ -83,10 +83,7 @@ describe('B1: holý vstup a pozice leadera (U4)', () => {
   it('desk: holý vstup jen přes newestOpenBareEntry a jen v pohledu leadera skupiny workeru; attach jen s capability', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     expect(desk).toMatch(/const chartBareEntry = useMemo\(\(\) => \(chartLeaderBasis\s*\? liveBareEntryRecord\(newestOpenBareEntry\(agentStatus\?\.controller\.manualEntries, chartPositionSymbol\)\)\s*: null\)/);
-    // Ovládání po fillu se neschová (review Codexu): nabídky i z neověřené pozice, odeslání zastaví brána.
-    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary \?\? null;/);
-    expect(desk).toMatch(/const chartGuard = useMemo\(\(\) => createLiveChartCommandGuard\(\{/);
-    expect(desk).toMatch(/livePhonePosition\(chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
+    expect(desk).toMatch(/livePhonePosition\(chartData\.position\?\.summary \?\? null, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
     // PC: Přidat SL/TP = deskový attachBrackets, jen když worker inzeruje manual-entry-bare-v1.
     expect(desk.match(/onAttachBrackets/g)).toHaveLength(1);
     expect(desk).toContain('{...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}');
@@ -167,7 +164,7 @@ describe('B1: pracující příkazy pro graf (U5) — jen zobrazení', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     const uses = desk.split('\n').filter(line => /\bchartWorkingOrders\b/.test(line)).map(line => line.trim());
     expect(uses).toEqual([
-      'const chartWorkingOrders = useKeyedValue(chartWorkingWithIntents);',
+      'const chartWorkingOrders = useKeyedValue(chartWorkingView);',
       'workingOrders={chartWorkingOrders}',
       'workingOrders: chartWorkingOrders,',
     ]);

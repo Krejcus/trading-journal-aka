@@ -1,4 +1,3 @@
-import { isLiveCommandNotSent } from './liveCommandErrors';
 /**
  * C7 — „Zrušit vše“ = zrušit VLASTNÍ čekající vstupy, nikdy ochranu pozice
  * (3. 11. 2026, docs/reviews/trading-gaps-designs/safety.md, oponentura copier-design-critic).
@@ -510,7 +509,7 @@ export function classifyCancelPendingResult(result: LeaderOrderManageResult | nu
 }
 
 /** Chyba relaye/agenta, u které je prokázané, že se nic neodeslalo (stejné vzory jako `LiveTradingScreen`). */
-/** Dřívější textový vzor nahradil typ/kód chyby (`isLiveCommandNotSent`, 10. 11. 2026). */
+export const CANCEL_PENDING_NOT_SENT_PATTERN = /entry-busy|entry-superseded|entry-not-admitted|manage-daily-cap|entry-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/;
 
 /**
  * Sekvenční odeslání N× `cancel-entry` (desk: PC panel, Dashboard i telefon). Každá položka
@@ -546,9 +545,8 @@ export async function cancelOwnPendingEntries(input: {
     } catch (error) {
       // Výjimka může přijít i po převzetí workerem (relay timeout, ztracený ACK) — „neodesláno“ jen u
       // prokazatelně neodeslaných vzorů (stejné jako LiveTradingScreen), jinak výsledek neznámý.
-      // „Neodesláno“ jen podle typu/kódu chyby (`lib/liveCommandErrors.ts`), nikdy podle textu.
       const message = error instanceof Error ? error.message : String(error);
-      results.push(isLiveCommandNotSent(error)
+      results.push(CANCEL_PENDING_NOT_SENT_PATTERN.test(message)
         ? { entry, operationId, outcome: 'blocked', text: `Neodesláno (${message.slice(0, 160)}).` }
         : { entry, operationId, outcome: 'unknown', text: `Výsledek neznámý (${message.slice(0, 160)}) — zkontroluj leadera v Tradovate.` });
     }

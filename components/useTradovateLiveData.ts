@@ -1,6 +1,5 @@
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
-import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
@@ -566,14 +565,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
       // Every connection is applied as soon as it completes. A slow prop firm
       // no longer holds back the first usable card from a faster connection.
-      // Sekvence zahájení každého čtení (pořadí vůči stavu workeru v grafu); předstartované = neznámá.
-      const readSeqByConnection = new Map<string, number>();
       const preflights = await consumeTradovatePreflights(
         eligibleConnectionIds,
-        connectionId => {
-          readSeqByConnection.set(connectionId, nextTradovateClientReadSeq());
-          return runTradovateReadOnlyPreflight(connectionId, detail, undefined, readOptions);
-        },
+        connectionId => runTradovateReadOnlyPreflight(connectionId, detail, undefined, readOptions),
         dataset => {
           if (!isCurrent() || !statusRef.current?.connections.some(connection => connection.id === dataset.connectionId && connection.connected)) return;
           const limitedFor = datasetRateLimitMs(dataset);
@@ -582,10 +576,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           ));
           // Update the shared read model synchronously before publishing to
           // React; a tick resolving in the same batch must see this refresh.
-          const merged = applyTradovateConnectionDataRefresh(connectionDataRef.current, [dataset], 'merge');
-          const next = merged[dataset.connectionId] ? { ...merged, [dataset.connectionId]: stampTradovateClientReads(
-            connectionDataRef.current[dataset.connectionId], merged[dataset.connectionId], readSeqByConnection.get(dataset.connectionId) ?? null,
-          ) } : merged;
+          const next = applyTradovateConnectionDataRefresh(connectionDataRef.current, [dataset], 'merge');
           connectionDataRef.current = next;
           setConnectionData(next);
         },
@@ -1038,14 +1029,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         };
         if (runFullTick) {
           const becameFlat: string[] = [];
-          const tickSeqByConnection = new Map<string, number>();
           rateLimitIds = fullTickConnections;
           rateLimitResults = await consumeTradovateReads(
             fullTickConnections,
-            connectionId => {
-              tickSeqByConnection.set(connectionId, nextTradovateClientReadSeq());
-              return readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0));
-            },
+            connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               // Partial success must still honor the broker's rate-limit signal.
@@ -1062,7 +1049,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               const applied = applyTradovateLivePnlTick(dataset, tick, livePnlMarksRef.current[connectionId] ?? {});
               if (applied.data === dataset) return;
               if (tradovateLiveTickClosedLastPosition(dataset, tick)) becameFlat.push(connectionId);
-              const next = { ...current, [connectionId]: stampTradovateClientReads(dataset, applied.data as TradovatePreflightResult, tickSeqByConnection.get(connectionId) ?? null) };
+              const next = { ...current, [connectionId]: applied.data as TradovatePreflightResult };
               connectionDataRef.current = next;
               livePnlMarksRef.current[connectionId] = applied.marks;
               livePnlCursorsRef.current[connectionId] = tick.nextContractCursor;
@@ -1099,8 +1086,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               livePnlAnchorCursorsRef.current[connectionId] = ((livePnlAnchorCursorsRef.current[connectionId] ?? 0) + 1)
                 % candidatesByConnection.get(connectionId)!.count;
               if (applied.data === dataset) return;
-              // Kotva P&L pozice ani příkazy nečte: sekvence čtení se jen přenese.
-              const next = { ...current, [connectionId]: stampTradovateClientReads(dataset, applied.data as TradovatePreflightResult, null) };
+              const next = { ...current, [connectionId]: applied.data as TradovatePreflightResult };
               connectionDataRef.current = next;
               livePnlMarksRef.current[connectionId] = applied.marks;
               setConnectionData(next);

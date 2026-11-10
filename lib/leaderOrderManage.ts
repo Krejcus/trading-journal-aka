@@ -1,4 +1,3 @@
-import { LiveCommandNotSentError } from './liveCommandErrors.js';
 import { GROUP_LIMIT_CONTRACT, GROUP_LIMIT_STATE_HASH_PATTERN } from './groupLimitProtocol.js';
 import { stableHash64 } from '../services/copierKeys.js';
 
@@ -133,7 +132,7 @@ export function leaderOrderManagePayloadHash(command: Omit<LeaderOrderManageComm
 
 /** Striktní validace (whitelist, tick, akce); vyhodí `invalid-relay-command-payload`. */
 export function validateLeaderOrderManage(value: unknown): LeaderOrderManageCommand {
-  const fail = (): never => { throw new LiveCommandNotSentError('invalid-relay-command-payload', 'invalid-payload'); };
+  const fail = (): never => { throw new Error('invalid-relay-command-payload'); };
   if (!value || typeof value !== 'object') fail();
   const command = value as Record<string, unknown>;
   if (Object.keys(command).some(key => !KEYS.includes(key))) fail();

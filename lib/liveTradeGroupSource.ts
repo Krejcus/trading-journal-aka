@@ -98,8 +98,6 @@ export function liveAccountPositionText(account: LiveAccount, orders: readonly L
   return working ? `flat · ${working} ${plural(working)}` : 'flat';
 }
 
-const withUnverifiedNote = (text: string | null, unverified: boolean): string | null => (text != null && unverified ? `${text} · neověřeno` : text);
-
 export function buildLiveTradeGroup(input: {
   group: Pick<CopyGroupConfig, 'leaderAccountId' | 'followers'> | null;
   controller: CopierController | null | undefined;
@@ -112,8 +110,6 @@ export function buildLiveTradeGroup(input: {
   nameOf: (accountId: number) => string;
   root: string;
   now: number;
-  /** Účty z neověřené projekce workeru (graf): text pozice nese „neověřeno“. */
-  unverifiedAccountIds?: ReadonlySet<number>;
 }): LiveTradeGroup | null {
   const { group, controller, statusFresh, now } = input;
   if (!group || group.leaderAccountId == null) return null;
@@ -136,7 +132,7 @@ export function buildLiveTradeGroup(input: {
       multiplier,
       dayPnl: money(liveDailyPnlDisplay(shown, now)),
       dayRemaining: money(remaining, remainingNote),
-      position: withPositions ? withUnverifiedNote(liveAccountPositionText(withPositions, input.orders, input.root, now), input.unverifiedAccountIds?.has(accountId) === true) : null,
+      position: withPositions ? liveAccountPositionText(withPositions, input.orders, input.root, now) : null,
       ...extra,
     };
   };

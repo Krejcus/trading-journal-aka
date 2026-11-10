@@ -1,4 +1,3 @@
-import { isLiveCommandNotSent, liveCommandNotSentText, liveCommandUnknownText } from '../../lib/liveCommandErrors';
 import { LIVE_ACTION_CHANGED_TEXT } from '../../lib/liveClickGate';
 import { groupLimitOutcomeNotice } from '../../lib/groupLimitUiNotice';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -261,8 +260,9 @@ export function LivePhoneOrderLines({
             : result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.');
     } catch (reason) {
       setPendingMove(null);
-      // Typ/kód chyby, nikdy text (`lib/liveCommandErrors.ts`).
-      onNotice(isLiveCommandNotSent(reason) ? liveCommandNotSentText(reason, 120) : liveCommandUnknownText(reason));
+      const message = reason instanceof Error ? reason.message : 'chyba';
+      onNotice(/entry-busy|entry-superseded|entry-not-admitted|entry-daily-cap|manage-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/.test(message)
+        ? `Neodesláno: ${message.slice(0, 120)}` : `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate.`);
     } finally {
       busyRef.current = false;
     }

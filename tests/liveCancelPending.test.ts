@@ -1,5 +1,3 @@
-import { withLiveRelayPhase } from '../lib/liveCommandErrors';
-import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 // C7 (3. 11. 2026, docs/reviews/trading-gaps-designs/safety.md): „Zrušit vše“ = zrušit VLASTNÍ čekající
 // vstupy, nikdy ochranu pozice ani cizí příkaz. Čisté helpery (výběr, výsledek stavem, dvoukrok,
 // sekvenční odeslání) + skutečný controller v sólo skupině (manual-only local-only DEMO).
@@ -351,8 +349,7 @@ describe('C7 — UI helpery (čistě)', () => {
         return ack(command, { status: 'rejected', blockers: [{ code: 'entry-filled', text: 'Vstup se vyplnil (1) dřív, než ho broker zrušil — pozice je otevřená; zavři ji × nebo Flattenem.' }] });
       }
       if (command.entryOperationId === 'entry:d0000000') return ack(command, { status: 'blocked', blockers: [{ code: 'entry-not-pending', text: 'Vstup už nečeká.' }] });
-      // Relay odmítnutí před frontou = strojový kód + HTTP 409 (ne text).
-      if (command.entryOperationId === 'entry:e0000000') throw withLiveRelayPhase(new TradovateRequestError('copier-relay-entry-busy', 409, null, 'copier-relay-entry-busy'), 'submit');
+      if (command.entryOperationId === 'entry:e0000000') throw new Error('copy-command entry-busy: jiná změna se zpracovává');
       return ack(command);
     });
     const entries = [entry('a'), entry('b'), entry('c'), entry('d'), entry('e'), entry('a')];

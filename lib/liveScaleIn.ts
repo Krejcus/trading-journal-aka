@@ -1,4 +1,3 @@
-import { LiveCommandNotSentError } from './liveCommandErrors';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
 import { supportsCopierManualEntryScaleIn } from './copierWorkerCapabilities';
@@ -36,7 +35,7 @@ export function withScaleInIntent(
   const position = scaleInPositionFor(status, draft.symbol, draft.side);
   if (!position) return draft;
   if (position.stopPrice == null || position.targetPrice == null || draft.stopLoss !== position.stopPrice || draft.takeProfit !== position.targetPrice) {
-    throw new LiveCommandNotSentError(scaleInBracketsText(position));
+    throw new Error(scaleInBracketsText(position));
   }
   return {
     ...draft,

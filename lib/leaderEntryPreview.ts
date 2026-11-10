@@ -1,4 +1,3 @@
-import { LiveCommandNotSentError } from './liveCommandErrors.js';
 import { GROUP_LIMIT_CONTRACT } from './groupLimitProtocol.js';
 import { stableHash64 } from '../services/copierKeys.js';
 
@@ -118,7 +117,7 @@ const INTENT_KEYS = ['armedAt', 'groupConfigHash', 'followerQuantities'];
 
 /** Striktní validace náhledu (whitelist klíčů, typy, tick); vyhodí `invalid-relay-command-payload`. */
 export function validateLeaderEntryPreview(value: unknown): LeaderEntryPreviewCommand {
-  const fail = () => { throw new LiveCommandNotSentError('invalid-relay-command-payload', 'invalid-payload'); };
+  const fail = () => { throw new Error('invalid-relay-command-payload'); };
   if (!value || typeof value !== 'object') fail();
   const command = value as Record<string, unknown>;
   if (Object.keys(command).some(key => !COMMAND_KEYS.includes(key))) fail();
