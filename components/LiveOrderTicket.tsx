@@ -188,16 +188,17 @@ const PositionCard: React.FC<{ isDark: boolean; summary: LiveChartPositionSummar
       <span className={`absolute top-0 h-full w-[2px] rounded transition-[left] duration-500 ${isDark ? 'bg-white' : 'bg-slate-900'}`} style={{ left: `calc(${progress * 100}% - 1px)` }} />
     </div>}
     <div className={`flex gap-3 font-mono text-[10px] ${ink}`}>
-      <span className="text-rose-500">SL {price(summary.stop)}</span><span className="text-emerald-500">TP {price(summary.target)}</span>
+      {/* Neověřená projekce workeru: ceny ochrany tlumeně, text krytí nese „neověřeno“ (INV-UI-03). */}
+      <span className={summary.unverified ? muted : 'text-rose-500'}>SL {price(summary.stop)}</span><span className={summary.unverified ? muted : 'text-emerald-500'}>TP {price(summary.target)}</span>
       <span className={`flex-1 text-right font-sans font-bold ${muted}`}>{summary.protection}</span>
     </div>
     {canExpand && <div className={`live-ticket-accounts ${expanded ? 'is-open' : ''}`}>
       <div>
         {summary.rows.map(row => <div key={row.accountId} className={`grid grid-cols-[8px_minmax(0,1fr)_auto_68px] items-center gap-1.5 border-t py-1.5 text-[10.5px] ${isDark ? 'border-white/[0.08]' : 'border-slate-900/[0.08]'}`}>
-          <i className={`h-[7px] w-[7px] rounded-full ${row.protectedFully ? 'bg-emerald-500' : 'bg-amber-500'}`} title={row.protectedFully ? 'SL i TP kryjí celou pozici' : 'Ochrana nekryje celou pozici'} />
+          <i className={`h-[7px] w-[7px] rounded-full ${row.unverified ? 'bg-slate-400' : row.protectedFully ? 'bg-emerald-500' : 'bg-amber-500'}`} title={row.unverified ? 'Neověřeno — stav workeru bez dokladu' : row.protectedFully ? 'SL i TP kryjí celou pozici' : 'Ochrana nekryje celou pozici'} />
           <span className="min-w-0">
             <b className={`block truncate font-extrabold ${ink}`}>{row.name}{row.isLeader && <span className="ml-1 rounded-[3px] border border-indigo-400/45 px-[3px] align-[1px] text-[8px] font-black uppercase tracking-[0.06em] text-indigo-400">leader</span>}</b>
-            <small className={`block font-mono text-[9.5px] ${muted}`}>@ {price(row.entry)} · SL {price(row.stop)} · TP {price(row.target)}</small>
+            <small className={`block font-mono text-[9.5px] ${muted}`}>@ {price(row.entry)} · SL {price(row.stop)} · TP {price(row.target)}{row.unverified ? ' · neověřeno' : ''}</small>
           </span>
           <span className={`text-right font-mono text-[10.5px] font-bold ${muted}`}>{row.quantity}×</span>
           <b className={`text-right font-mono text-[11px] font-extrabold ${row.openPnl == null ? muted : row.openPnl < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{formatUsd(row.openPnl)}</b>

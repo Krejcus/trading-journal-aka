@@ -68,6 +68,8 @@ export interface LiveChartPositionAccountRow {
   /** Kontrakty kryté SL / TP (víc cen = `stop`/`target` null, krytí > 0). */
   stopCoverage: number;
   targetCoverage: number;
+  /** Účet je jen z neověřené projekce workeru: krytí ani ceny nejsou potvrzená ochrana. */
+  unverified?: boolean;
 }
 
 export interface LiveChartPosition {

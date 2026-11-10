@@ -129,24 +129,26 @@ export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: numbe
 
 /** Štítek čar pozice z neověřené projekce workeru (bez dokladu kontinuity). */
 export const LIVE_UNVERIFIED_LINE_NOTE = 'neověřeno';
+/** Tlumená barva všeho, co stojí na neověřeném stavu (čáry pozice i pracující příkazy). */
+export const LIVE_UNVERIFIED_LINE_COLOR = MUTED_COLOR;
+/** Proč akce z neověřené pozice neodejde (BE zašedlé, text u ostatních vrátí brána desku). */
+export const LIVE_UNVERIFIED_ACTION_TITLE = 'Neověřeno — čekám na doklad workeru nebo čtení brokera; zavřít hned jde Flattenem.';
 
 /**
- * Čáry z neověřené projekce workeru: jen zobrazení. Bez tažení, ×, BE i „+ SL/TP“
- * a se značkou `displayOnly`, kterou všechny handlery PC i telefonu ignorují
- * (`isLiveDisplayOnlyLine`). Nic zobrazovacího nesmí autorizovat příkaz (INV-UI-01/03).
+ * Čáry z neověřené projekce workeru (10. 11. 2026, review Codexu): ovládání po fillu NEMIZÍ —
+ * × i „+ SL/TP“ zůstávají a BE je zašedlé s důvodem, aby uživatel viděl, co půjde. Autorizace
+ * ale stojí jen na platném dokladu: tažení je vypnuté a každé odeslání z takové pozice odmítne
+ * brána desku (`liveChartProjectionManageBlock`, „nic se neodeslalo“). Čáry jsou tlumené
+ * a se štítkem „neověřeno“ — SL/TP nesmí vypadat jako potvrzená ochrana (INV-UI-01/03).
  */
 function unverifiedLines(lines: BacktestChartOrderLine[]): BacktestChartOrderLine[] {
-  return lines.map(line => {
-    const { actions: _actions, addableBrackets: _addable, cancelAction: _cancelAction, labelAt: _labelAt, ...rest } = line;
-    return Object.assign(rest, {
-      draggable: false,
-      cancellable: false,
-      // Tlumeně: SL/TP z neověřeného stavu nesmí vypadat jako potvrzená ochrana.
-      color: MUTED_COLOR,
-      label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
-      displayOnly: true as const,
-    });
-  });
+  return lines.map(line => ({
+    ...line,
+    draggable: false,
+    color: LIVE_UNVERIFIED_LINE_COLOR,
+    label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
+    ...(line.actions ? { actions: line.actions.map(action => ({ ...action, disabled: true, title: LIVE_UNVERIFIED_ACTION_TITLE })) } : {}),
+  }));
 }
 
 export function livePositionChartLines(summary: LiveChartPositionSummary, controls: LivePositionLineControls): BacktestChartOrderLine[] {

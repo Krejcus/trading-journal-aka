@@ -83,8 +83,9 @@ describe('B1: holý vstup a pozice leadera (U4)', () => {
   it('desk: holý vstup jen přes newestOpenBareEntry a jen v pohledu leadera skupiny workeru; attach jen s capability', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     expect(desk).toMatch(/const chartBareEntry = useMemo\(\(\) => \(chartLeaderBasis\s*\? liveBareEntryRecord\(newestOpenBareEntry\(agentStatus\?\.controller\.manualEntries, chartPositionSymbol\)\)\s*: null\)/);
-    // Neověřená projekce workeru se do pozice leadera (lišta, attach, × holé) nepromítne.
-    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary\?\.unverified === true \? null : chartData\.position\?\.summary \?\? null;/);
+    // Ovládání po fillu se neschová (review Codexu): nabídky i z neověřené pozice, odeslání zastaví brána.
+    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary \?\? null;/);
+    expect(desk).toMatch(/const chartGuard = useMemo\(\(\) => createLiveChartCommandGuard\(\{/);
     expect(desk).toMatch(/livePhonePosition\(chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
     // PC: Přidat SL/TP = deskový attachBrackets, jen když worker inzeruje manual-entry-bare-v1.
     expect(desk.match(/onAttachBrackets/g)).toHaveLength(1);

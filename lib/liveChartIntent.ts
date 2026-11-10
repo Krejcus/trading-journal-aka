@@ -1,5 +1,6 @@
 import { LIVE_WORKING_OWNER, type LiveWorkingOrderLine } from './liveWorkingOrderLines';
 import type { LiveChartPosition } from './liveChartPosition';
+import { isLiveCommandNotSent } from './liveCommandErrors';
 
 /**
  * Čekající záměr v LIVE grafu (10. 11. 2026): po kliknutí (Market/Limit vstup, přidat /
@@ -37,14 +38,20 @@ export interface LiveChartIntentDraft {
   orderType?: string | null;
   /** Kde kreslit tlumenou čáru; prázdné = nic ke kreslení (záměr se jen eviduje). */
   legs: readonly LiveChartIntentLeg[];
-  /** Je-li známé předem (vstup, správa z desku); jinak se doplní z výsledku. */
-  operationId?: string | null;
+  /**
+   * `operationId` příkazu, který tento klik odešle — POVINNÝ a známý předem na všech cestách
+   * (vstup, správa, skupina, holé nohy, × holé pozice). Je klíčem záměru: výsledek, timeout
+   * i pozdní odpověď se párují jen přes něj.
+   */
+  operationId: string;
+  /** Klíč pozice grafu v okamžiku kliku: stará pozice nesmí „potvrdit“ nový vstup. */
+  baselinePositionKey?: string | null;
 }
 
 export interface LiveChartIntent extends LiveChartIntentDraft {
-  id: string;
-  operationId: string | null;
   state: LiveChartIntentState;
+  /** Relay požadavek s tímto `operationId` opravdu odešel (`markSent`). */
+  sent: boolean;
   createdAt: number;
   settledAt: number | null;
 }
@@ -55,24 +62,24 @@ export const LIVE_INTENT_SENDING_MAX_MS = 45_000;
 export const LIVE_INTENT_SETTLED_HOLD_MS = 20_000;
 
 export type LiveChartIntentOutcome =
-  | { status: 'acknowledged' | 'unknown'; operationId?: string | null }
-  | { status: 'rejected' | 'blocked' | 'abandoned' | 'not-sent'; operationId?: string | null };
-
-const NOT_SENT = /nic se neodeslalo|Neodesláno|není čerstvě ověřený|chybí připojení|entry-busy|entry-superseded|entry-not-admitted|daily-cap/;
+  | { status: 'acknowledged' | 'unknown' }
+  | { status: 'rejected' | 'blocked' | 'abandoned' | 'not-sent' };
 
 export interface LiveChartIntentStore {
+  /** Založí (nebo nahradí) záměr s `draft.operationId`; vrací ho. */
   begin(draft: LiveChartIntentDraft): string;
-  settle(id: string, outcome: LiveChartIntentOutcome): void;
+  /** Relay požadavek s tímto `operationId` odchází — od teď výjimka = výsledek neznámý. */
+  markSent(operationId: string): void;
+  /** Uzavře záměr výsledkem; neznámé / prošlé `operationId` = nic (pozdní odpověď nic neoživí). */
+  settle(operationId: string, outcome: LiveChartIntentOutcome): void;
   /** Smaže splněné (read model ukazuje cíl) a prošlé záměry. */
   prune(now: number, position: LiveChartPosition | null | undefined): void;
   snapshot(): readonly LiveChartIntent[];
   subscribe(listener: () => void): () => void;
 }
 
-export function createLiveChartIntentStore(options: { now?: () => number; newId?: () => string } = {}): LiveChartIntentStore {
+export function createLiveChartIntentStore(options: { now?: () => number } = {}): LiveChartIntentStore {
   const now = options.now ?? Date.now;
-  let seq = 0;
-  const newId = options.newId ?? (() => `intent-${Date.now().toString(36)}-${(seq += 1)}`);
   let intents: readonly LiveChartIntent[] = [];
   const listeners = new Set<() => void>();
   const publish = (next: readonly LiveChartIntent[]) => {
@@ -80,27 +87,31 @@ export function createLiveChartIntentStore(options: { now?: () => number; newId?
     intents = next;
     for (const listener of [...listeners]) listener();
   };
+  const update = (operationId: string, change: (intent: LiveChartIntent) => LiveChartIntent | null) => {
+    if (!intents.some(intent => intent.operationId === operationId)) return;
+    publish(intents.flatMap(intent => {
+      if (intent.operationId !== operationId) return [intent];
+      const next = change(intent);
+      return next ? [next] : [];
+    }));
+  };
   return {
     begin(draft) {
-      const id = newId();
+      // Týž operationId je týž příkaz: už založený záměr (i jeho `sent`) se nepřepisuje.
+      if (intents.some(intent => intent.operationId === draft.operationId)) return draft.operationId;
       publish([...intents, {
         ...draft, legs: draft.legs.filter(leg => Number.isFinite(leg.price)),
-        id, operationId: draft.operationId ?? null, state: 'sending', createdAt: now(), settledAt: null,
+        state: 'sending', sent: false, createdAt: now(), settledAt: null,
       }]);
-      return id;
+      return draft.operationId;
     },
-    settle(id, outcome) {
-      const current = intents.find(intent => intent.id === id);
-      if (!current) return;
-      if (outcome.status === 'acknowledged' || outcome.status === 'unknown') {
-        publish(intents.map(intent => (intent.id === id ? {
-          ...intent, state: outcome.status as LiveChartIntentState, settledAt: now(),
-          // Skutečné id příkazu z výsledku má přednost (skupinová cesta generuje vlastní).
-          operationId: outcome.operationId ?? intent.operationId ?? null,
-        } : intent)));
-      } else {
-        publish(intents.filter(intent => intent.id !== id));
-      }
+    markSent(operationId) {
+      update(operationId, intent => (intent.sent ? intent : { ...intent, sent: true }));
+    },
+    settle(operationId, outcome) {
+      update(operationId, intent => (outcome.status === 'acknowledged' || outcome.status === 'unknown'
+        ? { ...intent, state: outcome.status, settledAt: now() }
+        : null));
     },
     prune(at, position) {
       const next = intents.filter(intent => !intentExpired(intent, at) && !intentLanded(intent, position));
@@ -119,13 +130,17 @@ export function intentExpired(intent: LiveChartIntent, now: number): boolean {
   return intent.settledAt != null && now - intent.settledAt > LIVE_INTENT_SETTLED_HOLD_MS;
 }
 
+/** Klíč pozice bez přípony stavu „neověřeno“ (`markLiveChartPositionProjection`). */
+const positionContentKey = (key: string | null | undefined) => (key ?? '').replace(/\|neověřeno$/, '');
+
 const samePrice = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) < 1e-9;
 const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => intent.legs.find(leg => leg.role === role)?.price ?? null;
 
 /**
  * Read model brokera už ukazuje cíl záměru → tlumená čára není potřeba (skutečná čára
  * ji nahradí). Jen ověřený, ne neověřený pohled (`summary.unverified`), a jen týž kontrakt.
- * Při odeslání (`sending`) se nic nesmaže — cíl mohl být vidět už před klikem.
+ * Při odeslání (`sending`) se nic nesmaže — cíl mohl být vidět už před klikem. Vstup se
+ * potvrdí jen změnou pozice proti stavu při kliku (stará pozice téže strany nestačí).
  */
 export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined): boolean {
   if (intent.state === 'sending' || !position || position.issue != null) return false;
@@ -134,21 +149,27 @@ export function intentLanded(intent: LiveChartIntent, position: LiveChartPositio
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
-    case 'entry': return summary.side === intent.side;
+    // Jen změna obsahu pozice; samotná změna ověřenosti (přípona „neověřeno“) vstup nepotvrdí.
+    case 'entry': return summary.side === intent.side && intent.baselinePositionKey !== undefined
+      && positionContentKey(position.key) !== positionContentKey(intent.baselinePositionKey);
     case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));
     case 'move-target': case 'add-target': return samePrice(summary.target, legPrice(intent, 'takeProfit'));
     case 'attach': return samePrice(summary.stop, legPrice(intent, 'stopLoss')) && samePrice(summary.target, legPrice(intent, 'takeProfit'));
     case 'move-limit': return summary.kind === 'pending' && samePrice(summary.entry, legPrice(intent, 'entry'));
     case 'remove-stop': return summary.stop == null && summary.rows.every(row => row.stopCoverage === 0);
     case 'remove-target': return summary.target == null && summary.rows.every(row => row.targetCoverage === 0);
-    case 'close': case 'cancel-entry': return false;
     default: return false;
   }
 }
 
 /**
- * Obal deskového odeslání: záměr vznikne synchronně (před prvním `await` volajícího),
- * výsledek ho uzavře. Výjimka s „nic se neodeslalo“ = návrat, jiná = neznámý výsledek.
+ * Obal deskového odeslání. Záměr vznikne synchronně (před prvním `await` volajícího) pod
+ * `draft.operationId`; desk ho při odchodu relay požadavku označí `markSent`. Uzavření:
+ * - výsledek se stejným `operationId`: ACK / neznámý drží čáru, odmítnutí / blokace ji vrátí;
+ *   výsledek s JINÝM `operationId` (nemá nastat) = neznámý, nic se nepáruje naslepo;
+ * - výjimka: když požadavek prokazatelně neodešel (`markSent` nebyl, nebo chyba nese kód
+ *   `not-sent` — `LiveCommandNotSentError`), čára zmizí; jinak výsledek neznámý.
+ *   Rozhoduje stav a typ chyby, NIKDY text.
  * Výsledek ani výjimku nemění — vrací / hází přesně to, co `run`.
  */
 export async function trackLiveChartIntent<R extends { status: string; operationId?: string }>(
@@ -156,19 +177,21 @@ export async function trackLiveChartIntent<R extends { status: string; operation
   draft: LiveChartIntentDraft | null,
   run: () => Promise<R>,
 ): Promise<R> {
-  const id = store && draft ? store.begin(draft) : null;
+  const operationId = store && draft ? store.begin(draft) : null;
   try {
     const result = await run();
-    if (id) {
-      const status = result.status === 'acknowledged' || result.status === 'unknown' ? result.status
+    if (operationId) {
+      const matches = result.operationId == null || result.operationId === operationId;
+      const status = !matches ? 'unknown'
+        : result.status === 'acknowledged' || result.status === 'unknown' ? result.status
         : result.status === 'rejected' || result.status === 'blocked' || result.status === 'abandoned' ? result.status : 'unknown';
-      store!.settle(id, { status, operationId: result.operationId ?? null } as LiveChartIntentOutcome);
+      store!.settle(operationId, { status } as LiveChartIntentOutcome);
     }
     return result;
   } catch (reason) {
-    if (id) {
-      const message = reason instanceof Error ? reason.message : '';
-      store!.settle(id, { status: NOT_SENT.test(message) ? 'not-sent' : 'unknown' });
+    if (operationId) {
+      const sent = store!.snapshot().find(intent => intent.operationId === operationId)?.sent === true;
+      store!.settle(operationId, { status: sent && !isLiveCommandNotSent(reason) ? 'unknown' : 'not-sent' });
     }
     throw reason;
   }
@@ -205,14 +228,14 @@ export function liveChartIntentLines(intents: readonly LiveChartIntent[], symbol
   return intents.filter(intent => intent.symbol === symbol).flatMap(intent => intent.legs.map((leg): LiveWorkingOrderLine => {
     const text = `${kindLabel(intent, leg)}  ${leg.price.toFixed(2)} · ${stateLabel(intent.state)}`;
     return {
-      id: `${LIVE_WORKING_OWNER}:intent:${intent.id}:${leg.role}`,
+      id: `${LIVE_WORKING_OWNER}:intent:${intent.operationId}:${leg.role}`,
       ownerId: LIVE_WORKING_OWNER,
       ownerType: 'order',
       kind: leg.role,
       price: leg.price,
       color: INTENT_COLOR,
       label: text,
-      title: `Čekající záměr${intent.operationId ? ` (${intent.operationId})` : ''} — jen zobrazení, skutečný stav ukazuje broker.`,
+      title: `Čekající záměr (${intent.operationId}) — jen zobrazení, skutečný stav ukazuje broker.`,
       draggable: false,
       cancellable: false,
       displayOnly: true,
@@ -222,7 +245,7 @@ export function liveChartIntentLines(intents: readonly LiveChartIntent[], symbol
       orderClass: 'limit',
       quantity: intent.quantity ?? 0,
       accountId: 0,
-      orderIds: intent.operationId ? [intent.operationId] : [],
+      orderIds: [intent.operationId],
     };
   }));
 }
@@ -252,9 +275,9 @@ const leg = (role: LiveChartIntentLeg['role'], price: number | null | undefined)
 export function entryIntentDraft(draft: {
   symbol: string; side: 'Buy' | 'Sell'; quantity: number; orderType: string;
   price?: number; referencePrice?: number; stopLoss?: number; takeProfit?: number;
-}, operationId: string): LiveChartIntentDraft {
+}, operationId: string, baselinePositionKey: string | null): LiveChartIntentDraft {
   return {
-    kind: 'entry', symbol: draft.symbol, side: sideOf(draft.side), quantity: draft.quantity, orderType: draft.orderType, operationId,
+    kind: 'entry', symbol: draft.symbol, side: sideOf(draft.side), quantity: draft.quantity, orderType: draft.orderType, operationId, baselinePositionKey,
     legs: [
       ...leg('entry', draft.orderType === 'Market' ? draft.referencePrice : draft.price),
       ...leg('stopLoss', draft.stopLoss),
@@ -284,21 +307,22 @@ export function manageIntentDraft(action: string, input: {
 export function bareLegIntentDraft(
   seen: { symbol: string; side: 'Buy' | 'Sell'; quantity: number },
   intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number; stop?: number | null; target?: number | null },
+  operationId: string,
 ): LiveChartIntentDraft {
   const stop = intent.leg === 'stopLoss';
   const kind: LiveChartIntentKind = intent.kind === 'add' ? (stop ? 'add-stop' : 'add-target')
     : intent.kind === 'move' ? (stop ? 'move-stop' : 'move-target') : (stop ? 'remove-stop' : 'remove-target');
   // Odebrání kreslí „ruším“ na dosavadní ceně; skutečná čára z read modelu zůstává.
   const price = intent.kind === 'remove' ? (stop ? intent.stop : intent.target) : intent.price;
-  return { kind, symbol: seen.symbol, side: sideOf(seen.side), quantity: seen.quantity, legs: leg(intent.leg, price) };
+  return { kind, symbol: seen.symbol, side: sideOf(seen.side), quantity: seen.quantity, legs: leg(intent.leg, price), operationId };
 }
 
-export function attachIntentDraft(input: { symbol: string; side: 'long' | 'short' | null | undefined; quantity: number; stopLoss: number; takeProfit: number }): LiveChartIntentDraft | null {
+export function attachIntentDraft(input: { symbol: string; side: 'long' | 'short' | null | undefined; quantity: number; stopLoss: number; takeProfit: number }, operationId: string): LiveChartIntentDraft | null {
   if (!input.side) return null;
-  return { kind: 'attach', symbol: input.symbol, side: input.side, quantity: input.quantity,
+  return { kind: 'attach', symbol: input.symbol, side: input.side, quantity: input.quantity, operationId,
     legs: [...leg('stopLoss', input.stopLoss), ...leg('takeProfit', input.takeProfit)] };
 }
 
-export function closeBareIntentDraft(seen: { symbol: string; side: 'Buy' | 'Sell'; quantity: number; referencePrice: number }, entry: number | null | undefined): LiveChartIntentDraft {
-  return { kind: 'close', symbol: seen.symbol, side: sideOf(seen.side), quantity: seen.quantity, legs: leg('entry', entry ?? seen.referencePrice) };
+export function closeBareIntentDraft(seen: { symbol: string; side: 'Buy' | 'Sell'; quantity: number; referencePrice: number }, entry: number | null | undefined, operationId: string): LiveChartIntentDraft {
+  return { kind: 'close', symbol: seen.symbol, side: sideOf(seen.side), quantity: seen.quantity, legs: leg('entry', entry ?? seen.referencePrice), operationId };
 }

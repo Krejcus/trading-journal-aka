@@ -47,7 +47,12 @@ export interface LiveGroupLimitPositionInput {
   action: 'close-position' | 'attach-brackets';
   stopLoss?: number;
   takeProfit?: number;
+  /** `operationId` předem (čekající čára grafu se na něj váže); bez něj nové z `newOperationId`. */
+  operationId?: string;
 }
+
+/** Volitelné `operationId` předem — jinak se chová přesně jako dřív. */
+export interface LiveDeskCommandOptions { operationId?: string }
 
 export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
   /** `relayId` = trasa zachycená volajícím (C7 sekvence); jinak aktuální. */
@@ -72,7 +77,7 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     if (!trade || trade.stateHash !== input.groupLimitStateHash || leader?.openQuantity == null || leader.entry?.price == null) {
       throw new Error('Stav pozice všech účtů se změnil — nic se neodeslalo.');
     }
-    const command = buildLeaderOrderManageCommand({ groupId: group.id, operationId: deps.newOperationId(),
+    const command = buildLeaderOrderManageCommand({ groupId: group.id, operationId: input.operationId ?? deps.newOperationId(),
       leaderAccountId: group.leaderAccountId, entryOperationId: input.entryOperationId, symbol: input.symbol, action: input.action,
       expect: { price: leader.entry.price, quantity: leader.openQuantity }, ...groupLimitCommandFields(trade),
       ...(input.stopLoss != null ? { stopLoss: input.stopLoss } : {}), ...(input.takeProfit != null ? { takeProfit: input.takeProfit } : {}),
@@ -80,7 +85,7 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     return sendLeaderManage(command, 'Výsledek skupiny chybí — zkontroluj účty v Tradovate.');
   };
 
-  const closeBareLeader = async (seen: BareLeaderTrade): Promise<LeaderOrderManageResult> => {
+  const closeBareLeader = async (seen: BareLeaderTrade, options: LiveDeskCommandOptions = {}): Promise<LeaderOrderManageResult> => {
     const current = deps.status();
     const executionGroup = copierWorkerExecutionGroup(current.status);
     if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !(supportsCopierManualOrderCloseBare(current.status) || supportsCopierGroupLimitManage(current.status))) {
@@ -94,7 +99,7 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     const relayId = deps.relayId();
     if (!relayId) throw new Error('Zavření jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
     const command = buildLeaderOrderManageCommand({
-      groupId: executionGroup.id, operationId: deps.newOperationId(),
+      groupId: executionGroup.id, operationId: options.operationId ?? deps.newOperationId(),
       leaderAccountId: executionGroup.leaderAccountId, ...bareCloseManageFields(seen),
       ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
     });
@@ -102,7 +107,7 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
   };
 
   /** SL a TP po jedné: `seen` = obchod a nohy, které uživatel viděl. Rozhoduje worker. */
-  const manageBareLeg = async (seen: BareLeaderTrade, intent: LiveBareLegIntent): Promise<LeaderOrderManageResult> => {
+  const manageBareLeg = async (seen: BareLeaderTrade, intent: LiveBareLegIntent, options: LiveDeskCommandOptions = {}): Promise<LeaderOrderManageResult> => {
     const current = deps.status();
     const executionGroup = copierWorkerExecutionGroup(current.status);
     if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !(supportsCopierManualOrderSingleLeg(current.status) || supportsCopierGroupLimitManage(current.status))) {
@@ -116,7 +121,7 @@ export function createLiveDeskCommands(deps: LiveDeskCommandDeps) {
     const relayId = deps.relayId();
     if (!relayId) throw new Error('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
     const command = buildLeaderOrderManageCommand({
-      groupId: executionGroup.id, operationId: deps.newOperationId(), leaderAccountId: executionGroup.leaderAccountId,
+      groupId: executionGroup.id, operationId: options.operationId ?? deps.newOperationId(), leaderAccountId: executionGroup.leaderAccountId,
       entryOperationId: seen.entryOperationId, symbol: seen.symbol, ...liveBareLegFields(seen, intent),
       ...(groupTrade ? groupLimitCommandFields(groupTrade) : {}),
     });

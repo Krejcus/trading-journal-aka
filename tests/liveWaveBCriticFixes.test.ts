@@ -497,7 +497,7 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
     expect(fresh).toBeGreaterThan(0);
     expect(relay).toBeGreaterThan(fresh);
     // Relay odeslání správy je v čisté továrně desku (lib/liveDeskCommands.ts); desk dodá jen relay klienta.
-    expect(desk).toMatch(/relay: \(relayId, command\) => executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\),/);
+    expect(desk).toMatch(/relay: \(relayId, command\) => \{\s*\/\/[^\n]*\n\s*chartIntentStore\.markSent\(command\.operationId\);\s*return executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\);\s*\},/);
     expect(desk).toMatch(/const sendLeaderManage = deskCommands\.sendLeaderManage;/);
     const factory = source('lib/liveDeskCommands.ts');
     expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) throw new Error\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);

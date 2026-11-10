@@ -270,7 +270,7 @@ describe('C8 UI: desk — tatáž cesta správy leadera, jen obchod, který uži
   const desk = source('components/TradovateLiveDesk.tsx');
   it('closeBareLeader a cancelPendingEntries jsou z čisté továrny desku (testy chování níže)', () => {
     // Obal desku jen přidá bránu neověřené projekce a čekající čáru; odeslání zůstává v továrně.
-    expect(desk).toMatch(/const closeBareLeader = useCallback\([\s\S]*?trackLiveChartIntent\(chartIntentStore, closeBareIntentDraft\([^\n]*\), \(\) => deskCommands\.closeBareLeader\(seen\)\)/);
+    expect(desk).toMatch(/const closeBareLeader = useCallback\([\s\S]*?return chartGuard\.closeBare\(seen, operationId => deskCommands\.closeBareLeader\(seen, \{ operationId \}\)\);/);
     expect(desk).toMatch(/const cancelPendingEntries = deskCommands\.cancelPendingEntries;/);
     expect(desk).toMatch(/const sendLeaderManage = deskCommands\.sendLeaderManage;/);
     const factory = source('lib/liveDeskCommands.ts');
@@ -279,7 +279,8 @@ describe('C8 UI: desk — tatáž cesta správy leadera, jen obchod, který uži
   it('jediné relay odeslání správy je sendLeaderManage (manage, attach, × holé pozice, Zrušit čekající)', () => {
     // place-leader-entry (vstup) zvlášť; správa jen přes `relay` továrny — žádná třetí kopie.
     expect(desk.match(/executeTradovateCopierRelayCommand\(route\.relayConnectionId, \{ type: 'copy-command', command \}\)/g) ?? []).toHaveLength(1);
-    expect(desk.match(/relay: \(relayId, command\) => executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\),/g) ?? []).toHaveLength(1);
+    // Relay obal jen označí čekající čáru „odeslaný“ (operationId) a pošle týž příkaz.
+    expect(desk.match(/relay: \(relayId, command\) => \{\s*\/\/[^\n]*\n\s*chartIntentStore\.markSent\(command\.operationId\);\s*return executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\);\s*\},/g) ?? []).toHaveLength(1);
     expect(between(desk, 'const sendManageLeaderEntry = useCallback(', '// Telefon (2. 11. 2026):')).toMatch(/return sendLeaderManage\(command,/);
     expect(between(desk, 'const sendAttachBrackets = useCallback(', '// C8 (4. 11. 2026):')).toMatch(/return sendLeaderManage\(command,/);
     expect(between(desk, 'const sendManageLeaderEntry = useCallback(', '// Telefon (2. 11. 2026):')).toMatch(/if \(groupTrade && action === 'close-position'\)[\s\S]*return manageGroupLimitPosition\(/);

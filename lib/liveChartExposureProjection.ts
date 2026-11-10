@@ -25,8 +25,9 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
  *   pozice a příkazy z workeru označené `displayProjection: 'worker-unverified'` (štítek
  *   „neověřeno“, tlumené čáry bez ovládání) — jen čerstvý neobnovený stav ≤ 8 s;
  * - pořadí: dokud worker žije, jeho stav vždy přednost (REST ho nepřepíše). Když worker
- *   zmlkne, REST čtení, které dorazilo (místní hodiny) dřív, než graf naposledy kreslil
- *   stav workeru, je starší — neutrální „neověřené“ bez čar (INV-UI-01), nikdy flat.
+ *   zmlkne, REST čtení ZAHÁJENÉ (sekvence požadavků, `lib/tradovateClientReadOrder.ts`)
+ *   dřív, než graf naposledy kreslil stav workeru, je starší, i kdyby dorazilo později —
+ *   neutrální „neověřené“ bez čar (INV-UI-01), nikdy flat.
  *
  * Autorizace se tím NEMĚNÍ: `overlayWorkerExposure` v desku (přehled, způsobilost,
  * plán čtení REST) dál vyžaduje doklad, `isLiveAccountReadVerified` taky; příkazy
@@ -40,7 +41,7 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
 export const LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS = WORKER_EXPOSURE_MAX_AGE_MS;
 /** Ručně vypnutý režim followera: worker ho hlásí OK bez čtení pozice. */
 const WORKER_FOLLOWER_OFF_DETAIL = 'vypnutý follower';
-export const LIVE_CHART_UNVERIFIED_MANAGE_TEXT = 'Pozice v grafu je zatím jen ze stavu workeru bez dokladu (neověřeno) — nic se neodeslalo. Zkus to za chvilku.';
+export const LIVE_CHART_UNVERIFIED_MANAGE_TEXT = 'Pozice v grafu je zatím neověřená (stav workeru bez dokladu) — nic se neodeslalo. Za chvilku to půjde; zavřít hned jde Flattenem.';
 
 const unavailable = { availability: 'unavailable' as const, count: 0, httpStatus: null };
 
@@ -75,30 +76,18 @@ export function workerConnectionStreamLive(status: LocalCopierAgentStatus | null
   return rows.length === 1 && rows[0].streamConnected === true && rows[0].phase === 'connected';
 }
 
-/**
- * Místní čas, kdy dorazilo aktuální REST čtení pozic a příkazů účtu (hodiny prohlížeče,
- * stejné jako `observedAt` workeru — žádné porovnání s hodinami serveru).
- */
-export interface LiveChartRestArrival { positionsAsOf: string | null; ordersAsOf: string | null; positionsAt: number; ordersAt: number }
+/** Sekvence zahájení REST čtení pozic a příkazů účtu (`lib/tradovateClientReadOrder.ts`). */
+export function liveChartRestReadSeq(account: TradovateAccountDataAccount): { positions: number; orders: number } {
+  return { positions: account.readState?.clientPositionsReadSeq ?? 0, orders: account.readState?.clientOrdersReadSeq ?? 0 };
+}
 
-/** Aktualizuje místní časy příchodu REST čtení; nové `asOf` = nový příchod (`now`). */
-export function trackLiveChartRestArrivals(
-  previous: ReadonlyMap<number, LiveChartRestArrival>,
-  data: TradovateAccountDataResult | null | undefined,
-  now: number,
-): Map<number, LiveChartRestArrival> {
-  const next = new Map<number, LiveChartRestArrival>();
-  for (const account of data?.accounts ?? []) {
-    const read = tradovateAccountReadState(account, data!);
-    const before = previous.get(account.id);
-    next.set(account.id, {
-      positionsAsOf: read.positionsAsOf,
-      ordersAsOf: read.ordersAsOf,
-      positionsAt: before && before.positionsAsOf === read.positionsAsOf ? before.positionsAt : now,
-      ordersAt: before && before.ordersAsOf === read.ordersAsOf ? before.ordersAt : now,
-    });
-  }
-  return next;
+/**
+ * REST čtení účtu bylo zahájeno až PO okamžiku, kdy graf naposledy kreslil stav workeru
+ * (sekvence požadavků, ne čas příchodu ani hodiny serveru) — pozice i příkazy.
+ */
+export function restReadStartedAfter(account: TradovateAccountDataAccount, shownSeq: number): boolean {
+  const read = liveChartRestReadSeq(account);
+  return read.positions > shownSeq && read.orders > shownSeq;
 }
 
 export interface LiveChartProjectionInput {
@@ -106,15 +95,16 @@ export interface LiveChartProjectionInput {
   statusFresh: boolean;
   /** Pozorování workeru je z této instance (ne obnovená cache); jinak žádná projekce ani plot. */
   trusted: boolean;
-  /** Místní příchody REST čtení (`trackLiveChartRestArrivals`). */
-  restArrivals: ReadonlyMap<number, LiveChartRestArrival>;
-  /** Kdy (místní hodiny) graf naposledy kreslil účet ze stavu workeru. */
-  lastWorkerShownAt: ReadonlyMap<number, number>;
+  /**
+   * Pro každý účet: nejvyšší sekvence REST požadavku přidělená v okamžiku, kdy graf naposledy
+   * kreslil jeho stav ze workeru (`currentTradovateClientReadSeq()`).
+   */
+  lastWorkerShownSeq: ReadonlyMap<number, number>;
 }
 
 export interface LiveChartProjectionResult<T> {
   data: T | null;
-  /** Účty, které teď kreslí stav workeru (s dokladem i bez) — pro `lastWorkerShownAt`. */
+  /** Účty, které teď kreslí stav workeru (s dokladem i bez) — pro `lastWorkerShownSeq`. */
   workerShown: number[];
 }
 
@@ -145,11 +135,11 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
       workerShown.push(account.id);
       return overlayWorkerAccount(account, proven, context, observed, null);
     }
-    // Graf účet nedávno kreslil ze stavu workeru: REST čtení, které dorazilo dřív, je starší
-    // a ten stav nepřepíše — neutrální „neověřeno“ (bez čar), dokud nedorazí novější REST.
-    const shownAt = input.lastWorkerShownAt.get(account.id);
-    const arrival = input.restArrivals.get(account.id);
-    if (shownAt != null && (!arrival || arrival.positionsAt <= shownAt || arrival.ordersAt <= shownAt)) {
+    // Graf účet kreslil ze stavu workeru: REST čtení zahájené dřív (i když dorazilo později)
+    // je starší a ten stav nepřepíše — neutrální „neověřeno“ bez čar, nikdy flat, dokud
+    // nedorazí čtení zahájené až po něm.
+    const shownSeq = input.lastWorkerShownSeq.get(account.id);
+    if (shownSeq != null && !restReadStartedAfter(account, shownSeq)) {
       changed = true;
       const readState = tradovateAccountReadState(account, proven);
       const { displayStreamCoverage: _proof, displayProjection: _projection, ...rest } = readState;
@@ -170,8 +160,19 @@ export function markLiveChartPositionProjection(
   const touched = summary.rows.some(row => unverifiedAccountIds.has(row.accountId))
     || (summary.leader != null && unverifiedAccountIds.has(summary.leader.accountId));
   if (!touched) return position;
-  return { ...position, key: `${position.key}|neověřeno`, summary: { ...summary, unverified: true } };
+  // Všechny cesty zobrazení ochrany nesou stav: souhrn, text krytí i řádky účtů (karta PC,
+  // telefonní list). Neověřený řádek nikdy „kryje celou pozici“.
+  const rows = summary.rows.map(row => (unverifiedAccountIds.has(row.accountId)
+    ? { ...row, unverified: true, protectedFully: false } : row));
+  return {
+    ...position,
+    key: `${position.key}|${LIVE_CHART_UNVERIFIED_NOTE}`,
+    summary: { ...summary, unverified: true, protection: `${summary.protection} · ${LIVE_CHART_UNVERIFIED_NOTE}`, rows },
+  };
 }
+
+/** Jediný text stavu „neověřeno“ pro všechny cesty zobrazení grafu. */
+export const LIVE_CHART_UNVERIFIED_NOTE = 'neověřeno';
 
 /**
  * Brána odeslání správy z grafu: neověřená projekce nikdy neautorizuje příkaz

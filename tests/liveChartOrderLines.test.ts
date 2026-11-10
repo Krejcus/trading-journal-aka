@@ -97,16 +97,20 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(stop.price).not.toBe(28980);
   });
 
-  it('neověřená projekce workeru: čáry se kreslí, ale tlumeně, jen pro zobrazení a bez ovládání', () => {
+  it('neověřená projekce workeru: čáry tlumeně se štítkem, ovládání po fillu zůstává vidět (BE zašedlé), tažení vypnuté', () => {
+    const verified = livePositionChartLines(summary(), { ...controls, canClose: true });
     const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
-      expect(line).toMatchObject({ draggable: false, cancellable: false, color: '#64748b' });
+    expect(lines.map(line => line.id)).toEqual(verified.map(line => line.id));
+    for (const [index, line] of lines.entries()) {
+      expect(line).toMatchObject({ draggable: false, color: '#64748b' });
+      expect(line.cancellable).toBe(verified[index].cancellable);
       expect(line.label).toMatch(/neověřeno/);
-      expect(line.actions).toBeUndefined();
-      expect(line.addableBrackets).toBeUndefined();
-      expect(isLiveDisplayOnlyLine(line as never)).toBe(true);
+      // Ovládání se neschová: × zůstává (odeslání zastaví brána desku), BE je vidět, ale zašedlé.
+      expect(isLiveDisplayOnlyLine(line as never)).toBe(false);
     }
+    const be = lines[0].actions?.find(action => action.id === 'break-even');
+    expect(be).toMatchObject({ disabled: true, title: expect.stringMatching(/Neověřeno/) });
+    expect(verified[0].actions?.find(action => action.id === 'break-even')).toBeDefined();
   });
 
   it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {

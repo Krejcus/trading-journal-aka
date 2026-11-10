@@ -288,6 +288,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: opravy po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
+
+- Codex k `dc91b582`: merge NE. Blokující byly dvě věci. Některé cesty zobrazení ochrany
+  neměly stav „neověřeno“ a pozdní REST odpověď uměla vyrobit falešný flat. Rizika: čekající
+  záměry nebyly vždy vázané na `operationId`, „neodesláno“ záviselo na textu chyby a ovládání
+  po fillu mizelo.
+- **Pořadí REST vs. worker:** rozhoduje sekvence ZAHÁJENÍ požadavku v prohlížeči
+  (`lib/tradovateClientReadOrder.ts`, přiděluje `useTradovateLiveData`), ne čas příchodu ani
+  hodiny serveru. Hodiny Vercelu, workeru a prohlížeče se liší a požadavek odeslaný před
+  fillem může dorazit až po stavu workeru. Účet sekvenci převezme jen tehdy, když čtení změnilo
+  jeho `asOf`, takže merge starší odpovědi novější číslo nedostane. Předstartované čtení = 0.
+- **„Neověřeno“ všude:** čáry pozice, pracující příkazy, karta ochrany (text, řádky, PC panel
+  i telefon) a skupina v hlavičce.
+- **Ovládání se neschovává:** × a „+ SL/TP“ zůstávají, BE je zašedlé s důvodem, jen tažení je
+  vypnuté. Autorizace je jen v `lib/liveChartCommandGuard.ts`, čisté továrně s testy.
+  Neověřená pozice → `LiveCommandNotSentError` dřív, než vznikne příkaz.
+- **Záměry:** klíčem je `operationId`, vzniká předem na všech cestách (`liveDeskCommands`
+  přijímá volitelné id, bez něj se chová stejně). „Odesláno“ označí relay obal (`markSent`),
+  takže výjimka se rozliší bez textu.
+- copier-design-critic: viz odpověď v session. Ověření: viz zápis níže a commit.
+
 ### 2026-11-10 — LIVE graf: kreslí ze stavu workeru i bez dokladu + čekající čáry (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - **Problém:** od dd393f72 bral graf stav workeru jen s dokladem kontinuity. Worker ho ale ruší
