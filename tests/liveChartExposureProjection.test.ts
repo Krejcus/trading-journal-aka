@@ -476,7 +476,7 @@ describe('DEMO 10. 11. bod 3: návrat na tab — poslední nakreslený stav se d
     const hook = readFileSync('hooks/useLiveChartData.ts', 'utf8');
     expect(hook).toMatch(/holdLastDrawnPosition\(enabled \? liveChartDrawnMemory\(targetKey, now\) : null/);
     // Klíč nese skupinu (po přepnutí skupiny se nedrží cizí pozice) a vypnutý graf paměť maže.
-    expect(hook).toMatch(/const targetKey = liveChartDrawnMemoryKey\(viewGroup, requested\);/);
+    expect(hook).toMatch(/const targetKey = liveChartDrawnMemoryKey\(viewGroup, requested, \{ userId: input.userId, owners: coverageOwners \}\);/);
     expect(hook).toMatch(/else rememberLiveChartDrawn\(targetKey, null\);/);
     expect(hook).not.toMatch(/drawnRef/);
     resetLiveChartDrawnMemoryForTests();
@@ -521,5 +521,29 @@ describe('DEMO 10. 11. bod 5: po stop-outu se zbylý TP nekreslí jako čekajíc
   it('skutečný čekající vstup (bez vazby) se dál kreslí jako čekající', () => {
     const { data } = projectLiveChartExposure(restFlat(), stoppedOut({}), NOW - 1_000, NOW, owners, fresh);
     expect(chartLines(data!).position.summary).toMatchObject({ kind: 'pending', side: 'short' });
+  });
+});
+
+describe('review Codexu a09c4176', () => {
+  it('neověřený flat nese issue stale, ověřený flat ani pozice se nemění', async () => {
+    const { markUnverifiedFlat } = await import('../lib/liveChartExposureProjection');
+    const flat = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
+    const marked = markUnverifiedFlat(flat, [1, 2], new Set([1]));
+    expect(marked.issueKind).toBe('stale');
+    expect(marked.issue).toContain('neověřeno');
+    expect(markUnverifiedFlat(flat, [1, 2], new Set([9]))).toBe(flat);
+    expect(markUnverifiedFlat(flat, [1], new Set())).toBe(flat);
+    const withIssue = { ...flat, issue: 'rozjeto', issueKind: 'mismatch' as const };
+    expect(markUnverifiedFlat(withIssue, [1], new Set([1]))).toBe(withIssue);
+  });
+
+  it('klíč držené pozice odliší uživatele, připojení i prostředí', () => {
+    const group = { id: 'g', leaderAccountId: 1, followers: [{ accountId: 2 }] };
+    const owners = (env: 'demo' | 'live', conn: string) => new Map([[1, { connectionId: conn, environment: env }], [2, { connectionId: conn, environment: env }]]);
+    const base = liveChartDrawnMemoryKey(group, 'group', { userId: 'u1', owners: owners('demo', 'c1') });
+    expect(liveChartDrawnMemoryKey(group, 'group', { userId: 'u2', owners: owners('demo', 'c1') })).not.toBe(base);
+    expect(liveChartDrawnMemoryKey(group, 'group', { userId: 'u1', owners: owners('live', 'c1') })).not.toBe(base);
+    expect(liveChartDrawnMemoryKey(group, 'group', { userId: 'u1', owners: owners('demo', 'c2') })).not.toBe(base);
+    expect(liveChartDrawnMemoryKey(group, 'group', { userId: 'u1', owners: owners('demo', 'c1') })).toBe(base);
   });
 });

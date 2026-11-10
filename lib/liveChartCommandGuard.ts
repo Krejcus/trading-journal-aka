@@ -82,8 +82,11 @@ export function createLiveChartCommandGuard(deps: LiveChartGuardDeps) {
      */
     entry<R extends Result>(draft: Parameters<typeof entryIntentDraft>[0], operationId: string, scaleIn: boolean, send: () => Promise<R>): Promise<R> {
       const position = deps.position();
-      const blocked = scaleIn ? gateFor({ kind: 'scale-in' })
-        : position.symbol === draft.symbol ? gateFor({ kind: 'entry' }) : null;
+      // Neznámé ≠ flat: bez souhrnu a s neověřeným čtením nevíme kontrakt ani velikost → žádný vstup.
+      const unknown = !position.summary && (position.issueKind === 'stale' || position.issueKind === 'orders-stale')
+        ? new LiveCommandNotSentError('Pozice není ověřená — nový vstup se neodeslal.') : null;
+      const blocked = unknown ?? (scaleIn ? gateFor({ kind: 'scale-in' })
+        : position.symbol === draft.symbol ? gateFor({ kind: 'entry' }) : null);
       if (blocked) return Promise.reject(blocked);
       return trackLiveChartIntent(deps.store, entryIntentDraft(draft, operationId, liveChartPositionBaseline(position)), send);
     },

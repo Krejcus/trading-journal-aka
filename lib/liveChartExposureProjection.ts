@@ -256,6 +256,22 @@ export function markLiveChartPositionProjection(
   };
 }
 
+/**
+ * Neznámé ≠ flat (review Codexu a09c4176): pohled bez pozice, který stojí na neověřené projekci
+ * workeru (např. leader bez dokladu ani kontinuity), není ověřený flat — dostane `issueKind:
+ * 'stale'`, takže ho graf nekreslí jako čistý flat (krátce podrží poslední stav jako neověřený)
+ * a brána nového vstupu ho odmítne (`createLiveChartCommandGuard().entry`).
+ */
+export function markUnverifiedFlat(
+  position: LiveChartPosition,
+  viewAccountIds: ReadonlyArray<number | null | undefined>,
+  unverifiedAccountIds: ReadonlySet<number>,
+): LiveChartPosition {
+  if (position.summary || position.issue != null || unverifiedAccountIds.size === 0) return position;
+  if (!viewAccountIds.some(id => id != null && unverifiedAccountIds.has(id))) return position;
+  return { ...position, key: `${position.key}|flat-${LIVE_CHART_UNVERIFIED_NOTE}`, issue: `Pozice ${LIVE_CHART_UNVERIFIED_NOTE}`, issueKind: 'stale' };
+}
+
 /** Jediný text stavu „neověřeno“ pro všechny cesty zobrazení grafu. */
 export const LIVE_CHART_UNVERIFIED_NOTE = 'neověřeno';
 
@@ -322,8 +338,16 @@ const drawnMemoryByTarget = new Map<string, LiveChartDrawnMemory>();
 export function liveChartDrawnMemoryKey(
   group: { id?: string | null; leaderAccountId?: number | null; followers?: ReadonlyArray<{ accountId: number }> | null } | null | undefined,
   requested: unknown,
+  /** Identita (review Codexu a09c4176): uživatel a OAuth připojení + prostředí každého účtu pohledu. */
+  identity: { userId?: string | null; owners?: ReadonlyMap<number, WorkerCoverageOwner> } = {},
 ): string {
-  return JSON.stringify([group?.id ?? null, group?.leaderAccountId ?? null,
+  const ids = [group?.leaderAccountId, ...(group?.followers ?? []).map(follower => follower.accountId),
+    typeof requested === 'number' ? requested : null].filter((id): id is number => id != null);
+  const owners = [...new Set(ids)].sort((a, b) => a - b).map(id => {
+    const owner = identity.owners?.get(id);
+    return owner ? `${id}@${owner.environment}:${owner.connectionId}` : `${id}@?`;
+  });
+  return JSON.stringify([identity.userId ?? null, owners, group?.id ?? null, group?.leaderAccountId ?? null,
     (group?.followers ?? []).map(follower => follower.accountId).sort((a, b) => a - b), requested ?? null]);
 }
 /** Paměť cíle; při čtení zahodí všechny záznamy starší než okno držení (mapa neroste). */

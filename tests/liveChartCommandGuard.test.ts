@@ -138,3 +138,22 @@ describe('callbacky grafu: autorizace jen na platném dokladu', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('neznámé ≠ flat (review Codexu a09c4176)', () => {
+  it('pohled bez pozice s neověřeným čtením: nový vstup na žádném kontraktu neodejde', async () => {
+    for (const issueKind of ['stale', 'orders-stale'] as const) {
+      const { store, guard } = setup({ key: 'u', symbol: null, lines: [], summary: null, issue: 'Pozice neověřeno', issueKind });
+      const send = relay(store, operationId => Promise.resolve({ status: 'acknowledged', operationId }));
+      const result = guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh9', false, () => send('entry:abcdefgh9'));
+      await expect(result).rejects.toSatisfy(isLiveCommandNotSent);
+      expect(send).not.toHaveBeenCalled();
+    }
+  });
+
+  it('ověřený flat vstup pustí', async () => {
+    const { store, guard } = setup({ key: 'f', symbol: null, lines: [], summary: null, issue: null });
+    const send = relay(store, operationId => Promise.resolve({ status: 'acknowledged', operationId }));
+    await guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh8', false, () => send('entry:abcdefgh8'));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});

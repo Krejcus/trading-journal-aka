@@ -13,7 +13,7 @@ import {
 } from '../lib/liveWorkingOrderLines';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
-import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, liveChartDrawnMemory, liveChartDrawnMemoryKey, markLiveChartPositionProjection, projectLiveChartExposure, rememberLiveChartDrawn } from '../lib/liveChartExposureProjection';
+import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, liveChartDrawnMemory, liveChartDrawnMemoryKey, markLiveChartPositionProjection, markUnverifiedFlat, projectLiveChartExposure, rememberLiveChartDrawn } from '../lib/liveChartExposureProjection';
 import { LIVE_UNVERIFIED_LINE_COLOR } from '../lib/liveChartOrderLines';
 import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
@@ -57,6 +57,8 @@ export function useLiveChartData(input: {
   root: string;
   target: LiveTradeTarget;
   now: number;
+  /** Přihlášený uživatel — část klíče paměti držené pozice (nikdy nesměšovat identity). */
+  userId?: string | null;
 }): { group: LiveTradeGroup | null; groupKey: string; position: LiveChartPosition; disarm: LiveChartDisarm | null; working: LiveChartWorkingSource } {
   const { enabled, data, profiles, agentStatus, agentStatusObservedAt, statusFresh, group, now } = input;
   const exposureObservedAt = input.exposureObservedAt === undefined ? agentStatusObservedAt : input.exposureObservedAt;
@@ -129,14 +131,17 @@ export function useLiveChartData(input: {
   });
   const computedPosition = useMemo(() => {
     if (!enabled || !viewGroup) return NO_LIVE_CHART_POSITION;
-    return markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds);
+    const viewIds = requested === 'group'
+      ? [viewGroup.leaderAccountId, ...viewGroup.followers.map(follower => follower.accountId)]
+      : [requested];
+    return markUnverifiedFlat(markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds), viewIds, unverifiedIds);
   }, [enabled, viewGroup, view, requested, unverifiedIds]);
   // Návrat na tab / krátce neznámý stav: podržet poslední nakreslenou pozici jako neověřenou,
   // dokud nepřijde nová (nejdéle `LIVE_CHART_HOLD_LAST_DRAWN_MS` = 5 s); ověřený flat hned (DEMO 10. 11., bod 3).
   // Paměť žije v MODULU (checklist: remount grafu nesmí bliknout na flat), klíč = cíl pohledu.
   // Klíč = identita skupiny i vlastníků účtů (leader a členové): po přepnutí skupiny nebo
   // změně leadera/followerů se nikdy nedrží pozice jiného leadera (review Codexu).
-  const targetKey = liveChartDrawnMemoryKey(viewGroup, requested);
+  const targetKey = liveChartDrawnMemoryKey(viewGroup, requested, { userId: input.userId, owners: coverageOwners });
   const held = holdLastDrawnPosition(enabled ? liveChartDrawnMemory(targetKey, now) : null, computedPosition, now);
   if (enabled) rememberLiveChartDrawn(targetKey, held.memory);
   else rememberLiveChartDrawn(targetKey, null);

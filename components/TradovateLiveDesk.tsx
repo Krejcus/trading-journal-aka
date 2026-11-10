@@ -1181,6 +1181,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     root: 'MNQ',
     target: chartTarget,
     now: freshnessNow,
+    userId,
   });
   // Fáze 2a: správa vlastního ručního vstupu (poslední přijatý). Jen přes
   // relay; ceny „co jsem viděl“ jsou ze živé pozice, worker je ověří u brokera.

@@ -1969,8 +1969,12 @@ existující ochranu.
   socket session, globální zneplatnění (vadná nebo neurčitelná událost, změna REST zdroje,
   vadné čtení). `streamContinuity` / `exposure.streamContinuity` mají stejné příznaky a kontroly
   jako doklad (socket, sync, gap, backlog včetně nezpracovaných událostí controlleru, merge, shoda
-  snímku streamu s cache). Používá je JEN graf; řízení REST čtení (`streamCoverage`,
-  `workerConnectionReadPlan`) dál stojí výhradně na dokladu. Předpoklad (NEOVĚŘENO conformance
+  snímku streamu s cache). Používá je JEN zobrazení: graf a od 10. 11. 2026 (Filipovo zadání,
+  nález 4 review 9aa17b7) také vykreslení řádků účtů v LIVE přehledu a mobilní detail účtu
+  (`overlayWorkerContinuityForDisplay` → `rowDisplaySnapshot`/`rowDisplayOrders`, pozice
+  i příkazy ze stejných dat). ARM předkontrola, výrok „flat“, náhled Flatten, ostrov, záložka
+  Risk, způsobilost i řízení REST čtení (`streamCoverage`, `workerConnectionReadPlan`) dál stojí
+  výhradně na dokladu (`tests/liveCopyRowDisplaySnapshot.test.ts`). Předpoklad (NEOVĚŘENO conformance
   testem): Tradovate stream v rámci živé session nevynechá entitu Position ani Order; vynechání
   by kotva nepoznala (proti tomu stojí jen shoda snímku streamu s cache controlleru).
   Chybějící kotva (restart workeru, nová WS session) se obnovuje i S EXPOZICÍ: jen když chybí,
@@ -2238,8 +2242,12 @@ existující ochranu.
   `lib/liveChartCommandGuard.ts` (`gateFor`), který na neověřené pozici odmítne akce zvyšující
   riziko chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz; akce
   snižující riziko pustí. Vstup na jiném kontraktu,
-  Flatten, OFF a Kill brána neblokuje (INV-UI-02). Desková data (`overlayWorkerExposure` v desku,
-  způsobilost, plán REST čtení) dál vyžadují doklad.
+  Flatten, OFF a Kill brána neblokuje (INV-UI-02). Neznámé ≠ flat: pohled bez pozice stojící na
+  neověřené projekci (`markUnverifiedFlat`) nese `issueKind: 'stale'` a nový vstup z něj brána
+  odmítne (kontrakt neznáme). Paměť držené pozice má klíč s uživatelem, OAuth připojením
+  a prostředím každého účtu pohledu. Desková autorizační data (`overlayWorkerExposure` v desku,
+  ARM/flat předkontrola, způsobilost, plán REST čtení) dál vyžadují doklad; kontinuita smí jen
+  do vykreslení řádků přehledu (viz kotva kontinuity výše).
   Pořadí REST vs. worker: podle SEKVENCE ZAHÁJENÍ REST požadavku v prohlížeči
   (`lib/tradovateClientReadOrder.ts`, přidělí `useTradovateLiveData` při startu čtení, účet ji
   převezme jen když čtení změnilo jeho `positionsAsOf`/`ordersAsOf`), NE podle času příchodu ani
