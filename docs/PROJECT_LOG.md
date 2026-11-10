@@ -288,6 +288,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 (večer) — Claude: dokončení větve claude/chart-worker-projection-20261110 (od 184ffdd)
+
+- Nálezy Codexu 9aa17b7: 1–3 byly v 184ffdd už opravené. Bod 4: přehled LIVE kreslí řádky účtů
+  ze stejné kontinuity streamu jako graf (`rowDisplaySnapshot`/`rowDisplayOrders`). ARM/flat
+  předkontrola, Flatten náhled, ostrov, Risk a způsobilost zůstávají na dokladu. Bod 5: test
+  závodu fill × REST při obnově kotvy.
+- Smyčka review: Codex kolo 1 (0a468e20) 2× P1, kolo 2 (a09c4176) 3× P1, kolo 3 (5e9b2aef) 1× P1.
+  Vše ověřeno a opraveno. Kolo 4 nedoběhlo: limit Codexu do 13. 11. Critic 2 kola (OPRAVIT PŘED
+  COMMITEM, opraveno v 5e9b2aef a a432fd58).
+- Klíčové rozhodnutí (Filip přenechal volbu Claudovi, „nejkvalitnější“): kotva kontinuity je
+  MEZISTUPEŇ autorizace (`continuityOnly`), ne doklad. Kotva nepozná vynechanou událost Tradovate.
+  - Z pozice: nejde rozšířit ani odebrat SL ani přikoupit.
+  - Z flat pohledu z kotvy: nejde žádný nový vstup, dokud adaptér neobnoví plný doklad
+    (~3 s klidu, nejvýš 1× za 30 s).
+  - TP, limit, zavření, BE a utažení SL jdou.
+  - Cena: přikoupení z grafu během obchodu nepůjde, po uzavření až ~30 s žádný nový vstup.
+- Dále: neznámé ≠ flat (`markUnverifiedFlat` + brána vstupu na každém pohledu s issue). Klíč
+  paměti držené pozice obsahuje uživatele, připojení i prostředí. Přehled stárne každou sekundu
+  a má stejný plot proti starším REST čtením jako graf.
+- Výsledek: a432fd58. tsc OK, celá sada 8680/8680 (1 todo). Nic na main, nic nenasazeno.
+- Merge pozor: main obsahuje revert 97774d38 (DEMO session pushla revert f465880 na main proti
+  zadání). Merge větve musí revert vrátit.
+- Restart workeru po merge NUTNÝ: větev mění `tradovateBroker` a controller status
+  (`streamContinuity`, obnova kotvy, `streamCoverageGaps`). Reinstall z čistého release worktree.
+- Otevřené: pojistka „jen snižovat riziko“ i ve WORKERU (změna jádra + DEMO conformance
+  vynechané události). Kolo 4 Codexu po 13. 11.
+
 ### 2026-11-10 — LIVE graf: 7. kolo, review Codexu 6bb8ef7 (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; RESTART WORKERU nutný kvůli změnám z 6. kola)
 - **P1 risk-redukce:** politika z 6. kola (`lib/liveChartRiskPolicy.ts`) už rozhodovala bránu i
   plánovače; odstraněn pozůstatek plošné blokace (`liveChartProjectionManageBlock`,
