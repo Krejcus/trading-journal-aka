@@ -3,7 +3,7 @@ import type { TradovateAccountDataAccount, TradovateAccountDataResult } from './
 import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
 import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
 import { tradovateAccountReadState } from './tradovateLiveReadState';
-import { LIVE_READ_MAX_AGE_MS, verifiedReadAvailability } from './liveReadFreshness';
+import { verifiedReadAvailability } from './liveReadFreshness';
 import {
   overlayWorkerAccount,
   overlayWorkerExposure,
@@ -198,8 +198,11 @@ export function guardStaleRestReads<T extends TradovateAccountDataResult>(
 const workingOrderPrint = (order: TradovateAccountDataAccount['orders'][number]) =>
   `${order.id}|${order.quantity ?? ''}|${order.price ?? ''}|${order.stopPrice ?? ''}`;
 
+/** Jak staré REST čtení smí kontinuitu potvrdit (kratší než obecných 45 s; review b174135a). */
+export const LIVE_CHART_REST_CONFIRM_MAX_AGE_MS = 15_000;
+
 /**
- * Čerstvé ověřené REST čtení pozic i příkazů (≤ `LIVE_READ_MAX_AGE_MS`) se shoduje s kontinuitou:
+ * Čerstvé ověřené REST čtení pozic i příkazů (≤ `LIVE_CHART_REST_CONFIRM_MAX_AGE_MS`) se shoduje s kontinuitou:
  * stejný net na každém kontraktu a stejné pracující příkazy (id, kusy, ceny). Jinak fail-closed.
  */
 export function restConfirmsContinuity(
@@ -211,7 +214,7 @@ export function restConfirmsContinuity(
   const state = tradovateAccountReadState(rest, data);
   const fresh = (asOf: string | null | undefined) => {
     const at = Date.parse(asOf ?? '');
-    return Number.isFinite(at) && at <= now + 1_000 && now - at <= LIVE_READ_MAX_AGE_MS;
+    return Number.isFinite(at) && at <= now + 1_000 && now - at <= LIVE_CHART_REST_CONFIRM_MAX_AGE_MS;
   };
   if (!verifiedReadAvailability(state.positions.availability) || !verifiedReadAvailability(state.orders.availability)) return false;
   if (!fresh(state.positionsAsOf) || !fresh(state.ordersAsOf)) return false;
@@ -252,6 +255,9 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   const context = workerLive && exposure ? workerExposureOverlayContext(proven, exposure) : null;
   const workerShown: number[] = [];
   const continuityOnly: number[] = [];
+  // Potvrzení kontinuity bere SUROVÉ REST čtení (před plotem): plot posouvá každý render grafu,
+  // takže by odfiltroval skoro každé čtení (review b174135a). Plot dál řídí jen kreslení.
+  const rawRestById = new Map((data?.accounts ?? []).map(item => [item.id, item] as const));
   let changed = false;
   const accounts = proven.accounts.map((account): TradovateAccountDataAccount => {
     if (account.readState?.displayStreamCoverage) { workerShown.push(account.id); return account; }
@@ -264,7 +270,8 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
       // starší odfiltroval plot v kroku 1), které se s kontinuitou shoduje, vynechanou událost
       // vylučuje → plně ověřeno, ne mezistupeň (review 5e9b2aef/f63859c2: kontinuita nesmí být
       // přísnější než REST na mainu; jinak by přikoupení a vstupy stály po celou pozici).
-      if (!restConfirmsContinuity(account, shown, proven, now)) continuityOnly.push(account.id);
+      const raw = rawRestById.get(account.id);
+      if (!raw || !data || !restConfirmsContinuity(raw, shown, data, now)) continuityOnly.push(account.id);
       return shown;
     }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).

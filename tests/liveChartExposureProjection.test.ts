@@ -581,8 +581,18 @@ describe('kontinuita = mezistupeň autorizace (review Codexu 5e9b2aef)', () => {
     expect(projectLiveChartExposure(matching(NOW - 2_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([]);
     // SL u brokera jinde než ve streamu (vynechaná událost) → mezistupeň.
     expect(projectLiveChartExposure(matching(NOW - 2_000, 28_800), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100]);
-    // Staré čtení nic nepotvrdí.
-    expect(projectLiveChartExposure(matching(NOW - 60_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100, 200]);
+    // Staré čtení (> 15 s) nic nepotvrdí.
+    expect(projectLiveChartExposure(matching(NOW - 16_000), current, NOW - 1_000, NOW, owners, fresh).continuityOnly).toEqual([100, 200]);
+    // Sled renderů: graf po každém renderu posune plot nad všechna přidělená čtení — potvrzení
+    // ze shodného čtení musí vydržet i další přepočty (review b174135a).
+    const rest = matching(NOW - 2_000);
+    for (const item of rest.accounts) item.readState = { ...item.readState!, clientPositionsReadSeq: 5, clientOrdersReadSeq: 5 };
+    const fence = new Map<number, number>();
+    for (let render = 0; render < 3; render += 1) {
+      const result = projectLiveChartExposure(rest, current, NOW - 1_000, NOW + render * 500, owners, { ...fresh, lastWorkerShownSeq: fence });
+      expect(result.continuityOnly).toEqual([]);
+      for (const id of result.workerShown) fence.set(id, 9);
+    }
   });
 
   it('značka continuityOnly: jen ověřená pozice dotčená kotvou', async () => {
