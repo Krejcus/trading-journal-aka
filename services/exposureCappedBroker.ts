@@ -62,6 +62,8 @@ export function createExposureCappedBroker(
     streamOrderSnapshot: broker.streamOrderSnapshot ? accountId => broker.streamOrderSnapshot!(accountId) : undefined,
     streamPositionSnapshot: broker.streamPositionSnapshot ? accountId => broker.streamPositionSnapshot!(accountId) : undefined,
     streamCoverage: broker.streamCoverage ? accountId => broker.streamCoverage!(accountId) : undefined,
+    streamContinuity: broker.streamContinuity ? accountId => broker.streamContinuity!(accountId) : undefined,
+    streamContinuityPositionSnapshot: broker.streamContinuityPositionSnapshot ? accountId => broker.streamContinuityPositionSnapshot!(accountId) : undefined,
     newRiskRequestBlocker: broker.newRiskRequestBlocker ? accountIds => broker.newRiskRequestBlocker!(accountIds) : undefined,
     requestHealth: broker.requestHealth ? () => broker.requestHealth!() : undefined,
     runWithAcceptedRequests: broker.runWithAcceptedRequests ? run => broker.runWithAcceptedRequests!(run) : undefined,

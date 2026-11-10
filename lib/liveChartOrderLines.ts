@@ -119,6 +119,7 @@ export function liveLineMoveBlockReason(
 /** Stav tlačítka BE na štítku pozice. */
 export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: number | null): { price: number | null; blocked: string | null } {
   const price = breakEvenStop(summary.side, entryAvg);
+  if (summary.unverified === true) return { price, blocked: LIVE_UNVERIFIED_ACTION_TITLE };
   if (summary.kind !== 'position') return { price: null, blocked: 'BE jde až u vyplněné pozice.' };
   // Rozjeté SL nohy (pozice z přikoupení) = žádná jedna cena SL: BE nejde, místo tichého kliknutí důvod.
   if (summary.stop == null) return { price, blocked: 'SL pozice není na jedné ceně (nebo není známý) — BE teď nejde.' };
@@ -220,7 +221,7 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
       price: at,
       ...(controls.groupLimitStateHash ? { groupLimitStateHash: controls.groupLimitStateHash } : {}),
       color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
-      label: levelLabel(kind, at, pendingPrice != null ? 'mění se' : position ? undefined : 'čeká na vstup'),
+      label: levelLabel(kind, at, pendingPrice != null ? 'mění se' : position ? (kind === 'stopLoss' ? summary.fillNote : undefined) : 'čeká na vstup'),
       labelAt: next => levelLabel(kind, next),
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.

@@ -1,5 +1,5 @@
 import { breakEvenStop, leaderManageBasis, type LiveChartPositionSummary } from './liveChartPosition';
-import { liveLineMoveBlockReason } from './liveChartOrderLines';
+import { LIVE_UNVERIFIED_ACTION_TITLE, liveLineMoveBlockReason } from './liveChartOrderLines';
 import type { TicketBracketUnits } from './liveOrderTicket';
 
 /**
@@ -262,6 +262,8 @@ export function planManageMove(
 ): LiveManagePlan {
   const tick = options.tick ?? MNQ_TICK;
   if (!summary) return blocked('Pozice leadera není známá.');
+  // Neověřená pozice (stav workeru bez dokladu): tlačítko zašedlé s důvodem jako na čáře.
+  if (summary.unverified === true) return blocked(LIVE_UNVERIFIED_ACTION_TITLE);
   if (!validPrice(price) || !onTick(price, tick)) return blocked(`Cena musí být kladná a na ticku ${tick}.`);
   const reason = liveLineMoveBlockReason(summary, leg, price, { pendingLegs: options.pendingLegs === true });
   if (reason) return blocked(reason, price);
@@ -286,6 +288,8 @@ export function planBreakEven(
   variant: LiveManageBreakEvenVariant,
 ): LiveManagePlan {
   if (!summary) return blocked('Pozice leadera není známá.');
+  // BE / BE+ / BE + poplatky jen u ověřené pozice (DEMO 10. 11.: vypadaly aktivní a nic neodešly).
+  if (summary.unverified === true) return blocked(LIVE_UNVERIFIED_ACTION_TITLE);
   if (summary.kind !== 'position') return blocked('BE jde až u vyplněné pozice.');
   // Pole „BE +[n] t“ v panelu i listu: n 1–40 (čisté BE má vlastní tlačítko).
   if (variant.kind === 'be-plus' && (!Number.isInteger(variant.ticks) || variant.ticks < 1 || variant.ticks > MANAGE_BE_MAX_TICKS)) {

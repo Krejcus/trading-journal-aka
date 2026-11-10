@@ -182,5 +182,6 @@ export function tradovateCopyTradeOrders(data: TradovateAccountDataResult): Live
     placedAt: order.timestamp,
     updatedAt: order.timestamp,
     working: isWorkingTradovateOrder(order),
+    ...(order.ocoId != null || order.parentId != null ? { bracketLeg: true } : {}),
   })));
 }

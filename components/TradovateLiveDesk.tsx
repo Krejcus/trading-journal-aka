@@ -158,7 +158,7 @@ import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, liv
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
 import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
-import { leaderManageBasis, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
+import { leaderManageBasis, liveFillSlippageNote, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
 import {
@@ -1426,6 +1426,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartWorkingWithIntents = useMemo(() => withLiveChartIntentLines(chartWorkingView, chartIntents,
     chartPositionSymbol ?? chartIntents[chartIntents.length - 1]?.symbol ?? entryFrontContract), [chartWorkingView, chartIntents, chartPositionSymbol, entryFrontContract]);
   const chartWorkingOrders = useKeyedValue(chartWorkingWithIntents);
+  // Skluz Market vstupu (bod 7, DEMO 10. 11.): poznámka ke štítku SL, nic se neposouvá.
+  const chartSlipEntry = useMemo(() => (agentStatus?.controller.manualEntries ?? [])
+    .filter(entry => entry.symbol === chartPositionSymbol && entry.open !== false && entry.timing?.fillAvg != null)
+    .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null, [agentStatus?.controller.manualEntries, chartPositionSymbol]);
+  const chartPositionShown = useMemo(() => {
+    const summary = chartData.position.summary;
+    const note = liveFillSlippageNote(summary, chartSlipEntry ? { orderType: chartSlipEntry.orderType, side: chartSlipEntry.side,
+      referencePrice: chartSlipEntry.referencePrice, fillAvg: chartSlipEntry.timing?.fillAvg } : null);
+    return note && summary ? { ...chartData.position, key: `${chartData.position.key}|${note}`, summary: { ...summary, fillNote: note } } : chartData.position;
+  }, [chartData.position, chartSlipEntry]);
   // Splněné (read model brokera ukazuje cíl) a prošlé záměry pryč; tik desku je 1 s.
   // Vstup potvrdí jen důkaz workeru se shodným operationId nebo změna tvaru pozice (ne cena/P&L).
   const chartEntryEvidence = useMemo(() => liveChartWorkerEntryEvidence(agentStatus?.controller.manualEntries), [agentStatus?.controller.manualEntries]);
@@ -2161,7 +2171,7 @@ acceptAgentStatus((await executeAgent({
           liveExposurePaint={liveExposurePaint}
           group={chartData.group}
           groupKey={chartData.groupKey}
-          position={chartData.position}
+          position={chartPositionShown}
           disarm={liveChartDisarmDuringArm(chartData.disarm, armFlowActive)}
           onDisarm={disarmFromChart}
           onTargetChange={setChartTarget}
@@ -2227,7 +2237,7 @@ acceptAgentStatus((await executeAgent({
               onPick={id => { setPhoneMenuOpen(false); navigateToTab(id); }}
               onClose={() => setPhoneMenuOpen(false)}
             /> : null,
-            position: chartData.position,
+            position: chartPositionShown,
             // Karty obchodů vlevo dole jako na PC (stejná brána `runtimeAvailable` vč. krátké grace obnoveného stavu).
             copyEvents: runtimeAvailable ? chartLive.status?.controller.recentCopyEvents : undefined,
             copierArmed: runtimeAvailable && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode !== true,

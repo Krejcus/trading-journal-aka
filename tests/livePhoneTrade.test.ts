@@ -100,7 +100,9 @@ describe('obchodní lišta na telefonu', () => {
   it('hlavička telefonu: P&L skupiny jen z read modelu LIVE pultu, bez vlastního čtení relaye', () => {
     const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
     expect(desk).toMatch(/enabled: \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart'/);
-    expect(desk).toMatch(/position: chartData\.position/);
+    // Telefon dostane tutéž pozici jako PC (jen s poznámkou o skluzu fillu ke štítku SL).
+    expect(desk).toMatch(/position: chartPositionShown/);
+    expect(desk).toMatch(/const chartPositionShown = useMemo\(\(\) => \{\s*const summary = chartData\.position\.summary;/);
     // Tempo čtení zrychluje jen PC graf, telefon ne.
     expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
     const accounts = readFileSync('components/day/LivePhoneAccounts.tsx', 'utf8');

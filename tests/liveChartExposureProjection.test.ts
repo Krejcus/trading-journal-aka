@@ -5,11 +5,11 @@ import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';
 import {
   LIVE_CHART_UNVERIFIED_MANAGE_TEXT, liveChartDisplayAccounts, liveChartProjectionManageBlock, markLiveChartPositionProjection,
-  projectLiveChartExposure,
+  projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS,
 } from '../lib/liveChartExposureProjection';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { buildTradeCard } from '../lib/liveTradeCard';
-import { liveChartPosition } from '../lib/liveChartPosition';
+import { liveChartPosition, type LiveChartPosition, type LiveChartPositionSummary } from '../lib/liveChartPosition';
 import { LIVE_UNVERIFIED_LINE_COLOR, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { noteTradovateWorkerShown, resetTradovateClientReadSeqForTests, stampTradovateClientReads, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
@@ -106,6 +106,38 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     const entry = lines.find(line => line.kind === 'entry')!;
     expect(entry.cancellable).toBe(true);
     expect(entry.actions?.find(action => action.id === 'break-even')).toMatchObject({ disabled: true, title: expect.stringMatching(/Neověřeno/) });
+  });
+
+  it('DEMO 10. 11.: doklad po obchodu chybí, ale kontinuita streamu od baseline z čerstvého statusu pozici ověří (tažení jde)', () => {
+    const withContinuity = (observedAt = NOW - 500) => {
+      const current = status();
+      (current.controller.exposure as { streamContinuity?: unknown }).streamContinuity = [100, 200].map(id => ({ ...proof(id), observedAt }));
+      return current;
+    };
+    const { data, workerShown } = projectLiveChartExposure(restFlat(), withContinuity(), NOW - 1_000, NOW, owners, fresh);
+    expect(workerShown).toEqual(expect.arrayContaining([100, 200]));
+    const { position, lines } = chartLines(data!);
+    expect(position.summary).toMatchObject({ kind: 'position', side: 'short', quantity: 2, stop: 28_790 });
+    expect(position.summary?.unverified).toBeUndefined();
+    expect(lines.find(line => line.kind === 'stopLoss')).toMatchObject({ draggable: true });
+    expect(liveChartProjectionManageBlock(position)).toBeNull();
+    // Řízení REST čtení kontinuitu NEbere: bez dokladu web dál čte REST sám.
+    expect(workerConnectionReadPlan({ ...restFlat(), ...owner }, { status: withContinuity(), observedAt: NOW - 1_000 }, NOW).suppressFullTick).toBe(false);
+    // Obnovená cache ani nečerstvý status kontinuitu nepoužijí; starý řádek (> 8 s) taky ne.
+    for (const input of [{ ...fresh, trusted: false }, { ...fresh, statusFresh: false }]) {
+      const out = projectLiveChartExposure(restFlat(), withContinuity(), NOW - 1_000, NOW, owners, input);
+      expect(out.data!.accounts.find(item => item.id === 100)!.readState?.displayStreamCoverage).toBeUndefined();
+    }
+    // Nezpracované události (backlog) ani neshoda snímku streamu s cache (merge) kontinuitu neověří.
+    for (const flag of [{ backlog: true }, { mergeInProgress: true }, { synchronized: false }, { gap: true }, { socketLive: false }]) {
+      const current = withContinuity();
+      const rows = (current.controller.exposure as unknown as { streamContinuity: Array<Record<string, unknown>> }).streamContinuity;
+      rows.forEach((row, index) => { rows[index] = { ...row, ...flag }; });
+      const out = projectLiveChartExposure(restFlat(), current, NOW - 1_000, NOW, owners, fresh);
+      expect(chartLines(out.data!).position.summary?.unverified).toBe(true);
+    }
+    const stale = projectLiveChartExposure(restFlat(), withContinuity(NOW - 9_000), NOW - 1_000, NOW, owners, fresh);
+    expect(chartLines(stale.data!).position.summary?.unverified).toBe(true);
   });
 
   it('s platným dokladem zůstává ověřený stav (bez štítku, s tažením)', () => {
@@ -373,5 +405,81 @@ describe('autorizace dál vyžaduje doklad', () => {
     expect(LIVE_CHART_UNVERIFIED_MANAGE_TEXT).toMatch(/nic se neodeslalo/);
     const verified = chartLines(projectLiveChartExposure(restFlat(), status({ proof: true }), NOW - 1_000, NOW, owners, fresh).data!).position;
     expect(liveChartProjectionManageBlock(verified)).toBeNull();
+  });
+});
+
+describe('DEMO 10. 11. bod 3: návrat na tab — poslední nakreslený stav se drží jako neověřený', () => {
+  const drawn = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPosition => ({
+    key: 'pos', symbol: 'MNQZ6', lines: [], issue: null,
+    summary: { kind: 'position', side: 'short', quantity: 2, entry: 100, entryType: null, openPnl: 0, mark: 99, stop: 110, target: 80,
+      protection: 'SL 2/2 · TP 2/2', accounts: 2, scopeLabel: null, leader: { accountId: 100, quantity: 2, entry: 100 },
+      rows: [{ accountId: 100 } as never, { accountId: 200 } as never], ...patch },
+  });
+  const unknown: LiveChartPosition = { key: 'issue:stale', symbol: null, lines: [], summary: null, issue: 'Pozice neověřené', issueKind: 'stale' };
+  const verifiedFlat: LiveChartPosition = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
+
+  it('po návratu na tab (status ještě nečerstvý, starší REST = neznámo) čáry nezmizí — pozice se drží jako neověřená', () => {
+    let memory = holdLastDrawnPosition(null, drawn(), NOW).memory;
+    const back = holdLastDrawnPosition(memory, unknown, NOW + 650);
+    expect(back.shown.summary).toMatchObject({ side: 'short', quantity: 2, unverified: true });
+    expect(back.shown.summary!.protection).toMatch(/neověřeno/);
+    // Držený stav nic neautorizuje.
+    expect(liveChartProjectionManageBlock(back.shown)).toBe(LIVE_CHART_UNVERIFIED_MANAGE_TEXT);
+    // Nový stav (ověřený) ho nahradí hned.
+    memory = back.memory;
+    const fresh2 = holdLastDrawnPosition(memory, drawn({ quantity: 1 }), NOW + 700);
+    expect(fresh2.shown.summary).toMatchObject({ quantity: 1 });
+    expect(fresh2.shown.summary!.unverified).toBeUndefined();
+  });
+
+  it('rozjetá skupina, dobíhající kopie, chybějící účet ani jiný cíl se nedrží — štítek hned (INV-UI-01/03)', () => {
+    const memory = holdLastDrawnPosition(null, drawn(), NOW).memory;
+    for (const issueKind of ['divergent', 'settling', 'missing-account', 'mismatch', 'unknown'] as const) {
+      const real: LiveChartPosition = { key: `issue:${issueKind}`, symbol: null, lines: [], summary: null, issue: 'Účty skupiny se liší', issueKind };
+      expect(holdLastDrawnPosition(memory, real, NOW + 300)).toEqual({ shown: real, memory: null });
+    }
+    // orders-stale (jen příkazy neověřené) se drží stejně jako stale.
+    expect(holdLastDrawnPosition(memory, { ...unknown, issueKind: 'orders-stale' }, NOW + 300).shown.summary?.unverified).toBe(true);
+  });
+
+  it('ověřený flat se ukáže hned; držení má strop 15 s a nikdy nenahradí jinou pozici', () => {
+    const memory = holdLastDrawnPosition(null, drawn(), NOW).memory;
+    expect(holdLastDrawnPosition(memory, verifiedFlat, NOW + 100)).toEqual({ shown: verifiedFlat, memory: null });
+    expect(holdLastDrawnPosition(memory, unknown, NOW + LIVE_CHART_HOLD_LAST_DRAWN_MS + 1).shown).toBe(unknown);
+    const other = drawn({ side: 'long' });
+    expect(holdLastDrawnPosition(memory, other, NOW + 100).shown).toBe(other);
+    // Bez řádků účtů je držený stav stejně neověřený.
+    const bare = holdLastDrawnPosition(holdLastDrawnPosition(null, drawn({ rows: [], leader: null }), NOW).memory, unknown, NOW + 500);
+    expect(bare.shown.summary!.unverified).toBe(true);
+  });
+});
+
+describe('DEMO 10. 11. bod 5: po stop-outu se zbylý TP nekreslí jako čekající vstup', () => {
+  const stoppedOut = (link: Record<string, string>) => {
+    const current = status();
+    current.controller.exposure!.positions = [];
+    current.controller.exposure!.orders = [{ accountId: 100, brokerOrderId: '42', symbol: 'MNQZ6', side: 'Sell', orderType: 'Limit', quantity: 1,
+      filledQuantity: 0, limitPrice: 27_796.25, stopPrice: null, status: 'working', updatedAt: NOW - 1_000, ...link } as never];
+    (current.controller.exposure as { streamContinuity?: unknown }).streamContinuity = [100, 200].map(id => proof(id));
+    return current;
+  };
+  it('TP s OSO rodičem / OCO párem od workeru = noha bracketu, ne „SELL 1 LIMIT“ vstup', () => {
+    for (const link of [{ parentOrderId: '41' }, { ocoId: '43' }]) {
+      const { data } = projectLiveChartExposure(restFlat(), stoppedOut(link), NOW - 1_000, NOW, owners, fresh);
+      expect(tradovateCopyTradeOrders(data!).find(order => order.id === 42)).toMatchObject({ bracketLeg: true });
+      expect(chartLines(data!).position.summary).toBeNull();
+    }
+  });
+  it('vazba známá jen z REST téhož příkazu se zachová i v datech workeru', () => {
+    const rest = restFlat();
+    rest.accounts[0].orders = [{ id: 42, contractId: 7, symbol: 'MNQZ6', timestamp: null, action: 'Sell', orderType: 'Limit', quantity: 1, price: 27_796.25,
+      stopPrice: null, status: 'Working', admin: null, ocoId: null, parentId: 41, linkedId: null }];
+    const { data } = projectLiveChartExposure(rest, stoppedOut({}), NOW - 1_000, NOW, owners, fresh);
+    expect(data!.accounts[0].orders[0]).toMatchObject({ id: 42, parentId: 41 });
+    expect(chartLines(data!).position.summary).toBeNull();
+  });
+  it('skutečný čekající vstup (bez vazby) se dál kreslí jako čekající', () => {
+    const { data } = projectLiveChartExposure(restFlat(), stoppedOut({}), NOW - 1_000, NOW, owners, fresh);
+    expect(chartLines(data!).position.summary).toMatchObject({ kind: 'pending', side: 'short' });
   });
 });

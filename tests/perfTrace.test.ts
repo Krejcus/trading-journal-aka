@@ -30,6 +30,18 @@ describe('perfTrace (měření na iPhonu)', () => {
     expect(plugin.perfTrace).toHaveBeenCalledTimes(200);
   });
 
+  it('window.__atPerf je kruhový buffer: po stropu se nové značky dál zapisují, nejstarší vypadávají', async () => {
+    vi.resetModules();
+    const { perfDuration, perfMark } = await import('../lib/perfTrace');
+    for (let index = 0; index < 450; index += 1) perfDuration('net:ring:fetch', index);
+    perfMark('chart:pending-line');
+    const list = (window as { __atPerf?: Array<{ name: string; ms: number }> }).__atPerf!;
+    expect(list.length).toBeLessThanOrEqual(400);
+    expect(list[list.length - 1].name).toBe('chart:pending-line');
+    expect(list.some(entry => entry.name === 'net:ring:fetch' && entry.ms === 449)).toBe(true);
+    expect(list.some(entry => entry.name === 'net:ring:fetch' && entry.ms === 0)).toBe(false);
+  });
+
   it('URL zkrátí na bezpečný slug bez parametrů', async () => {
     const { perfSlug } = await import('../lib/perfTrace');
     expect(perfSlug('/api/tradovate/oauth/copier-relay?connectionId=abc&commandId=x')).toBe('tradovate-oauth-copier-relay');

@@ -1963,6 +1963,17 @@ existující ochranu.
   `displayCoverageRebaseline`), jinak by doklad po první události zmizel a weby
   četly brokera dál samy. S expozicí se nečte: čtení grafu příkazů by správě
   obchodu vzalo rychlý snímek streamu. ACK není baseline.
+  Kontinuita pro graf (10. 11. 2026, DEMO: s otevřenou pozicí se doklad nikdy neobnovil a graf
+  zůstal „neověřeno“): spolu s dokladem vzniká per-účet kotva kontinuity (stejná REST baseline
+  a session). Obchodní událost téhož účtu ji NEzruší (mění data, ne kontinuitu); zruší ji nová
+  socket session, globální zneplatnění (vadná nebo neurčitelná událost, změna REST zdroje,
+  vadné čtení). `streamContinuity` / `exposure.streamContinuity` mají stejné příznaky a kontroly
+  jako doklad (socket, sync, gap, backlog včetně nezpracovaných událostí controlleru, merge, shoda
+  snímku streamu s cache). Používá je JEN graf; řízení REST čtení (`streamCoverage`,
+  `workerConnectionReadPlan`) dál stojí výhradně na dokladu. Předpoklad (NEOVĚŘENO conformance
+  testem): Tradovate stream v rámci živé session nevynechá entitu Position ani Order; vynechání
+  by kotva nepoznala (proti tomu stojí jen shoda snímku streamu s cache controlleru). Test
+  `tests/tradovateBrokerRequestControl.test.ts`.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
   Per-part sequence patří fyzickému requestu i jeho joinerům: starší completion
   nesmí přepsat novější pozici. Heartbeat nezmění čas původních dat.
@@ -2230,7 +2241,14 @@ existující ochranu.
   plot nevynuluje. Plot je PRVNÍ krok projekce (`guardStaleRestReads`), před jakýmkoli overlayem,
   zkratkou dokladu nebo návratem, takže platí na všech cestách. Stav workeru (s dokladem
   i bez) graf kreslí jen z čerstvého, neobnoveného statusu této instance (`trusted &&
-  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity. Pořadí workeru samotného dál řeší fence pollu
+  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity.
+  Účet s platným řádkem `exposure.streamContinuity` (tytéž kontroly jako doklad, ≤ 8 s) je
+  z čerstvého neobnoveného statusu OVĚŘENÝ i s otevřenou pozicí — správa z grafu jde (worker vše
+  ověří u brokera). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
+  návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 15 s
+  (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.). Nikdy
+  přes ověřený flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl; nic z ní
+  neodejde. Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,

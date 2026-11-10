@@ -1,6 +1,7 @@
 import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from './tradovateAccountDataTypes';
-import type { WorkerCoverageOwner } from './tradovateWorkerCoverage';
+import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
+import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
 import { tradovateAccountReadState } from './tradovateLiveReadState';
 import {
   overlayWorkerAccount,
@@ -116,6 +117,27 @@ export interface LiveChartProjectionResult<T> {
  * jeho pozice a příkazy jsou neutrálně „unavailable“ (nikdy flat), dokud nedorazí čtení
  * zahájené až potom. Nezávisí na statusu workeru, čerstvosti, cache ani dokladu (INV-UI-01/03).
  */
+/**
+ * Účty s platnou kontinuitou streamu od REST baseline (`exposure.streamContinuity`) — tytéž
+ * kontroly jako doklad (`coveredWorkerAccounts`), jen jiný zdroj řádků. Jen graf.
+ */
+export function workerContinuityAccounts(
+  status: LocalCopierAgentStatus | null | undefined,
+  observedAtMs: number | null | undefined,
+  owners: ReadonlyMap<number, WorkerCoverageOwner>,
+  now: number,
+): Map<number, TradovateWorkerAccountCoverage> {
+  const rows = (status?.controller?.exposure as { streamContinuity?: TradovateWorkerAccountCoverage[] } | null | undefined)?.streamContinuity;
+  const result = new Map<number, TradovateWorkerAccountCoverage>();
+  if (!rows?.length) return result;
+  const receipt = { status: { controller: { connected: status?.controller?.connected, exposure: { streamCoverage: rows } } }, observedAt: observedAtMs };
+  for (const [accountId, owner] of owners) {
+    const row = coveredWorkerAccounts(receipt, owner, [accountId], now).get(accountId);
+    if (row) result.set(accountId, row);
+  }
+  return result;
+}
+
 export function guardStaleRestReads<T extends TradovateAccountDataResult>(
   data: T | null,
   lastWorkerShownSeq: ReadonlyMap<number, number>,
@@ -149,6 +171,10 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   if (!input.trusted || !input.statusFresh) return { data: guarded, workerShown: [] };
   // KROK 3: overlay — účty s dokladem (`overlayWorkerExposure`), pak známé účty bez dokladu.
   const proven = overlayWorkerExposure(guarded, status, observedAtMs, now, owners)!;
+  // Kontinuita streamu od REST baseline (`exposure.streamContinuity`, přežije obchodní událost):
+  // stejné kontroly jako doklad (session, route, socket, sync, backlog, merge, shoda snímku
+  // s cache, stáří ≤ 8 s) — z čerstvého neobnoveného statusu ověří účet i s otevřenou pozicí.
+  const continuity = workerContinuityAccounts(status, observedAtMs, owners, now);
   const exposure = status?.controller?.exposure;
   const observed = observedAtMs != null && Number.isFinite(observedAtMs) && observedAtMs <= now + 5_000 ? observedAtMs : null;
   const workerLive = observed != null && status?.controller?.connected === true && !!exposure?.orders
@@ -159,6 +185,12 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   let changed = false;
   const accounts = proven.accounts.map((account): TradovateAccountDataAccount => {
     if (account.readState?.displayStreamCoverage) { workerShown.push(account.id); return account; }
+    const continuous = continuity.get(account.id);
+    if (context && continuous) {
+      changed = true;
+      workerShown.push(account.id);
+      return overlayWorkerAccount(account, proven, context, continuous.lastDataAt, continuous);
+    }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).
     if (context && observed != null && known.has(account.id) && workerConnectionStreamLive(status, owners.get(account.id))) {
       changed = true;
@@ -214,4 +246,39 @@ export function liveChartDisplayAccounts(accounts: readonly LiveAccount[]): Live
     const { displayProjection: _projection, ...rest } = account;
     return rest;
   });
+}
+
+/**
+ * Nejdéle tak dlouho graf podrží poslední nakreslenou pozici, když nový pohled je jen
+ * „neznámý“ (issue) — např. návrat na tab, než přijde nový status (DEMO 10. 11.: 600–680 ms
+ * bez čar). Stejný horizont jako INV-FRESH-03.
+ */
+export const LIVE_CHART_HOLD_LAST_DRAWN_MS = 15_000;
+
+export interface LiveChartDrawnMemory { position: LiveChartPosition; at: number }
+
+/**
+ * Drží poslední nakreslený stav jako NEOVĚŘENÝ, dokud nepřijde nový: jen když nový pohled je
+ * jen neověřené čtení (`issueKind` `stale` / `orders-stale`) — nikdy přes rozjetí, dobíhající
+ * kopii, chybějící účet, ověřený flat ani jinou pozici — a nejdéle
+ * `LIVE_CHART_HOLD_LAST_DRAWN_MS` od posledního skutečného vykreslení. Držená pozice je jen
+ * zobrazení: všechny řádky `unverified`, takže brána grafu z ní nic neodešle (INV-UI-01/03).
+ */
+export function holdLastDrawnPosition(
+  memory: LiveChartDrawnMemory | null,
+  next: LiveChartPosition,
+  now: number,
+): { shown: LiveChartPosition; memory: LiveChartDrawnMemory | null } {
+  if (next.summary) return { shown: next, memory: { position: next, at: now } };
+  // Ověřený flat (bez issue) = pozice opravdu není: hned flat, paměť pryč.
+  if (next.issue == null) return { shown: next, memory: null };
+  // Držet jen u NEOVĚŘENÉHO ČTENÍ. Rozjetá skupina, dobíhající kopie, chybějící účet nebo jiný
+  // cíl je skutečný stav: štítek hned, žádná poslední známá poloha (INV-UI-01/03).
+  if (next.issueKind !== 'stale' && next.issueKind !== 'orders-stale') return { shown: next, memory: null };
+  if (!memory || now - memory.at > LIVE_CHART_HOLD_LAST_DRAWN_MS || now < memory.at - 1_000) return { shown: next, memory: null };
+  const held = memory.position;
+  const ids = new Set([...held.summary!.rows.map(row => row.accountId), ...(held.summary!.leader ? [held.summary!.leader.accountId] : [])]);
+  const marked = markLiveChartPositionProjection({ ...held, summary: { ...held.summary!, unverified: undefined } }, ids);
+  // Vždy neověřená, i bez řádků účtů (brána grafu pak nic neodešle).
+  return { shown: { ...marked, key: `${marked.key}|drženo`, summary: { ...marked.summary!, unverified: true } }, memory };
 }

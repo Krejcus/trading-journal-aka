@@ -280,3 +280,22 @@ describe('SL a TP po jedné na čarách', () => {
   });
 });
 
+
+describe('DEMO 10. 11. bod 7: skluz Market vstupu je vidět na štítku SL (ochrana se neposouvá)', () => {
+  it('fill o 4,75 b horší než viděná cena: SL ukazuje skutečnou vzdálenost od fillu', async () => {
+    const { liveFillSlippageNote } = await import('../lib/liveChartPosition');
+    const note = liveFillSlippageNote({ kind: 'position', side: 'long', stop: 27_790 }, { orderType: 'Market', side: 'Buy', referencePrice: 27_802, fillAvg: 27_806.75 });
+    expect(note).toBe('fill o 4.75 b horší — SL je 16.75 b od fillu (od viděné ceny 12.00 b)');
+    expect(liveFillSlippageNote({ kind: 'position', side: 'short', stop: 27_814 }, { orderType: 'Market', side: 'Sell', referencePrice: 27_802, fillAvg: 27_797.25 }))
+      .toBe('fill o 4.75 b horší — SL je 16.75 b od fillu (od viděné ceny 12.00 b)');
+    // DEMO případ: SL od fillu jen 7,25 b místo 12 (fill na opačné straně reference).
+    expect(liveFillSlippageNote({ kind: 'position', side: 'long', stop: 27_790 }, { orderType: 'Market', side: 'Buy', referencePrice: 27_802, fillAvg: 27_797.25 }))
+      .toBe('fill o 4.75 b lepší — SL je 7.25 b od fillu (od viděné ceny 12.00 b)');
+    // Odchylka pod tick, Limit, jiná strana nebo chybějící data = nic.
+    expect(liveFillSlippageNote({ kind: 'position', side: 'long', stop: 27_790 }, { orderType: 'Market', side: 'Buy', referencePrice: 27_802, fillAvg: 27_802.1 })).toBeNull();
+    expect(liveFillSlippageNote({ kind: 'position', side: 'long', stop: 27_790 }, { orderType: 'Limit', side: 'Buy', referencePrice: 27_802, fillAvg: 27_806 })).toBeNull();
+    expect(liveFillSlippageNote({ kind: 'position', side: 'long', stop: 27_790 }, { orderType: 'Market', side: 'Sell', referencePrice: 27_802, fillAvg: 27_806 })).toBeNull();
+    const line = livePositionChartLines(summary({ fillNote: note! }), controls).find(item => item.kind === 'stopLoss')!;
+    expect(line.label).toContain('fill o 4.75 b horší');
+  });
+});

@@ -371,6 +371,13 @@ export interface BrokerPort {
   requestHealth?(): import('../lib/tradovateRequestControl').TradovateRequestHealth[];
   streamPositionSnapshot?(accountId: number): { positions: BrokerPosition[]; observedAt: number } | null;
   streamCoverage?(accountId: number): import('../lib/tradovateRequestControl').TradovateWorkerAccountCoverage | null;
+  /**
+   * Kontinuita streamu od poslední REST baseline účtu, kterou obchodní události téhož účtu
+   * nezruší (jen zobrazení grafu; řízení REST čtení stojí jen na `streamCoverage`).
+   */
+  streamContinuity?(accountId: number): import('../lib/tradovateRequestControl').TradovateWorkerAccountCoverage | null;
+  /** Pozice ze streamu pod kotvou kontinuity, jen v klidu (jinak null). */
+  streamContinuityPositionSnapshot?(accountId: number): { positions: BrokerPosition[]; observedAt: number } | null;
   runWithAcceptedRequests?<T>(run: () => Promise<T>): Promise<T>;
   /** Bounded broker-read recovery classification only; never trade authorization. */
   runWithRecoveryRequests?<T>(run: () => Promise<T>): Promise<T>;

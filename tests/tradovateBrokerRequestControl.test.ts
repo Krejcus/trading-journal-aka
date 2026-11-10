@@ -326,6 +326,67 @@ describe('Tradovate broker final request-control integration', () => {
     await expect(broker.listOrders(101,{fresh:true})).rejects.toThrow(/authoritative order baseline/);expect(broker.streamCoverage?.(101)).toBeNull();
   });
 
+  it('DEMO 10. 11.: trade ingress drops the proof, but stream continuity since the baseline survives for the chart; new session or unknown account ends it',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async input=>response(String(input).includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]),clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    // Bez REST baseline není ani doklad, ani kontinuita (ACK/heartbeat nic nedokazuje).
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    const baseline=broker.streamCoverage?.(101);expect(baseline).not.toBeNull();
+    expect(broker.streamContinuity?.(101)).toMatchObject({baselineAt:baseline?.baselineAt,synchronized:true,gap:false,backlog:false});
+    f.advance(500);
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{accountId:101,contractId:77,netPos:1}}}]);
+    // Doklad (řízení REST čtení) po obchodní události zmizí hned — beze změny.
+    expect(broker.streamCoverage?.(101)).toBeNull();
+    await flush();
+    const continuity=broker.streamContinuity?.(101);
+    expect(continuity).toMatchObject({baselineAt:baseline?.baselineAt,sessionId:baseline?.sessionId,backlog:false,synchronized:true});
+    expect(continuity!.lastDataAt).toBeGreaterThanOrEqual(continuity!.baselineAt);
+    // Událost bez určitelného účtu = nejistota pro všechny účty.
+    socket.deliver([{e:'props',d:{entityType:'order',eventType:'Updated',entity:{orderId:999999}}}]);
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    unsubscribe();
+  });
+
+  it('stream continuity never survives a new socket session (deterministic reconnect)',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},
+      fetchImpl:async()=>response([]),reconnectDelayMs:1_000,reconnectJitterRatio:0,closeTimeoutMs:1_000,
+      webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const handshake=async(socket:Socket)=>{socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+      socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();};
+    const unsubscribe=broker.subscribe(()=>undefined);await handshake(sockets[0]);
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    const before=broker.streamContinuity?.(101);expect(before).not.toBeNull();
+    sockets[0].close();
+    expect(broker.streamContinuity?.(101)?.socketLive).toBe(false);
+    for(let i=0;i<10&&sockets.length<2;i++){await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(sockets.length).toBeGreaterThan(1);
+    await handshake(sockets[sockets.length-1]);
+    // Nová session bez nové REST baseline: kontinuita z předchozí session neplatí.
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    // Nová baseline v nové session ji obnoví (s novou session).
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    expect(broker.streamContinuity?.(101)?.sessionId).not.toBe(before?.sessionId);
+    unsubscribe();
+  });
+
+  it('a malformed trade frame ends stream continuity for every account',async()=>{
+    const f=fixture();await f.governor.initialize();const socket=new Socket();
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
+      fetchImpl:async()=>response([]),clock:f.clock,webSocketFactory:()=>socket});
+    const unsubscribe=broker.subscribe(()=>undefined);socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();socket.deliver([{i:1,s:200,d:[]}]);await flush();
+    await Promise.all([broker.listPositions(101),broker.listOrders(101,{fresh:true})]);
+    expect(broker.streamContinuity?.(101)).not.toBeNull();
+    socket.deliver([null]);
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    unsubscribe();
+  });
+
   it('late background completion and a late joiner cannot replace a newer management position proof',async()=>{
     const f=fixture();await f.governor.initialize();const socket=new Socket();let hold=false;const held=deferred<Response>();
     const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,

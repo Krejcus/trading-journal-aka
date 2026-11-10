@@ -35,6 +35,9 @@ async function setup() {
     sessionId: 'test-session', currentSessionId: 'test-session', baselineAt: START, lastDataAt: START,
     observedAt: now, socketLive: true, synchronized: true, gap: false, backlog: false, mergeInProgress: false,
   });
+  // Kontinuita streamu (jen graf): stejný řádek, ale bez dokladu — obchodní událost ji nezruší.
+  broker.streamContinuity = accountId => ({ ...broker.streamCoverage!(accountId)!, baselineAt: START - 1, lastDataAt: START });
+  broker.streamContinuityPositionSnapshot = () => ({ positions: [], observedAt: now });
   const originalCancel = broker.cancelOrder;
   broker.cancelOrder = async (...args) => {
     if (limited) expect(scope.getStore(), 'accepted cancel dispatch scope').toBe(true);
@@ -90,6 +93,14 @@ describe('request capacity changes do not replace copier safety', () => {
   it('a healthy armed controller refuses new risk before any leader/follower write when capacity is unavailable', async () => {
     const ctx = await setup(); expect(ctx.controller.status().armed).toBe(true);
     expect(ctx.controller.status().exposure?.streamCoverage).toHaveLength(2);
+    // Kontinuita má tytéž kontroly (shoda snímku s cache) a nezávisí na dokladu.
+    expect(ctx.controller.status().exposure?.streamContinuity).toHaveLength(2);
+    expect(ctx.controller.status().exposure?.streamContinuity?.every(row => row.synchronized && !row.backlog && row.baselineAt === START - 1)).toBe(true);
+    const coverage = ctx.broker.streamCoverage;
+    ctx.broker.streamCoverage = () => null;
+    expect(ctx.controller.status().exposure?.streamCoverage).toEqual([]);
+    expect(ctx.controller.status().exposure?.streamContinuity).toHaveLength(2);
+    ctx.broker.streamCoverage = coverage;
     ctx.limit();
     const preview = ctx.controller.previewLeaderEntry(ctx.preview());
     expect(preview.blockers.map(blocker => blocker.code)).toContain('tradovate-request-control');

@@ -171,18 +171,22 @@ const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => 
  */
 export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined, evidence: LiveChartIntentEvidence = {}): boolean {
   if (intent.state === 'sending') return false;
-  // Vstup: důkaz workeru se SHODNÝM operationId (příkaz u brokera / fill) stačí sám.
-  if (intent.kind === 'entry' && evidence.workerEntryOperationIds?.has(intent.operationId) === true) return true;
   if (!position || position.issue != null) return false;
   const summary = position.summary;
+  // Vstup (DEMO 10. 11.: čáry záměru mizely 200–250 ms před pozicí): záměr zmizí, až když ho
+  // NAHRADÍ nakreslená pozice / čekající příkaz téže strany na tomtéž kontraktu (i „neověřeno“
+  // — čáry jsou vidět) A zároveň je tu důkaz workeru se shodným operationId nebo změna tvaru
+  // pozice. Samotný důkaz workeru bez nakreslené pozice záměr nesmaže.
+  if (intent.kind === 'entry') {
+    if (!summary || position.symbol !== intent.symbol || summary.side !== intent.side || intent.baselinePosition === undefined) return false;
+    const shape = shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
+    const workerEvidence = evidence.workerEntryOperationIds?.has(intent.operationId) === true;
+    return shape || (workerEvidence && intent.baselinePosition == null);
+  }
   if (summary?.unverified === true) return false;
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
-    // Jen změna tvaru pozice (druh / strana / množství) proti stavu při kliku — P&L, mark ani
-    // jiná cenová pole vstup nikdy nepotvrdí; bez známého výchozího tvaru jen důkaz workeru.
-    case 'entry': return summary.side === intent.side && intent.baselinePosition !== undefined
-      && shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
     case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));
     case 'move-target': case 'add-target': return samePrice(summary.target, legPrice(intent, 'takeProfit'));
     case 'attach': return samePrice(summary.stop, legPrice(intent, 'stopLoss')) && samePrice(summary.target, legPrice(intent, 'takeProfit'));

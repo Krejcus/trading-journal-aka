@@ -1,3 +1,4 @@
+import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
 import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
@@ -387,7 +388,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       }
     }).catch(reason => {
       if (isCurrent()) {
-        setError(reason instanceof Error ? reason.message : 'OAuth účet se nepodařilo propojit s journalem.');
+        setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'OAuth účet se nepodařilo propojit s journalem.');
       }
     });
   }, [connectionData, enabled, journalOptions?.accounts, journalOptions?.onAccountsChanged, profiles, userId]);
@@ -520,7 +521,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           pending: false,
           retryAt,
           failureCount,
-          error: reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.',
+          error: reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Tradovate data se nepodařilo načíst.',
         },
       };
     });
@@ -646,7 +647,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           profileOnboardingBusyRef.current = false;
         }
       }).catch(reason => {
-        if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Profily Tradovate účtů se nepodařilo načíst.');
+        if (isCurrent()) setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Profily Tradovate účtů se nepodařilo načíst.');
       });
       const complete = connectionIds.length > 0 && connectionIds.every(id => {
         const state = dataEnrichmentByConnectionRef.current[id];
@@ -654,7 +655,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       });
       return complete;
     } catch (reason) {
-      if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.');
+      if (isCurrent()) setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Tradovate data se nepodařilo načíst.');
       return false;
     } finally {
       for (const [id, claim] of fullClaims) {
@@ -804,7 +805,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         }
         return nextStatus;
       } catch (reason) {
-        if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Stav Tradovate OAuth se nepodařilo načíst.');
+        if (isCurrent()) setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Stav Tradovate OAuth se nepodařilo načíst.');
         return null;
       } finally {
         if (isCurrent()) {
@@ -827,7 +828,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     try {
       await beginTradovateOAuth(connectionId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Tradovate OAuth se nepodařilo spustit.');
+      setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Tradovate OAuth se nepodařilo spustit.');
       setBusy(null);
     }
   }, []);
@@ -855,7 +856,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       await setTradovateOAuthConnectionArchived(connectionId, archived);
       await refreshStatus();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Připojení se nepodařilo skrýt.');
+      setError(reason instanceof Error ? tradovateHumanErrorMessage(reason.message) : 'Připojení se nepodařilo skrýt.');
       setBusy(null);
     }
   }, [refreshStatus]);

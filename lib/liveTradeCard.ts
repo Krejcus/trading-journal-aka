@@ -241,7 +241,8 @@ export function buildTradeCard(rows: readonly TradeCardRowInput[], orders: reado
   // Čekající vstup: leaderův working Limit/Stop a u followerů jejich kopie
   // (stejný kontrakt, stejná strana). SL/TP bracketu jsou do fillu Suspended.
   const leader = members.find(row => row.isLeader);
-  const entries = (row: typeof members[number]) => orders.filter(order => order.working
+  // Noha bracketu (OSO rodič / OCO pár) není vstup: po stop-outu zbylý TP ≠ „SELL LIMIT čeká“.
+  const entries = (row: typeof members[number]) => orders.filter(order => order.working && order.bracketLeg !== true
     && order.accountId === row.accountId && (isLimit(order) || isStop(order)));
   const leaderEntry = leader ? entries(leader)[0] : undefined;
   if (!leader || !leaderEntry) return null;

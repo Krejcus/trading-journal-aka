@@ -76,7 +76,10 @@ describe('čekající čára po odeslání: rozhoduje kód odpovědi, ne text', 
     expect(store.snapshot().map(intent => intent.state)).toEqual(['sending']);
     answer({ status: 'acknowledged', operationId: 'entry:abcdefgh8' });
     await tracked;
+    // Bez nakreslené pozice záměr drží (žádné bliknutí na flat); s pozicí téže strany zmizí.
     store.prune(Date.now(), null, evidence);
+    expect(store.snapshot().map(intent => intent.state)).toEqual(['acknowledged']);
+    store.prune(Date.now(), { key: 'p', symbol: 'MNQZ6', lines: [], issue: null, summary: { kind: 'pending', side: 'long', quantity: 1 } } as never, evidence);
     expect(store.snapshot()).toEqual([]);
   });
 });
