@@ -195,3 +195,25 @@ Postup nasazení a co sledovat: `docs/reviews/live-latency-release-20261110.md`.
   a 2 000 příkazů správy za 24 h. Úplné vypnutí oponent nedoporučil: správa se neúčtuje do lokálního rozpočtu
   a zacyklený příkaz každé 2 s by na čtyřech účtech vyvolal skutečnou hodinovou penalizaci brokera.
   Účinek pro appku až po nasazení webu (konstanta je v serverové části).
+
+### Měření s živou cenou z IBKR (DEMO, worker 6a651ed9, držené spojení, 10. 11. 05:13–05:19 UTC)
+
+Šest celých cyklů: skutečný Market se SL/TP → 2× posun SL a TP → zavření → čekající Limit → zrušení.
+Časy „provedení“ z logu workeru; „od odeslání“ zahrnuje ~0,4 s fronty měřicího skriptu bez push kanálu.
+
+| | Před (cd530285) | Po (6a651ed9) |
+|---|---|---|
+| Market — provedení | 341 ms (264–1498, n=7) | 252 ms (244–282, n=6) |
+| Market — pozice ve stavu workeru od odeslání | 2033 ms | 1118 ms (1074–1681) |
+| Posun SL — provedení | 317 ms (n=11) | 244 ms (208–365, n=12) |
+| Posun TP — provedení | 246 ms (n=12) | 234 ms (212–433, n=12) |
+| Zavření — provedení | 1982 ms (1260–2443, n=6) | 956 ms (788–1350, n=6) |
+| Zavření — flat ve stavu workeru od odeslání | 2025 ms | 1240 ms (1076–1487) |
+| Čekající Limit — provedení | — | 224 ms (n=6) |
+| Zrušení Limitu — provedení | — | 256 ms (223–404, n=5) |
+| Dotažení verze příkazu | medián ~880 ms | medián 143 ms (86–352, n=15) |
+| Vstup odmítnutý rozpočtem | 3 ze 6 | 0 z 12 |
+
+Rozpad jednoho zavření z logu: zápis 148 ms · flat ve streamu 368 ms · ověření REST 227 ms. Během měření žádný
+`FAIL-CLOSED`, `socket-message-error` ani odmítnutí rozpočtem (jediný řádek je čtení front kontraktu hned po
+restartu, které se samo zotavilo). Pořád jde o DEMO účet a jeden účet bez followerů.
