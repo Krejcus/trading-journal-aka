@@ -877,6 +877,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => liveData ? tradovateCopyTradeOrders(liveData) : [],
     [liveData],
   );
+  // Příkazy ze stejných dat jako `overviewSnapshot` — štít ochrany nesmí kombinovat
+  // čerstvé „ověřeno“ se starším seznamem příkazů.
+  const overviewOrders = useMemo(
+    () => overviewLiveData === liveData ? copyTradeOrders : overviewLiveData ? tradovateCopyTradeOrders(overviewLiveData) : [],
+    [overviewLiveData, liveData, copyTradeOrders],
+  );
   // Skutečné poplatky z fillů pro kartu obchodu (jen zobrazení).
   const tradeFeeRates = useMemo(
     () => liveData ? tradeCardFeeRates(liveData.accounts) : new Map<string, number>(),
@@ -2450,7 +2456,11 @@ acceptAgentStatus((await executeAgent({
               journalHistory={journalHistory}
               userId={userId}
               owner={cardOwner}
-              snapshot={overviewSnapshot ?? copyTradeSnapshot}
+              snapshot={displaySnapshot ?? copyTradeSnapshot}
+              // Jen vykreslení řádků (pozice + příkazy z téhož zdroje): kontinuita streamu jako graf.
+              // ARM předkontrola, „flat“, Flatten náhled a ostrov zůstávají na `snapshot`/`orders` (doklad).
+              rowDisplaySnapshot={overviewSnapshot ?? undefined}
+              rowDisplayOrders={overviewOrders}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
               // C7: Dashboard „Zrušit“ jen přes `dashboardCancelTarget` (vlastní čekající vstup leadera);
@@ -2564,7 +2574,7 @@ acceptAgentStatus((await executeAgent({
             <LiveRiskTabSlot
               runtimeAvailable={runtimeAvailable}
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
-              snapshot={overviewSnapshot ?? copyTradeSnapshot}
+              snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               group={workerGroup}
               status={agentStatus?.controller ?? null}
@@ -2631,7 +2641,7 @@ acceptAgentStatus((await executeAgent({
           }}
         />
       ) : null}
-      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetailSlot key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
+      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetailSlot key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={overviewOrders}
         dailyPnlPending={false} leader={selectedMembership?.leaderAccountId === selectedAccountId}
         multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
         onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}

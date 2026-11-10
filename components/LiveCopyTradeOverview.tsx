@@ -454,6 +454,10 @@ interface Props {
   /** Komu den patří — karta dne se posílá dál, bez jména je anonymní. */
   owner?: { name: string; avatar?: string | null };
   snapshot: LiveSnapshot;
+  /** Jen vykreslení řádků účtů: pozice z kontinuity streamu (jako graf). Nikdy ARM/flat/Flatten. */
+  rowDisplaySnapshot?: LiveSnapshot;
+  /** Příkazy ze stejných dat jako `rowDisplaySnapshot`. */
+  rowDisplayOrders?: LiveOrder[];
   accountProfiles?: TradovateAccountProfile[];
   orders?: LiveOrder[];
   onAccount?: (account: LiveAccount) => void;
@@ -852,6 +856,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   userId = '',
   owner,
   snapshot,
+  rowDisplaySnapshot,
+  rowDisplayOrders,
   accountProfiles = [],
   orders = [],
   onAccount,
@@ -1221,6 +1227,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
+  // INV-UI: kontinuita jen do vykreslení řádků. ARM blok, „flat“, Flatten náhled a ostrov čtou `accountsById`/`orders`.
+  const rowAccountsById = useMemo(
+    () => rowDisplaySnapshot ? new Map(rowDisplaySnapshot.accounts.map(a => [a.id, a])) : accountsById,
+    [rowDisplaySnapshot, accountsById],
+  );
+  const rowOrders = rowDisplaySnapshot && rowDisplayOrders ? rowDisplayOrders : orders;
   const tradeCutsByAccount = useMemo(() => new Map(
     (followerCuts ?? [])
       .filter(cut => cut.source === 'manual' && cut.scope === 'trade' && cut.until > Date.now())
@@ -2411,7 +2423,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ) : compact ? (
           <div className="space-y-3 px-3 pb-3" data-testid="compact-group-list">
             {orderedGroups.map(group => {
-              const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
+              const rows = groupRows(group, rowAccountsById, sourceGroupsById.get(group.id), profilesById);
               const selected = group.id === executionGroupId;
               const armed = selected && copierArmed;
               return (
@@ -2421,7 +2433,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   key={group.id}
                   group={group}
                   rows={rows}
-                  tradeCard={buildTradeCard(rows, orders, tradeFeeRates)}
+                  tradeCard={buildTradeCard(rows, rowOrders, tradeFeeRates)}
                   armed={armed}
                   islandTone={islandModel && islandGroup?.id === group.id && islandModel.tone !== 'muted'
                     ? islandModel.tone
@@ -2442,7 +2454,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   onFollowerEnabled={selected && commandAdapter
                     ? (accountId, enabled, onRejected) => toggleFollower(group.id, accountId, enabled, onRejected)
                     : undefined}
-                  orders={orders}
+                  orders={rowOrders}
                   isLive={isLive}
                   onAccount={onAccount}
                   busyCommand={commandBusy}
@@ -2489,8 +2501,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 </tr>
               </thead>
               {orderedGroups.map(group => {
-                  const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
-                  const tradeCard = buildTradeCard(rows, orders, tradeFeeRates);
+                  const rows = groupRows(group, rowAccountsById, sourceGroupsById.get(group.id), profilesById);
+                  const tradeCard = buildTradeCard(rows, rowOrders, tradeFeeRates);
                   const selected = group.id === executionGroupId;
                   // `groups` se po mountu synchronizují efektem, ale už první
                   // render musí respektovat autoritativní runtime `enabled`.
@@ -2606,7 +2618,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               dailyPnlPending={dailyPnlPending}
                               columns={visibleColumns}
                               tradeCard={tradeCard}
-                              orders={orders}
+                              orders={rowOrders}
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
                               participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
