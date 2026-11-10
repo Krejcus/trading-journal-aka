@@ -288,6 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 22:12 — Claude: NASAZENO c40faab1 (chart-worker-projection), Filip „nasaď to a otestuj“
+
+- `main`: revert revertu 97774d38 + merge větve (strom shodný s 1b015607). Vercel READY.
+- Worker: reinstall z `~/alphatrade-worktrees/release-20261110-chart` se stejnými parametry
+  (DEMO 61038658, manual-only, max 1, `--tv off --tv-stream on --price-source ibkr
+  --price-alerts on --pending-legs on --tradovate-keepalive on --allow-full-dev-origins true`).
+  Brána čistá. Po startu DISARMED, `streamCoverage` i `streamContinuity` pro 61038658.
+- Ověřeno bez obchodu:
+  - flat graf je bez „neověřeno“ a bez čar;
+  - ARM DEMO skupiny z UI prošel a OFF taky;
+  - vstup z localhostu skončil typovaně „Neodesláno: z localhostu se k brokerovi nezapisuje“.
+- NEOVĚŘENO naživo, protože obchod jde poslat jen z produkčního webu (fill → pozice bez blikání,
+  potvrzení REST → rozšíření SL a přikoupení, × → nový vstup):
+  - Claude na produkci pokyny k brokerovi neposílá;
+  - DEMO test musí kliknout Filip.
+- iPhone appka nepřebuildovaná. Codex review finálního kódu po 13. 11.
+
 ### 2026-11-10 (večer) — Claude: dokončení větve claude/chart-worker-projection-20261110 (od 184ffdd)
 
 - Nálezy Codexu 9aa17b7: 1–3 byly v 184ffdd už opravené. Bod 4: přehled LIVE kreslí řádky účtů
