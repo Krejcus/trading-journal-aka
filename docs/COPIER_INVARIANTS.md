@@ -2230,12 +2230,14 @@ existující ochranu.
   Stav „neověřeno“ nesou VŠECHNY cesty zobrazení: čáry pozice (tlumené, štítek), druhý kanál čar
   (pracující příkazy, `liveChartWorkingSource.unverified`), karta ochrany (text krytí, řádky účtů
   `unverified` a nikdy `protectedFully`; PC panel i telefonní list) a skupina v hlavičce grafu.
-  Ovládání po fillu NEMIZÍ (review Codexu 10. 11.): × a „+ SL/TP“ zůstávají, BE je zašedlé
-  s důvodem, jen tažení je vypnuté. Autorizace stojí jen na platném dokladu / ověřeném čtení:
+  Ovládání po fillu NEMIZÍ (review Codexu 10. 11.): ×, „+ SL/TP“, BE i tažení SL (jen utažení)
+  zůstávají; co z neověřené pozice odejít smí, rozhoduje JEN politika níže (žádné plošné
+  zamčení). Autorizace stojí jen na platném dokladu / ověřeném čtení:
   `isLiveAccountReadVerified` projekci vždy odmítá (kreslí jen výslovná zobrazovací kopie
-  `liveChartDisplayAccounts` uvnitř hooku) a každé odeslání z neověřené pozice grafu — správa,
-  doplnění SL/TP, holé nohy, × holé pozice, přikoupení — odmítne `lib/liveChartCommandGuard.ts`
-  chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz. Obyčejný vstup,
+  `liveChartDisplayAccounts` uvnitř hooku). Každé odeslání z grafu jde přes
+  `lib/liveChartCommandGuard.ts` (`gateFor`), který na neověřené pozici odmítne akce zvyšující
+  riziko chybou `LiveCommandNotSentError` (kód `not-sent`) dřív, než vznikne příkaz; akce
+  snižující riziko pustí. Vstup na jiném kontraktu,
   Flatten, OFF a Kill brána neblokuje (INV-UI-02). Desková data (`overlayWorkerExposure` v desku,
   způsobilost, plán REST čtení) dál vyžadují doklad.
   Pořadí REST vs. worker: podle SEKVENCE ZAHÁJENÍ REST požadavku v prohlížeči
@@ -2252,10 +2254,12 @@ existující ochranu.
   Účet s platným řádkem `exposure.streamContinuity` (tytéž kontroly jako doklad, ≤ 8 s) je
   z čerstvého neobnoveného statusu OVĚŘENÝ i s otevřenou pozicí — správa z grafu jde (worker vše
   ověří u brokera). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
-  návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 15 s
-  (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.). Nikdy
-  přes ověřený flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl. Paměť
-  žije v modulu (přežije remount grafu).
+  návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 5 s
+  (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.; review
+  6bb8ef7 zkrátilo 15 s → 5 s, aby neznámý stop-out nezakrývala stará pozice). Nikdy přes ověřený
+  flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl. Paměť žije v modulu
+  (přežije remount grafu) pod klíčem IDENTITY pohledu: id skupiny, leader, množina followerů
+  a požadovaný cíl — přepnutí skupiny ani změna vlastníka účtů nepodrží pozici jiného leadera.
   **Neověřená pozice a příkazy (checklist 10. 11. 2026, Filip):** nezamyká se vše kromě
   Flattenu. `lib/liveChartRiskPolicy.ts` povolí akce snižující riziko — zavřít (i pozici z víc
   ticketů), zrušit vstup, utáhnout SL / BE (jen směrem k trhu proti brokerově SL), přidat SL/TP.
@@ -2273,7 +2277,12 @@ existující ochranu.
   s jiným `operationId` = neznámý; pozdní odpověď po vypršení (45 s odesílání) nic neoživí.
   Čekající vstup se „potvrdí“ jen důkazem workeru se SHODNÝM `operationId` (příkaz u brokera nebo
   fill: `manualEntries[].entryBrokerOrderId` / `timing.orderAt|fillAt|positionAt`) nebo změnou tvaru
-  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
+  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark. Záměr
+  zmizí jen, když ho NAHRADÍ kreslitelná pozice (známá cena vstupu, týž kontrakt a strana; review
+  6bb8ef7) — bez ní drží. Během odesílání ho nahradí jen změna tvaru (nezdvojí už nakreslenou
+  pozici), správa (SL/TP/limit) během odesílání nemizí nikdy. Pozor: „změna tvaru“ nemusí
+  pocházet z tohoto záměru (částečné zavření, příkaz z jiného zařízení) — záměr pak zmizí dřív;
+  je to jen čára, nic podle úložiště záměrů nepovoluje ani neblokuje odeslání.
   „Neodesláno“ v celém LIVE UI (runner správy, „Zrušit čekající“, × holé pozice, panel vstupu,
   telefon, náhled) rozhoduje jen `lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z klienta
   před relayem, nebo relay odmítnutí HTTP 400/409 s přesným kódem z těla odpovědi

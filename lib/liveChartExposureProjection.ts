@@ -33,8 +33,8 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
  *   neutrální „neověřené“ bez čar (INV-UI-01), nikdy flat.
  *
  * Autorizace se tím NEMĚNÍ: `overlayWorkerExposure` v desku (přehled, způsobilost,
- * plán čtení REST) dál vyžaduje doklad, `isLiveAccountReadVerified` taky; příkazy
- * z neověřené projekce desk odmítne (`liveChartProjectionManageBlock`).
+ * plán čtení REST) dál vyžaduje doklad, `isLiveAccountReadVerified` taky; z neověřené pozice
+ * projdou jen akce snižující riziko (`lib/liveChartRiskPolicy.ts`), worker vše ověří znovu.
  */
 
 /**
@@ -44,7 +44,6 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
 export const LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS = WORKER_EXPOSURE_MAX_AGE_MS;
 /** Ručně vypnutý režim followera: worker ho hlásí OK bez čtení pozice. */
 const WORKER_FOLLOWER_OFF_DETAIL = 'vypnutý follower';
-export const LIVE_CHART_UNVERIFIED_MANAGE_TEXT = 'Pozice v grafu je zatím neověřená (stav workeru bez dokladu) — nic se neodeslalo. Za chvilku to půjde; zavřít hned jde Flattenem.';
 
 const unavailable = { availability: 'unavailable' as const, count: 0, httpStatus: null };
 
@@ -226,14 +225,6 @@ export function markLiveChartPositionProjection(
 /** Jediný text stavu „neověřeno“ pro všechny cesty zobrazení grafu. */
 export const LIVE_CHART_UNVERIFIED_NOTE = 'neověřeno';
 
-/**
- * Brána odeslání správy z grafu: neověřená projekce nikdy neautorizuje příkaz
- * (INV-UI-01/03). null = smí dál (rozhoduje worker a broker). Text obsahuje
- * „nic se neodeslalo“, takže UI hlásí „Neodesláno“, ne neznámý výsledek.
- */
-export function liveChartProjectionManageBlock(position: Pick<LiveChartPosition, 'summary'> | null | undefined): string | null {
-  return position?.summary?.unverified === true ? LIVE_CHART_UNVERIFIED_MANAGE_TEXT : null;
-}
 
 /**
  * Kopie účtů jen pro kreslení grafu (karta, čáry, pracující příkazy): bez značky projekce,
@@ -251,9 +242,9 @@ export function liveChartDisplayAccounts(accounts: readonly LiveAccount[]): Live
 /**
  * Nejdéle tak dlouho graf podrží poslední nakreslenou pozici, když nový pohled je jen
  * „neznámý“ (issue) — např. návrat na tab, než přijde nový status (DEMO 10. 11.: 600–680 ms
- * bez čar). Stejný horizont jako INV-FRESH-03.
+ * bez čar). Krátce (review Codexu): neznámý stop-out nesmí dlouho zakrývat stará pozice.
  */
-export const LIVE_CHART_HOLD_LAST_DRAWN_MS = 15_000;
+export const LIVE_CHART_HOLD_LAST_DRAWN_MS = 5_000;
 
 export interface LiveChartDrawnMemory { position: LiveChartPosition; at: number }
 
@@ -290,7 +281,24 @@ export function holdLastDrawnPosition(
  * se drží jako neověřený, dokud nepřijde nový (nejvýš `LIVE_CHART_HOLD_LAST_DRAWN_MS`).
  */
 const drawnMemoryByTarget = new Map<string, LiveChartDrawnMemory>();
-export const liveChartDrawnMemory = (target: string): LiveChartDrawnMemory | null => drawnMemoryByTarget.get(target) ?? null;
+/**
+ * Klíč paměti = IDENTITA pohledu: id skupiny, leader, množina followerů a požadovaný cíl
+ * (review 6bb8ef7) — přepnutí skupiny nebo změna vlastníků účtů nikdy nepodrží pozici jiného leadera.
+ */
+export function liveChartDrawnMemoryKey(
+  group: { id?: string | null; leaderAccountId?: number | null; followers?: ReadonlyArray<{ accountId: number }> | null } | null | undefined,
+  requested: unknown,
+): string {
+  return JSON.stringify([group?.id ?? null, group?.leaderAccountId ?? null,
+    (group?.followers ?? []).map(follower => follower.accountId).sort((a, b) => a - b), requested ?? null]);
+}
+/** Paměť cíle; při čtení zahodí všechny záznamy starší než okno držení (mapa neroste). */
+export function liveChartDrawnMemory(target: string, now = Date.now()): LiveChartDrawnMemory | null {
+  for (const [key, memory] of drawnMemoryByTarget) {
+    if (now - memory.at > LIVE_CHART_HOLD_LAST_DRAWN_MS) drawnMemoryByTarget.delete(key);
+  }
+  return drawnMemoryByTarget.get(target) ?? null;
+}
 export function rememberLiveChartDrawn(target: string, memory: LiveChartDrawnMemory | null): void {
   if (memory) drawnMemoryByTarget.set(target, memory);
   else drawnMemoryByTarget.delete(target);

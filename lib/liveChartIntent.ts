@@ -170,21 +170,27 @@ const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => 
  * množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
  */
 export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined, evidence: LiveChartIntentEvidence = {}): boolean {
-  if (intent.state === 'sending') return false;
   if (!position || position.issue != null) return false;
   const summary = position.summary;
+  // Náhrada musí být KRESLITELNÁ (čáry pozice potřebují cenu vstupu): bez ní záměr drží.
+  const drawable = summary != null && summary.entry != null && Number.isFinite(summary.entry);
   // Vstup (DEMO 10. 11.: čáry záměru mizely 200–250 ms před pozicí): záměr zmizí, až když ho
   // NAHRADÍ nakreslená pozice / čekající příkaz téže strany na tomtéž kontraktu (i „neověřeno“
   // — čáry jsou vidět) A zároveň je tu důkaz workeru se shodným operationId nebo změna tvaru
   // pozice. Samotný důkaz workeru bez nakreslené pozice záměr nesmaže.
   if (intent.kind === 'entry') {
-    if (!summary || position.symbol !== intent.symbol || summary.side !== intent.side || intent.baselinePosition === undefined) return false;
+    if (!drawable || position.symbol !== intent.symbol || summary!.side !== intent.side || intent.baselinePosition === undefined) return false;
     const shape = shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
+    // Změna tvaru proti stavu při kliku smí záměr nahradit i během odesílání (jinak by čára
+    // zdvojila už nakreslenou pozici); důkaz workeru až po výsledku.
+    if (intent.state === 'sending') return shape;
     const workerEvidence = evidence.workerEntryOperationIds?.has(intent.operationId) === true;
     return shape || (workerEvidence && intent.baselinePosition == null);
   }
+  if (intent.state === 'sending') return false;
   if (summary?.unverified === true) return false;
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
+  if (!drawable) return false;
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
     case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));

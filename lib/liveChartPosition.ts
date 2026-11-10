@@ -38,8 +38,8 @@ export interface LiveChartPositionSummary {
   rows: readonly LiveChartPositionAccountRow[];
   /**
    * Aspoň jeden účet je jen ze zobrazovací projekce workeru bez dokladu kontinuity
-   * (`lib/liveChartExposureProjection.ts`): čáry se kreslí se štítkem „neověřeno“,
-   * bez ovládání, a desk z takového stavu nic neodešle. Nikdy autorizace.
+   * (`lib/liveChartExposureProjection.ts`) nebo držený stav: čáry tlumené se štítkem
+   * „neověřeno“; projdou jen akce snižující riziko (`lib/liveChartRiskPolicy.ts`). Nikdy autorizace.
    */
   unverified?: boolean;
   /**

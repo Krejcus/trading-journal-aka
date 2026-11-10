@@ -1,11 +1,12 @@
+import { liveUnverifiedActionBlock } from '../lib/liveChartRiskPolicy';
 import { describe, expect, it } from 'vitest';
 import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';
 import {
-  LIVE_CHART_UNVERIFIED_MANAGE_TEXT, liveChartDisplayAccounts, liveChartProjectionManageBlock, markLiveChartPositionProjection,
-  projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS, liveChartDrawnMemory, rememberLiveChartDrawn, resetLiveChartDrawnMemoryForTests,
+  liveChartDisplayAccounts, markLiveChartPositionProjection,
+  projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS, liveChartDrawnMemory, liveChartDrawnMemoryKey, rememberLiveChartDrawn, resetLiveChartDrawnMemoryForTests,
 } from '../lib/liveChartExposureProjection';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { buildTradeCard } from '../lib/liveTradeCard';
@@ -120,7 +121,7 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     expect(position.summary).toMatchObject({ kind: 'position', side: 'short', quantity: 2, stop: 28_790 });
     expect(position.summary?.unverified).toBeUndefined();
     expect(lines.find(line => line.kind === 'stopLoss')).toMatchObject({ draggable: true });
-    expect(liveChartProjectionManageBlock(position)).toBeNull();
+    expect(liveUnverifiedActionBlock(position.summary, { kind: 'move-target' })).toBeNull();
     // Řízení REST čtení kontinuitu NEbere: bez dokladu web dál čte REST sám.
     expect(workerConnectionReadPlan({ ...restFlat(), ...owner }, { status: withContinuity(), observedAt: NOW - 1_000 }, NOW).suppressFullTick).toBe(false);
     // Obnovená cache ani nečerstvý status kontinuitu nepoužijí; starý řádek (> 8 s) taky ne.
@@ -401,10 +402,11 @@ describe('autorizace dál vyžaduje doklad', () => {
 
   it('z neověřené pozice desk nic neodešle; ověřená projde dál k workeru', () => {
     const unverified = chartLines(projectLiveChartExposure(restFlat(), status(), NOW - 1_000, NOW, owners, fresh).data!).position;
-    expect(liveChartProjectionManageBlock(unverified)).toBe(LIVE_CHART_UNVERIFIED_MANAGE_TEXT);
-    expect(LIVE_CHART_UNVERIFIED_MANAGE_TEXT).toMatch(/nic se neodeslalo/);
+    // Z neověřené pozice neprojde nic, co riziko zvyšuje; snížení rizika ano.
+    expect(liveUnverifiedActionBlock(unverified.summary, { kind: 'entry' })).toMatch(/Nic se neodeslalo/);
+    expect(liveUnverifiedActionBlock(unverified.summary, { kind: 'close' })).toBeNull();
     const verified = chartLines(projectLiveChartExposure(restFlat(), status({ proof: true }), NOW - 1_000, NOW, owners, fresh).data!).position;
-    expect(liveChartProjectionManageBlock(verified)).toBeNull();
+    expect(liveUnverifiedActionBlock(verified.summary, { kind: 'entry' })).toBeNull();
   });
 });
 
@@ -424,7 +426,8 @@ describe('DEMO 10. 11. bod 3: návrat na tab — poslední nakreslený stav se d
     expect(back.shown.summary).toMatchObject({ side: 'short', quantity: 2, unverified: true });
     expect(back.shown.summary!.protection).toMatch(/neověřeno/);
     // Držený stav nic neautorizuje.
-    expect(liveChartProjectionManageBlock(back.shown)).toBe(LIVE_CHART_UNVERIFIED_MANAGE_TEXT);
+    expect(liveUnverifiedActionBlock(back.shown.summary, { kind: 'scale-in' })).toMatch(/přikoupit/);
+    expect(liveUnverifiedActionBlock(back.shown.summary, { kind: 'close' })).toBeNull();
     // Nový stav (ověřený) ho nahradí hned.
     memory = back.memory;
     const fresh2 = holdLastDrawnPosition(memory, drawn({ quantity: 1 }), NOW + 700);
@@ -445,16 +448,16 @@ describe('DEMO 10. 11. bod 3: návrat na tab — poslední nakreslený stav se d
   it('checklist ★: remount grafu — paměť posledního stavu žije v modulu (ne v komponentě), takže nový mount neblikne na flat', () => {
     resetLiveChartDrawnMemoryForTests();
     // Instance A nakreslí pozici a odpojí se.
-    rememberLiveChartDrawn('group', holdLastDrawnPosition(liveChartDrawnMemory('group'), drawn(), NOW).memory);
+    rememberLiveChartDrawn('group', holdLastDrawnPosition(liveChartDrawnMemory('group', NOW), drawn(), NOW).memory);
     // Instance B (nový mount, žádné vlastní refs) dostane nejdřív jen neověřené čtení.
-    const afterRemount = holdLastDrawnPosition(liveChartDrawnMemory('group'), unknown, NOW + 400);
+    const afterRemount = holdLastDrawnPosition(liveChartDrawnMemory('group', NOW + 400), unknown, NOW + 400);
     expect(afterRemount.shown.summary).toMatchObject({ side: 'short', unverified: true });
     // Jiný cíl pohledu cizí paměť nepoužije.
-    expect(holdLastDrawnPosition(liveChartDrawnMemory('100'), unknown, NOW + 400).shown).toBe(unknown);
+    expect(holdLastDrawnPosition(liveChartDrawnMemory('100', NOW + 400), unknown, NOW + 400).shown).toBe(unknown);
     const hook = readFileSync('hooks/useLiveChartData.ts', 'utf8');
-    expect(hook).toMatch(/holdLastDrawnPosition\(enabled \? liveChartDrawnMemory\(targetKey\) : null/);
+    expect(hook).toMatch(/holdLastDrawnPosition\(enabled \? liveChartDrawnMemory\(targetKey, now\) : null/);
     // Klíč nese skupinu (po přepnutí skupiny se nedrží cizí pozice) a vypnutý graf paměť maže.
-    expect(hook).toMatch(/const targetKey = `\$\{viewGroup\?\.id \?\? 'none'\}\|\$\{requested\}`;/);
+    expect(hook).toMatch(/const targetKey = liveChartDrawnMemoryKey\(viewGroup, requested\);/);
     expect(hook).toMatch(/else rememberLiveChartDrawn\(targetKey, null\);/);
     expect(hook).not.toMatch(/drawnRef/);
     resetLiveChartDrawnMemoryForTests();

@@ -288,6 +288,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: 7. kolo, review Codexu 6bb8ef7 (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; RESTART WORKERU nutný kvůli změnám z 6. kola)
+- **P1 risk-redukce:** politika z 6. kola (`lib/liveChartRiskPolicy.ts`) už rozhodovala bránu i
+  plánovače; odstraněn pozůstatek plošné blokace (`liveChartProjectionManageBlock`,
+  `LIVE_CHART_UNVERIFIED_MANAGE_TEXT`) a INV-UI-03 přepsán podle checklistu (žádné „zamčení vše
+  kromě Flattenu“).
+- **P2 držená pozice:** klíč paměti v `useLiveChartData` = id skupiny + leader + followeři +
+  požadovaný cíl — přepnutí skupiny/vlastníka nepodrží pozici jiného leadera.
+- **P2 záměr bez náhrady:** `intentLanded` vyžaduje kreslitelnou náhradu (`summary.entry`); během
+  odesílání vstup zmizí jen při změně tvaru (nezdvojí nakreslenou pozici), správa nikdy.
+- **Poznámka stop-out:** držení poslední pozice 15 s → 5 s.
+- Kritik (copier-design-critic): OK S VÝHRADAMI → zapracováno: klíč jako čistá funkce
+  `liveChartDrawnMemoryKey` s testem chování, paměť maže záznamy starší než okno držení,
+  komentář 5 s, poznámka v INV-UI-03 o cizí změně tvaru, testy stavu `sending` a pozdního výsledku.
+- Testy: `tests/liveChartChecklist.test.ts` (+7), `liveCommandErrors` (fixture s cenou vstupu).
+  tsc bez nových chyb, build OK, `npm test` 8663 OK / 3 známé selhání (i na čistém main).
+
 ### 2026-11-10 — LIVE graf: 6. kolo, checklist obchodovatelnosti (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; nutný RESTART WORKERU)
 
 - Filipův závazný checklist a Codexovo review proti f465880. Přednost měly ★ položky a P1.
@@ -336,7 +352,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Blokující 2, bliknutí na flat po přijetí příkazu.** Záměr vstupu zmizí, až ho nahradí
   nakreslená pozice téže strany (i „neověřeno“). Samotný důkaz workeru už nestačí.
 - **Blokující 3, bliknutí na flat po návratu na tab.** Krátce neznámý stav drží poslední
-  nakreslenou pozici jako neověřenou (nejvýš 15 s, nikdy přes ověřený flat).
+  nakreslenou pozici jako neověřenou (nejvýš 15 s — v 7. kole zkráceno na 5 s, nikdy přes ověřený flat).
 - **Bod 4:** BE / BE+ / BE + poplatky a posun v panelu jsou u neověřené pozice zašedlé s důvodem.
 - **Bod 5:** nohy bracketu (OSO rodič / OCO pár; od workeru `exposure.orders.parentOrderId/ocoId`,
   jinak z REST téhož příkazu) nejsou čekající vstup. Zbylý TP po stop-outu už se nekreslí jako
