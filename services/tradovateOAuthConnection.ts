@@ -1,3 +1,4 @@
+import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { perfDuration, perfMark, perfServerTiming, perfSlug } from '../lib/perfTrace';
 import {
   markLiveCommandResult,
@@ -497,7 +498,8 @@ export async function executeTradovateCopierRelayCommand(
   } catch (reason) {
     wakeTimers.forEach(timer => clearTimeout(timer));
     markTraceResult('error', 'request-error');
-    throw reason;
+    // Chyba SAMOTNÉHO odeslání: jen tady smí kód odmítnutí znamenat „neodesláno“.
+    throw withLiveRelayPhase(reason, 'submit');
   }
   perfMark(`${perfCommand}:${queued.resolution ? 'inline' : 'queued'}`);
   if (queued.resolution) {
@@ -513,10 +515,10 @@ export async function executeTradovateCopierRelayCommand(
         ? { details: queued.resolution.result.errorDetails }
         : undefined,
     );
-    throw new LocalCopierAgentCommandError(
+    throw withLiveRelayPhase(new LocalCopierAgentCommandError(
       queued.resolution.error || `Copier příkaz skončil stavem ${queued.resolution.status}`,
       details,
-    );
+    ), 'accepted');
   }
   // Nouzový Flatten smí u pomalého brokera běžet i minuty (retry čtení,
   // stavové potvrzení); server ho navíc přichytí k už běžícímu Flattenu,
@@ -538,7 +540,8 @@ export async function executeTradovateCopierRelayCommand(
       );
     } catch (reason) {
       markTraceResult('error', 'poll-error');
-      throw reason;
+      // POST přijat: chyba pollu (i HTTP 405/409) = výsledek neznámý, nikdy „neodesláno“.
+      throw withLiveRelayPhase(reason, 'accepted');
     }
     perfMark(`${perfCommand}:poll`);
     if (result.status === 'succeeded' && result.result) {
@@ -554,7 +557,7 @@ export async function executeTradovateCopierRelayCommand(
           ? { details: result.result.errorDetails }
           : undefined,
       );
-      throw new LocalCopierAgentCommandError(result.error || `Copier příkaz skončil stavem ${result.status}`, details);
+      throw withLiveRelayPhase(new LocalCopierAgentCommandError(result.error || `Copier příkaz skončil stavem ${result.status}`, details), 'accepted');
     }
     await new Promise<void>((resolve, reject) => {
       let timer: number | undefined;
@@ -578,7 +581,7 @@ export async function executeTradovateCopierRelayCommand(
     throw new CopierBrakeQueuedError(queuedBrakeType, queued.expiresAt);
   }
   markTraceResult('error', 'timeout');
-  throw new Error('Mac worker příkaz včas nepotvrdil. Výsledek není ověřený; zkontroluj stav kopírky a účtů. Příkaz nebude automaticky opakován.');
+  throw withLiveRelayPhase(new Error('Mac worker příkaz včas nepotvrdil. Výsledek není ověřený; zkontroluj stav kopírky a účtů. Příkaz nebude automaticky opakován.'), 'accepted');
 }
 
 export function runTradovateLivePnlTick(

@@ -1,3 +1,4 @@
+import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
@@ -137,7 +138,7 @@ describe('texty výsledků (shodné s dosavadním PC runLiveManage)', () => {
     expect(ack('move-stop', 'Noha se mezitím vyplnila — vyplnil se SL.')).toMatchObject({ tone: 'warn', text: 'Noha se mezitím vyplnila — vyplnil se SL.' });
   });
   it('mapování prokazatelně neodeslaných chyb — podle kódu relay odmítnutí / typu chyby, ne textu', () => {
-    const relay = (code: string, status = 409) => new TradovateRequestError(code, status, null, code);
+    const relay = (code: string, status = 409) => withLiveRelayPhase(new TradovateRequestError(code, status, null, code), 'submit');
     expect(liveManageErrorNotice(relay('copier-relay-entry-busy'), NOW)).toMatchObject({ tone: 'bad', text: 'Neodesláno: jiná změna se právě zpracovává' });
     expect(liveManageErrorNotice(relay('copier-relay-entry-superseded'), NOW).text).toBe('Neodesláno: mezitím přišlo vypnutí kopírky (brzda)');
     expect(liveManageErrorNotice(relay('copier-relay-entry-not-admitted: expired'), NOW).text).toBe('Neodesláno: server změnu nepřijal');

@@ -118,17 +118,22 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
 ): LiveChartProjectionResult<T> {
   const proven = overlayWorkerExposure(data, status, observedAtMs, now, owners);
   if (!proven) return { data: null, workerShown: [] };
-  if (!input.trusted) return { data: proven, workerShown: [] };
+  // Obnovená cache (`trusted: false`) se jako stav workeru NEpromítá a nic neeviduje — ale
+  // ochrana pořadí níže (starší REST nepřepíše naposledy zobrazený stav workeru) platí na
+  // VŠECH cestách, i při obnovení statusu z cache (INV-UI-01/03; review Codexu 10. 11., P1).
   const exposure = status?.controller?.exposure;
   const observed = observedAtMs != null && Number.isFinite(observedAtMs) && observedAtMs <= now + 5_000 ? observedAtMs : null;
-  const workerLive = input.statusFresh && observed != null && status?.controller?.connected === true && !!exposure?.orders
+  const workerLive = input.trusted && input.statusFresh && observed != null && status?.controller?.connected === true && !!exposure?.orders
     && now - observed <= LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS;
   const known = workerLive ? workerKnownAccounts(status) : new Set<number>();
   const context = workerLive && exposure ? workerExposureOverlayContext(proven, exposure) : null;
   const workerShown: number[] = [];
   let changed = false;
   const accounts = proven.accounts.map((account): TradovateAccountDataAccount => {
-    if (account.readState?.displayStreamCoverage) { workerShown.push(account.id); return account; }
+    if (account.readState?.displayStreamCoverage) {
+      if (input.trusted) workerShown.push(account.id);
+      return account;
+    }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).
     if (context && observed != null && known.has(account.id) && workerConnectionStreamLive(status, owners.get(account.id))) {
       changed = true;

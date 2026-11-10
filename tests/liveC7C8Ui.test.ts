@@ -1,3 +1,4 @@
+import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
@@ -920,7 +921,7 @@ describe('(f) čáry grafu: první klik, dvojklik a změněná čára (liveLineC
     for (const status of ['acknowledged', 'rejected', 'blocked', 'abandoned'] as const) expect(liveDirectResultLocks({ status })).toBe(false);
     expect(liveDirectResultLocks({ status: 'unknown' } as never)).toBe(true);
     expect(liveDirectErrorLocks(new Error('relay timeout'))).toBe(true);
-    expect(liveDirectErrorLocks(new TradovateRequestError('copier-relay-entry-busy', 409, null, 'copier-relay-entry-busy'))).toBe(false);
+    expect(liveDirectErrorLocks(withLiveRelayPhase(new TradovateRequestError('copier-relay-entry-busy', 409, null, 'copier-relay-entry-busy'), 'submit'))).toBe(false);
     // Text bez typu/kódu nic nerozhoduje: „entry-busy“ jako prostá chyba = neznámý výsledek (zámek).
     expect(liveDirectErrorLocks(new Error('entry-busy'))).toBe(true);
     const ticket = source('components/LiveOrderTicket.tsx');

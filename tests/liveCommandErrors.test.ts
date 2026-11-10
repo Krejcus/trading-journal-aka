@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import { LIVE_RELAY_NOT_ADMITTED_CODES, LiveCommandNotSentError, isLiveCommandNotSent, liveCommandNotSentReason } from '../lib/liveCommandErrors';
+import { describe, expect, it, vi } from 'vitest';
+import { LIVE_RELAY_NOT_ADMITTED_CODES, LiveCommandNotSentError, isLiveCommandNotSent, liveCommandNotSentReason, withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { copierRelayValidationErrorStatus } from '../server/tradovateCopierCommandRelay';
-import { TradovateRequestError } from '../services/tradovateOAuthConnection';
+import { executeTradovateCopierRelayCommand, TradovateRequestError } from '../services/tradovateOAuthConnection';
+import { liveManageErrorNotice } from '../hooks/useLiveManageRunner';
+
+vi.mock('../services/supabase', () => ({
+  supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'mock-token' } } }) } },
+}));
 import { LocalCopierAgentCommandError } from '../lib/localCopierAgentProtocol';
 import { createLiveChartIntentStore, entryIntentDraft, trackLiveChartIntent } from '../lib/liveChartIntent';
 
-const relay = (code: string, status = 409) => new TradovateRequestError(code, status, null, code);
+const relay = (code: string, status = 409) => withLiveRelayPhase(new TradovateRequestError(code, status, null, code), 'submit');
 
 describe('„neodesláno“ jen podle typu chyby a přesného kódu relay odmítnutí', () => {
   it('kódy UI jsou podmnožinou odmítnutí serveru PŘED frontou (400/409) — žádný konflikt idempotence ani entry-conflict', () => {
@@ -31,7 +36,7 @@ describe('„neodesláno“ jen podle typu chyby a přesného kódu relay odmít
     expect(liveCommandNotSentReason(relay('copier-relay-entry-busy'))).toBe('entry-busy');
     expect(liveCommandNotSentReason(relay('invalid-relay-command-payload', 400))).toBe('invalid-payload');
     expect(liveCommandNotSentReason(relay('copier-relay-entry-not-admitted: expired'))).toBe('entry-not-admitted');
-    expect(liveCommandNotSentReason(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405))).toBe('read-only');
+    expect(liveCommandNotSentReason(withLiveRelayPhase(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405), 'submit'))).toBe('read-only');
   });
 });
 
@@ -61,5 +66,75 @@ describe('čekající čára po odeslání: rozhoduje kód odpovědi, ne text', 
     await tracked;
     store.prune(Date.now(), null, evidence);
     expect(store.snapshot()).toEqual([]);
+  });
+});
+
+describe('fáze relay požadavku: „neodesláno“ jen u chyby samotného POST před zařazením (review Codexu, P2)', () => {
+  const command = { type: 'copy-command', command: { type: 'manage-leader-order', operationId: 'manage:phase0001', action: 'move-stop' } } as never;
+  const run = async (respond: (method: string) => Response) => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => respond(init?.method ?? 'GET')));
+    try {
+      return await executeTradovateCopierRelayCommand('mock-connection', command).then(() => null, error => error);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+  const accepted = () => Response.json({ id: 'queued-1', expiresAt: new Date(Date.now() + 15_000).toISOString() });
+
+  it('POST přijat, poll vrátí HTTP 405 = výsledek NEZNÁMÝ (příkaz mohl proběhnout), nikdy „neodesláno“', async () => {
+    const error = await run(method => (method === 'POST' ? accepted() : Response.json({ error: 'Method not allowed' }, { status: 405 })));
+    expect(error).toBeInstanceOf(TradovateRequestError);
+    expect(error.status).toBe(405);
+    expect(isLiveCommandNotSent(error)).toBe(false);
+    expect(liveManageErrorNotice(error, 1).tone).toBe('warn');
+  });
+
+  it('POST přijat, poll vrátí 409 s kódem odmítnutí = taky neznámý výsledek', async () => {
+    const error = await run(method => (method === 'POST' ? accepted() : Response.json({ error: 'copier-relay-entry-busy' }, { status: 409 })));
+    expect(error.code).toBe('copier-relay-entry-busy');
+    expect(isLiveCommandNotSent(error)).toBe(false);
+  });
+
+  it('samotný POST odmítnutý 405 (read-only) nebo 409 entry-busy = neodesláno', async () => {
+    const readOnly = await run(() => Response.json({ error: 'Localhost je pro Tradovate pouze read-only.' }, { status: 405 }));
+    expect(liveCommandNotSentReason(readOnly)).toBe('read-only');
+    const busy = await run(() => Response.json({ error: 'copier-relay-entry-busy' }, { status: 409 }));
+    expect(liveCommandNotSentReason(busy)).toBe('entry-busy');
+    // POST s chybou serveru (502) nebo neznámým kódem není prokazatelně neodeslaný.
+    expect(isLiveCommandNotSent(await run(() => Response.json({ error: 'boom' }, { status: 502 })))).toBe(false);
+  });
+
+  it('čekající čára: přijatý POST + 405 z pollu = „výsledek neznámý“, čára nezmizí (žádné ruční duplicitní odeslání)', async () => {
+    const store = createLiveChartIntentStore();
+    const draft = entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'manage:phase0001', null);
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => (init?.method === 'POST' ? accepted() : Response.json({ error: 'x' }, { status: 405 }))));
+    try {
+      await trackLiveChartIntent(store, draft, () => {
+        store.markSent('manage:phase0001');
+        return executeTradovateCopierRelayCommand('mock-connection', command) as unknown as Promise<{ status: string; operationId: string }>;
+      }).catch(() => undefined);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(store.snapshot().map(intent => intent.state)).toEqual(['unknown']);
+  });
+
+  it('POST: výpadek sítě = neznámý; výsledek „rejected“ přímo v odpovědi POST (už ve frontě) = neznámý', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const network = await executeTradovateCopierRelayCommand('mock-connection', command).then(() => null, error => error).finally(() => vi.unstubAllGlobals());
+    expect(network).not.toBeNull();
+    expect(isLiveCommandNotSent(network)).toBe(false);
+    const inline = await run(() => Response.json({ id: 'queued-2', expiresAt: new Date(Date.now() + 15_000).toISOString(),
+      resolution: { status: 'rejected', error: 'copier-relay-entry-busy' } }));
+    expect(inline).toBeInstanceOf(LocalCopierAgentCommandError);
+    expect(isLiveCommandNotSent(inline)).toBe(false);
+  });
+
+  it('bez značky fáze (jiný původ chyby) HTTP stav nerozhoduje', () => {
+    expect(isLiveCommandNotSent(new TradovateRequestError('copier-relay-entry-busy', 409, null, 'copier-relay-entry-busy'))).toBe(false);
+    expect(isLiveCommandNotSent(new TradovateRequestError('x', 405))).toBe(false);
+    expect(isLiveCommandNotSent(withLiveRelayPhase(new TradovateRequestError('x', 405), 'accepted'))).toBe(false);
+    // Typovaná klientská kontrola fázi nepotřebuje.
+    expect(isLiveCommandNotSent(new LiveCommandNotSentError('x'))).toBe(true);
   });
 });

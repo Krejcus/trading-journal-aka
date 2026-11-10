@@ -1,3 +1,4 @@
+import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -106,7 +107,7 @@ describe('texty výsledku', () => {
   });
 
   it('chyba náhledu: preview-busy = „zkus za 3 s“, jinak text beze změny', () => {
-    expect(livePreviewErrorText(new TradovateRequestError('copier-relay-preview-busy', 409, null, 'copier-relay-preview-busy'))).toBe('Náhled už běží, zkus to za 3 s.');
+    expect(livePreviewErrorText(withLiveRelayPhase(new TradovateRequestError('copier-relay-preview-busy', 409, null, 'copier-relay-preview-busy'), 'submit'))).toBe('Náhled už běží, zkus to za 3 s.');
     // Text bez kódu nic nerozhoduje.
     expect(livePreviewErrorText(new Error('copier-relay-preview-busy'))).toBe('copier-relay-preview-busy');
     expect(livePreviewErrorText('Stav kopírky není čerstvě ověřený — náhled teď nejde.')).toBe('Stav kopírky není čerstvě ověřený — náhled teď nejde.');

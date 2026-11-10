@@ -1,3 +1,4 @@
+import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { isLiveCommandNotSent, liveCommandNotSentText } from '../lib/liveCommandErrors';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
@@ -209,7 +210,7 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/if \(placedResult\.status === 'acknowledged'\) onAcknowledged\?\.\(\);/);
   });
   it('read-only localhost (HTTP 405) je „neodesláno“, ne neznámý výsledek — podle stavu, ne textu', () => {
-    expect(liveCommandNotSentText(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405))).toMatch(/z localhostu se k brokerovi nezapisuje/);
+    expect(liveCommandNotSentText(withLiveRelayPhase(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405), 'submit'))).toMatch(/z localhostu se k brokerovi nezapisuje/);
     expect(isLiveCommandNotSent(new Error('Localhost je pro Tradovate pouze read-only.'))).toBe(false);
     expect(ticket).toMatch(/isLiveCommandNotSent\(reason\)/);
   });

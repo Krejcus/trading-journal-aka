@@ -44,15 +44,41 @@ const RELAY_NOT_ADMITTED_PREFIX = 'copier-relay-entry-not-admitted:';
 /** Pro test souladu se serverem (`copierRelayValidationErrorStatus`). */
 export const LIVE_RELAY_NOT_ADMITTED_CODES: readonly string[] = [...RELAY_NOT_ADMITTED.keys()];
 
+/**
+ * Fáze relay požadavku, ve které chyba vznikla (relay klient v `services/tradovateOAuthConnection.ts`):
+ * `submit` = samotný POST odeslání (server ho mohl odmítnout PŘED zařazením do fronty),
+ * `accepted` = POST server přijal a chyba přišla až potom (poll výsledku, výsledek workeru,
+ * timeout). Po přijetí NIKDY „neodesláno“ — příkaz mohl proběhnout (review Codexu, P2).
+ */
+export type LiveRelayPhase = 'submit' | 'accepted';
+
+/** Označí chybu fází relay požadavku (vlastnost `relayPhase`); vrací tutéž chybu. */
+export function withLiveRelayPhase<T>(reason: T, phase: LiveRelayPhase): T {
+  if (typeof reason === 'object' && reason != null && Object.isExtensible(reason)) {
+    try { Object.defineProperty(reason, 'relayPhase', { value: phase, configurable: true, enumerable: false }); } catch { /* jen značka */ }
+  }
+  return reason;
+}
+
+export const liveRelayPhase = (reason: unknown): LiveRelayPhase | null => {
+  const phase = typeof reason === 'object' && reason != null ? (reason as { relayPhase?: unknown }).relayPhase : null;
+  return phase === 'submit' || phase === 'accepted' ? phase : null;
+};
+
 /** Důvod, proč příkaz prokazatelně neodešel; null = mohl odejít (výsledek neznámý). */
 export function liveCommandNotSentReason(reason: unknown): LiveCommandNotSentReason | null {
   if (reason instanceof LiveCommandNotSentError) return reason.reason;
   if (typeof reason !== 'object' || reason == null) return null;
+  const phase = liveRelayPhase(reason);
+  // Po přijetí relay POSTu nic není „neodesláno“, ať je kód/stav jakýkoli.
+  if (phase === 'accepted') return null;
   const { code, status } = reason as { code?: unknown; status?: unknown };
   if (code === 'not-sent') {
     const own = (reason as { reason?: unknown }).reason;
     return typeof own === 'string' ? own as LiveCommandNotSentReason : 'client-check';
   }
+  // HTTP stav / kód serveru rozhoduje JEN u chyby samotného odeslání (POST, fáze `submit`).
+  if (phase !== 'submit') return null;
   // Read-only localhost: proxy odmítne zápis 405 ještě před jakýmkoli voláním (bez fronty).
   if (status === 405) return 'read-only';
   if ((status === 400 || status === 409) && typeof code === 'string') {

@@ -2227,7 +2227,8 @@ existující ochranu.
   než graf naposledy kreslil stav workeru (i kdyby dorazilo později), ho nepřepíše — účet je
   neutrálně neověřený bez čar, nikdy flat. Evidence „kdy graf naposledy kreslil stav workeru“
   žije v modulu `tradovateClientReadOrder` (stejná životnost jako čítač), takže remount grafu
-  plot nevynuluje. Pořadí workeru samotného dál řeší fence pollu
+  plot nevynuluje. Plot platí na VŠECH cestách, i při statusu obnoveném z cache (`trusted: false`
+  jen vypne promítání stavu workeru, ne ochranu pořadí). Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
@@ -2244,7 +2245,10 @@ existující ochranu.
   telefon, náhled) rozhoduje jen `lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z klienta
   před relayem, nebo relay odmítnutí HTTP 400/409 s přesným kódem z těla odpovědi
   (`TradovateRequestError.code`) ze seznamu kódů vrácených PŘED zařazením do fronty, nebo 405
-  read-only localhostu. Text chyby nerozhoduje nikde; obyčejná chyba = neznámý výsledek.
+  read-only localhostu — HTTP stav a kód ale rozhodují JEN u chyby samotného POST odeslání
+  (relay klient ji označí `relayPhase: 'submit'`). Chyba po přijetí POSTu (poll výsledku,
+  výsledek workeru, timeout; `relayPhase: 'accepted'`) je vždy neznámý výsledek, ať je stav
+  jakýkoli. Text chyby nerozhoduje nikde; obyčejná chyba = neznámý výsledek.
   Odmítnutí/blokace = hned zmizí;
   ACK ji NEPOTVRDÍ jako ochranu (zůstává tlumená „přijato · čekám na stav brokera“ do potvrzení
   read modelem, nejvýš 20 s); neznámý výsledek 20 s „výsledek neznámý“, nic se neopakuje.

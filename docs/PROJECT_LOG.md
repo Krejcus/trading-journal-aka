@@ -288,6 +288,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: třetí kolo oprav po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
+
+- Codex k `f9e286f`: merge NE.
+  - **P1 (blokující):** při `trusted:false` (status obnovený z cache) projekce vracela data dřív,
+    než se uplatnila ochrana pořadí. REST čtení seq 9 po stavu workeru zobrazeném při seq 10
+    tak ukázalo `empty`.
+  - **P2:** jakékoli HTTP 405 (i 400/409 kódy) se bralo jako „neodesláno“, i když vzniklo
+    v pollu po přijatém POST. Přijatý příkaz by se tak tvářil jako neodeslaný a hrozilo
+    ruční duplicitní odeslání.
+- **P1:** žádný předčasný návrat. `trusted` vypíná jen promítání stavu workeru a evidenci
+  „zobrazeno“; ochrana pořadí platí na všech cestách.
+- **P2:** relay klient (`executeTradovateCopierRelayCommand`) označí chybu fází. Chyba POST
+  = `submit`. Inline výsledek, poll, rejected/expired a timeout = `accepted`. Klasifikátor
+  uzná HTTP stav/kód jen ve fázi `submit`; po přijetí nikdy „neodesláno“.
+- Testy: přesná repro seq 10/9 přes pět cest (obnovená cache, „čerstvá“ obnovená cache,
+  zmlklý worker, odpojený worker, spadlý socket) a scénáře relay klienta se stubem `fetch`
+  (přijatý POST + 405/409 z pollu = neznámý a čára zůstane; 405/409 na POST = neodesláno).
+  Oba testy bez opravy selžou.
+- copier-design-critic: „OK s výhradami“, nic neblokuje. Doplněné testy: výpadek sítě na
+  POST = neznámý; `rejected` přímo v odpovědi POST = neznámý. Zbývá (NEOVĚŘENO, mimo tento
+  diff): předpoklad, že server vrací kódy z bílé listiny jen před vložením do fronty
+  (`copierRelayValidationErrorStatus`).
+- Ověření: tsc 0 nových chyb proti baseline. Celá sada 8594 testů prošla, 3 selhaly — tytéž
+  jako na čistém `main` f4a9d6b. Build prošel. Na DEMO NEOVĚŘENO.
+
 ### 2026-11-10 — LIVE graf: druhé kolo oprav po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - Codex k `30c6b30`: merge NE. Blokující byly dvě věci: UI dál poznávalo „neodesláno“ podle

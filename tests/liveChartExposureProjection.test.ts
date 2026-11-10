@@ -187,6 +187,28 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     expect(silentLate.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
   });
 
+  it('repro Codex P1: worker zobrazen při seq 10, REST čtení seq 9 = „unavailable“, ne „empty“ — na VŠECH cestách vč. obnovené cache', () => {
+    const shown = new Map([[100, 10], [200, 10]]);
+    for (const [label, input, current] of [
+      ['obnovený status z cache (trusted:false)', { statusFresh: false, trusted: false, lastWorkerShownSeq: shown }, status()],
+      ['obnovený status z cache, ještě „čerstvý“', { statusFresh: true, trusted: false, lastWorkerShownSeq: shown }, status()],
+      ['worker zmlkl', { statusFresh: false, trusted: true, lastWorkerShownSeq: shown }, status()],
+      ['worker odpojený', { statusFresh: true, trusted: true, lastWorkerShownSeq: shown }, status({ connected: false })],
+      ['socket připojení dole', { statusFresh: true, trusted: true, lastWorkerShownSeq: shown }, status({ streamLive: false })],
+    ] as const) {
+      const out = projectLiveChartExposure(restRead(9), current, NOW - 1_000, NOW, owners, input);
+      const leader = out.data!.accounts.find(item => item.id === 100)!;
+      expect({ label, availability: leader.readState?.positions.availability }).toEqual({ label, availability: 'unavailable' });
+      expect(leader.readState?.orders.availability).toBe('unavailable');
+      expect(chartLines(out.data!).position.summary).toBeNull();
+      // Obnovená cache nic neeviduje jako „zobrazený stav workeru“.
+      if (!input.trusted) expect(out.workerShown).toEqual([]);
+      // Čtení zahájené po zobrazení (seq 11) platí i na této cestě.
+      const later = projectLiveChartExposure(restRead(11), current, NOW - 1_000, NOW, owners, input);
+      expect(later.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('empty');
+    }
+  });
+
   it('obnovená cache, odpojený worker ani spadlý socket připojení se nepromítnou jako stav (neznámo ≠ flat)', () => {
     for (const [input, current] of [
       [{ ...fresh, trusted: false }, status()],
