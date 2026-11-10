@@ -143,11 +143,17 @@ const isLeaderTradeClose = (command: unknown): boolean => {
 };
 const ENTRY_MIN_INTERVAL_MS = MANUAL_ENTRY_MIN_INTERVAL_MS;
 // Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.
-// Proti smyčce chrání dál rozestup 3 s a „jeden čekající na uživatele“ (P7; od 1. 11. atomicky v DB).
-const ENTRY_DAILY_CAP = 100;
-/** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup, 100 za 24 h na uživatele (INV-TRAD-04). */
+// Filip 10. 11. 2026: denní strop vypnout — noční měření na DEMO vyčerpalo 100 příkazů správy
+// a zablokovalo by obchodní den. Pro člověka je strop pryč (dosud nejvýš ~45 příkazů za den);
+// zůstává jen pojistka proti smyčce mimo lidský dosah (oponentura 10. 11.): správa se u
+// brokera neúčtuje do lokálního rozpočtu a příkaz každé 2 s by při čtyřech účtech udělal
+// ~7 200 zápisů za hodinu, tedy skutečnou hodinovou penalizaci při otevřené pozici.
+// Dál platí rozestup 3 s / 2 s, „jeden čekající na uživatele“ (P7) a zneplatnění brzdou.
+const ENTRY_DAILY_CAP = 500;
+const MANAGE_RUNAWAY_CAP = 2_000;
+/** Správa vlastního vstupu (fáze 2a): rozestup 2 s na vstup; strop jen jako pojistka proti smyčce (viz výše). */
 const MANAGE_MIN_INTERVAL_MS = 2_000;
-const MANAGE_DAILY_CAP = 100;
+const MANAGE_DAILY_CAP = MANAGE_RUNAWAY_CAP;
 const STANDARD_COMMAND_TTL_MS = 30_000;
 const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
 /** Musí zůstat shodné s čerstvostí push runtime v copierCommandPushRelay. */

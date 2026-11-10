@@ -1181,8 +1181,60 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const readOrderVersionLifecycle = <T>(read: () => Promise<T>): Promise<T> => (
     config.runWithLifecycleReads && takeLifecycleHydration() ? config.runWithLifecycleReads(read) : readRecoveryMetadata(read)
   );
+  // Odmítnutí LOKÁLNÍM rozpočtem znamená, že se nic neodeslalo. Dřív taková chyba ukončila
+  // zpracování rámce, adaptér zavřel socket a kopírka se uprostřed obchodu vypnula; resync
+  // pak četl ze stejného vyčerpaného pruhu (DEMO 9. 11. 2026 21:26 UTC). Čtení se proto
+  // krátce opakuje, ale s pevnými mezemi (oponentura 9.–10. 11.):
+  //  - celkem nejvýš ORDER_VERSION_BUDGET_WAIT_MS od ZAČÁTKU čtení podle hodin, včetně
+  //    času, který pokus sám prosedí v rezervaci — pod stářím, po kterém řadič událost
+  //    expozice odmítá (5 s), a hluboko pod hlídačem zpoždění fronty;
+  //  - jen dokud žije TENTÝŽ socket a jeho session; po zavření, obnově nebo odhlášení smyčka
+  //    hned končí původní chybou a už nic nerezervuje ani nečte;
+  //  - jen pro odmítnutí rozpočtem; cooldown, captcha, nedostupná autorita a chyby přenosu
+  //    se neopakují.
+  // Po vypršení platí původní chování (chyba → zavření socketu → fail-closed).
+  const ORDER_VERSION_BUDGET_WAIT_MS = 2_500;
+  const ORDER_VERSION_BUDGET_STEP_MS = 250;
+  const readOrderVersionsBounded = async (orderId: number): Promise<TradovateOrderVersionEntity[] | null> => {
+    const boundSocket = socket;
+    const boundSession = socketSessionSequence;
+    const alive = () => boundSocket != null && socket === boundSocket && socketSessionSequence === boundSession
+      && socketState === 'connected' && listeners.size > 0;
+    // Termín běží od ZAČÁTKU čtení, ne od prvního odmítnutí: odmítnutí, které přišlo až po
+    // dlouhém čekání na volný slot, se už neopakuje (rámec by stál déle, než řadič snese).
+    const deadline = clock() + ORDER_VERSION_BUDGET_WAIT_MS;
+    let firstError: unknown = null;
+    for (;;) {
+      // Termín se kontroluje dřív, než pokus vznikne: opuštěný pokus bez posluchače by
+      // skončil neošetřeným odmítnutím (v Node pád procesu).
+      const remaining = deadline - clock();
+      if (firstError != null && remaining <= 0) throw firstError;
+      const attempt = readOrderVersionLifecycle(() => request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`));
+      // Každý pokus má posluchače hned; výsledek opuštěného pokusu se zahodí.
+      attempt.catch(() => undefined);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        if (firstError == null) return await attempt;
+        // Opakovaný pokus nesmí přetáhnout termín tím, že čeká uvnitř rezervace.
+        const expired = new Promise<'expired'>(resolveWait => { timer = timeouts(() => resolveWait('expired'), Math.max(1, remaining)); });
+        const outcome = await Promise.race([attempt.then(value => ({ value })), expired]);
+        if (outcome === 'expired') throw firstError;
+        return outcome.value;
+      } catch (error) {
+        if (firstError != null && error === firstError) throw error;
+        const budget = error instanceof BrokerRequestNotSentError && (error as { controlReason?: string }).controlReason === 'budget';
+        if (!budget) throw error;
+        firstError ??= error;
+        if (!alive() || deadline - clock() <= ORDER_VERSION_BUDGET_STEP_MS) throw firstError;
+      } finally {
+        if (timer) clearTimeouts(timer);
+      }
+      await new Promise<void>(resolveWait => { timeouts(() => resolveWait(), ORDER_VERSION_BUDGET_STEP_MS); });
+      if (!alive() || deadline - clock() <= 0) throw firstError;
+    }
+  };
   const fetchOrderVersions = (orderId: number): Promise<OrderVersionFetchResult> => (
-    readOrderVersionLifecycle(() => request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`))
+    readOrderVersionsBounded(orderId)
       .then(versions => ({ ok: true as const, versions: versions ?? [] }))
       // Prefetch zacina uz pri prijeti ramce a muze cekat za predchozim
       // semantickym ramcem. Zachycena chyba zabrani unhandled rejection;

@@ -2310,8 +2310,11 @@ existující ochranu.
   payloadu). Jen přes relay (loopback = `manual-entry-relay-only`), s
   platností 15 s (`deadlineAt` bez ACK rezervy; chybí = blocked), jeden
   na uživatele (do 1. 11. 2026 na zařízení; od té doby atomicky v DB, viz
-  INV-RELAY-01), 3 s rozestup, 100 za 24 h (do 30. 10. 2026 30; Filip zvedl;
-  denní strop správy 100 neplatí pro zavření obchodu — snižuje riziko),
+  INV-RELAY-01), 3 s rozestup, pojistka proti smyčce 500 vstupů a 2 000 příkazů
+  správy za 24 h (do 30. 10. 2026 30, pak 100; 10. 11. 2026 Filip denní strop
+  vypnul — pro člověka nedosažitelná mez zůstala, protože správa se neúčtuje
+  do lokálního rozpočtu a příkaz každé 2 s by na čtyřech účtech vyvolal
+  skutečnou penalizaci brokera; strop neplatí pro zavření obchodu — snižuje riziko),
   idempotence `operationId` per
   uživatel, brzda čekající vstup zneplatní. Controller
   (`placeLeaderEntry`/`executeManualEntry`): běží ve frontě controlleru
@@ -2559,7 +2562,7 @@ existující ochranu.
   - **Jen ARMED ∧ ¬shadow ∧ ¬kill** (jako dnešní × fáze 2d) — ve frontě (`not-armed`) i
     synchronně před zápisem. C8 tedy NENÍ výjimkou z INV-DEFAULT-01, INV-BRAKE-02 ani
     INV-ARM-04; za DISARMED až s C9 (výjimka se pak zapíše uzavřeným seznamem). Relay
-    supersede brzdou, agent `brake-after-request`, TTL 5 s a výjimka z denního stropu beze změny.
+    supersede brzdou, agent `brake-after-request`, TTL 5 s a výjimka z denního stropu (od 10. 11. 2026 jen pojistka proti smyčce) beze změny.
   - **„Co jsem viděl“ = počet kontraktů** (oponentura P3): `expect.price` = `referencePrice`
     záznamu je konstanta a zastaralé zobrazení nezachytí. Vlastnictví pozice dokládají
     VÝHRADNĚ kontroly ve workeru: vlastní přijatý holý záznam bez nohou, NEJNOVĚJŠÍ ruční vstup

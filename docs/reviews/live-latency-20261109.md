@@ -182,3 +182,16 @@ se třemi nálezy — všechny zapracované:
   pauza po obchodu a čerstvé zapnutí klid ruší.
 
 Postup nasazení a co sledovat: `docs/reviews/live-latency-release-20261110.md`.
+
+## Dodatek 10. 11. 2026 dopoledne
+
+- **Odmítnutí dotažení verze rozpočtem už hned neshazuje socket** (`tradovateBroker.readOrderVersionsBounded`).
+  Čtení se opakuje po 250 ms, celkem nejvýš 2,5 s od ZAČÁTKU čtení (pod 5 s, po kterých řadič událost expozice
+  odmítá), jen pro odmítnutí rozpočtem a jen dokud žije tentýž socket a session; potom platí původní chování
+  (chyba → zavření socketu → fail-closed). Odmítnutí, které přijde až po dlouhém čekání na slot, se neopakuje.
+  Oponent: OK S VÝHRADAMI. Zbývající výhrady: opuštěný pokus může později ještě odeslat jeden GET (výsledek se
+  zahodí); 12 souběžných čtení (vstup OSO na 4 účtech) při vyčerpaném pruhu není pokryto testem.
+- **Denní strop příkazů** (Filip: „denní strop vypni“): z 100/100 na pojistku proti smyčce 500 vstupů
+  a 2 000 příkazů správy za 24 h. Úplné vypnutí oponent nedoporučil: správa se neúčtuje do lokálního rozpočtu
+  a zacyklený příkaz každé 2 s by na čtyřech účtech vyvolal skutečnou hodinovou penalizaci brokera.
+  Účinek pro appku až po nasazení webu (konstanta je v serverové části).

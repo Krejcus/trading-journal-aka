@@ -77,8 +77,8 @@ cd ~/alphatrade-worktrees/live-latency-20261109 && npm run copier:mac -- reconci
 
 ## Co nasazením nevyřeší
 
-- Odmítnutí dotažení verze rozpočtem pořád shodí WebSocket a vypne kopírku (práh je vyšší: 90/min místo 24/min).
+- Odmítnutí dotažení verze rozpočtem shodí WebSocket až po 2,5 s marného opakování (a práh je vyšší: 90/min místo 24/min).
 - Skupina s followery nebyla s touto větví odzkoušená naživo (na DEMO je jeden účet) — jen testy.
-- Denní strop 100 vstupů a 100 příkazů správy na uživatele za 24 hodin; noční měření z něj 10. 11. ubralo
-  55 příkazů správy (uvolní se mezi 22:00 a 00:10 SEČ) a ~36 vstupů.
+- Denní strop se nasazením webu mění ze 100/100 na pojistku 500 vstupů a 2 000 příkazů správy za 24 hodin.
+  Do nasazení webu platí starý strop; noční měření z něj 10. 11. ubralo 55 příkazů správy a ~36 vstupů.
 - Volné místo na disku je ~8 GB (pod hranicí 11 GB, při které noční záloha Supabase odmítne běžet).

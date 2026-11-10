@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TradovateRequestControlSnapshot } from '../lib/tradovateRequestControl';
+import { TradovateRemoteControlError, type TradovateRequestControlSnapshot } from '../lib/tradovateRequestControl';
 import { tradovateRequestContext } from '../server/tradovateRequestContext';
 import { createTradovateBroker, type WebSocketLike } from '../services/tradovateBroker';
 import { createTradovateRequestGovernor } from '../services/tradovateRequestControlGovernor';
@@ -390,4 +390,108 @@ describe('OrderVersion read primed at the write ACK', () => {
     await flush();
     expect(versionReads(paths)).toBe(0);
   });
+});
+
+describe('OrderVersion hydration refused by the local budget', () => {
+  const versionWire = (path: string) => (path.endsWith('/orderVersion/deps') ? [{ id: 500, orderId: 500, orderQty: 1, orderType: 'Market' }] : []);
+  const orderFrame = (orderId: number) => [props('order', { id: orderId, accountId: 101, contractId: 77, ordStatus: 'Working', action: 'Buy', timestamp: '2026-11-09T20:00:00Z' }, 'Created')];
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const versionReads = (paths: string[]) => paths.filter(path => path.endsWith('/orderVersion/deps')).length;
+  // Bez accepted scope jde čtení recovery pruhem, kde rozpočet může odmítnout.
+  const refuse = (t: Awaited<ReturnType<typeof connected>>, decide: (call: number) => 'budget' | 'cooldown' | 'grant' | 'hang', onCall?: () => void) => {
+    const granted = t.f.remote.reserve.getMockImplementation()!;
+    let calls = 0;
+    t.f.remote.reserve.mockImplementation(async input => {
+      if (input.purpose !== 'control') return granted(input);
+      calls += 1; onCall?.();
+      const verdict = decide(calls);
+      if (verdict === 'budget') throw new TradovateRemoteControlError('tradovate-request-budget', 1_000);
+      if (verdict === 'cooldown') throw new TradovateRemoteControlError('tradovate-request-cooldown', 60_000);
+      if (verdict === 'hang') return new Promise(() => undefined);
+      return granted(input);
+    });
+    return () => calls;
+  };
+
+  it('a short refusal keeps the frame queued and the socket open; the read happens once capacity returns', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    // Kontrakt je známý předem, ať po úspěšném dotažení verze rámec doběhne celý.
+    t.socket.deliver([props('contract', { id: 77, name: 'MNQZ6' })]); await flush();
+    const calls = refuse(t, call => (call <= 2 ? 'budget' : 'grant'));
+    t.paths.length = 0;
+    t.socket.deliver(orderFrame(500)); await flush();
+    expect(versionReads(t.paths)).toBe(0);
+    await wait(900);
+    // Dvě odmítnutí, potom povolení (další rezervace patří dotažení kontraktu).
+    expect(calls()).toBeGreaterThanOrEqual(3);
+    expect(versionReads(t.paths)).toBe(1);
+    expect(t.socket.readyState).toBe(1);
+    expect(t.broker.usage().phase).toBe('connected');
+    t.unsubscribe();
+  }, 15_000);
+
+  it('a refusal that outlasts the bounded wait fails as before: the frame errors and the socket is closed', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    const calls = refuse(t, () => 'budget', () => t.f.advance(1_000));
+    t.paths.length = 0;
+    t.socket.deliver(orderFrame(500)); await flush();
+    await wait(1_500);
+    expect(versionReads(t.paths)).toBe(0);
+    // Každé odmítnutí posune hodiny o 1 s: mez 2,5 s od začátku čtení dovolí nejvýš tři pokusy.
+    expect(calls()).toBeLessThanOrEqual(3);
+    expect(t.socket.readyState).toBe(3);
+    const settled = calls();
+    await wait(700);
+    expect(calls()).toBe(settled);
+    t.unsubscribe();
+  }, 15_000);
+
+  it('a refusal that arrives late (after a long wait for a slot) is not retried at all', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    const calls = refuse(t, () => 'budget', () => t.f.advance(3_000));
+    t.socket.deliver(orderFrame(500)); await flush();
+    await wait(700);
+    expect(calls()).toBe(1);
+    expect(t.socket.readyState).toBe(3);
+    t.unsubscribe();
+  }, 15_000);
+
+  it('a real cooldown is never retried', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    const calls = refuse(t, () => 'cooldown');
+    t.socket.deliver(orderFrame(500)); await flush();
+    await wait(700);
+    expect(calls()).toBe(1);
+    t.unsubscribe();
+  }, 15_000);
+
+  it('the loop dies with its socket: after a close no further reservation or read is made', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    const calls = refuse(t, () => 'budget');
+    t.paths.length = 0;
+    t.socket.deliver(orderFrame(500)); await flush();
+    await wait(100);
+    const before = calls();
+    t.socket.close();
+    await wait(900);
+    expect(calls()).toBeLessThanOrEqual(before + 1);
+    const settled = calls();
+    await wait(600);
+    expect(calls()).toBe(settled);
+    expect(versionReads(t.paths)).toBe(0);
+    t.unsubscribe();
+  }, 15_000);
+
+  it('a retry that stalls inside the reservation cannot overrun the bound', async () => {
+    const t = await connected({ accepted: false, wire: versionWire });
+    refuse(t, call => (call === 1 ? 'budget' : 'hang'));
+    t.paths.length = 0;
+    t.socket.deliver(orderFrame(500)); await flush();
+    await wait(1_000);
+    expect(t.socket.readyState).toBe(1);
+    await wait(2_300);
+    expect(versionReads(t.paths)).toBe(0);
+    expect(t.socket.readyState).toBe(3);
+    t.unsubscribe();
+  }, 15_000);
 });

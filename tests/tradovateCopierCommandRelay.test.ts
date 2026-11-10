@@ -262,7 +262,7 @@ describe('Tradovate copier command relay', () => {
     expect(armUpsert).toHaveBeenCalledOnce();
   });
 
-  describe('denní strop ručních vstupů (100 za 24 h, Filip 30. 10.; od 1. 11. atomicky v RPC)', () => {
+  describe('denní strop ručních vstupů (od 10. 11. jen pojistka proti smyčce: 500 vstupů, 2 000 příkazů správy za 24 h)', () => {
     const deliveryId = '6f1d2c3b-4a5e-4f60-8a71-b2c3d4e5f607';
     const entryDb = (resultCode: string, upsert: (row: unknown) => void, rpcCalls: unknown[][] = []): SupabaseClient => {
       const devices = { eq: () => devices, is: () => devices,
@@ -302,7 +302,7 @@ describe('Tradovate copier command relay', () => {
       expect(calls[0][1]).toMatchObject({
         p_user_id: userId, p_device_id: deviceId, p_connection_id: connectionId, p_operation_id: 'entry:captest00001',
         p_now: '2026-08-21T12:00:00.000Z', p_expires_at: '2026-08-21T12:00:15.000Z',
-        p_entry_min_interval_ms: 3_000, p_manage_min_interval_ms: 2_000, p_entry_cap: 100, p_manage_cap: 100,
+        p_entry_min_interval_ms: 3_000, p_manage_min_interval_ms: 2_000, p_entry_cap: 500, p_manage_cap: 2_000,
         p_delivery_id: null,
       });
     });
