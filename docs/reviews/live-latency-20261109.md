@@ -166,3 +166,19 @@ nic nepřinesly. Stav po měření: DEMO worker z `125d40c4`, REST zápisy, `--t
 Zbývá (neuděláno): rámec se stejnou verzí příkazu přesto čeká na REST dotažení (~150–200 ms, pořadí entit
 v `stageOrderVersions`); odmítnutí hydratace rozpočtem shazuje socket (jen vyšší práh); živý test skupiny
 s followery (na DEMO není druhý účet); účinek zpomalení cronu až po nasazení webu.
+
+## Příprava vydání (10. 11. 2026 ráno)
+
+Poslední kolo před nasazením: copier-design-critic **OK S VÝHRADAMI** (bez blockeru), Codex **FIX BEFORE RELEASE**
+se třemi nálezy — všechny zapracované:
+
+- **Předčtení verze při ACK:** seznam přečtený při ACK se použije jen pro tento příkaz; když po něm chybí
+  povýšená verze nebo verze, kterou mezitím potvrdil broker, rámec čte znovu (dřív mohl příkaz zůstat bez tvaru
+  do další události). Test teď ověřuje i vydanou událost příkazu, ne jen počet čtení.
+- **Zpomalení cronu je výchozí VYPNUTÉ** (`ALPHATRADE_IDLE_BROKER_SNAPSHOT=on` na serveru ho zapne). Důvod:
+  zámek účtu, který vznikne i zmizí mezi dvěma čteními v klidu, by se neoznámil vůbec. Je to rozhodnutí
+  o notifikacích, ne oprava — nechávám na Filipovi.
+- **Víc workerů jednoho uživatele:** klid se počítá přes všechny čerstvé workery; vypnutí, kill switch, zámek dne,
+  pauza po obchodu a čerstvé zapnutí klid ruší.
+
+Postup nasazení a co sledovat: `docs/reviews/live-latency-release-20261110.md`.

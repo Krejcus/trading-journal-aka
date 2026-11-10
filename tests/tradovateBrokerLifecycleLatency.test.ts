@@ -281,7 +281,8 @@ describe('OrderVersion read primed at the write ACK', () => {
   it('starts the read at the ACK and the first Order frame reuses it instead of reading again', async () => {
     const t = await connected({ accepted: true, wire: path => {
       if (path.endsWith('/order/placeorder')) return { orderId: 900 };
-      if (path.endsWith('/orderVersion/deps')) return [{ id: 9900, orderId: 900, orderQty: 1, orderType: 'Market' }];
+      // Počáteční verze nese id příkazu (jinak ji adaptér bez důkazu Command nepovýší).
+      if (path.endsWith('/orderVersion/deps')) return [{ id: 900, orderId: 900, orderQty: 1, orderType: 'Market' }];
       if (path.endsWith('/contract/find') || path.endsWith('/contract/items')) return [{ id: 77, name: 'MNQZ6' }];
       return [];
     } });
@@ -292,6 +293,8 @@ describe('OrderVersion read primed at the write ACK', () => {
     expect(versionReads(t.paths)).toBe(1);
     t.socket.deliver(frame(900)); await flush();
     expect(versionReads(t.paths)).toBe(1);
+    expect(t.events.some(event => (event as { type?: string; order?: { brokerOrderId?: string } }).type === 'order'
+      && (event as { order?: { brokerOrderId?: string } }).order?.brokerOrderId === '900')).toBe(true);
     // Předčtení je jednorázové: jiný nový příkaz si verzi čte sám jako dřív.
     t.socket.deliver(frame(950)); await flush();
     expect(versionReads(t.paths)).toBe(2);
@@ -355,6 +358,26 @@ describe('OrderVersion read primed at the write ACK', () => {
     expect(versionReads(t.paths)).toBe(1);
     releasePost!(); await placing; await flush();
     expect(versionReads(t.paths)).toBe(1);
+    t.unsubscribe();
+  });
+
+  it('a primed list that lacks the version the frame needs is read again inside the frame', async () => {
+    // Bez důkazu Command (New) se verze 9906 nepovýší: po předčtení tedy chybí tvar příkazu
+    // a rámec musí číst znovu, ne skončit „ready“ bez verze.
+    let reads = 0;
+    const t = await connected({ accepted: true, wire: path => {
+      if (path.endsWith('/order/placeorder')) return { orderId: 906 };
+      if (path.endsWith('/orderVersion/deps')) { reads += 1; return [{ id: reads === 1 ? 9906 : 906, orderId: 906, orderQty: 1, orderType: 'Market' }]; }
+      return [];
+    } });
+    t.socket.deliver([props('contract', { id: 77, name: 'MNQZ6' })]); await flush();
+    await t.broker.runWithAcceptedRequests!(() => t.broker.placeOrder(order));
+    await flush();
+    expect(reads).toBe(1);
+    t.socket.deliver(frame(906)); await flush();
+    expect(reads).toBe(2);
+    expect(t.events.some(event => (event as { type?: string; order?: { brokerOrderId?: string } }).type === 'order'
+      && (event as { order?: { brokerOrderId?: string } }).order?.brokerOrderId === '906')).toBe(true);
     t.unsubscribe();
   });
 

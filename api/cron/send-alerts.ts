@@ -1,4 +1,4 @@
-import { skipIdleBrokerSnapshot } from '../../server/nativeIdleBrokerSnapshot.js';
+import { idleBrokerSnapshotUsers } from '../../server/nativeIdleBrokerSnapshot.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, randomUUID } from 'node:crypto';
 import webpush from 'web-push';
@@ -540,6 +540,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 now: now.getTime(),
             });
 
+            // Klid podle VŠECH čerstvých workerů uživatele: zobrazovací čtení brokera jen každou pátou minutu.
+            const idleSnapshotUsers = idleBrokerSnapshotUsers(runtimes, now.getTime());
+
             accountSnapshotResult = await collectConnectedAccountSnapshots({
                 db: supabase,
                 environment: tradovateConfig.environment,
@@ -609,7 +612,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 const runtimeLastSeen = Date.parse(runtime.last_seen_at);
                 if (!Number.isFinite(runtimeLastSeen) || now.getTime() - runtimeLastSeen > 90_000) continue;
                 // Klid podle workeru: zámky účtů stačí číst každou pátou minutu.
-                if (skipIdleBrokerSnapshot(runtime, now.getTime())) continue;
+                if (idleSnapshotUsers.has(runtime.user_id)) continue;
                 const broker = await brokerSnapshot(runtime);
                 if (!broker || broker.accountStatusComplete !== true || broker.accountLockStatusComplete !== true) continue;
                 const accountLocks = planBrokerAccountLockNotifications({
@@ -658,7 +661,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 runtimes,
                 now: now.getTime(),
                 brokerSnapshot,
-                skipBrokerRead: runtime => skipIdleBrokerSnapshot(runtime, now.getTime()),
+                skipBrokerRead: runtime => idleSnapshotUsers.has(runtime.user_id),
             });
             // iOS 26 WidgetKit push requests complement the timeline. Urgent
             // user alerts and ActivityKit remain independent instant channels;
@@ -668,7 +671,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 runtimes,
                 now: now.getTime(),
                 brokerSnapshot,
-                skipBrokerRead: runtime => skipIdleBrokerSnapshot(runtime, now.getTime()),
+                skipBrokerRead: runtime => idleSnapshotUsers.has(runtime.user_id),
             });
         } catch (copierWatchdogError) {
             // Watchdog nesmí shodit zbytek alertů — selhání jen zalogovat.

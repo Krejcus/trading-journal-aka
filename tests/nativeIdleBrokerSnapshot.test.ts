@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { skipIdleBrokerSnapshot, workerRuntimeReportsIdle } from '../server/nativeIdleBrokerSnapshot';
+import { idleBrokerSnapshotUsers, workerRuntimeReportsIdle } from '../server/nativeIdleBrokerSnapshot';
 
 const NOW = Date.parse('2026-11-10T00:02:20.000Z'); // minuta 2 → není pátá
 const runtime = (controller: Record<string, unknown> | null, seenAgoMs = 2_000) => ({
@@ -14,9 +14,9 @@ const idle = (patch: Record<string, unknown> = {}, exposure: Record<string, unkn
 describe('cron broker snapshot is slowed down only when the worker reports a settled flat state', () => {
   it('idle worker: four of five minutes skip the display read', () => {
     expect(workerRuntimeReportsIdle(idle(), NOW)).toBe(true);
-    expect(skipIdleBrokerSnapshot(idle(), NOW)).toBe(true);
-    expect(skipIdleBrokerSnapshot(idle(), Date.parse('2026-11-10T00:05:20.000Z'))).toBe(false);
-    expect(skipIdleBrokerSnapshot(idle({}, { verifiedAt: Date.parse('2026-11-10T00:00:00.000Z') }), Date.parse('2026-11-10T00:10:20.000Z'))).toBe(false);
+    expect([...idleBrokerSnapshotUsers([{ ...idle(), user_id: 'u1' }], NOW, true)]).toEqual(['u1']);
+    const fifth = Date.parse('2026-11-10T00:05:20.000Z');
+    expect(idleBrokerSnapshotUsers([{ ...idle(), user_id: 'u1', last_seen_at: new Date(fifth - 1_000).toISOString() }], fifth, true).size).toBe(0);
   });
 
   it.each([
@@ -32,8 +32,33 @@ describe('cron broker snapshot is slowed down only when the worker reports a set
     ['verified in the future', idle({}, { verifiedAt: NOW + 60_000 })],
     ['stale heartbeat', (() => { const row = idle(); return { ...row, last_seen_at: new Date(NOW - 120_000).toISOString() }; })()],
     ['no controller', runtime(null)],
+    ['kill switch', idle({ killSwitch: true })],
+    ['day lock running', idle({ dayLockUntil: NOW + 60_000 })],
+    ['entry cooldown running', idle({ entryCooldownUntil: NOW + 60_000 })],
+    ['switched off a minute ago', idle({ lastDisarm: { at: NOW - 60_000 } })],
+    ['switched on a minute ago', idle({ armedAt: NOW - 60_000 })],
   ])('%s is never idle: the broker is read every minute as before', (_label, row) => {
     expect(workerRuntimeReportsIdle(row, NOW)).toBe(false);
-    expect(skipIdleBrokerSnapshot(row, NOW)).toBe(false);
+    expect(idleBrokerSnapshotUsers([{ ...row, user_id: 'u1' }], NOW, true).size).toBe(0);
+  });
+
+  it('armed and flat for a while is still idle; an expired day lock does not block it', () => {
+    expect(workerRuntimeReportsIdle(idle({ armed: true, armedAt: NOW - 30 * 60_000, dayLockUntil: 0, entryCooldownUntil: NOW - 1 }), NOW)).toBe(true);
+  });
+
+  it('one user with two workers: a flat DEMO worker never slows reads while the other worker is busy', () => {
+    const demo = { ...idle(), user_id: 'u1' };
+    const live = { ...idle({}, { positions: [{ accountId: 2, symbol: 'MNQZ6', netQuantity: 1 }] }), user_id: 'u1' };
+    const other = { ...idle(), user_id: 'u2' };
+    expect([...idleBrokerSnapshotUsers([demo, live, other], NOW, true)]).toEqual(['u2']);
+    expect([...idleBrokerSnapshotUsers([live, demo, other], NOW, true)]).toEqual(['u2']);
+    // Dávno mrtvý druhý worker klid živého neruší.
+    const dead = { ...live, last_seen_at: new Date(NOW - 10 * 60_000).toISOString() };
+    expect([...idleBrokerSnapshotUsers([demo, dead], NOW, true)]).toEqual(['u1']);
+  });
+
+  it('is off unless the server opts in', () => {
+    expect(idleBrokerSnapshotUsers([{ ...idle(), user_id: 'u1' }], NOW, false).size).toBe(0);
+    expect(idleBrokerSnapshotUsers([{ ...idle(), user_id: 'u1' }], NOW).size).toBe(0);
   });
 });

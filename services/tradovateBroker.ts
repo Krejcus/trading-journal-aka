@@ -1012,7 +1012,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   type OrderVersionFetchResult =
-    | { ok: true; versions: TradovateOrderVersionEntity[] }
+    | { ok: true; versions: TradovateOrderVersionEntity[]; primed?: true }
     | { ok: false; error: unknown };
   type PreparedOrderVersions = Map<number, Promise<OrderVersionFetchResult>>;
 
@@ -1228,7 +1228,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     // Čtení při ACK mohlo předběhnout zápis verze u brokera: prázdný seznam (nebo seznam bez
     // verze tohoto příkazu) není výsledek — rámec si verzi přečte znovu jako dřív.
     return primed.result.then(result => ('error' in result || !result.versions.some(version => version.orderId === orderId)
-      ? fetchOrderVersions(orderId) : result));
+      ? fetchOrderVersions(orderId)
+      // Jen verze tohoto příkazu a s označením původu: `hydrateOrderVersion` ověří, že seznam
+      // přečtený při ACK opravdu nese verzi, kterou rámec vyžaduje.
+      : { ok: true as const, versions: result.versions.filter(version => version.orderId === orderId), primed: true as const }));
   };
 
   const hydrateOrderVersion = async (
@@ -1244,12 +1247,24 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       waitForStagedOrderVersion(orderId, desired).then(seen => ({ kind: 'staged' as const, seen })),
     ]);
     if (winner.kind === 'staged' && winner.seen) return 'deferred';
-    const result = winner.kind === 'fetch' ? winner.result : await fetchResult;
+    let result = winner.kind === 'fetch' ? winner.result : await fetchResult;
     if ('error' in result) throw result.error;
     // Aplikace do execution cache zustava v socket serial tailu. Prefetch tedy
     // prekryva pouze REST latenci; budouci frame nesmi zmenit shape drive,
     // nez controller dostane predchozi order event.
     for (const version of result.versions) rememberVersion(version);
+    // Seznam přečtený už při ACK je starší než tento rámec: když po něm chybí povýšená verze
+    // nebo verze, kterou mezitím potvrdil broker, čte se znovu teď (jako před zavedením
+    // předčtení). Bez toho by příkaz zůstal bez tvaru až do náhodné další události.
+    if (result.primed) {
+      const required = confirmedVersionIds.get(orderId);
+      const current = orderVersions.get(orderId);
+      if (!current || (required != null && current.id < required)) {
+        result = await fetchOrderVersions(orderId);
+        if ('error' in result) throw result.error;
+        for (const version of result.versions) rememberVersion(version);
+      }
+    }
     return 'ready';
   };
 
