@@ -86,7 +86,12 @@ export function createLiveChartCommandGuard(deps: LiveChartGuardDeps) {
       // Každý pohled bez souhrnu s issue (neověřené čtení, chybějící účet/připojení, rozjetí, neznámo)
       // je neznámý stav, ne flat (critic 0a7f6ff3).
       const unknown = !position.summary && position.issue != null
-        ? new LiveCommandNotSentError('Pozice není ověřená — nový vstup se neodeslal.') : null;
+        ? new LiveCommandNotSentError('Pozice není ověřená — nový vstup se neodeslal.')
+        // Pohled ověřený jen kotvou kontinuity (flat i s pozicí): vynechaná událost může skrývat
+        // expozici kdekoli na účtu → žádný nový vstup, dokud není plný doklad (critic 677895e0).
+        : position.continuityOnly === true || position.summary?.continuityOnly === true
+          ? new LiveCommandNotSentError('Pozice není plně ověřená u brokera — nový vstup teď nejde, za pár sekund ano. Nic se neodeslalo.')
+          : null;
       const blocked = unknown ?? (scaleIn ? gateFor({ kind: 'scale-in' })
         : position.symbol === draft.symbol ? gateFor({ kind: 'entry' }) : null);
       if (blocked) return Promise.reject(blocked);

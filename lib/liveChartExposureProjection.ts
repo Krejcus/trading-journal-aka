@@ -281,20 +281,31 @@ export function markUnverifiedFlat(
 }
 
 /**
- * Pozice stojí aspoň na jednom účtu ověřeném jen kotvou kontinuity → `summary.continuityOnly`.
- * Zobrazení beze změny (pozice je ověřená, bez štítku); brána odmítne jen akce zvětšující možnou
- * ztrátu (rozšířit/odebrat SL, přikoupit, nový vstup na kontraktu). Neověřená pozice má přednost.
+ * Pohled stojí aspoň na jednom účtu ověřeném jen kotvou kontinuity (podle ÚČTŮ POHLEDU, ne jen
+ * řádků s pozicí — critic 677895e0: follower „flat“ z kotvy i flat leader po uzavření). Pozice →
+ * `summary.continuityOnly`; flat bez issue → `position.continuityOnly`. Zobrazení beze změny;
+ * brána odmítne akce zvětšující možnou ztrátu a JAKÝKOLI nový vstup (vynechaná událost může skrývat
+ * expozici kdekoli na účtu). Neověřená pozice / issue mají přednost.
  */
 export function markLiveChartContinuityOnly(
   position: LiveChartPosition,
+  viewAccountIds: ReadonlyArray<number | null | undefined>,
   continuityAccountIds: ReadonlySet<number>,
 ): LiveChartPosition {
+  if (continuityAccountIds.size === 0) return position;
   const summary = position.summary;
-  if (!summary || summary.unverified === true || continuityAccountIds.size === 0) return position;
-  const touched = summary.rows.some(row => continuityAccountIds.has(row.accountId))
-    || (summary.leader != null && continuityAccountIds.has(summary.leader.accountId));
-  if (!touched) return position;
-  return { ...position, key: `${position.key}|kontinuita`, summary: { ...summary, continuityOnly: true } };
+  const ids = new Set<number>(viewAccountIds.filter((id): id is number => id != null));
+  if (summary) {
+    for (const row of summary.rows) ids.add(row.accountId);
+    if (summary.leader) ids.add(summary.leader.accountId);
+  }
+  if (![...ids].some(id => continuityAccountIds.has(id))) return position;
+  if (summary) {
+    if (summary.unverified === true) return position;
+    return { ...position, key: `${position.key}|kontinuita`, summary: { ...summary, continuityOnly: true } };
+  }
+  if (position.issue != null) return position;
+  return { ...position, key: `${position.key}|kontinuita`, continuityOnly: true };
 }
 
 /** Jediný text stavu „neověřeno“ pro všechny cesty zobrazení grafu. */

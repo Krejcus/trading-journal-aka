@@ -567,9 +567,17 @@ describe('kontinuita = mezistupeň autorizace (review Codexu 5e9b2aef)', () => {
     const { markLiveChartContinuityOnly } = await import('../lib/liveChartExposureProjection');
     const summary = { leader: { accountId: 100, quantity: 1, entry: 1 }, rows: [] } as never;
     const pos = { key: 'p', symbol: 'MNQZ6', lines: [], summary, issue: null };
-    expect(markLiveChartContinuityOnly(pos, new Set([100])).summary?.continuityOnly).toBe(true);
-    expect(markLiveChartContinuityOnly(pos, new Set([300]))).toBe(pos);
+    expect(markLiveChartContinuityOnly(pos, [], new Set([100])).summary?.continuityOnly).toBe(true);
+    expect(markLiveChartContinuityOnly(pos, [], new Set([300]))).toBe(pos);
     const unverified = { ...pos, summary: { ...(summary as object), unverified: true } as never };
-    expect(markLiveChartContinuityOnly(unverified, new Set([100]))).toBe(unverified);
+    expect(markLiveChartContinuityOnly(unverified, [100], new Set([100]))).toBe(unverified);
+    // Follower bez pozice ověřený jen kotvou označí i pozici plně ověřeného leadera.
+    expect(markLiveChartContinuityOnly(pos, [100, 200], new Set([200])).summary?.continuityOnly).toBe(true);
+    // Flat pohled z kotvy nese značku na pozici; flat s issue se nemění.
+    const flat = { key: 'none', symbol: null, lines: [], summary: null, issue: null };
+    expect(markLiveChartContinuityOnly(flat, [100], new Set([100])).continuityOnly).toBe(true);
+    expect(markLiveChartContinuityOnly(flat, [100], new Set([300]))).toBe(flat);
+    const stale = { ...flat, issue: 'x', issueKind: 'stale' as const };
+    expect(markLiveChartContinuityOnly(stale, [100], new Set([100]))).toBe(stale);
   });
 });

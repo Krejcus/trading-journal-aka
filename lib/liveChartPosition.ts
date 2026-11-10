@@ -92,6 +92,8 @@ export interface LiveChartPosition {
    * (jen tehdy smí graf krátce podržet poslední stav), ostatní = skutečný stav skupiny.
    */
   issueKind?: JournalLiveView['issue'] | 'mismatch' | 'unknown';
+  /** Flat pohled ověřený jen kotvou kontinuity (ne plným dokladem): nový vstup brána nepustí. */
+  continuityOnly?: boolean;
 }
 
 export const NO_LIVE_CHART_POSITION: LiveChartPosition = { key: 'none', symbol: null, lines: [], summary: null, issue: null };

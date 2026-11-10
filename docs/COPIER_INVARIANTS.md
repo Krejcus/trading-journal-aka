@@ -2264,7 +2264,11 @@ existující ochranu.
   mezistupeň (`summary.continuityOnly`, review Codexu 5e9b2aef): kotva nepozná vynechanou událost
   (předpoklad NEOVĚŘEN conformance testem), proto z ní brána grafu nepustí akce zvětšující možnou
   ztrátu — rozšíření nebo odebrání SL, přikoupení, nový vstup na kontraktu. Zavřít, zrušit vstup,
-  utáhnout SL / BE, přidat SL/TP, posun/odebrání TP a posun limitu jdou. Plný doklad (`streamCoverage`)
+  utáhnout SL / BE, přidat SL/TP, posun/odebrání TP a posun limitu jdou (posun limitu přes trh je
+  v praxi okamžitý vstup — vědomá výjimka, množství se nemění). Značí se podle VŠECH účtů pohledu
+  (leader + kopírující followeři), ne jen řádků s pozicí; i flat pohled z kotvy (`position.
+  continuityOnly`) zablokuje JAKÝKOLI nový vstup, dokud plný doklad nevznikne znovu (po uzavření
+  obchodu adaptér obnoví baseline po 3 s klidu, nejvýš 1× za 30 s). Neznámý druh akce = blok. Plný doklad (`streamCoverage`)
   odemyká vše. Pojistka téhož ve workeru je samostatný úkol (změna jádra + DEMO conformance). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
   návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 5 s
   (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.; review

@@ -74,10 +74,19 @@ function continuityOnlyBlock(
       if (current == null) return block('posun SL bez jedné známé ceny SL');
       return liveStopTightens(summary.side, current, action.newPrice) ? null : block('rozšířit SL');
     }
+    case 'close':
+    case 'cancel-entry':
+    case 'add-protection':
+    // TP je výstup s pevným množstvím (přes trh = zavření); limit vstupu nemění množství —
+    // přes trh je to v praxi okamžitý vstup, vědomá výjimka (COPIER_INVARIANTS).
+    case 'move-target':
+    case 'remove-target':
+    case 'move-limit':
+      return null;
     case 'remove-stop': return block('odebrat SL');
     case 'scale-in': return block('přikoupit');
-    case 'entry': return block('nový vstup na tomto kontraktu');
-    default: return null;
+    case 'entry': return block('nový vstup');
+    default: return block('tahle akce');
   }
 }
 

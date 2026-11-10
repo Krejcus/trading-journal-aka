@@ -174,7 +174,22 @@ describe('pozice ověřená jen kotvou kontinuity (review Codexu 5e9b2aef)', () 
     await guard.manage({ action: 'move-target', symbol: 'MNQZ6', expectPrice: 120, newPrice: 130 }, send);
     await guard.bareLeg(seen, { kind: 'remove', leg: 'takeProfit' } as never, send);
     await guard.manage({ action: 'close-position', symbol: 'MNQZ6', expectPrice: 100 }, send);
-    await guard.entry({ symbol: 'MNQH7', side: 'Sell', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh5', false, () => send('entry:abcdefgh5'));
-    expect(send).toHaveBeenCalledTimes(6);
+    // Vynechaná událost může skrývat expozici kdekoli: ani vstup na jiném kontraktu (critic 677895e0).
+    await expect(guard.entry({ symbol: 'MNQH7', side: 'Sell', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh5', false, () => send('entry:abcdefgh5'))).rejects.toSatisfy(isLiveCommandNotSent);
+    expect(send).toHaveBeenCalledTimes(5);
+  });
+
+  it('flat pohled ověřený jen kotvou: žádný nový vstup; plný doklad vstup pustí', async () => {
+    const { store, guard, holder } = setup({ key: 'f', symbol: null, lines: [], summary: null, issue: null, continuityOnly: true });
+    const send = relay(store, operationId => Promise.resolve({ status: 'acknowledged', operationId }));
+    await expect(guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh6', false, () => send('entry:abcdefgh6'))).rejects.toSatisfy(isLiveCommandNotSent);
+    expect(send).not.toHaveBeenCalled();
+    holder.current = { key: 'f2', symbol: null, lines: [], summary: null, issue: null };
+    await guard.entry({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100 }, 'entry:abcdefgh7', false, () => send('entry:abcdefgh7'));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('neznámý druh akce se z pozice jen z kotvy zablokuje', () => {
+    expect(liveUnverifiedActionBlock({ continuityOnly: true, side: 'long', stop: 90 }, { kind: 'nové' } as never)).not.toBeNull();
   });
 });

@@ -140,6 +140,7 @@ export function useLiveChartData(input: {
       : [requested];
     return markLiveChartContinuityOnly(
       markUnverifiedFlat(markLiveChartPositionProjection(liveChartPosition(view, requested), unverifiedIds), viewIds, unverifiedIds),
+      viewIds,
       continuityIds,
     );
   }, [enabled, viewGroup, view, requested, unverifiedIds, continuityIds]);
