@@ -130,22 +130,29 @@ export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: numbe
 /** Štítek čar pozice z neověřené projekce workeru (bez dokladu kontinuity). */
 export const LIVE_UNVERIFIED_LINE_NOTE = 'neověřeno';
 
+const RISK_REDUCING_CANCEL = new Set(['close-position', 'cancel-order']);
+
 /**
- * Čáry z neověřené projekce workeru: jen zobrazení. Bez tažení, ×, BE i „+ SL/TP“
- * a se značkou `displayOnly`, kterou všechny handlery PC i telefonu ignorují
- * (`isLiveDisplayOnlyLine`). Nic zobrazovacího nesmí autorizovat příkaz (INV-UI-01/03).
+ * Čáry z neověřené projekce workeru: tlumené, se štítkem „neověřeno“, takže nevypadají
+ * jako potvrzená ochrana. Zůstává zavření, zrušení vstupu, tažení SL (utažení pustí
+ * až brána desku) a BE / přidání ochrany. Odebrání SL a posun TP/limitu ne — to riziko
+ * nezmenšuje. Bez `displayOnly`: handlery musí dojít do brány desku, která zvětšení
+ * rizika neodešle. Samotná čára příkaz neautorizuje (INV-UI-01/03).
  */
 function unverifiedLines(lines: BacktestChartOrderLine[]): BacktestChartOrderLine[] {
   return lines.map(line => {
-    const { actions: _actions, addableBrackets: _addable, cancelAction: _cancelAction, labelAt: _labelAt, ...rest } = line;
-    return Object.assign(rest, {
-      draggable: false,
-      cancellable: false,
-      // Tlumeně: SL/TP z neověřeného stavu nesmí vypadat jako potvrzená ochrana.
+    const cancelReduces = line.cancellable === true && line.cancelAction != null && RISK_REDUCING_CANCEL.has(line.cancelAction);
+    const actions = line.actions?.filter(action => action.id === 'break-even' || action.id === LIVE_ATTACH_SEND_ACTION);
+    const next: BacktestChartOrderLine = {
+      ...line,
+      draggable: line.kind === 'stopLoss' && line.draggable === true,
+      cancellable: cancelReduces,
       color: MUTED_COLOR,
       label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
-      displayOnly: true as const,
-    });
+      ...(actions && actions.length > 0 ? { actions } : { actions: undefined }),
+    };
+    if (!cancelReduces) delete next.cancelAction;
+    return next;
   });
 }
 

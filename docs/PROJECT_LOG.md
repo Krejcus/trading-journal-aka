@@ -288,6 +288,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: po fillu čáry zůstávají a riziko jde zmenšit (větev `cursor/chart-lines-after-fill-c0da`, NENASAZENO)
+
+- **Příčina mezery 5–22 s:** `observeTradeIngress` po fillu / posunu SL smaže doklad kontinuity
+  (`streamReadProof`). `overlayWorkerExposure` pak grafu vrátí starší REST. Doklad se nemaže
+  „jen na chvíli“ schválně: stejný zámek drží `seedCoveragePositions`, které by po klidu přepsalo
+  stream starým REST snímkem. Z toho streamu si bere contractId i zavření pozice. Do brokeru se
+  proto nesahalo.
+- **Co graf dělá:** dál kreslí stav workeru bez dokladu jako tlumené „neověřeno“ (to už uměla
+  projekce z `dc91b58`), ale čáry nejsou zamčené. Zavřít, zrušit vstup, utáhnout SL, BE a přidat
+  SL/TP jde odeslat; worker to ověří znovu. Roztažení SL, posun TP/limitu, odebrání SL, přikoupení
+  a nový vstup z neověřeného obrazu neodejdou. ACK pořád není potvrzená ochrana.
+- **Pořadí:** worker podle `startedAt` + `revision` a `displaySeq`. REST podle vlastního
+  `requestedAt`, ne podle času, kdy odpověď dorazila do prohlížeče. Starší snímek workeru graf
+  nepřekreslí, jen dokud je stav čerstvý. Zmlknutí nebo smazaný status držení pustí a čáry
+  zůstanou neutrální, ne poslední potvrzený SL. Pracující příkaz z neověřené projekce se
+  nekreslí jako potvrzený.
+- **Záměry:** „neodešlo“ se pozná podle kódu `live-chart-not-sent` (a známého kódu admission na
+  `TradovateRequestError`), ne podle textu. Ceny po ticích. Přikoupení neskončí jen shodou strany.
+  Druhé zařízení záměr nevidí a nemá z něj potvrzenou cenu — kreslí stejnou projekci workeru.
+  Sdílený kanál záměrů by byl nový stav, proto není.
+- Na DEMO neověřeno. Nasazení rozhodne Filip.
+
 ### 2026-11-10 — LIVE graf: kreslí ze stavu workeru i bez dokladu + čekající čáry (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - **Problém:** od dd393f72 bral graf stav workeru jen s dokladem kontinuity. Worker ho ale ruší

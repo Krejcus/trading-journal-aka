@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   LIVE_INTENT_SETTLED_HOLD_MS, bareLegIntentDraft, createLiveChartIntentStore, entryIntentDraft, liveChartIntentLines,
-  manageIntentDraft, trackLiveChartIntent, withLiveChartIntentLines,
+  manageIntentDraft, sameTick, trackLiveChartIntent, withLiveChartIntentLines,
 } from '../lib/liveChartIntent';
+import { liveChartNotSent } from '../lib/liveChartNotSent';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
 
@@ -34,7 +35,7 @@ describe('čekající záměr v LIVE grafu', () => {
     for (const run of [
       () => Promise.resolve({ status: 'rejected', operationId: 'manage:x1234567' }),
       () => Promise.resolve({ status: 'blocked', operationId: 'manage:x1234567' }),
-      () => Promise.reject(new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.')),
+      () => Promise.reject(liveChartNotSent('Stav kopírky není čerstvě ověřený — nic se neodeslalo.')),
     ]) {
       const intents = store();
       await trackLiveChartIntent(intents, moveStop(95), run).catch(() => undefined);
@@ -57,6 +58,28 @@ describe('čekající záměr v LIVE grafu', () => {
     expect(intents.snapshot()).toHaveLength(1);
     intents.prune(clock, position({ stop: 95 }));
     expect(intents.snapshot()).toEqual([]);
+    // Zaokrouhlení na tick (0.25) čáru složí; jiný tick ne.
+    const rounded = store();
+    rounded.begin(moveStop(95.02)!);
+    rounded.settle(rounded.snapshot()[0].id, { status: 'acknowledged' });
+    expect(sameTick(95.02, 95)).toBe(true);
+    rounded.prune(clock, position({ stop: 95 }));
+    expect(rounded.snapshot()).toEqual([]);
+    const otherTick = store();
+    otherTick.begin(moveStop(95.2)!);
+    otherTick.settle(otherTick.snapshot()[0].id, { status: 'acknowledged' });
+    otherTick.prune(clock, position({ stop: 95 }));
+    expect(otherTick.snapshot()).toHaveLength(1);
+  });
+
+  it('věta „nic se neodeslalo“ bez kódu není důkaz, že příkaz neodešel', async () => {
+    const intents = store();
+    await trackLiveChartIntent(intents, moveStop(95), () => Promise.reject(new Error('nic se neodeslalo'))).catch(() => undefined);
+    expect(intents.snapshot()[0]?.state).toBe('unknown');
+    const relay = Object.assign(new Error('copier-relay-entry-busy'), { name: 'TradovateRequestError', status: 409 });
+    const second = store();
+    await trackLiveChartIntent(second, moveStop(95), () => Promise.reject(relay)).catch(() => undefined);
+    expect(second.snapshot()).toEqual([]);
   });
 
   it('neznámý výsledek = „výsledek neznámý“, po čase zmizí; nic se neopakuje', async () => {
@@ -88,6 +111,26 @@ describe('čekající záměr v LIVE grafu', () => {
     expect(lines.map(line => [line.kind, line.price])).toEqual([['entry', 100], ['stopLoss', 110], ['takeProfit', 80]]);
     expect(lines[0].label).toMatch(/SELL 2 MARKET/);
     expect(liveChartIntentLines(intents.snapshot(), 'MNQH7')).toEqual([]);
+  });
+
+  it('přikoupení neskončí jen proto, že strana už sedí; vstup z flatu ano, až když dorazí qty a SL', () => {
+    const scale = store();
+    scale.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100, baselineQuantity: 2 }, 'entry:scalein01'));
+    scale.settle(scale.snapshot()[0].id, { status: 'acknowledged' });
+    scale.prune(clock, position({ side: 'long', quantity: 2 }));
+    expect(scale.snapshot()).toHaveLength(1);
+    scale.prune(clock, position({ side: 'long', quantity: 3 }));
+    expect(scale.snapshot()).toEqual([]);
+    const freshEntry = store();
+    freshEntry.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 2, orderType: 'Market', referencePrice: 100, stopLoss: 90, baselineQuantity: 0 }, 'entry:fresh0001'));
+    freshEntry.settle(freshEntry.snapshot()[0].id, { status: 'acknowledged' });
+    freshEntry.prune(clock, position({ side: 'long', quantity: 2, stop: 90.1 }));
+    expect(freshEntry.snapshot()).toEqual([]);
+    const waitingStop = store();
+    waitingStop.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 2, orderType: 'Market', referencePrice: 100, stopLoss: 90, baselineQuantity: 0 }, 'entry:waitstop1'));
+    waitingStop.settle(waitingStop.snapshot()[0].id, { status: 'acknowledged' });
+    waitingStop.prune(clock, position({ side: 'long', quantity: 2, stop: 80 }));
+    expect(waitingStop.snapshot()).toHaveLength(1);
   });
 
   it('záměry jdou do kanálu pracujících příkazů (PC i telefon) a mění jen jeho obsahový klíč', () => {

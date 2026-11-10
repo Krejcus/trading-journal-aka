@@ -97,15 +97,19 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(stop.price).not.toBe(28980);
   });
 
-  it('neověřená projekce workeru: čáry se kreslí, ale tlumeně, jen pro zobrazení a bez ovládání', () => {
+  it('neověřená projekce: čáry jsou tlumené, zavření a tažení SL zůstává, odebrání SL a posun TP ne', () => {
     const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
     expect(lines.length).toBeGreaterThan(1);
+    const entry = lines.find(line => line.kind === 'entry')!;
+    const stop = lines.find(line => line.kind === 'stopLoss')!;
+    const target = lines.find(line => line.kind === 'takeProfit')!;
+    expect(entry).toMatchObject({ cancellable: true, cancelAction: 'close-position', draggable: false, color: '#64748b' });
+    expect(stop).toMatchObject({ draggable: true, cancellable: false, color: '#64748b' });
+    expect(target).toMatchObject({ draggable: false, cancellable: false, color: '#64748b' });
+    expect(entry.actions?.map(action => action.id)).toEqual(['break-even']);
     for (const line of lines) {
-      expect(line).toMatchObject({ draggable: false, cancellable: false, color: '#64748b' });
       expect(line.label).toMatch(/neověřeno/);
-      expect(line.actions).toBeUndefined();
-      expect(line.addableBrackets).toBeUndefined();
-      expect(isLiveDisplayOnlyLine(line as never)).toBe(true);
+      expect(isLiveDisplayOnlyLine(line as never)).toBe(false);
     }
   });
 

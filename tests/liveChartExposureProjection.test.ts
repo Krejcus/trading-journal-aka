@@ -4,8 +4,9 @@ import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '..
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';
 import {
-  LIVE_CHART_UNVERIFIED_MANAGE_TEXT, liveChartDisplayAccounts, liveChartProjectionManageBlock, markLiveChartPositionProjection,
-  projectLiveChartExposure, trackLiveChartRestArrivals, type LiveChartRestArrival,
+  LIVE_CHART_UNVERIFIED_RISK_TEXT, liveChartDisplayAccounts, liveChartProjectionActionBlock, liveChartWorkerCursor,
+  liveChartWorkerCursorAccepts, markLiveChartPositionProjection, projectLiveChartExposure, selectLiveChartProjection,
+  trackLiveChartRestArrivals, type LiveChartRestArrival,
 } from '../lib/liveChartExposureProjection';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { buildTradeCard } from '../lib/liveTradeCard';
@@ -66,7 +67,7 @@ const status = (opts: { proof?: boolean; streamLive?: boolean; connected?: boole
   },
 } as unknown as LocalCopierAgentStatus);
 
-const fresh = { statusFresh: true, trusted: true, restArrivals: new Map<number, LiveChartRestArrival>(), lastWorkerShownAt: new Map<number, number>() };
+const fresh = { statusFresh: true, trusted: true, restArrivals: new Map<number, LiveChartRestArrival>(), lastWorkerRestAt: new Map<number, number | null>() };
 
 /** Celý řetěz grafu: projekce → účty → karta leadera → pozice grafu → čáry. */
 const chartLines = (projected: TradovateAccountDataResult) => {
@@ -88,7 +89,9 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     const { position, lines } = chartLines(data!);
     expect(position.summary).toMatchObject({ kind: 'position', side: 'short', quantity: 2, stop: 28_790, unverified: true });
     expect(lines.map(line => line.kind)).toEqual(['entry', 'stopLoss']);
-    expect(lines.every(line => isLiveDisplayOnlyLine(line as never) && !line.draggable && !line.cancellable && /neověřeno/.test(line.label))).toBe(true);
+    // Tlumené a označené, ale ne displayOnly: SL se dá utáhnout a čára není potvrzená ochrana.
+    expect(lines.every(line => !isLiveDisplayOnlyLine(line as never) && /neověřeno/.test(line.label))).toBe(true);
+    expect(lines.find(line => line.kind === 'stopLoss')).toMatchObject({ draggable: true, color: '#64748b' });
   });
 
   it('s platným dokladem zůstává ověřený stav (bez štítku, s ovládáním)', () => {
@@ -101,24 +104,56 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
   it('stará REST odpověď nepřepíše novější stav workeru, dokud worker žije', () => {
     // REST dorazil (i podle serveru) později, ale worker je čerstvý: přednost má worker.
     const rest = restFlat(NOW - 200);
-    const arrivals = trackLiveChartRestArrivals(new Map(), rest, NOW - 100);
+    const arrivals = trackLiveChartRestArrivals(new Map(), rest);
     const { data } = projectLiveChartExposure(rest, status(), NOW - 1_000, NOW, owners, { ...fresh, restArrivals: arrivals });
     expect(data!.accounts.find(item => item.id === 100)!.positions[0]).toMatchObject({ netPosition: -2 });
   });
 
-  it('worker zmlkne: REST, který dorazil dřív než poslední stav workeru, je neutrální „neověřeno“, ne flat; novější REST platí', () => {
+  it('worker zmlkne: REST se starším requestedAt je neutrální, ne flat; novější requestedAt platí i když odpověď přišla pozdě', () => {
     const rest = restFlat(NOW - 30_000);
-    const shownAt = new Map([[100, NOW - 20_000], [200, NOW - 20_000]]);
-    const older = trackLiveChartRestArrivals(new Map(), rest, NOW - 25_000);
-    const stale = projectLiveChartExposure(rest, status(), NOW - 20_000, NOW, owners, { ...fresh, statusFresh: false, restArrivals: older, lastWorkerShownAt: shownAt });
+    const held = new Map<number, number | null>([[100, NOW - 30_000], [200, NOW - 30_000]]);
+    const older = trackLiveChartRestArrivals(new Map(), rest);
+    const stale = projectLiveChartExposure(rest, status(), NOW - 20_000, NOW, owners, { ...fresh, statusFresh: false, restArrivals: older, lastWorkerRestAt: held });
     const leader = stale.data!.accounts.find(item => item.id === 100)!;
     expect(leader.readState?.positions.availability).toBe('unavailable');
     const snapshot = tradovateCopyTradeSnapshot(stale.data!, []);
     expect(isLiveAccountReadVerified(snapshot.accounts.find(item => item.id === 100)!, 'positions', NOW)).toBe(false);
-    // Hodiny serveru tu nerozhodují: nové čtení dorazilo (místní hodiny) po posledním stavu workeru.
-    const newer = trackLiveChartRestArrivals(older, restFlat(NOW - 60_000), NOW - 1_000);
-    const after = projectLiveChartExposure(restFlat(NOW - 60_000), status(), NOW - 20_000, NOW, owners, { ...fresh, statusFresh: false, restArrivals: newer, lastWorkerShownAt: shownAt });
+    // Pozdní odpověď čtení, které začalo před stavem workeru, flat nevrátí.
+    const late = trackLiveChartRestArrivals(new Map(), restFlat(NOW - 60_000));
+    const lateOut = projectLiveChartExposure(restFlat(NOW - 60_000), status(), NOW - 20_000, NOW, owners, { ...fresh, statusFresh: false, restArrivals: late, lastWorkerRestAt: held });
+    expect(lateOut.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
+    // Čtení spuštěné až po tom, které pod workerem leželo, už stav nahradí.
+    const newer = trackLiveChartRestArrivals(older, restFlat(NOW - 1_000));
+    const after = projectLiveChartExposure(restFlat(NOW - 1_000), status(), NOW - 20_000, NOW, owners, { ...fresh, statusFresh: false, restArrivals: newer, lastWorkerRestAt: held });
     expect(after.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('empty');
+  });
+
+  it('starší revision nebo displaySeq téhož běhu se do grafu nevrátí', () => {
+    const current = liveChartWorkerCursor(status());
+    const olderRevision = liveChartWorkerCursor({ ...status(), controller: { ...status().controller, revision: 0 } });
+    const olderSeq = liveChartWorkerCursor({ ...status(), displaySeq: 4 });
+    const newerSeq = liveChartWorkerCursor({ ...status(), displaySeq: 5 });
+    expect(liveChartWorkerCursorAccepts(null, current)).toBe(true);
+    expect(liveChartWorkerCursorAccepts(current, olderRevision)).toBe(false);
+    expect(liveChartWorkerCursorAccepts({ ...current!, displaySeq: 5 }, olderSeq)).toBe(false);
+    expect(liveChartWorkerCursorAccepts({ ...current!, displaySeq: 4 }, newerSeq)).toBe(true);
+    const held = projectLiveChartExposure(restFlat(), status(), NOW - 1_000, NOW, owners, fresh);
+    const selected = selectLiveChartProjection({ cursor: { ...current!, displaySeq: 5 }, projected: held }, olderSeq, { statusFresh: true }, () => {
+      throw new Error('starší snímek se nesmí znovu počítat');
+    });
+    expect(selected.held).toBe(true);
+    expect(selected.projected).toBe(held);
+    let recomputed = 0;
+    const released = selectLiveChartProjection({ cursor: { ...current!, displaySeq: 5 }, projected: held }, olderSeq, { statusFresh: false }, () => {
+      recomputed += 1;
+      return held;
+    });
+    expect(recomputed).toBe(1);
+    expect(released.held).toBe(false);
+    expect(released.cursor).toEqual(olderSeq);
+    const cleared = selectLiveChartProjection({ cursor: current, projected: held }, null, { statusFresh: true }, () => held);
+    expect(cleared.held).toBe(false);
+    expect(cleared.cursor).toBeNull();
   });
 
   it('obnovená cache, odpojený worker ani spadlý socket připojení se nepromítnou jako stav (neznámo ≠ flat)', () => {
@@ -170,11 +205,22 @@ describe('autorizace dál vyžaduje doklad', () => {
     expect(plan.uncoveredAccountIds).toEqual([100, 200]);
   });
 
-  it('z neověřené pozice desk nic neodešle; ověřená projde dál k workeru', () => {
+  it('z neověřené pozice jde zavřít a utáhnout SL; roztažení, přikoupení a nový vstup ne', () => {
     const unverified = chartLines(projectLiveChartExposure(restFlat(), status(), NOW - 1_000, NOW, owners, fresh).data!).position;
-    expect(liveChartProjectionManageBlock(unverified)).toBe(LIVE_CHART_UNVERIFIED_MANAGE_TEXT);
-    expect(LIVE_CHART_UNVERIFIED_MANAGE_TEXT).toMatch(/nic se neodeslalo/);
+    expect(liveChartProjectionActionBlock(unverified, { action: 'close-position' })).toBeNull();
+    expect(liveChartProjectionActionBlock(unverified, { action: 'cancel-entry' })).toBeNull();
+    expect(liveChartProjectionActionBlock(unverified, { action: 'attach-brackets' })).toBeNull();
+    expect(liveChartProjectionActionBlock(unverified, { action: 'add-stop' })).toBeNull();
+    // Short: utažení = SL níž. 28 790 → 28 780.
+    expect(liveChartProjectionActionBlock(unverified, { action: 'move-stop', nextPrice: 28_780 })).toBeNull();
+    expect(liveChartProjectionActionBlock(unverified, { action: 'move-stop', nextPrice: 28_800 })).toBe(LIVE_CHART_UNVERIFIED_RISK_TEXT);
+    expect(liveChartProjectionActionBlock(unverified, { action: 'move-stop', nextPrice: 28_790 })).toBe(LIVE_CHART_UNVERIFIED_RISK_TEXT);
+    expect(liveChartProjectionActionBlock(unverified, { action: 'scale-in' })).toBe(LIVE_CHART_UNVERIFIED_RISK_TEXT);
+    expect(liveChartProjectionActionBlock(unverified, { action: 'entry' })).toBe(LIVE_CHART_UNVERIFIED_RISK_TEXT);
+    expect(liveChartProjectionActionBlock(unverified, { action: 'remove-stop' })).toBe(LIVE_CHART_UNVERIFIED_RISK_TEXT);
+    expect(LIVE_CHART_UNVERIFIED_RISK_TEXT).toMatch(/nic se neodeslalo/);
     const verified = chartLines(projectLiveChartExposure(restFlat(), status({ proof: true }), NOW - 1_000, NOW, owners, fresh).data!).position;
-    expect(liveChartProjectionManageBlock(verified)).toBeNull();
+    expect(liveChartProjectionActionBlock(verified, { action: 'scale-in' })).toBeNull();
+    expect(liveChartProjectionActionBlock(verified, { action: 'move-stop', nextPrice: 28_800 })).toBeNull();
   });
 });

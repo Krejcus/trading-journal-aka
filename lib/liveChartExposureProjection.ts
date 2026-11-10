@@ -2,6 +2,7 @@ import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from './tradovateAccountDataTypes';
 import type { WorkerCoverageOwner } from './tradovateWorkerCoverage';
 import { tradovateAccountReadState } from './tradovateLiveReadState';
+import { shouldAcceptCopierStatus } from './copierStatusPollFence';
 import {
   overlayWorkerAccount,
   overlayWorkerExposure,
@@ -9,7 +10,7 @@ import {
   WORKER_EXPOSURE_MAX_AGE_MS,
   WORKER_POSITION_MISMATCH_DETAIL,
 } from './tradovateWorkerExposureOverlay';
-import type { LiveChartPosition } from './liveChartPosition';
+import { MNQ_TICK, type LiveChartPosition } from './liveChartPosition';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 /**
@@ -23,14 +24,19 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
  * - účty s dokladem: beze změny (`overlayWorkerExposure`);
  * - účty, které worker prokazatelně zná, se živým socketem svého připojení, bez dokladu:
  *   pozice a příkazy z workeru označené `displayProjection: 'worker-unverified'` (štítek
- *   „neověřeno“, tlumené čáry bez ovládání) — jen čerstvý neobnovený stav ≤ 8 s;
- * - pořadí: dokud worker žije, jeho stav vždy přednost (REST ho nepřepíše). Když worker
- *   zmlkne, REST čtení, které dorazilo (místní hodiny) dřív, než graf naposledy kreslil
- *   stav workeru, je starší — neutrální „neověřené“ bez čar (INV-UI-01), nikdy flat.
+ *   „neověřeno“, tlumené čáry). Snižování rizika (zavřít, zrušit vstup, utáhnout SL, BE,
+ *   přidat SL/TP) z nich jde odeslat — worker je znovu ověří. Zvětšení rizika ne.
+ *   Jen čerstvý neobnovený stav ≤ 8 s;
+ * - pořadí workeru: `startedAt` + `revision` a `displaySeq` (INV-FRESH-02). Starší snímek
+ *   se do grafu nevrátí. REST se řadí vlastním `requestedAt` (začátek čtení), ne časem
+ *   příchodu do prohlížeče. Dokud worker žije, jeho stav má přednost. Když zmlkne, REST
+ *   starší než čtení, které už pod tím stavem leželo, je neutrální „neověřené“ bez čar
+ *   (INV-UI-01), nikdy flat.
  *
- * Autorizace se tím NEMĚNÍ: `overlayWorkerExposure` v desku (přehled, způsobilost,
- * plán čtení REST) dál vyžaduje doklad, `isLiveAccountReadVerified` taky; příkazy
- * z neověřené projekce desk odmítne (`liveChartProjectionManageBlock`).
+ * Autorizace ověřeného čtení se NEMĚNÍ: `overlayWorkerExposure` v desku (přehled,
+ * způsobilost, plán čtení REST) dál vyžaduje doklad, `isLiveAccountReadVerified` taky.
+ * Neověřená projekce nepotvrzuje ochranu. Zvětšení rizika z ní desk neodešle
+ * (`liveChartProjectionActionBlock`).
  */
 
 /**
@@ -40,7 +46,7 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
 export const LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS = WORKER_EXPOSURE_MAX_AGE_MS;
 /** Ručně vypnutý režim followera: worker ho hlásí OK bez čtení pozice. */
 const WORKER_FOLLOWER_OFF_DETAIL = 'vypnutý follower';
-export const LIVE_CHART_UNVERIFIED_MANAGE_TEXT = 'Pozice v grafu je zatím jen ze stavu workeru bez dokladu (neověřeno) — nic se neodeslalo. Zkus to za chvilku.';
+export const LIVE_CHART_UNVERIFIED_RISK_TEXT = 'Pozice v grafu je neověřená — tahle změna riziko nezmenšuje, nic se neodeslalo. Zavřít a utáhnout SL jde hned.';
 
 const unavailable = { availability: 'unavailable' as const, count: 0, httpStatus: null };
 
@@ -76,29 +82,85 @@ export function workerConnectionStreamLive(status: LocalCopierAgentStatus | null
 }
 
 /**
- * Místní čas, kdy dorazilo aktuální REST čtení pozic a příkazů účtu (hodiny prohlížeče,
- * stejné jako `observedAt` workeru — žádné porovnání s hodinami serveru).
+ * Čas začátku REST čtení (`readState.requestedAt` — hodiny serveru, který čtení spustil).
+ * Ne čas, kdy odpověď dorazila do prohlížeče: pozdní odpověď staršího čtení nesmí
+ * přebít novější.
  */
-export interface LiveChartRestArrival { positionsAsOf: string | null; ordersAsOf: string | null; positionsAt: number; ordersAt: number }
+export interface LiveChartRestArrival {
+  positionsAsOf: string | null;
+  ordersAsOf: string | null;
+  requestedAt: number | null;
+}
 
-/** Aktualizuje místní časy příchodu REST čtení; nové `asOf` = nový příchod (`now`). */
+/** Drží nejnovější `requestedAt`. Starší odpověď, která dorazí později, ho nevrátí. */
 export function trackLiveChartRestArrivals(
   previous: ReadonlyMap<number, LiveChartRestArrival>,
   data: TradovateAccountDataResult | null | undefined,
-  now: number,
 ): Map<number, LiveChartRestArrival> {
   const next = new Map<number, LiveChartRestArrival>();
   for (const account of data?.accounts ?? []) {
     const read = tradovateAccountReadState(account, data!);
+    const parsed = Date.parse(read.requestedAt ?? '');
+    const requestedAt = Number.isFinite(parsed) ? parsed : null;
     const before = previous.get(account.id);
-    next.set(account.id, {
-      positionsAsOf: read.positionsAsOf,
-      ordersAsOf: read.ordersAsOf,
-      positionsAt: before && before.positionsAsOf === read.positionsAsOf ? before.positionsAt : now,
-      ordersAt: before && before.ordersAsOf === read.ordersAsOf ? before.ordersAt : now,
-    });
+    if (before && before.requestedAt != null && (requestedAt == null || requestedAt < before.requestedAt)) {
+      next.set(account.id, before);
+      continue;
+    }
+    next.set(account.id, { positionsAsOf: read.positionsAsOf, ordersAsOf: read.ordersAsOf, requestedAt });
   }
   return next;
+}
+
+/** Běh workeru (`startedAt`) + monotónní `revision` a zobrazovací `displaySeq`. */
+export interface LiveChartWorkerCursor {
+  startedAt: string;
+  revision: number;
+  displaySeq: number | null;
+}
+
+export function liveChartWorkerCursor(status: {
+  startedAt?: string;
+  displaySeq?: number;
+  controller?: { revision?: number };
+} | null | undefined): LiveChartWorkerCursor | null {
+  const startedAt = status?.startedAt;
+  const revision = status?.controller?.revision;
+  if (typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return null;
+  if (typeof revision !== 'number' || !Number.isFinite(revision)) return null;
+  const displaySeq = status.displaySeq;
+  return {
+    startedAt,
+    revision,
+    displaySeq: typeof displaySeq === 'number' && Number.isFinite(displaySeq) ? displaySeq : null,
+  };
+}
+
+/** Starší revision nebo `displaySeq` téhož běhu se nepřijme (INV-FRESH-02). Bez kurzoru jen první snímek. */
+export function liveChartWorkerCursorAccepts(previous: LiveChartWorkerCursor | null, next: LiveChartWorkerCursor | null): boolean {
+  if (!next) return previous == null;
+  if (!shouldAcceptCopierStatus(
+    { startedAt: next.startedAt, controller: { revision: next.revision } },
+    previous ? { startedAt: previous.startedAt, controller: { revision: previous.revision } } : null,
+  )) return false;
+  return !(previous && previous.startedAt === next.startedAt && previous.displaySeq != null && next.displaySeq != null && next.displaySeq < previous.displaySeq);
+}
+
+/**
+ * Starší snímek workeru nechá poslední přijatou projekci, jen dokud je stav čerstvý
+ * a příchozí kurzor existuje. `held` = tahle odpověď je přehozený poll, graf zůstává
+ * u novějšího obrazu. Jakmile stav není čerstvý nebo status zmizel, projekce se
+ * spočítá znovu a držení se pustí — zmlklý worker nesmí nechat poslední potvrzené čáry.
+ */
+export function selectLiveChartProjection<T>(
+  hold: { cursor: LiveChartWorkerCursor | null; projected: T } | null,
+  incoming: LiveChartWorkerCursor | null,
+  input: { statusFresh: boolean },
+  project: () => T,
+): { cursor: LiveChartWorkerCursor | null; projected: T; held: boolean } {
+  if (!input.statusFresh || incoming == null) return { cursor: incoming, projected: project(), held: false };
+  if (hold && !liveChartWorkerCursorAccepts(hold.cursor, incoming)) return { ...hold, held: true };
+  return { cursor: incoming, projected: project(), held: false };
 }
 
 export interface LiveChartProjectionInput {
@@ -106,10 +168,14 @@ export interface LiveChartProjectionInput {
   statusFresh: boolean;
   /** Pozorování workeru je z této instance (ne obnovená cache); jinak žádná projekce ani plot. */
   trusted: boolean;
-  /** Místní příchody REST čtení (`trackLiveChartRestArrivals`). */
+  /** REST čtení seřazená podle vlastního `requestedAt` (`trackLiveChartRestArrivals`). */
   restArrivals: ReadonlyMap<number, LiveChartRestArrival>;
-  /** Kdy (místní hodiny) graf naposledy kreslil účet ze stavu workeru. */
-  lastWorkerShownAt: ReadonlyMap<number, number>;
+  /**
+   * `requestedAt` REST čtení, které už bylo v datech, když graf účet naposledy kreslil
+   * ze stavu workeru. Chybějící klíč = účet se ze workeru ještě nekreslil. Hodnota null =
+   * kreslil, ale REST čas neměl.
+   */
+  lastWorkerRestAt: ReadonlyMap<number, number | null>;
 }
 
 export interface LiveChartProjectionResult<T> {
@@ -145,11 +211,12 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
       workerShown.push(account.id);
       return overlayWorkerAccount(account, proven, context, observed, null);
     }
-    // Graf účet nedávno kreslil ze stavu workeru: REST čtení, které dorazilo dřív, je starší
-    // a ten stav nepřepíše — neutrální „neověřeno“ (bez čar), dokud nedorazí novější REST.
-    const shownAt = input.lastWorkerShownAt.get(account.id);
-    const arrival = input.restArrivals.get(account.id);
-    if (shownAt != null && (!arrival || arrival.positionsAt <= shownAt || arrival.ordersAt <= shownAt)) {
+    // Graf účet kreslil ze stavu workeru. Novější je jen REST, jehož vlastní `requestedAt`
+    // (začátek čtení) je přísně po čtení, které pod tím stavem už leželo. Pozdní odpověď
+    // staršího čtení ho nepřepíše — neutrální „neověřeno“ bez čar, nikdy flat.
+    const heldRest = input.lastWorkerRestAt.get(account.id);
+    const incomingRest = input.restArrivals.get(account.id)?.requestedAt ?? null;
+    if (heldRest !== undefined && !(heldRest != null && incomingRest != null && incomingRest > heldRest)) {
       changed = true;
       const readState = tradovateAccountReadState(account, proven);
       const { displayStreamCoverage: _proof, displayProjection: _projection, ...rest } = readState;
@@ -173,19 +240,73 @@ export function markLiveChartPositionProjection(
   return { ...position, key: `${position.key}|neověřeno`, summary: { ...summary, unverified: true } };
 }
 
-/**
- * Brána odeslání správy z grafu: neověřená projekce nikdy neautorizuje příkaz
- * (INV-UI-01/03). null = smí dál (rozhoduje worker a broker). Text obsahuje
- * „nic se neodeslalo“, takže UI hlásí „Neodesláno“, ne neznámý výsledek.
- */
-export function liveChartProjectionManageBlock(position: Pick<LiveChartPosition, 'summary'> | null | undefined): string | null {
-  return position?.summary?.unverified === true ? LIVE_CHART_UNVERIFIED_MANAGE_TEXT : null;
+export type LiveChartProjectionAction =
+  | { action: 'close-position' | 'cancel-entry' | 'attach-brackets' | 'add-stop' | 'add-target' | 'remove-target' }
+  | { action: 'move-stop'; nextPrice: number | null | undefined }
+  | { action: 'move-target' | 'move-limit' | 'scale-in' | 'entry' | 'remove-stop' };
+
+/** Utažení SL o aspoň jeden tick směrem k trhu. Posun dál nebo o nulu riziko nezmenšuje. */
+export function stopTightens(side: 'long' | 'short', current: number, next: number, tick = MNQ_TICK): boolean {
+  if (!(tick > 0) || !Number.isFinite(current) || !Number.isFinite(next)) return false;
+  const currentTick = Math.round(current / tick);
+  const nextTick = Math.round(next / tick);
+  return side === 'long' ? nextTick > currentTick : nextTick < currentTick;
 }
 
 /**
- * Kopie účtů jen pro kreslení grafu (karta, čáry, pracující příkazy): bez značky projekce,
- * aby se neověřený stav workeru vůbec nakreslil. Mimo `useLiveChartData` se nepoužívá;
- * neověřenost nese dál `summary.unverified` (`markLiveChartPositionProjection`).
+ * Brána odeslání z neověřené projekce. null = smí dál (rozhoduje worker a broker).
+ * Snižování rizika (zavřít, zrušit vstup, utáhnout SL, přidat ochranu) projde.
+ * Zvětšení rizika ne. Ověřená pozice se touhle branou neblokuje. Text odmítnutí
+ * obsahuje „nic se neodeslalo“.
+ */
+export function liveChartProjectionActionBlock(
+  position: { summary?: { unverified?: boolean; side?: 'long' | 'short'; stop?: number | null } | null } | null | undefined,
+  action: LiveChartProjectionAction,
+): string | null {
+  if (position?.summary?.unverified !== true) return null;
+  switch (action.action) {
+    case 'close-position':
+    case 'cancel-entry':
+    case 'attach-brackets':
+    case 'add-stop':
+    case 'add-target':
+    case 'remove-target':
+      return null;
+    case 'move-stop': {
+      const summary = position.summary;
+      const current = summary?.stop;
+      const next = action.nextPrice;
+      if (!summary?.side || current == null || next == null || !Number.isFinite(current) || !Number.isFinite(next)) {
+        return LIVE_CHART_UNVERIFIED_RISK_TEXT;
+      }
+      return stopTightens(summary.side, current, next) ? null : LIVE_CHART_UNVERIFIED_RISK_TEXT;
+    }
+    default:
+      return LIVE_CHART_UNVERIFIED_RISK_TEXT;
+  }
+}
+
+/** Akce `manage-leader-order` → brána projekce. Neznámá akce se při neověření neodešle. */
+export function liveChartManageProjectionAction(action: string, newPrice?: number): LiveChartProjectionAction {
+  if (action === 'move-stop') return { action: 'move-stop', nextPrice: newPrice };
+  if (action === 'close-position' || action === 'cancel-entry' || action === 'attach-brackets') return { action };
+  if (action === 'move-target' || action === 'move-limit') return { action };
+  return { action: 'move-limit' };
+}
+
+/** SL/TP po jedné → brána projekce. */
+export function liveChartBareProjectionAction(intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number | null }): LiveChartProjectionAction {
+  if (intent.kind === 'add') return intent.leg === 'stopLoss' ? { action: 'add-stop' } : { action: 'add-target' };
+  if (intent.kind === 'remove') return intent.leg === 'stopLoss' ? { action: 'remove-stop' } : { action: 'remove-target' };
+  if (intent.leg === 'stopLoss') return { action: 'move-stop', nextPrice: intent.price };
+  return { action: 'move-target' };
+}
+
+/**
+ * Kopie účtů pro kartu a čáry pozice: bez značky projekce, aby se neověřený stav
+ * workeru vůbec nakreslil. Pracující příkazy tuhle kopii nedostanou — bez značky by
+ * jejich čtení vypadalo ověřené. Mimo `useLiveChartData` se nepoužívá; neověřenost
+ * pozice nese dál `summary.unverified` (`markLiveChartPositionProjection`).
  */
 export function liveChartDisplayAccounts(accounts: readonly LiveAccount[]): LiveAccount[] {
   return accounts.map(account => {

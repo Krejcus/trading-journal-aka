@@ -1,5 +1,6 @@
 import { LIVE_WORKING_OWNER, type LiveWorkingOrderLine } from './liveWorkingOrderLines';
-import type { LiveChartPosition } from './liveChartPosition';
+import { MNQ_TICK, type LiveChartPosition } from './liveChartPosition';
+import { isLiveChartNotSent } from './liveChartNotSent';
 
 /**
  * Čekající záměr v LIVE grafu (10. 11. 2026): po kliknutí (Market/Limit vstup, přidat /
@@ -15,6 +16,10 @@ import type { LiveChartPosition } from './liveChartPosition';
  * - Odmítnutí / blokace / „nic se neodeslalo“ = čára hned zmizí (návrat).
  * - Neznámý výsledek = „výsledek neznámý“ a po čase zmizí; nic se neopakuje.
  * - Odebrání SL/TP nesahá na skutečnou čáru: ta zůstává, dokud ji read model neodebere.
+ * - Záměr žije jen v téhle instanci desku. Druhé zařízení (telefon / jiný prohlížeč) ho
+ *   nevidí a nesmí ho mít z čeho vykreslit jako potvrzenou cenu: kreslí jen sdílenou
+ *   projekci workeru. Sdílený zámek záměrů by potřeboval nový kanál a starý záměr
+ *   na druhém zařízení by vypadal jako druhý příkaz — proto se nesdílí.
  */
 
 export type LiveChartIntentKind =
@@ -39,6 +44,11 @@ export interface LiveChartIntentDraft {
   legs: readonly LiveChartIntentLeg[];
   /** Je-li známé předem (vstup, správa z desku); jinak se doplní z výsledku. */
   operationId?: string | null;
+  /**
+   * Kusy pozice v okamžiku kliku (0 = flat). Přikoupení „přistane“, až když se
+   * pozice zvětší o qty příkazu — shoda strany sama nestačí.
+   */
+  baselineQuantity?: number | null;
 }
 
 export interface LiveChartIntent extends LiveChartIntentDraft {
@@ -57,8 +67,6 @@ export const LIVE_INTENT_SETTLED_HOLD_MS = 20_000;
 export type LiveChartIntentOutcome =
   | { status: 'acknowledged' | 'unknown'; operationId?: string | null }
   | { status: 'rejected' | 'blocked' | 'abandoned' | 'not-sent'; operationId?: string | null };
-
-const NOT_SENT = /nic se neodeslalo|Neodesláno|není čerstvě ověřený|chybí připojení|entry-busy|entry-superseded|entry-not-admitted|daily-cap/;
 
 export interface LiveChartIntentStore {
   begin(draft: LiveChartIntentDraft): string;
@@ -119,7 +127,11 @@ export function intentExpired(intent: LiveChartIntent, now: number): boolean {
   return intent.settledAt != null && now - intent.settledAt > LIVE_INTENT_SETTLED_HOLD_MS;
 }
 
-const samePrice = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) < 1e-9;
+/** Stejný tick (MNQ 0.25). Přesná shoda 1e-9 nechávala čáru viset po zaokrouhlení ceny. */
+export function sameTick(a: number | null | undefined, b: number | null | undefined, tick = MNQ_TICK): boolean {
+  if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(tick > 0)) return false;
+  return Math.round(a / tick) === Math.round(b / tick);
+}
 const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => intent.legs.find(leg => leg.role === role)?.price ?? null;
 
 /**
@@ -134,11 +146,22 @@ export function intentLanded(intent: LiveChartIntent, position: LiveChartPositio
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
-    case 'entry': return summary.side === intent.side;
-    case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));
-    case 'move-target': case 'add-target': return samePrice(summary.target, legPrice(intent, 'takeProfit'));
-    case 'attach': return samePrice(summary.stop, legPrice(intent, 'stopLoss')) && samePrice(summary.target, legPrice(intent, 'takeProfit'));
-    case 'move-limit': return summary.kind === 'pending' && samePrice(summary.entry, legPrice(intent, 'entry'));
+    case 'entry': {
+      if (summary.kind !== 'position' || summary.side !== intent.side) return false;
+      const orderQty = intent.quantity;
+      const baseline = intent.baselineQuantity;
+      if (orderQty == null || !(orderQty > 0) || baseline == null || !Number.isFinite(baseline)) return false;
+      if (summary.quantity < baseline + orderQty) return false;
+      const stop = legPrice(intent, 'stopLoss');
+      const target = legPrice(intent, 'takeProfit');
+      if (stop != null && !sameTick(summary.stop, stop)) return false;
+      if (target != null && !sameTick(summary.target, target)) return false;
+      return true;
+    }
+    case 'move-stop': case 'add-stop': return sameTick(summary.stop, legPrice(intent, 'stopLoss'));
+    case 'move-target': case 'add-target': return sameTick(summary.target, legPrice(intent, 'takeProfit'));
+    case 'attach': return sameTick(summary.stop, legPrice(intent, 'stopLoss')) && sameTick(summary.target, legPrice(intent, 'takeProfit'));
+    case 'move-limit': return summary.kind === 'pending' && sameTick(summary.entry, legPrice(intent, 'entry'));
     case 'remove-stop': return summary.stop == null && summary.rows.every(row => row.stopCoverage === 0);
     case 'remove-target': return summary.target == null && summary.rows.every(row => row.targetCoverage === 0);
     case 'close': case 'cancel-entry': return false;
@@ -167,8 +190,7 @@ export async function trackLiveChartIntent<R extends { status: string; operation
     return result;
   } catch (reason) {
     if (id) {
-      const message = reason instanceof Error ? reason.message : '';
-      store!.settle(id, { status: NOT_SENT.test(message) ? 'not-sent' : 'unknown' });
+      store!.settle(id, { status: isLiveChartNotSent(reason) ? 'not-sent' : 'unknown' });
     }
     throw reason;
   }
@@ -252,9 +274,12 @@ const leg = (role: LiveChartIntentLeg['role'], price: number | null | undefined)
 export function entryIntentDraft(draft: {
   symbol: string; side: 'Buy' | 'Sell'; quantity: number; orderType: string;
   price?: number; referencePrice?: number; stopLoss?: number; takeProfit?: number;
+  /** Kusy pozice před klikem. 0 = vstup z flatu. Bez toho přikoupení „přistane“ hned. */
+  baselineQuantity?: number | null;
 }, operationId: string): LiveChartIntentDraft {
   return {
     kind: 'entry', symbol: draft.symbol, side: sideOf(draft.side), quantity: draft.quantity, orderType: draft.orderType, operationId,
+    baselineQuantity: draft.baselineQuantity ?? 0,
     legs: [
       ...leg('entry', draft.orderType === 'Market' ? draft.referencePrice : draft.price),
       ...leg('stopLoss', draft.stopLoss),

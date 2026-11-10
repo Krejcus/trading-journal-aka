@@ -83,8 +83,9 @@ describe('B1: holý vstup a pozice leadera (U4)', () => {
   it('desk: holý vstup jen přes newestOpenBareEntry a jen v pohledu leadera skupiny workeru; attach jen s capability', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     expect(desk).toMatch(/const chartBareEntry = useMemo\(\(\) => \(chartLeaderBasis\s*\? liveBareEntryRecord\(newestOpenBareEntry\(agentStatus\?\.controller\.manualEntries, chartPositionSymbol\)\)\s*: null\)/);
-    // Neověřená projekce workeru se do pozice leadera (lišta, attach, × holé) nepromítne.
-    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary\?\.unverified === true \? null : chartData\.position\?\.summary \?\? null;/);
+    // Neověřená projekce zůstává v souhrnu (zavření a utažení SL). Přikoupení z ní nabídka nesestaví.
+    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary \?\? null;/);
+    expect(desk).toMatch(/if \(chartUnverified \|\| !chartLeaderBasis \|\| !supportsCopierManualEntryScaleIn\(agentStatus\)\) return null;/);
     expect(desk).toMatch(/livePhonePosition\(chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
     // PC: Přidat SL/TP = deskový attachBrackets, jen když worker inzeruje manual-entry-bare-v1.
     expect(desk.match(/onAttachBrackets/g)).toHaveLength(1);
@@ -108,6 +109,14 @@ describe('B1: pracující příkazy pro graf (U5) — jen zobrazení', () => {
     expect(sourceOf({ orders: foreign, position: position({ issue: 'Kopie dobíhá…', summary: null, symbol: null }) }))
       .toMatchObject({ orders: [], verified: false });
     expect(sourceOf({ orders: foreign, accounts: [] })).toMatchObject({ verified: false });
+    const projected = sourceOf({
+      orders: foreign,
+      accounts: [account(LEADER, { displayProjection: 'worker-unverified' } as Partial<LiveAccount>)],
+      position: position({ summary: summary({ unverified: true }) }),
+    });
+    expect(projected).toMatchObject({ orders: [], verified: false });
+    expect(liveChartWorkingOrders(projected, { pointValue: 2 }).lines).toEqual([]);
+    expect(sourceOf({ orders: foreign, position: position({ summary: summary({ unverified: true }) }) }).verified).toBe(false);
     for (const unverified of [sourceOf({ enabled: false, orders: foreign }), null, undefined]) {
       expect(liveChartWorkingOrders(unverified, { frontContract: SYM })).toEqual({ lines: [], badges: [], key: EMPTY_LIVE_WORKING_KEY, contract: null });
     }
@@ -180,7 +189,7 @@ describe('B1: pracující příkazy pro graf (U5) — jen zobrazení', () => {
     }
     // Hook skládá podklad ze stejného čtení příkazů jako karta a z ověřené pozice.
     const hook = source('hooks/useLiveChartData.ts');
-    expect(hook).toMatch(/const working = useMemo\(\(\) => liveChartWorkingSource\(\{\s*enabled: enabled && viewGroup != null,\s*accounts,\s*orders,/);
+    expect(hook).toMatch(/const working = useMemo\(\(\) => liveChartWorkingSource\(\{\s*enabled: enabled && viewGroup != null,\s*\/\/[^\n]*\n\s*accounts: projectedAccounts,\s*orders,/);
     expect(hook).toMatch(/return \{ group: tradeGroup, groupKey, position, disarm, working \};/);
   });
 });

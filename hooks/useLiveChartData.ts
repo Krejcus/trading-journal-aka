@@ -13,7 +13,7 @@ import {
 } from '../lib/liveWorkingOrderLines';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
-import { liveChartDisplayAccounts, markLiveChartPositionProjection, projectLiveChartExposure, trackLiveChartRestArrivals, type LiveChartRestArrival } from '../lib/liveChartExposureProjection';
+import { liveChartDisplayAccounts, liveChartWorkerCursor, markLiveChartPositionProjection, projectLiveChartExposure, selectLiveChartProjection, trackLiveChartRestArrivals, type LiveChartRestArrival, type LiveChartWorkerCursor } from '../lib/liveChartExposureProjection';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import { buildLiveTradeGroup, liveChartDisarm, liveTradeGroupKey, type LiveChartDisarm } from '../lib/liveTradeGroupSource';
@@ -60,20 +60,30 @@ export function useLiveChartData(input: {
   // starší REST nepřepíše novější stav workeru. Autorizační data desku se nemění.
   const restArrivalsRef = useRef<ReadonlyMap<number, LiveChartRestArrival>>(new Map());
   const restArrivals = useMemo(() => {
-    restArrivalsRef.current = trackLiveChartRestArrivals(restArrivalsRef.current, data, Date.now());
+    restArrivalsRef.current = trackLiveChartRestArrivals(restArrivalsRef.current, data);
     return restArrivalsRef.current;
   }, [data]);
-  const lastWorkerShownRef = useRef(new Map<number, number>());
+  const lastWorkerRestRef = useRef(new Map<number, number | null>());
+  const holdRef = useRef<{ cursor: LiveChartWorkerCursor | null; projected: ReturnType<typeof projectLiveChartExposure> } | null>(null);
+  const heldRef = useRef(false);
   const statusTrusted = input.statusTrusted ?? statusFresh;
-  const projected = useMemo(() => (enabled ? projectLiveChartExposure(data, agentStatus, exposureObservedAt, now, coverageOwners, {
-    statusFresh, trusted: statusTrusted, restArrivals, lastWorkerShownAt: lastWorkerShownRef.current,
-  }) : null), [enabled, data, agentStatus, exposureObservedAt, now, coverageOwners, statusFresh, statusTrusted, restArrivals]);
+  const projected = useMemo(() => {
+    if (!enabled) return null;
+    const incoming = liveChartWorkerCursor(agentStatus);
+    const selected = selectLiveChartProjection(holdRef.current, incoming, { statusFresh }, () => projectLiveChartExposure(data, agentStatus, exposureObservedAt, now, coverageOwners, {
+      statusFresh, trusted: statusTrusted, restArrivals, lastWorkerRestAt: lastWorkerRestRef.current,
+    }));
+    heldRef.current = selected.held;
+    holdRef.current = { cursor: selected.cursor, projected: selected.projected };
+    return selected.projected;
+  }, [enabled, data, agentStatus, exposureObservedAt, now, coverageOwners, statusFresh, statusTrusted, restArrivals]);
   const chartData = projected?.data ?? null;
-  // Kdy graf naposledy kreslil účet ze stavu workeru (plot proti staršímu REST) — po renderu.
+  // REST `requestedAt`, které už leželo pod nakresleným stavem workeru. Drží se jen u nově
+  // přijatého snímku — starší kurzor (held) ten čas neposouvá.
   useEffect(() => {
-    if (!projected || exposureObservedAt == null) return;
-    for (const id of projected.workerShown) lastWorkerShownRef.current.set(id, exposureObservedAt);
-  }, [projected, exposureObservedAt]);
+    if (!projected || heldRef.current) return;
+    for (const id of projected.workerShown) lastWorkerRestRef.current.set(id, restArrivals.get(id)?.requestedAt ?? null);
+  }, [projected, restArrivals]);
   const projectedAccounts = useMemo(() => (chartData ? tradovateCopyTradeSnapshot(chartData, profiles).accounts : []), [chartData, profiles]);
   const unverifiedKey = projectedAccounts.filter(account => account.displayProjection === 'worker-unverified').map(account => account.id).join(',');
   // Kreslení: neověřená projekce se smí nakreslit (označená v souhrnu pozice), ale obecný
@@ -131,13 +141,14 @@ export function useLiveChartData(input: {
   // U5: podklad pracujících příkazů ze stejného čtení příkazů jako karta (jen zobrazení).
   const working = useMemo(() => liveChartWorkingSource({
     enabled: enabled && viewGroup != null,
-    accounts,
+    // Účty i se značkou projekce. Kopie bez značky je jen pro kartu; tady by z ní bylo ověřené čtení příkazů.
+    accounts: projectedAccounts,
     orders,
     target: input.target,
     leaderAccountId: viewGroup?.leaderAccountId,
     position,
     now,
-  }), [enabled, viewGroup, accounts, orders, input.target, position, now]);
+  }), [enabled, viewGroup, projectedAccounts, orders, input.target, position, now]);
   return { group: tradeGroup, groupKey, position, disarm, working };
 }
 
@@ -170,7 +181,9 @@ export function liveChartWorkingSource(input: {
 }): LiveChartWorkingSource {
   if (!input.enabled) return { orders: [], accountIds: [], verified: false, position: input.position };
   const accountIds = liveWorkingAccountIds(input.target, input.leaderAccountId);
-  const verified = liveWorkingOrdersVerified({ accounts: input.accounts, accountIds, positionIssue: input.position.issue, now: input.now });
+  // Neověřená projekce (značka na účtu, nebo souhrn pozice) není potvrzený pracující příkaz.
+  const verified = input.position.summary?.unverified !== true
+    && liveWorkingOrdersVerified({ accounts: input.accounts, accountIds, positionIssue: input.position.issue, now: input.now });
   return { orders: verified ? input.orders : [], accountIds, verified, position: input.position };
 }
 
