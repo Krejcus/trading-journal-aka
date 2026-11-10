@@ -307,7 +307,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Záměry:** klíčem je `operationId`, vzniká předem na všech cestách (`liveDeskCommands`
   přijímá volitelné id, bez něj se chová stejně). „Odesláno“ označí relay obal (`markSent`),
   takže výjimka se rozliší bez textu.
-- copier-design-critic: viz odpověď v session. Ověření: viz zápis níže a commit.
+- copier-design-critic: „OK s výhradami“. Žádnou cestu, kterou by z neověřeného stavu odešel
+  příkaz, nenašel. Opravené výhrady: brána a `expect.quantity` čtou týž snímek pozice; klíč
+  pozice bez přípony „neověřeno“ (změna ověřenosti nepotvrdí vstup); opakovaný `begin` téhož
+  `operationId` nesmaže „odesláno“.
+- Zbývá: `lastWorkerShownSeq` po remountu grafu začíná prázdný, takže první REST se ukáže bez
+  plotu (stejné jako dřív). `cancelPendingEntries` bránou úmyslně nejde (stojí na čerstvém
+  statusu, ne na projekci).
+- Ověření: tsc bez nových chyb proti baseline. Celá sada 8581 testů prošla, 3 selhaly
+  (`tradovateBrokerReconnect` 1×, `tradovateRequestControlFileStore` 2×); tytéž 3 selhávají
+  i na čistém `main` f4a9d6b v tomto kontejneru. Build prošel. Na DEMO NEOVĚŘENO, nasazení
+  rozhodne Filip po review od Codexu.
 
 ### 2026-11-10 — LIVE graf: kreslí ze stavu workeru i bez dokladu + čekající čáry (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
