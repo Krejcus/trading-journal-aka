@@ -13,7 +13,7 @@ import {
 } from '../lib/liveWorkingOrderLines';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
-import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, markLiveChartPositionProjection, projectLiveChartExposure, type LiveChartDrawnMemory } from '../lib/liveChartExposureProjection';
+import { LIVE_CHART_UNVERIFIED_NOTE, holdLastDrawnPosition, liveChartDisplayAccounts, liveChartDrawnMemory, markLiveChartPositionProjection, projectLiveChartExposure, rememberLiveChartDrawn } from '../lib/liveChartExposureProjection';
 import { LIVE_UNVERIFIED_LINE_COLOR } from '../lib/liveChartOrderLines';
 import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
@@ -133,12 +133,12 @@ export function useLiveChartData(input: {
   }, [enabled, viewGroup, view, requested, unverifiedIds]);
   // Návrat na tab / krátce neznámý stav: podržet poslední nakreslenou pozici jako neověřenou,
   // dokud nepřijde nová (nejdéle 15 s); ověřený flat hned (DEMO 10. 11., bod 3).
-  const drawnRef = useRef<LiveChartDrawnMemory | null>(null);
-  const targetKey = `${requested}`;
-  const drawnTargetRef = useRef(targetKey);
-  if (drawnTargetRef.current !== targetKey || !enabled) { drawnRef.current = null; drawnTargetRef.current = targetKey; }
-  const held = holdLastDrawnPosition(drawnRef.current, computedPosition, now);
-  drawnRef.current = held.memory;
+  // Paměť žije v MODULU (checklist: remount grafu nesmí bliknout na flat), klíč = cíl pohledu.
+  // Klíč nese i skupinu: po přepnutí skupiny se nikdy nedrží pozice jiné skupiny.
+  const targetKey = `${viewGroup?.id ?? 'none'}|${requested}`;
+  const held = holdLastDrawnPosition(enabled ? liveChartDrawnMemory(targetKey) : null, computedPosition, now);
+  if (enabled) rememberLiveChartDrawn(targetKey, held.memory);
+  else rememberLiveChartDrawn(targetKey, null);
   const position = useKeyedValue(held.shown);
   const disarm = liveChartDisarm(controller, statusFresh);
   // U5: podklad pracujících příkazů ze stejného čtení příkazů jako karta (jen zobrazení).

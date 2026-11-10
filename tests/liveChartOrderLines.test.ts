@@ -100,20 +100,25 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(stop.price).not.toBe(28980);
   });
 
-  it('neověřená projekce workeru: čáry tlumeně se štítkem, ovládání po fillu zůstává vidět (BE zašedlé), tažení vypnuté', () => {
-    const verified = livePositionChartLines(summary(), { ...controls, canClose: true });
-    const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
+  it('checklist ★: neověřená pozice — čáry tlumené se štítkem; riziko snižující ovládání zůstává (× zavřít, tažení SL jen utažením, BE), TP/odebrání nohy ne', () => {
+    const verified = livePositionChartLines(summary(), { ...controls, canClose: true, bareLegs: true });
+    const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true, bareLegs: true });
     expect(lines.map(line => line.id)).toEqual(verified.map(line => line.id));
-    for (const [index, line] of lines.entries()) {
-      expect(line).toMatchObject({ draggable: false, color: '#64748b' });
-      expect(line.cancellable).toBe(verified[index].cancellable);
+    for (const line of lines) {
+      expect(line.color).toBe('#64748b');
       expect(line.label).toMatch(/neověřeno/);
-      // Ovládání se neschová: × zůstává (odeslání zastaví brána desku), BE je vidět, ale zašedlé.
       expect(isLiveDisplayOnlyLine(line as never)).toBe(false);
     }
-    const be = lines[0].actions?.find(action => action.id === 'break-even');
-    expect(be).toMatchObject({ disabled: true, title: expect.stringMatching(/Neověřeno/) });
-    expect(verified[0].actions?.find(action => action.id === 'break-even')).toBeDefined();
+    const byKind = (kind: string) => lines.find(line => line.kind === kind)!;
+    expect(byKind('entry')).toMatchObject({ cancellable: true, cancelAction: 'close-position', draggable: false });
+    expect(byKind('stopLoss')).toMatchObject({ draggable: verified.find(line => line.kind === 'stopLoss')!.draggable, cancellable: false });
+    expect(byKind('takeProfit')).toMatchObject({ draggable: false, cancellable: false });
+    // BE je utažení SL → aktivní i neověřeně.
+    expect(byKind('entry').actions?.find(action => action.id === 'break-even')?.disabled).toBe(false);
+    // Tažení SL: utažení projde, rozšíření a TP ne (short: SL nad vstupem).
+    expect(liveLineMoveBlockReason(summary({ unverified: true }), 'stopLoss', 28_980)).toBeNull();
+    expect(liveLineMoveBlockReason(summary({ unverified: true }), 'stopLoss', 28_990)).toMatch(/rozšířit SL/);
+    expect(liveLineMoveBlockReason(summary({ unverified: true }), 'takeProfit', 28_950)).toMatch(/posunout TP/);
   });
 
   it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {

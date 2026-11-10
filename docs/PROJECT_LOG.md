@@ -288,6 +288,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: 6. kolo, checklist obchodovatelnosti (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; nutný RESTART WORKERU)
+
+- Filipův závazný checklist a Codexovo review proti f465880. Přednost měly ★ položky a P1.
+- **Worker:**
+  - chybějící kotva kontinuity (restart, nová WS session) se obnoví sama i s otevřenou pozicí,
+    za 0,5 s klidu (test: do ~1 s);
+  - běžné obchodování žádné čtení navíc nespouští;
+  - `exposure.streamCoverageGaps` nese u každého účtu explicitní důvod, místo mlčení `[]`;
+  - `verifiedAt` zůstává časem autoritativního čtení (klidový režim cronu); atestace kontinuity
+    všech účtů je zvlášť v `continuityAttestedAt`.
+- **Politika neověřené pozice (změna podle Filipa):** povoleno zavřít (i víc ticketů), zrušit
+  vstup, utáhnout SL / BE a přidat SL/TP. Odmítnuto rozšířit nebo odebrat SL, posunout TP nebo
+  limit, přikoupit a nový vstup. Platí to pro bránu, panel, čáry i zkratky
+  (`lib/liveChartRiskPolicy.ts`).
+- **Graf:** paměť držení posledního stavu je v modulu, takže remount grafu neblikne na flat.
+  Klíč paměti obsahuje id skupiny; vypnutý graf paměť maže.
+- copier-design-critic: „OPRAVIT PŘED COMMITEM“, pět bodů, všechny zapracované:
+  1. `verifiedAt` posouvaný atestací by vypnul klidový režim cronu, proto je atestace zvlášť;
+  2. utažení SL se posuzuje proti `expectPrice`, ne proti zastaralému souhrnu;
+  3. klíč paměti držení obsahuje skupinu;
+  4. typ `current` u nohy;
+  5. text `remove-leg`.
+- **Riziko:** pravidlo „jen utáhnout“ vynucuje UI, worker ověřuje jen `expect` (shodu s brokerem).
+  Vynutit ho i ve workeru je samostatná změna.
+- Druhé kolo kritika: „OK s výhradami“. Chybí test REST pozadu za streamem (fill těsně před
+  obnovou kotvy) a test odložení obnovy čekajícím zápisem.
+- Ověření: tsc 0 nových chyb proti baseline. Celá sada 8656 testů prošla, 3 selhaly (tytéž jako
+  na `main` f4a9d6b). Build prošel. DEMO až po Filipově souhlasu.
+- **Nesplněno v kódu (rozhodnutí / DEMO):**
+  - posun šablonového SL od fill ceny (byl by to nový zápis k brokerovi; zatím jen poznámka
+    na štítku SL);
+  - Flatten do 1 s, relay POST p95 pod 1 s, kopírka a výkon pro 10+ účtů a 30min DEMO
+    ověří až DEMO.
+
 ### 2026-11-10 — LIVE graf: opravy po DEMO testu na produkci (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO; nutný RESTART WORKERU)
 
 - DEMO (DEMO8661118, MNQ) na produkci: f465880 krátce na main, revert 97774d38. Klik → čekající

@@ -341,7 +341,7 @@ export function manageIntentDraft(action: string, input: {
 /** Záměr SL a TP po jedné (`manual-order-single-leg-v1`): přidat, posunout, odebrat. */
 export function bareLegIntentDraft(
   seen: { symbol: string; side: 'Buy' | 'Sell'; quantity: number },
-  intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number; stop?: number | null; target?: number | null },
+  intent: { kind: 'add' | 'move' | 'remove'; leg: 'stopLoss' | 'takeProfit'; price?: number; current?: number; stop?: number | null; target?: number | null },
   operationId: string,
 ): LiveChartIntentDraft {
   const stop = intent.leg === 'stopLoss';

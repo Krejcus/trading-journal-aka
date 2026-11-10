@@ -262,7 +262,7 @@ export interface LiveChartDrawnMemory { position: LiveChartPosition; at: number 
  * jen neověřené čtení (`issueKind` `stale` / `orders-stale`) — nikdy přes rozjetí, dobíhající
  * kopii, chybějící účet, ověřený flat ani jinou pozici — a nejdéle
  * `LIVE_CHART_HOLD_LAST_DRAWN_MS` od posledního skutečného vykreslení. Držená pozice je jen
- * zobrazení: všechny řádky `unverified`, takže brána grafu z ní nic neodešle (INV-UI-01/03).
+ * zobrazení: všechny řádky `unverified`, takže z ní projdou jen akce snižující riziko (INV-UI-01/03).
  */
 export function holdLastDrawnPosition(
   memory: LiveChartDrawnMemory | null,
@@ -279,6 +279,21 @@ export function holdLastDrawnPosition(
   const held = memory.position;
   const ids = new Set([...held.summary!.rows.map(row => row.accountId), ...(held.summary!.leader ? [held.summary!.leader.accountId] : [])]);
   const marked = markLiveChartPositionProjection({ ...held, summary: { ...held.summary!, unverified: undefined } }, ids);
-  // Vždy neověřená, i bez řádků účtů (brána grafu pak nic neodešle).
+  // Vždy neověřená, i bez řádků účtů: brána grafu pak pustí jen akce snižující riziko
+  // (`lib/liveChartRiskPolicy.ts`); worker je ověří znovu u brokera (expect, net, kotva).
   return { shown: { ...marked, key: `${marked.key}|drženo`, summary: { ...marked.summary!, unverified: true } }, memory };
 }
+
+/**
+ * Poslední nakreslený stav grafu podle cíle pohledu („group“ / id účtu) — v MODULU, ne
+ * v komponentě: remount grafu (přepnutí záložky, PC ↔ telefon) ho nesmaže, takže i po remountu
+ * se drží jako neověřený, dokud nepřijde nový (nejvýš `LIVE_CHART_HOLD_LAST_DRAWN_MS`).
+ */
+const drawnMemoryByTarget = new Map<string, LiveChartDrawnMemory>();
+export const liveChartDrawnMemory = (target: string): LiveChartDrawnMemory | null => drawnMemoryByTarget.get(target) ?? null;
+export function rememberLiveChartDrawn(target: string, memory: LiveChartDrawnMemory | null): void {
+  if (memory) drawnMemoryByTarget.set(target, memory);
+  else drawnMemoryByTarget.delete(target);
+}
+/** Jen pro testy. */
+export const resetLiveChartDrawnMemoryForTests = () => drawnMemoryByTarget.clear();

@@ -1972,8 +1972,15 @@ existující ochranu.
   snímku streamu s cache). Používá je JEN graf; řízení REST čtení (`streamCoverage`,
   `workerConnectionReadPlan`) dál stojí výhradně na dokladu. Předpoklad (NEOVĚŘENO conformance
   testem): Tradovate stream v rámci živé session nevynechá entitu Position ani Order; vynechání
-  by kotva nepoznala (proti tomu stojí jen shoda snímku streamu s cache controlleru). Test
-  `tests/tradovateBrokerRequestControl.test.ts`.
+  by kotva nepoznala (proti tomu stojí jen shoda snímku streamu s cache controlleru).
+  Chybějící kotva (restart workeru, nová WS session) se obnovuje i S EXPOZICÍ: jen když chybí,
+  bez rozpracovaného zápisu, po 0,5 s klidu, nejvýš jednou za 5 s, backoff do 60 s, background
+  třída. Během toho čtení může správa spadnout na pomalejší REST předčtení (vědomá cena).
+  `exposure.streamCoverageGaps` nese u každého nepokrytého účtu explicitní důvod.
+  `verifiedAt` zůstává časem autoritativního čtení (klidový režim `nativeIdleBrokerSnapshot`);
+  atestace kontinuity všech účtů skupiny (živý synchronizovaný stream bez mezery, backlogu
+  a neshody snímku s cache) je zvlášť v `continuityAttestedAt`. Test
+  `tests/tradovateBrokerRequestControl.test.ts`, `tests/copierRequestControlController.test.ts`.
   Trade ingress invaliduje proof hned při parsování, ne až po semantic queue.
   Per-part sequence patří fyzickému requestu i jeho joinerům: starší completion
   nesmí přepsat novější pozici. Heartbeat nezmění čas původních dat.
@@ -2247,8 +2254,14 @@ existující ochranu.
   ověří u brokera). Při krátce NEOVĚŘENÉM ČTENÍ (`issueKind` `stale`/`orders-stale`, např.
   návrat na tab) graf podrží poslední nakreslenou pozici jako NEOVĚŘENOU nejvýš 15 s
   (`holdLastDrawnPosition`; vědomě déle než grace 1,2 s, na přání Filipa po DEMO 10. 11.). Nikdy
-  přes ověřený flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl; nic z ní
-  neodejde. Pořadí workeru samotného dál řeší fence pollu
+  přes ověřený flat, rozjetou skupinu, dobíhající kopii, chybějící účet ani jiný cíl. Paměť
+  žije v modulu (přežije remount grafu).
+  **Neověřená pozice a příkazy (checklist 10. 11. 2026, Filip):** nezamyká se vše kromě
+  Flattenu. `lib/liveChartRiskPolicy.ts` povolí akce snižující riziko — zavřít (i pozici z víc
+  ticketů), zrušit vstup, utáhnout SL / BE (jen směrem k trhu proti brokerově SL), přidat SL/TP.
+  Odmítne rozšíření i odebrání SL, posun TP nebo limitu, odebrání TP, přikoupení a nový vstup
+  na tomtéž kontraktu (`LiveCommandNotSentError`, srozumitelný důvod). Táž politika platí pro
+  bránu odeslání, plánovače panelu, čáry i zkratky; worker vše ověří znovu u brokera. Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,

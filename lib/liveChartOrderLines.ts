@@ -1,6 +1,7 @@
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 import { MNQ_TICK, TIGHTEN_MIN_TICKS, breakEvenStop, liveShownOpenPnl, tightenBlockReason, type LiveChartPositionSummary } from './liveChartPosition';
 import { pendingLegSideProblem } from './leaderOrderManage';
+import { liveUnverifiedActionBlock } from './liveChartRiskPolicy';
 import { liveBareLineId } from './liveBareCloseUi';
 
 /**
@@ -77,6 +78,10 @@ export function liveLineMoveBlockReason(
   price: number,
   options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean } = {},
 ): string | null {
+  // Neověřená pozice: jen utažení SL (politika `lib/liveChartRiskPolicy.ts`); pak běžné kontroly.
+  const policy = liveUnverifiedActionBlock(summary, kind === 'entry' ? { kind: 'move-limit' }
+    : kind === 'takeProfit' ? { kind: 'move-target' } : { kind: 'move-stop', newPrice: price });
+  if (policy) return policy;
   // Holý Limit/Stop: nohy nejsou; jestli by se nová cena vyplnila hned, rozhodne worker podle své kotace.
   if (kind === 'entry' && options.moveBareEntry && summary.kind === 'pending' && summary.stop == null && summary.target == null) {
     return summary.entryType?.toLowerCase() === 'limit' ? null : 'Posun Stopu bez SL/TP zatím nejde — zruš ho × a zadej znovu.';
@@ -119,8 +124,10 @@ export function liveLineMoveBlockReason(
 /** Stav tlačítka BE na štítku pozice. */
 export function liveBreakEven(summary: LiveChartPositionSummary, entryAvg: number | null): { price: number | null; blocked: string | null } {
   const price = breakEvenStop(summary.side, entryAvg);
-  if (summary.unverified === true) return { price, blocked: LIVE_UNVERIFIED_ACTION_TITLE };
   if (summary.kind !== 'position') return { price: null, blocked: 'BE jde až u vyplněné pozice.' };
+  // Neověřená pozice: BE jen jako utažení SL (ne rozšíření).
+  const policy = price != null ? liveUnverifiedActionBlock(summary, { kind: 'move-stop', newPrice: price }) : null;
+  if (policy && summary.stop != null && price !== summary.stop) return { price, blocked: policy };
   // Rozjeté SL nohy (pozice z přikoupení) = žádná jedna cena SL: BE nejde, místo tichého kliknutí důvod.
   if (summary.stop == null) return { price, blocked: 'SL pozice není na jedné ceně (nebo není známý) — BE teď nejde.' };
   if (price == null) return { price, blocked: 'Průměrný vstup leadera není známý.' };
@@ -136,20 +143,25 @@ export const LIVE_UNVERIFIED_LINE_COLOR = MUTED_COLOR;
 export const LIVE_UNVERIFIED_ACTION_TITLE = 'Neověřeno — čekám na doklad workeru nebo čtení brokera; zavřít hned jde Flattenem.';
 
 /**
- * Čáry z neověřené projekce workeru (10. 11. 2026, review Codexu): ovládání po fillu NEMIZÍ —
- * × i „+ SL/TP“ zůstávají a BE je zašedlé s důvodem, aby uživatel viděl, co půjde. Autorizace
- * ale stojí jen na platném dokladu: tažení je vypnuté a každé odeslání z takové pozice odmítne
- * brána desku (`liveChartProjectionManageBlock`, „nic se neodeslalo“). Čáry jsou tlumené
- * a se štítkem „neověřeno“ — SL/TP nesmí vypadat jako potvrzená ochrana (INV-UI-01/03).
+ * Čáry z neověřené pozice (stav workeru bez dokladu / držený stav), checklist 10. 11. 2026:
+ * tlumené a se štítkem „neověřeno“ (SL/TP nesmí vypadat jako potvrzená ochrana), ale ovládání
+ * SNIŽUJÍCÍ riziko zůstává: × zavřít / zrušit vstup, tažení SL (jen utažení — ověří
+ * `liveLineMoveBlockReason` i brána odeslání), BE (stav podle `liveBreakEven`), „+ SL/TP“.
+ * Tažení TP / limitu a × odebrání nohy jsou vypnuté. Rozhoduje `lib/liveChartRiskPolicy.ts`.
  */
 function unverifiedLines(lines: BacktestChartOrderLine[]): BacktestChartOrderLine[] {
-  return lines.map(line => ({
-    ...line,
-    draggable: false,
-    color: LIVE_UNVERIFIED_LINE_COLOR,
-    label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
-    ...(line.actions ? { actions: line.actions.map(action => ({ ...action, disabled: true, title: LIVE_UNVERIFIED_ACTION_TITLE })) } : {}),
-  }));
+  return lines.map(line => {
+    const keepsCancel = line.kind === 'entry' && line.cancellable === true;
+    const { cancelAction, ...rest } = line;
+    return {
+      ...rest,
+      ...(keepsCancel && cancelAction ? { cancelAction } : {}),
+      draggable: line.kind === 'stopLoss' ? line.draggable : false,
+      cancellable: keepsCancel,
+      color: LIVE_UNVERIFIED_LINE_COLOR,
+      label: `${line.label} · ${LIVE_UNVERIFIED_LINE_NOTE}`,
+    };
+  });
 }
 
 export function livePositionChartLines(summary: LiveChartPositionSummary, controls: LivePositionLineControls): BacktestChartOrderLine[] {

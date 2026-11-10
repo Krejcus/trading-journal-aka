@@ -262,7 +262,7 @@ describe('statika: modul jen počítá záměr (INV-UI-01..04)', () => {
   const source = readFileSync('lib/liveManagePrices.ts', 'utf8');
   it('importuje jen zobrazovací moduly, nic z kopírky ani relaye', () => {
     const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-    expect(imports).toEqual(['./liveChartOrderLines', './liveChartPosition', './liveOrderTicket']);
+    expect(imports).toEqual(['./liveChartOrderLines', './liveChartPosition', './liveChartRiskPolicy', './liveOrderTicket']);
     expect(source).not.toMatch(/fetch\(|executeTradovate|relay|services\//);
   });
 });

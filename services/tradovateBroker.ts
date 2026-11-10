@@ -3039,32 +3039,63 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const raw of rawOrders.values()) if (!terminalOrderStatus(raw.ordStatus)) return false;
     return pendingSocketWrites.size === 0;
   };
-  const scheduleCoverageRebaseline = (delayMs = COVERAGE_REBASELINE_QUIET_MS) => {
+  // Obnova chybějící KOTVY kontinuity (10. 11. 2026, checklist obchodovatelnosti): po restartu
+  // workeru nebo výpadku WS s otevřenou pozicí by bez ní graf zůstal „neověřeno“ až do flatu.
+  // Proto se kotva obnovuje i s expozicí — jen když chybí (obchodní událost ji neruší, takže
+  // běžné obchodování žádné čtení navíc nespouští), bez rozpracovaného zápisu u brokera, po
+  // 0,5 s klidu, nejvýš jednou za 5 s, backoff do 60 s, vždy background třídou. Čtení grafu
+  // příkazů může správě na chvíli vzít rychlý snímek streamu → správa spadne na REST předčtení
+  // (pomalejší, ne nebezpečnější); to je cena za ověřitelnost po výpadku.
+  const COVERAGE_ANCHOR_QUIET_MS = 500;
+  const COVERAGE_ANCHOR_MIN_GAP_MS = 5_000;
+  const COVERAGE_ANCHOR_MAX_BACKOFF_MS = 60_000;
+  let coverageAnchorBackoffMs = 0;
+  let lastCoverageAnchorReadAt = -Infinity;
+  const anchorMissing = () => [...accountSpecsByAccountId.keys()].filter(accountId => {
+    const anchor = continuityAnchors.get(accountId);
+    return !anchor || anchor.session !== activeSession;
+  });
+  const scheduleCoverageRebaseline = (delayMs?: number) => {
     if (!config.displayCoverageRebaseline || listeners.size === 0) return;
+    const delay = delayMs ?? (anchorMissing().length > 0 ? COVERAGE_ANCHOR_QUIET_MS : COVERAGE_REBASELINE_QUIET_MS);
     if (coverageRebaselineTimer) clearTimeouts(coverageRebaselineTimer);
-    coverageRebaselineTimer = timeouts(() => { coverageRebaselineTimer = null; void runCoverageRebaseline(); }, Math.max(1, delayMs));
+    coverageRebaselineTimer = timeouts(() => { coverageRebaselineTimer = null; void runCoverageRebaseline(); }, Math.max(1, delay));
     (coverageRebaselineTimer as { unref?: () => void }).unref?.();
   };
   const runCoverageRebaseline = async () => {
     if (!coverageRebaselineRead || listeners.size === 0 || coverageRebaselineBusy) return;
     const missing = coverageMissing();
-    if (missing.length === 0) { coverageRebaselineBackoffMs = 0; return; }
-    // S expozicí se nečte vůbec; další pokus vyvolá až obchodní rámec, který ji ukončí.
-    if (!coverageExposureFree()) return;
+    if (missing.length === 0) { coverageRebaselineBackoffMs = 0; coverageAnchorBackoffMs = 0; return; }
+    const exposureFree = coverageExposureFree();
+    // Bez expozice: doklad (i řízení REST čtení) jako dosud. S expozicí: jen chybějící kotva.
+    const targets = exposureFree ? missing : anchorMissing().filter(accountId => missing.includes(accountId));
+    if (targets.length === 0) return;
     if (!syncReady || socketState !== 'connected') return;
-    if (!coverageReadQuiet()) { scheduleCoverageRebaseline(); return; }
-    const wait = lastCoverageRebaselineAt + Math.max(COVERAGE_REBASELINE_MIN_GAP_MS, coverageRebaselineBackoffMs) - clock();
+    if (!exposureFree && pendingSocketWrites.size > 0) { scheduleCoverageRebaseline(COVERAGE_ANCHOR_QUIET_MS); return; }
+    if (!coverageReadQuiet()) { scheduleCoverageRebaseline(exposureFree ? COVERAGE_REBASELINE_QUIET_MS : COVERAGE_ANCHOR_QUIET_MS); return; }
+    const anchorPath = !exposureFree || anchorMissing().length > 0;
+    const last = anchorPath ? lastCoverageAnchorReadAt : lastCoverageRebaselineAt;
+    const gap = anchorPath ? Math.max(COVERAGE_ANCHOR_MIN_GAP_MS, coverageAnchorBackoffMs) : Math.max(COVERAGE_REBASELINE_MIN_GAP_MS, coverageRebaselineBackoffMs);
+    const wait = last + gap - clock();
     if (wait > 0) { scheduleCoverageRebaseline(wait); return; }
     coverageRebaselineBusy = true;
     lastCoverageRebaselineAt = clock();
+    if (anchorPath) lastCoverageAnchorReadAt = clock();
     try {
-      await Promise.all(missing.map(accountId => coverageRebaselineRead!(accountId)));
+      await Promise.all(targets.map(accountId => coverageRebaselineRead!(accountId)));
     } catch {
       // Jen zobrazení: bez baseline zůstává web u vlastního čtení jako dosud.
     } finally {
       coverageRebaselineBusy = false;
     }
-    if (coverageMissing().length === 0) { coverageRebaselineBackoffMs = 0; return; }
+    const stillAnchorMissing = anchorMissing().length > 0;
+    if (coverageMissing().length === 0) { coverageRebaselineBackoffMs = 0; coverageAnchorBackoffMs = 0; return; }
+    if (stillAnchorMissing) {
+      coverageAnchorBackoffMs = Math.min(COVERAGE_ANCHOR_MAX_BACKOFF_MS, Math.max(COVERAGE_ANCHOR_MIN_GAP_MS * 2, coverageAnchorBackoffMs * 2));
+      scheduleCoverageRebaseline(coverageAnchorBackoffMs);
+      return;
+    }
+    coverageAnchorBackoffMs = 0;
     coverageRebaselineBackoffMs = Math.min(COVERAGE_REBASELINE_MAX_BACKOFF_MS,
       Math.max(COVERAGE_REBASELINE_MIN_GAP_MS * 2, coverageRebaselineBackoffMs * 2));
     if (coverageExposureFree()) scheduleCoverageRebaseline(coverageRebaselineBackoffMs);

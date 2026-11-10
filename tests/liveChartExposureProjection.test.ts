@@ -5,7 +5,7 @@ import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';
 import {
   LIVE_CHART_UNVERIFIED_MANAGE_TEXT, liveChartDisplayAccounts, liveChartProjectionManageBlock, markLiveChartPositionProjection,
-  projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS,
+  projectLiveChartExposure, holdLastDrawnPosition, LIVE_CHART_HOLD_LAST_DRAWN_MS, liveChartDrawnMemory, rememberLiveChartDrawn, resetLiveChartDrawnMemoryForTests,
 } from '../lib/liveChartExposureProjection';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { buildTradeCard } from '../lib/liveTradeCard';
@@ -94,18 +94,18 @@ const chartLines = (projected: TradovateAccountDataResult) => {
 };
 
 describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
-  it('ztráta dokladu při otevřené pozici neschová čáry ani ovládání — vše „neověřeno“, tažení vypnuté', () => {
+  it('ztráta dokladu při otevřené pozici neschová čáry ani ovládání snižující riziko — vše „neověřeno“', () => {
     // Chyba z dd393f72: bez dokladu overlay vrátí starý REST (flat) a čáry zmizí.
     expect(overlayWorkerExposure(restFlat(), status(), NOW - 1_000, NOW, owners)!.accounts[0].positions).toEqual([]);
     const { data } = projectLiveChartExposure(restFlat(), status(), NOW - 1_000, NOW, owners, fresh);
     const { position, lines } = chartLines(data!);
     expect(position.summary).toMatchObject({ kind: 'position', side: 'short', quantity: 2, stop: 28_790, unverified: true });
     expect(lines.map(line => line.kind)).toEqual(['entry', 'stopLoss']);
-    expect(lines.every(line => !line.draggable && /neověřeno/.test(line.label) && line.color === LIVE_UNVERIFIED_LINE_COLOR)).toBe(true);
-    // Ovládání po fillu zůstává vidět: × u pozice i SL a BE (zašedlé s důvodem).
+    expect(lines.every(line => /neověřeno/.test(line.label) && line.color === LIVE_UNVERIFIED_LINE_COLOR)).toBe(true);
+    // Ovládání snižující riziko zůstává: × zavřít a tažení SL (jen utažení ověří brána).
     const entry = lines.find(line => line.kind === 'entry')!;
     expect(entry.cancellable).toBe(true);
-    expect(entry.actions?.find(action => action.id === 'break-even')).toMatchObject({ disabled: true, title: expect.stringMatching(/Neověřeno/) });
+    expect(lines.find(line => line.kind === 'stopLoss')!.draggable).toBe(true);
   });
 
   it('DEMO 10. 11.: doklad po obchodu chybí, ale kontinuita streamu od baseline z čerstvého statusu pozici ověří (tažení jde)', () => {
@@ -440,6 +440,24 @@ describe('DEMO 10. 11. bod 3: návrat na tab — poslední nakreslený stav se d
     }
     // orders-stale (jen příkazy neověřené) se drží stejně jako stale.
     expect(holdLastDrawnPosition(memory, { ...unknown, issueKind: 'orders-stale' }, NOW + 300).shown.summary?.unverified).toBe(true);
+  });
+
+  it('checklist ★: remount grafu — paměť posledního stavu žije v modulu (ne v komponentě), takže nový mount neblikne na flat', () => {
+    resetLiveChartDrawnMemoryForTests();
+    // Instance A nakreslí pozici a odpojí se.
+    rememberLiveChartDrawn('group', holdLastDrawnPosition(liveChartDrawnMemory('group'), drawn(), NOW).memory);
+    // Instance B (nový mount, žádné vlastní refs) dostane nejdřív jen neověřené čtení.
+    const afterRemount = holdLastDrawnPosition(liveChartDrawnMemory('group'), unknown, NOW + 400);
+    expect(afterRemount.shown.summary).toMatchObject({ side: 'short', unverified: true });
+    // Jiný cíl pohledu cizí paměť nepoužije.
+    expect(holdLastDrawnPosition(liveChartDrawnMemory('100'), unknown, NOW + 400).shown).toBe(unknown);
+    const hook = readFileSync('hooks/useLiveChartData.ts', 'utf8');
+    expect(hook).toMatch(/holdLastDrawnPosition\(enabled \? liveChartDrawnMemory\(targetKey\) : null/);
+    // Klíč nese skupinu (po přepnutí skupiny se nedrží cizí pozice) a vypnutý graf paměť maže.
+    expect(hook).toMatch(/const targetKey = `\$\{viewGroup\?\.id \?\? 'none'\}\|\$\{requested\}`;/);
+    expect(hook).toMatch(/else rememberLiveChartDrawn\(targetKey, null\);/);
+    expect(hook).not.toMatch(/drawnRef/);
+    resetLiveChartDrawnMemoryForTests();
   });
 
   it('ověřený flat se ukáže hned; držení má strop 15 s a nikdy nenahradí jinou pozici', () => {

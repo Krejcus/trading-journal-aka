@@ -374,6 +374,31 @@ describe('Tradovate broker final request-control integration', () => {
     unsubscribe();
   });
 
+  it('checklist ★: after a worker restart / WS reconnect WITH an open position the continuity anchor restores itself within ~1 s; ordinary trade events cause no extra reads',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T15:00:00.000Z'));const sockets:Socket[]=[];const reads:string[]=[];
+    const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},displayCoverageRebaseline:true,
+      fetchImpl:async input=>{const path=String(input);if(path.includes('/position/list')||path.includes('/order/list'))reads.push(path);
+        return response(path.includes('/position/list')?[{id:1,accountId:101,contractId:77,netPos:1}]:path.includes('/contract/items')?[{id:77,name:'MNQZ6'}]:[]);},
+      reconnectDelayMs:1_000,reconnectJitterRatio:0,webSocketFactory:()=>{const next=new Socket();sockets.push(next);return next;}});
+    const unsubscribe=broker.subscribe(()=>undefined);const socket=sockets[0];
+    socket.readyState=1;socket.onopen?.();socket.onmessage?.({data:'o'});await flush();
+    socket.deliver([{i:0,s:200,d:{}}]);await flush();
+    // Sync přinese otevřenou pozici (expozice) — dřív by obnova s expozicí vůbec nečetla.
+    socket.deliver([{i:1,s:200,d:{positions:[{id:1,accountId:101,contractId:77,netPos:1}]}}]);await flush();
+    expect(broker.streamContinuity?.(101)).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);await flush();
+    expect(broker.streamContinuity?.(101)).toMatchObject({backlog:false,synchronized:true});
+    const readsAfterBaseline=reads.length;
+    // Běžná obchodní událost kotvu nezruší a žádné čtení navíc nespustí (ani po 30 s).
+    socket.deliver([{e:'props',d:{entityType:'position',eventType:'Updated',entity:{id:1,accountId:101,contractId:77,netPos:2}}}]);await flush();
+    // Živý socket (heartbeaty serveru) 30 s.
+    for(let i=0;i<15;i++){socket.onmessage?.({data:'h'});await vi.advanceTimersByTimeAsync(2_000);await flush();}
+    expect(sockets).toHaveLength(1);
+    expect(broker.streamContinuity?.(101)).not.toBeNull();
+    expect(reads.length).toBe(readsAfterBaseline);
+    unsubscribe();
+  });
+
   it('a malformed trade frame ends stream continuity for every account',async()=>{
     const f=fixture();await f.governor.initialize();const socket=new Socket();
     const broker=createTradovateBroker({environment:'demo',connectionId:'own',accessToken:'token',accountSpecsByAccountId:{101:'DEMO'},requestControl:f.governor,
