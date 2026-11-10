@@ -1,3 +1,4 @@
+import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_ATTACH_SEND_ACTION, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
@@ -89,9 +90,27 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     expect(lines.slice(1).every(line => !line.draggable && /čeká na vstup/.test(line.label))).toBe(true);
   });
 
-  it('odeslaný posun: čára drží novou cenu se štítkem „odesílám“ a netáhne se', () => {
+  it('odeslaný posun: skutečná čára zůstává na ceně brokera, netáhne se a říká „mění se“ (novou cenu kreslí záměr desku)', () => {
+    const live = livePositionChartLines(summary(), controls)[1];
     const stop = livePositionChartLines(summary(), { ...controls, pending: { stopLoss: 28980 } })[1];
-    expect(stop).toMatchObject({ price: 28980, draggable: false, label: expect.stringMatching(/odesílám/) });
+    expect(stop).toMatchObject({ price: live.price, draggable: false, color: live.color, label: expect.stringMatching(/mění se/) });
+    expect(stop.price).not.toBe(28980);
+  });
+
+  it('neověřená projekce: čáry jsou tlumené, zavření a tažení SL zůstává, odebrání SL a posun TP ne', () => {
+    const lines = livePositionChartLines(summary({ unverified: true }), { ...controls, canClose: true });
+    expect(lines.length).toBeGreaterThan(1);
+    const entry = lines.find(line => line.kind === 'entry')!;
+    const stop = lines.find(line => line.kind === 'stopLoss')!;
+    const target = lines.find(line => line.kind === 'takeProfit')!;
+    expect(entry).toMatchObject({ cancellable: true, cancelAction: 'close-position', draggable: false, color: '#64748b' });
+    expect(stop).toMatchObject({ draggable: true, cancellable: false, color: '#64748b' });
+    expect(target).toMatchObject({ draggable: false, cancellable: false, color: '#64748b' });
+    expect(entry.actions?.map(action => action.id)).toEqual(['break-even']);
+    for (const line of lines) {
+      expect(line.label).toMatch(/neověřeno/);
+      expect(isLiveDisplayOnlyLine(line as never)).toBe(false);
+    }
   });
 
   it('holá pozice: štítky jen chybějících nohou, odeslání až s oběma', () => {

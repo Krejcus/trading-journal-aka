@@ -2203,6 +2203,46 @@ existující ochranu.
   porovnání, „drží X, očekáváno Y“ nebo záznam pozice) — zlikvidovaný účet,
   denní limit, příkazy mimo kopii, vypnutý režim, rozjetí čekající na
   reconcile nebo „pozice neověřena“ zůstanou na REST. Platí i pro LIVE.
+  **Zobrazovací projekce LIVE grafu (10. 11. 2026, `lib/liveChartExposureProjection.ts`):** od
+  dd393f72 bere `overlayWorkerExposure` stav workeru jen s dokladem kontinuity a worker ho ruší
+  každou obchodní událostí (`observeTradeIngress`) — graf pak spadl na starší REST. Doklad se
+  nemaže „měkce“: drží i `seedCoveragePositions`, které by jinak po klidu vrátilo starý REST
+  snímek do streamu, z něhož si zavření bere contractId. Jen graf (PC i telefon,
+  `useLiveChartData`) proto kreslí účty, které worker prokazatelně zná (pravidlo výše)
+  a jejichž připojení má živý socket (`connectionUsage`: `streamConnected`, fáze `connected`),
+  i bez dokladu: jen čerstvý NEOBNOVENÝ stav ≤ 8 s, značka `displayProjection: 'worker-unverified'`.
+  Takové čáry jsou tlumené, se štítkem „neověřeno“, a nejsou potvrzená ochrana. Zůstává zavření,
+  zrušení vstupu, tažení SL a BE / přidání ochrany; utažení SL (aspoň o tick směrem k trhu)
+  desk odešle, roztažení SL, posun TP, posun limitu, odebrání SL, přikoupení a nový vstup ne
+  (`liveChartProjectionActionBlock`, text „nic se neodeslalo“). Worker každý příkaz ověří znovu.
+  `isLiveAccountReadVerified` projekci vždy odmítá (kreslí jen výslovná zobrazovací kopie
+  `liveChartDisplayAccounts` uvnitř hooku). Flatten, OFF a Kill se to netýká (INV-UI-02).
+  Desková data (`overlayWorkerExposure` v desku, způsobilost, plán REST čtení) dál vyžadují doklad.
+  Pořadí workeru: `startedAt` + `revision` a `displaySeq` (INV-FRESH-02); starší snímek téhož běhu
+  graf nepřekreslí, jen dokud je stav čerstvý a kurzor existuje. Jakmile stav není čerstvý nebo
+  status zmizí, projekce se spočítá znovu a držení se pustí — poslední potvrzené čáry nesmí
+  přežít ticho workeru. REST se řadí vlastním `requestedAt` (začátek čtení), ne časem příchodu do
+  prohlížeče. Dokud worker žije, jeho stav má přednost. Když zmlkne, REST, jehož `requestedAt`
+  není přísně novější než čtení, které už pod nakresleným stavem leželo, je neutrálně neověřený
+  bez čar, nikdy flat. Pracující příkazy z neověřené projekce se nekreslí jako ověřené
+  (`liveChartWorkingSource` dostane účty i se značkou a souhrn `unverified` je sám odmítne);
+  SL pozice zůstává na tlumené čáře pozice. Testy `tests/liveChartExposureProjection.test.ts`,
+  `tests/liveChartDeskActions.test.ts`.
+  **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
+  BE, zavření, zrušení vstupu) desk synchronně založí záměr vázaný na `operationId` a graf PC
+  i telefonu téhož desku ho kreslí tlumenou tečkovanou čarou přes kanál pracujících příkazů
+  (`live-working`, `displayOnly`, nic se z ní neodesílá). Odmítnutí/blokace a typ
+  `live-chart-not-sent` (ne shoda textu hlášky) = hned zmizí; admission relaye (HTTP 400/409
+  se známým kódem na `TradovateRequestError`) taky. ACK ji NEPOTVRDÍ jako ochranu (zůstává
+  tlumená „přijato · čekám na stav brokera“ do potvrzení read modelem, nejvýš 20 s); neznámý
+  výsledek 20 s „výsledek neznámý“, nic se neopakuje. Ceny se porovnávají po ticích (MNQ 0.25),
+  ne na 1e-9. Vstup „přistane“, až když pozice naroste o qty příkazu proti `baselineQuantity`
+  a případné SL/TP sedí na tick — shoda strany sama přikoupení nesmaže. Skutečné čáry
+  SL/TP/vstupu zůstávají během posunu i odebrání na ceně z read modelu (štítek „mění se“),
+  dokud broker změnu nepotvrdí. Záměr je jen v instanci desku. Druhé zařízení ho nemá z čeho
+  vykreslit jako potvrzenou cenu; kreslí tutéž projekci workeru. Sdílený kanál záměrů by byl
+  nový stav a starý záměr na druhém zařízení by vypadal jako druhý příkaz, proto se nesdílí.
+  Testy `tests/liveChartIntent.test.ts`.
   Průměrná cena po změně velikosti pozice (30. 10. 2026, oponentura):
   přednost má průměr z REST pro tutéž `netPosition`; jinak průměr od workeru
   (`exposure.positions[].avgPrice`): broker `netPrice` ze streamu Position

@@ -489,7 +489,7 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
   it('zdroj: desk kontroluje čerstvý stav PŘED relayem; panel konečnost odvozuje z tónu', () => {
     const desk = source('components/TradovateLiveDesk.tsx');
     // C8 (4. 11. 2026): relay volá jen sdílený `sendLeaderManage` (správa, attach, × holé pozice, C7).
-    const attach = between(desk, 'const attachBrackets = useCallback(', '// C8 (4. 11. 2026):');
+    const attach = between(desk, 'const sendAttachBrackets = useCallback(', '// C8 (4. 11. 2026):');
     const fresh = attach.indexOf('if (!armStatusRef.current.fresh');
     const relay = attach.indexOf('sendLeaderManage(');
     const groupRelay = attach.indexOf('manageGroupLimitPosition(');
@@ -500,8 +500,8 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
     expect(desk).toMatch(/relay: \(relayId, command\) => executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\),/);
     expect(desk).toMatch(/const sendLeaderManage = deskCommands\.sendLeaderManage;/);
     const factory = source('lib/liveDeskCommands.ts');
-    expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) throw new Error\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);
-    expect(attach.slice(fresh, relay)).toMatch(/throw new Error\('Stav kopírky není čerstvě ověřený — nic se neodeslalo\.'\);/);
+    expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) refuse\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);
+    expect(attach.slice(fresh, relay)).toMatch(/throw liveChartNotSent\('Stav kopírky není čerstvě ověřený — nic se neodeslalo\.'\);/);
     expect(ticket).toMatch(/const notice = attachErrorNotice\(reason, Date\.now\(\)\);\s*setAttachNotice\(\{ entryOperationId: operationId, notice, final: notice\.tone !== 'bad' \}\);/);
   });
 });
