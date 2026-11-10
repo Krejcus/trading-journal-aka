@@ -9,7 +9,7 @@
  * → relay `copy-command`) přes sdílený zámek jednoho příkazu (`createLiveBareCloseRun`).
  */
 import type { LeaderOrderManageResult } from './leaderOrderManage';
-import { CANCEL_PENDING_NOT_SENT_PATTERN } from './liveCancelPending';
+import { isLiveCommandNotSent, liveCommandNotSentText } from './liveCommandErrors';
 import type { BareLeaderTrade } from './manualBareClose';
 
 export interface LiveBareCloseNotice { tone: 'ok' | 'bad' | 'warn'; text: string; at: number }
@@ -127,6 +127,6 @@ export function liveBareCloseResultNotice(result: LeaderOrderManageResult | null
  */
 export function liveBareCloseErrorNotice(reason: unknown, at: number): LiveBareCloseNotice {
   const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'chyba';
-  if (CANCEL_PENDING_NOT_SENT_PATTERN.test(message)) return { tone: 'bad', text: `Neodesláno: ${message.slice(0, 160)}`, at };
+  if (isLiveCommandNotSent(reason)) return { tone: 'bad', text: liveCommandNotSentText(reason), at };
   return { tone: 'warn', text: `Neověřeno — zkontroluj Tradovate (${message.slice(0, 120)}). Nic se neopakuje.`, at };
 }

@@ -1,3 +1,4 @@
+import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -477,7 +478,7 @@ describe('kontrolní seznam 25: Shift+X přes celou cestu až k jedinému close-
 
 describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodesláno“, jde opravit', () => {
   it('chyba desku „není čerstvě ověřený — nic se neodeslalo“ = Neodesláno (ne neznámé)', () => {
-    const notice = attachErrorNotice(new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.'), 1_000);
+    const notice = attachErrorNotice(new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — nic se neodeslalo.'), 1_000);
     expect(notice.tone).toBe('bad');
     expect(notice.text).toMatch(/^Neodesláno: /);
     // Výjimka po odeslání (timeout relaye) = neznámé, nic neopakovat.
@@ -500,8 +501,8 @@ describe('kontrolní seznam 25: attach z PC bez čerstvého stavu = „Neodeslá
     expect(desk).toMatch(/relay: \(relayId, command\) => \{\s*\/\/[^\n]*\n\s*chartIntentStore\.markSent\(command\.operationId\);\s*return executeTradovateCopierRelayCommand\(relayId, \{ type: 'copy-command', command \}\);\s*\},/);
     expect(desk).toMatch(/const sendLeaderManage = deskCommands\.sendLeaderManage;/);
     const factory = source('lib/liveDeskCommands.ts');
-    expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) throw new Error\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);
-    expect(attach.slice(fresh, relay)).toMatch(/throw new Error\('Stav kopírky není čerstvě ověřený — nic se neodeslalo\.'\);/);
+    expect(between(factory, 'const sendLeaderManage = async', 'const closeBareLeader')).toMatch(/if \(!route\) throw new LiveCommandNotSentError\(LIVE_DESK_RELAY_MISSING\);\s*const response = await deps\.relay\(route, command\);/);
+    expect(attach.slice(fresh, relay)).toMatch(/throw new LiveCommandNotSentError\('Stav kopírky není čerstvě ověřený — nic se neodeslalo\.'\);/);
     expect(ticket).toMatch(/const notice = attachErrorNotice\(reason, Date\.now\(\)\);\s*setAttachNotice\(\{ entryOperationId: operationId, notice, final: notice\.tone !== 'bad' \}\);/);
   });
 });

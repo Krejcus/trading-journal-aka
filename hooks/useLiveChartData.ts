@@ -15,7 +15,7 @@ import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { WORKER_EXPOSURE_MAX_AGE_MS } from '../lib/tradovateWorkerExposureOverlay';
 import { LIVE_CHART_UNVERIFIED_NOTE, liveChartDisplayAccounts, markLiveChartPositionProjection, projectLiveChartExposure } from '../lib/liveChartExposureProjection';
 import { LIVE_UNVERIFIED_LINE_COLOR } from '../lib/liveChartOrderLines';
-import { currentTradovateClientReadSeq } from '../lib/tradovateClientReadOrder';
+import { currentTradovateClientReadSeq, noteTradovateWorkerShown, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { tradeCardFeeRates } from '../lib/liveTradeCard';
 import { buildLiveTradeGroup, liveChartDisarm, liveTradeGroupKey, type LiveChartDisarm } from '../lib/liveTradeGroupSource';
@@ -61,18 +61,17 @@ export function useLiveChartData(input: {
   // Graf kreslí ze stavu workeru i bez dokladu kontinuity (jen zobrazení, štítek „neověřeno“);
   // starší REST nepřepíše novější stav workeru. Autorizační data desku se nemění.
   // Sekvence REST požadavků v okamžiku, kdy graf naposledy kreslil účet ze stavu workeru:
-  // jen čtení zahájené až potom ho smí nahradit (pozdní starší odpověď nevyrobí flat).
-  const lastWorkerShownRef = useRef(new Map<number, number>());
+  // jen čtení zahájené až potom ho smí nahradit (pozdní starší odpověď nevyrobí flat). Drží ji
+  // modul `tradovateClientReadOrder` (přežije remount grafu), ne tato komponenta.
   const statusTrusted = input.statusTrusted ?? statusFresh;
   const projected = useMemo(() => (enabled ? projectLiveChartExposure(data, agentStatus, exposureObservedAt, now, coverageOwners, {
-    statusFresh, trusted: statusTrusted, lastWorkerShownSeq: lastWorkerShownRef.current,
+    statusFresh, trusted: statusTrusted, lastWorkerShownSeq: tradovateWorkerShownSeq(),
   }) : null), [enabled, data, agentStatus, exposureObservedAt, now, coverageOwners, statusFresh, statusTrusted]);
   const chartData = projected?.data ?? null;
   // Po renderu (konzervativně: požadavek zahájený mezitím se počítá jako starší).
   useEffect(() => {
     if (!projected) return;
-    const seq = currentTradovateClientReadSeq();
-    for (const id of projected.workerShown) lastWorkerShownRef.current.set(id, seq);
+    noteTradovateWorkerShown(projected.workerShown, currentTradovateClientReadSeq());
   }, [projected]);
   const projectedAccounts = useMemo(() => (chartData ? tradovateCopyTradeSnapshot(chartData, profiles).accounts : []), [chartData, profiles]);
   const unverifiedKey = projectedAccounts.filter(account => account.displayProjection === 'worker-unverified').map(account => account.id).join(',');

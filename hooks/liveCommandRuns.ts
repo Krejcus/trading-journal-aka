@@ -1,7 +1,8 @@
+import { LiveCommandNotSentError, liveCommandNotSentText, isLiveCommandNotSent } from '../lib/liveCommandErrors';
 import type { LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { groupLimitSeenHash } from '../lib/groupLimitUi';
 import { liveBareCloseErrorNotice, liveBareCloseResultNotice, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
-import { CANCEL_PENDING_NOT_SENT_PATTERN, cancelPendingSummary, type CancelPendingItemResult, type PendingOwnEntry } from '../lib/liveCancelPending';
+import { cancelPendingSummary, type CancelPendingItemResult, type PendingOwnEntry } from '../lib/liveCancelPending';
 import type { LiveCancelPendingView } from '../lib/liveCancelPendingUi';
 import { LIVE_ACTION_CHANGED_TEXT, type LiveClickGate } from '../lib/liveClickGate';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
@@ -74,10 +75,10 @@ export function createLiveCancelPendingRun(deps: {
       const summary = cancelPendingSummary(results);
       return finish({ tone: summary.tone === 'error' ? 'bad' : summary.tone, text: summary.text, at: now() }, true, results);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'chyba';
-      return finish(CANCEL_PENDING_NOT_SENT_PATTERN.test(message)
-        ? { tone: 'bad', text: `Neodesláno: ${message.slice(0, 160)}`, at: now() }
-        : { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate. Nic se neopakuje.`, at: now() }, true);
+      // Typ/kód chyby, nikdy text (`lib/liveCommandErrors.ts`).
+      return finish(isLiveCommandNotSent(reason)
+        ? { tone: 'bad', text: liveCommandNotSentText(reason), at: now() }
+        : { tone: 'warn', text: `Výsledek neznámý (${(reason instanceof Error ? reason.message : 'chyba').slice(0, 120)}) — zkontroluj leadera v Tradovate. Nic se neopakuje.`, at: now() }, true);
     } finally {
       deps.busyRef.current = false;
       deps.setBusy?.(false);
@@ -94,7 +95,7 @@ export const LIVE_COMMAND_BUSY_TEXT = LIVE_MANAGE_BUSY_TEXT;
  * nezavolá; jinak zámek drží po dobu letu a uvolní ho i po výjimce. Nic se neopakuje.
  */
 export async function runWithCommandLock<T>(lockRef: { current: boolean }, send: () => Promise<T>): Promise<T> {
-  if (lockRef.current) throw new Error(LIVE_COMMAND_BUSY_TEXT);
+  if (lockRef.current) throw new LiveCommandNotSentError(LIVE_COMMAND_BUSY_TEXT, 'busy');
   lockRef.current = true;
   try {
     return await send();

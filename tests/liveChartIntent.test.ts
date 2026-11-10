@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  LIVE_INTENT_SENDING_MAX_MS, LIVE_INTENT_SETTLED_HOLD_MS, bareLegIntentDraft, createLiveChartIntentStore, entryIntentDraft, liveChartIntentLines,
+  LIVE_INTENT_SENDING_MAX_MS, LIVE_INTENT_SETTLED_HOLD_MS, bareLegIntentDraft, liveChartPositionBaseline, liveChartWorkerEntryEvidence, createLiveChartIntentStore, entryIntentDraft, liveChartIntentLines,
   manageIntentDraft, trackLiveChartIntent, withLiveChartIntentLines, type LiveChartIntentStore,
 } from '../lib/liveChartIntent';
 import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
@@ -121,27 +121,45 @@ describe('čekající záměr v LIVE grafu', () => {
     expect(intents.snapshot()).toEqual([]);
   });
 
-  it('stará pozice vs. nový vstup: stará pozice téže strany vstup nepotvrdí, až změna pozice', async () => {
+  it('čekající vstup nepotvrdí změna P&L, mark ani ověřenosti — jen změna množství / druhu pozice', async () => {
     const intents = store();
-    const old = position({}, 'old-long-1');
-    const draft = entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh1', old.key);
+    const old = position();
+    const draft = entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh1', liveChartPositionBaseline(old));
     await trackLiveChartIntent(intents, draft, sent(intents, 'entry:abcdefgh1', () => Promise.resolve(ack('entry:abcdefgh1'))));
-    intents.prune(clock, old);
-    expect(intents.snapshot()).toHaveLength(1);
-    intents.prune(clock, position({ quantity: 2 }, 'long-2'));
+    // Tik ceny: P&L, mark i klíč pozice se mění, tvar (long 1, pozice) ne.
+    for (const tick of [position({ openPnl: 42, mark: 121 }), position({ openPnl: -10, mark: 95, entry: 100.25 }), position({ protection: 'SL 1/1 · TP 1/1 · neověřeno' })]) {
+      intents.prune(clock, tick);
+      expect(intents.snapshot()).toHaveLength(1);
+    }
+    intents.prune(clock, position({ quantity: 2 }));
     expect(intents.snapshot()).toEqual([]);
   });
 
-  it('změna jen ověřenosti (přípona „neověřeno“) vstup nepotvrdí; opakovaný begin téhož operationId neztratí „odesláno“', async () => {
+  it('čekající vstup potvrdí důkaz workeru se SHODNÝM operationId (příkaz u brokera / fill), cizí operationId ne', async () => {
     const intents = store();
-    const old = position({}, 'pos-a|neověřeno');
-    intents.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh2', old.key));
+    const old = position();
+    await trackLiveChartIntent(intents, entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh3', liveChartPositionBaseline(old)),
+      sent(intents, 'entry:abcdefgh3', () => Promise.resolve(ack('entry:abcdefgh3'))));
+    const evidence = (entries: Parameters<typeof liveChartWorkerEntryEvidence>[0]) => ({ workerEntryOperationIds: liveChartWorkerEntryEvidence(entries) });
+    intents.prune(clock, position({ openPnl: 99 }), evidence([{ operationId: 'entry:other0001', entryBrokerOrderId: '77' }]));
+    intents.prune(clock, old, evidence([{ operationId: 'entry:abcdefgh3' }]));
+    expect(intents.snapshot()).toHaveLength(1);
+    intents.prune(clock, old, evidence([{ operationId: 'entry:abcdefgh3', entryBrokerOrderId: '42' }]));
+    expect(intents.snapshot()).toEqual([]);
+    expect([...liveChartWorkerEntryEvidence([{ operationId: 'a', timing: { fillAt: 1 } }, { operationId: 'b', timing: { orderAt: 1 } }, { operationId: 'c', timing: {} }])]).toEqual(['a', 'b']);
+  });
+
+  it('vstup bez pozice při kliku: objeví-li se pozice / čekající příkaz téže strany, je potvrzen; opakovaný begin neztratí „odesláno“', async () => {
+    const intents = store();
+    intents.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh2', null));
     intents.markSent('entry:abcdefgh2');
-    intents.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh2', old.key));
+    intents.begin(entryIntentDraft({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 99 }, 'entry:abcdefgh2', null));
     expect(intents.snapshot()).toMatchObject([{ operationId: 'entry:abcdefgh2', sent: true }]);
     intents.settle('entry:abcdefgh2', { status: 'acknowledged' });
-    intents.prune(clock, position({}, 'pos-a'));
+    intents.prune(clock, position({ kind: 'pending', side: 'short' }));
     expect(intents.snapshot()).toHaveLength(1);
+    intents.prune(clock, position({ kind: 'pending' }));
+    expect(intents.snapshot()).toEqual([]);
   });
 
   it('vstup Market/Limit: čára vstupu i SL/TP na ceně, kterou uživatel viděl; jiný kontrakt grafu nic nekreslí', () => {

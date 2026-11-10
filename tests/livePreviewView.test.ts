@@ -1,3 +1,4 @@
+import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -105,7 +106,9 @@ describe('texty výsledku', () => {
   });
 
   it('chyba náhledu: preview-busy = „zkus za 3 s“, jinak text beze změny', () => {
-    expect(livePreviewErrorText('copier-relay-preview-busy')).toBe('Náhled už běží, zkus to za 3 s.');
+    expect(livePreviewErrorText(new TradovateRequestError('copier-relay-preview-busy', 409, null, 'copier-relay-preview-busy'))).toBe('Náhled už běží, zkus to za 3 s.');
+    // Text bez kódu nic nerozhoduje.
+    expect(livePreviewErrorText(new Error('copier-relay-preview-busy'))).toBe('copier-relay-preview-busy');
     expect(livePreviewErrorText('Stav kopírky není čerstvě ověřený — náhled teď nejde.')).toBe('Stav kopírky není čerstvě ověřený — náhled teď nejde.');
   });
 });
@@ -170,7 +173,11 @@ describe('statická pojistka: zobrazení nic neodesílá', () => {
   const source = readFileSync(new URL('../lib/livePreviewView.ts', import.meta.url), 'utf8');
   it('importuje jen typy a nevolá relay ani síť', () => {
     const imports = [...source.matchAll(/^import (type )?.*from '([^']+)'/gm)].map(match => [Boolean(match[1]), match[2]]);
-    expect(imports).toEqual([[true, './leaderEntryPreview']]);
+    // Kromě typů jen čistý klasifikátor chyb podle kódu (bez sítě a bez dalších importů).
+    expect(imports).toEqual([[false, './liveCommandErrors'], [true, './leaderEntryPreview']]);
     expect(source).not.toMatch(/fetch\(|executeTradovateCopierRelayCommand|localStorage/);
+    const errors = readFileSync('lib/liveCommandErrors.ts', 'utf8');
+    expect(errors).not.toMatch(/^import /m);
+    expect(errors).not.toMatch(/fetch\(|executeTradovateCopierRelayCommand|localStorage/);
   });
 });

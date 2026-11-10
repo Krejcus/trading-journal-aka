@@ -44,8 +44,11 @@ export interface LiveChartIntentDraft {
    * i pozdní odpověď se párují jen přes něj.
    */
   operationId: string;
-  /** Klíč pozice grafu v okamžiku kliku: stará pozice nesmí „potvrdit“ nový vstup. */
-  baselinePositionKey?: string | null;
+  /**
+   * Tvar pozice grafu (druh, strana, množství — žádné ceny, P&L ani mark) v okamžiku kliku:
+   * stará pozice nesmí „potvrdit“ nový vstup; potvrdí ho jen změna tvaru nebo důkaz workeru.
+   */
+  baselinePosition?: LiveChartPositionBaseline | null;
 }
 
 export interface LiveChartIntent extends LiveChartIntentDraft {
@@ -73,7 +76,7 @@ export interface LiveChartIntentStore {
   /** Uzavře záměr výsledkem; neznámé / prošlé `operationId` = nic (pozdní odpověď nic neoživí). */
   settle(operationId: string, outcome: LiveChartIntentOutcome): void;
   /** Smaže splněné (read model ukazuje cíl) a prošlé záměry. */
-  prune(now: number, position: LiveChartPosition | null | undefined): void;
+  prune(now: number, position: LiveChartPosition | null | undefined, evidence?: LiveChartIntentEvidence): void;
   snapshot(): readonly LiveChartIntent[];
   subscribe(listener: () => void): () => void;
 }
@@ -113,8 +116,8 @@ export function createLiveChartIntentStore(options: { now?: () => number } = {})
         ? { ...intent, state: outcome.status, settledAt: now() }
         : null));
     },
-    prune(at, position) {
-      const next = intents.filter(intent => !intentExpired(intent, at) && !intentLanded(intent, position));
+    prune(at, position, evidence) {
+      const next = intents.filter(intent => !intentExpired(intent, at) && !intentLanded(intent, position, evidence));
       if (next.length !== intents.length) publish(next);
     },
     snapshot: () => intents,
@@ -130,8 +133,31 @@ export function intentExpired(intent: LiveChartIntent, now: number): boolean {
   return intent.settledAt != null && now - intent.settledAt > LIVE_INTENT_SETTLED_HOLD_MS;
 }
 
-/** Klíč pozice bez přípony stavu „neověřeno“ (`markLiveChartPositionProjection`). */
-const positionContentKey = (key: string | null | undefined) => (key ?? '').replace(/\|neověřeno$/, '');
+/** Tvar pozice pro potvrzení vstupu — jen druh, strana a množství, nikdy ceny / P&L / mark. */
+export interface LiveChartPositionBaseline { kind: 'position' | 'pending'; side: 'long' | 'short'; quantity: number }
+
+export function liveChartPositionBaseline(position: LiveChartPosition | null | undefined): LiveChartPositionBaseline | null {
+  const summary = position?.summary;
+  return summary ? { kind: summary.kind, side: summary.side, quantity: summary.quantity } : null;
+}
+
+/** Důkaz workeru / brokera k záměrům: `operationId` vstupů, které worker už má u brokera (příkaz nebo fill). */
+export interface LiveChartIntentEvidence { workerEntryOperationIds?: ReadonlySet<string> }
+
+/**
+ * Vstupy, ke kterým worker hlásí příkaz u brokera nebo fill (`controller.manualEntries`:
+ * `entryBrokerOrderId`, `timing.orderAt` / `fillAt` / `positionAt`). Jen zobrazení.
+ */
+export function liveChartWorkerEntryEvidence(entries: ReadonlyArray<{
+  operationId: string; entryBrokerOrderId?: string;
+  timing?: { orderAt?: number; fillAt?: number; positionAt?: number };
+}> | null | undefined): Set<string> {
+  return new Set((entries ?? []).filter(entry => entry.entryBrokerOrderId != null
+    || entry.timing?.orderAt != null || entry.timing?.fillAt != null || entry.timing?.positionAt != null).map(entry => entry.operationId));
+}
+
+const shapeChanged = (before: LiveChartPositionBaseline | null | undefined, now: LiveChartPositionBaseline) => (
+  before == null || before.kind !== now.kind || before.side !== now.side || before.quantity !== now.quantity);
 
 const samePrice = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) < 1e-9;
 const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => intent.legs.find(leg => leg.role === role)?.price ?? null;
@@ -140,18 +166,23 @@ const legPrice = (intent: LiveChartIntent, role: LiveChartIntentLeg['role']) => 
  * Read model brokera už ukazuje cíl záměru → tlumená čára není potřeba (skutečná čára
  * ji nahradí). Jen ověřený, ne neověřený pohled (`summary.unverified`), a jen týž kontrakt.
  * Při odeslání (`sending`) se nic nesmaže — cíl mohl být vidět už před klikem. Vstup se
- * potvrdí jen změnou pozice proti stavu při kliku (stará pozice téže strany nestačí).
+ * potvrdí jen důkazem workeru se shodným `operationId` nebo změnou tvaru pozice (druh/strana/
+ * množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
  */
-export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined): boolean {
-  if (intent.state === 'sending' || !position || position.issue != null) return false;
+export function intentLanded(intent: LiveChartIntent, position: LiveChartPosition | null | undefined, evidence: LiveChartIntentEvidence = {}): boolean {
+  if (intent.state === 'sending') return false;
+  // Vstup: důkaz workeru se SHODNÝM operationId (příkaz u brokera / fill) stačí sám.
+  if (intent.kind === 'entry' && evidence.workerEntryOperationIds?.has(intent.operationId) === true) return true;
+  if (!position || position.issue != null) return false;
   const summary = position.summary;
   if (summary?.unverified === true) return false;
   if (summary == null) return (intent.kind === 'close' || intent.kind === 'cancel-entry') && position.key === 'none';
   if (position.symbol !== intent.symbol) return false;
   switch (intent.kind) {
-    // Jen změna obsahu pozice; samotná změna ověřenosti (přípona „neověřeno“) vstup nepotvrdí.
-    case 'entry': return summary.side === intent.side && intent.baselinePositionKey !== undefined
-      && positionContentKey(position.key) !== positionContentKey(intent.baselinePositionKey);
+    // Jen změna tvaru pozice (druh / strana / množství) proti stavu při kliku — P&L, mark ani
+    // jiná cenová pole vstup nikdy nepotvrdí; bez známého výchozího tvaru jen důkaz workeru.
+    case 'entry': return summary.side === intent.side && intent.baselinePosition !== undefined
+      && shapeChanged(intent.baselinePosition, liveChartPositionBaseline(position)!);
     case 'move-stop': case 'add-stop': return samePrice(summary.stop, legPrice(intent, 'stopLoss'));
     case 'move-target': case 'add-target': return samePrice(summary.target, legPrice(intent, 'takeProfit'));
     case 'attach': return samePrice(summary.stop, legPrice(intent, 'stopLoss')) && samePrice(summary.target, legPrice(intent, 'takeProfit'));
@@ -275,9 +306,9 @@ const leg = (role: LiveChartIntentLeg['role'], price: number | null | undefined)
 export function entryIntentDraft(draft: {
   symbol: string; side: 'Buy' | 'Sell'; quantity: number; orderType: string;
   price?: number; referencePrice?: number; stopLoss?: number; takeProfit?: number;
-}, operationId: string, baselinePositionKey: string | null): LiveChartIntentDraft {
+}, operationId: string, baselinePosition: LiveChartPositionBaseline | null): LiveChartIntentDraft {
   return {
-    kind: 'entry', symbol: draft.symbol, side: sideOf(draft.side), quantity: draft.quantity, orderType: draft.orderType, operationId, baselinePositionKey,
+    kind: 'entry', symbol: draft.symbol, side: sideOf(draft.side), quantity: draft.quantity, orderType: draft.orderType, operationId, baselinePosition,
     legs: [
       ...leg('entry', draft.orderType === 'Market' ? draft.referencePrice : draft.price),
       ...leg('stopLoss', draft.stopLoss),

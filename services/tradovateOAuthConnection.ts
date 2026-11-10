@@ -132,6 +132,8 @@ export class TradovateRequestError extends Error {
     message: string,
     public readonly status: number,
     public readonly retryAfterMs: number | null = null,
+    /** Strojový kód z těla odpovědi (`body.error`, např. `copier-relay-entry-busy`); null = žádný. */
+    public readonly code: string | null = null,
   ) {
     super(message);
     this.name = 'TradovateRequestError';
@@ -240,6 +242,7 @@ const authenticatedRequest = async <T>(
         body.error || `Tradovate request failed (${response.status})`,
         response.status,
         retryAfterMs,
+        typeof body.error === 'string' && body.error ? body.error : null,
       );
     }
     return body;

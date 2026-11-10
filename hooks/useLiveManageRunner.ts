@@ -1,3 +1,4 @@
+import { isLiveCommandNotSent, liveCommandNotSentText, liveCommandUnknownText } from '../lib/liveCommandErrors';
 import { groupLimitOutcomeNotice } from '../lib/groupLimitUiNotice';
 import { liveRepeatClick, type LiveClickState } from '../lib/liveClickGate';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -64,7 +65,6 @@ export const LIVE_MANAGE_BUSY_TEXT = 'Čeká se na výsledek předchozí změny 
 /** Po potvrzeném posunu drží čára „odesílám“ ještě chvíli na dosednutí ceny. */
 export const LIVE_MANAGE_PENDING_HOLD_MS = 5_000;
 
-const NOT_SENT_PATTERN = /entry-busy|entry-superseded|entry-not-admitted|manage-daily-cap|entry-daily-cap|Chybí cesta|není čerstvě ověřený|nic se neodeslalo/;
 const ACK_WARNING_PATTERN = /zastavila|spustil|vyplnil|skončil|ne tímto|Flatten/;
 
 /** Text výsledku z workeru (stejné texty jako dosavadní PC `runLiveManage`). */
@@ -88,24 +88,21 @@ export function liveManageResultNotice(action: LeaderOrderManageAction, result: 
 }
 
 /**
- * Výjimka z `manage`: prokazatelně neodeslané (strop, rozestup, chybějící cesta,
- * neověřený stav) = „Neodesláno“, všechno ostatní = výsledek neznámý (nikdy úspěch).
+ * Výjimka z `manage`: „Neodesláno“ jen u prokazatelně neodeslaného — podle TYPU / KÓDU chyby
+ * (`lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z desku, kód relay odmítnutí), nikdy
+ * podle textu. Všechno ostatní = výsledek neznámý (nikdy úspěch, nic se neopakuje).
  */
 export function liveManageErrorNotice(reason: unknown, at: number): LiveManageNotice {
-  const message = reason instanceof Error ? reason.message : 'chyba';
-  if (!NOT_SENT_PATTERN.test(message)) {
-    return { tone: 'warn', text: `Výsledek neznámý (${message.slice(0, 120)}) — zkontroluj leadera v Tradovate.`, at };
-  }
-  return {
-    tone: 'bad', at,
-    text: `Neodesláno: ${/entry-busy/.test(message) ? 'jiná změna se právě zpracovává'
-      : /entry-superseded/.test(message) ? 'mezitím přišlo vypnutí kopírky (brzda)'
-        : /entry-not-admitted/.test(message) ? 'server změnu nepřijal' : message.slice(0, 120)}`,
-  };
+  if (!isLiveCommandNotSent(reason)) return { tone: 'warn', text: liveCommandUnknownText(reason), at };
+  return { tone: 'bad', at, text: liveCommandNotSentText(reason, 120, {
+    'entry-busy': 'Neodesláno: jiná změna se právě zpracovává',
+    'entry-superseded': 'Neodesláno: mezitím přišlo vypnutí kopírky (brzda)',
+    'entry-not-admitted': 'Neodesláno: server změnu nepřijal',
+  }) };
 }
 
-/** Rozhodla `manage` výjimkou, že se prokazatelně nic neodeslalo? */
-const errorNotSent = (reason: unknown) => NOT_SENT_PATTERN.test(reason instanceof Error ? reason.message : '');
+/** Rozhodla `manage` výjimkou, že se prokazatelně nic neodeslalo? (typ/kód, ne text) */
+const errorNotSent = (reason: unknown) => isLiveCommandNotSent(reason);
 
 export interface LiveManageRunDeps {
   groupLimitStateHash?: () => string | null | undefined;
@@ -118,7 +115,7 @@ export interface LiveManageRunDeps {
   now?: () => number;
   /** Jiné texty výsledku (C8 holá pozice); výchozí `liveManageResultNotice`. Stav běhu se nemění. */
   resultNotice?: (action: LeaderOrderManageAction, result: LeaderOrderManageResult, at: number) => LiveManageNotice;
-  /** Jiné texty výjimky (C8); výchozí `liveManageErrorNotice`. „Neodesláno“ vs. neznámé rozhoduje dál vzor. */
+  /** Jiné texty výjimky (C8); výchozí `liveManageErrorNotice`. „Neodesláno“ vs. neznámé rozhoduje typ/kód chyby. */
   errorNotice?: (reason: unknown, at: number) => LiveManageNotice;
 }
 

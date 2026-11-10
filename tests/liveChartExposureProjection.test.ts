@@ -12,7 +12,8 @@ import { buildTradeCard } from '../lib/liveTradeCard';
 import { liveChartPosition } from '../lib/liveChartPosition';
 import { LIVE_UNVERIFIED_LINE_COLOR, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
-import { stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
+import { noteTradovateWorkerShown, resetTradovateClientReadSeqForTests, stampTradovateClientReads, tradovateWorkerShownSeq } from '../lib/tradovateClientReadOrder';
+import { readFileSync } from 'node:fs';
 import { liveChartWorkingOrders, liveChartWorkingSource } from '../hooks/useLiveChartData';
 import { buildLiveTradeGroup } from '../lib/liveTradeGroupSource';
 
@@ -131,6 +132,30 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     // Požadavek zahájený až po stavu workeru (#6) platí — i kdyby jeho čas serveru byl „starší“.
     const after = projectLiveChartExposure(restRead(6, NOW - 60_000), status(), NOW - 20_000, NOW, owners, silent(5));
     expect(after.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('empty');
+  });
+
+  it('remount grafu: evidence posledního stavu workeru žije v modulu, takže stará REST odpověď po remountu flat nevyrobí', () => {
+    resetTradovateClientReadSeqForTests(10);
+    // Instance grafu A ukázala stav workeru (short 2) při sekvenci 10, pak se odpojila (remount).
+    noteTradovateWorkerShown([100, 200], 10);
+    // Nová instance B nemá vlastní paměť — čte modul. Worker mezitím zmlkl, dorazí odpověď na požadavek #9.
+    const afterRemount = projectLiveChartExposure(restRead(9), status(), NOW - 20_000, NOW, owners,
+      { statusFresh: false, trusted: true, lastWorkerShownSeq: tradovateWorkerShownSeq() });
+    expect(afterRemount.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
+    expect(chartLines(afterRemount.data!).position.summary).toBeNull();
+    // Čtení zahájené po stavu workeru (#11) platí.
+    const fresh11 = projectLiveChartExposure(restRead(11), status(), NOW - 20_000, NOW, owners,
+      { statusFresh: false, trusted: true, lastWorkerShownSeq: tradovateWorkerShownSeq() });
+    expect(fresh11.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('empty');
+    // Hodnota jen roste (starší záznam ji nesníží).
+    noteTradovateWorkerShown([100], 3);
+    expect(tradovateWorkerShownSeq().get(100)).toBe(10);
+    // Hook nemá vlastní (per-instance) paměť stavu workeru — jen modul.
+    const hook = readFileSync('hooks/useLiveChartData.ts', 'utf8');
+    expect(hook).toMatch(/lastWorkerShownSeq: tradovateWorkerShownSeq\(\)/);
+    expect(hook).toMatch(/noteTradovateWorkerShown\(projected\.workerShown, currentTradovateClientReadSeq\(\)\)/);
+    expect(hook).not.toMatch(/lastWorkerShownRef/);
+    resetTradovateClientReadSeqForTests();
   });
 
   it('pořadí podle sekvence, ne podle příchodu: novější čtení pozic se starším čtením příkazů nestačí', () => {

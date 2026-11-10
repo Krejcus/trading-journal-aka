@@ -1,7 +1,7 @@
 import { liveChartProjectionManageBlock } from './liveChartExposureProjection';
 import { LiveCommandNotSentError } from './liveCommandErrors';
 import {
-  attachIntentDraft, bareLegIntentDraft, closeBareIntentDraft, entryIntentDraft, manageIntentDraft, trackLiveChartIntent,
+  attachIntentDraft, bareLegIntentDraft, closeBareIntentDraft, entryIntentDraft, liveChartPositionBaseline, manageIntentDraft, trackLiveChartIntent,
   type LiveChartIntentStore,
 } from './liveChartIntent';
 import type { LiveChartPosition } from './liveChartPosition';
@@ -76,7 +76,7 @@ export function createLiveChartCommandGuard(deps: LiveChartGuardDeps) {
     entry<R extends Result>(draft: Parameters<typeof entryIntentDraft>[0], operationId: string, scaleIn: boolean, send: () => Promise<R>): Promise<R> {
       const blocked = scaleIn ? gate() : null;
       if (blocked) return Promise.reject(blocked);
-      return trackLiveChartIntent(deps.store, entryIntentDraft(draft, operationId, deps.position().key), send);
+      return trackLiveChartIntent(deps.store, entryIntentDraft(draft, operationId, liveChartPositionBaseline(deps.position())), send);
     },
   };
 }

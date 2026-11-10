@@ -1,3 +1,5 @@
+import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
+import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -125,7 +127,8 @@ describe('C8 UI: nabídka × u holé pozice (jen zobrazení, worker je autorita)
   });
 
   it('výjimka: prokazatelně neodesláno vs. neověřeno', () => {
-    expect(liveBareCloseErrorNotice(new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.'), 1).text).toMatch(/^Neodesláno/);
+    expect(liveBareCloseErrorNotice(new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — nic se neodeslalo.'), 1).text).toMatch(/^Neodesláno/);
+    expect(liveBareCloseErrorNotice(new Error('Stav kopírky není čerstvě ověřený — nic se neodeslalo.'), 1).tone).toBe('warn');
     expect(liveBareCloseErrorNotice(new Error('relay timeout'), 1)).toMatchObject({ tone: 'warn', text: expect.stringMatching(/^Neověřeno — zkontroluj Tradovate \(relay timeout\)/) });
   });
 });
@@ -411,7 +414,7 @@ describe('C7 UI: běh se sdíleným zámkem, výsledek po položkách, nic se ne
     filled.cancel.mockImplementation(async () => [item('canceled', 'Zrušeno.'), item('filled', 'Vstup se vyplnil (1) dřív, než ho broker zrušil.', '102')]);
     expect((await filled.run([entry('101'), entry('102')])).notice).toMatchObject({ tone: 'bad', text: expect.stringMatching(/^Zrušeno 1 z 2\. Vstup se vyplnil/) });
     const notSent = setup(false);
-    notSent.cancel.mockImplementation(async () => { throw new Error('Čekající vstupy se mezitím změnily — nic se neodeslalo.'); });
+    notSent.cancel.mockImplementation(async () => { throw new LiveCommandNotSentError('Čekající vstupy se mezitím změnily — nic se neodeslalo.'); });
     expect((await notSent.run([entry('101')])).notice.text).toMatch(/^Neodesláno/);
     const unknown = setup(false);
     unknown.cancel.mockImplementation(async () => { throw new Error('relay timeout'); });
@@ -916,14 +919,16 @@ describe('(f) čáry grafu: první klik, dvojklik a změněná čára (liveLineC
   it('panel: velké tlačítko po neznámém výsledku zamčené; dvojklik i po rychlém ACK jeden vstup', () => {
     for (const status of ['acknowledged', 'rejected', 'blocked', 'abandoned'] as const) expect(liveDirectResultLocks({ status })).toBe(false);
     expect(liveDirectResultLocks({ status: 'unknown' } as never)).toBe(true);
-    expect(liveDirectErrorLocks('relay timeout')).toBe(true);
-    expect(liveDirectErrorLocks('entry-busy')).toBe(false);
+    expect(liveDirectErrorLocks(new Error('relay timeout'))).toBe(true);
+    expect(liveDirectErrorLocks(new TradovateRequestError('copier-relay-entry-busy', 409, null, 'copier-relay-entry-busy'))).toBe(false);
+    // Text bez typu/kódu nic nerozhoduje: „entry-busy“ jako prostá chyba = neznámý výsledek (zámek).
+    expect(liveDirectErrorLocks(new Error('entry-busy'))).toBe(true);
     const ticket = source('components/LiveOrderTicket.tsx');
     expect(ticket).toContain('const directLockKey = `${String(group?.armed)}|${directKey}`;');
     expect(ticket).toContain('disabled={directBlocked != null || directBusy || directLocked}');
     expect(ticket).toContain('if (directBlocked != null || directLocked) return;');
     expect(ticket).toContain('if (liveDirectResultLocks(result)) setDirectLock(sentLockKey);');
-    expect(ticket).toContain('if (liveDirectErrorLocks(message)) setDirectLock(sentLockKey);');
+    expect(ticket).toContain('if (liveDirectErrorLocks(reason)) setDirectLock(sentLockKey);');
     const send = between(ticket, 'const sendDirect = async', 'directBusyRef.current = true;');
     expect(send).toMatch(/liveRepeatClick\(directClickRef\.current, liveBareConfirmKey\(previewDraft\), Date\.now\(\)\);\s*directClickRef\.current = step\.next;\s*if \(!step\.send\) return;/);
     const draft = { symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Limit', price: 25_000, stopLoss: 24_990, takeProfit: 25_020 } as const;

@@ -288,6 +288,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: druhé kolo oprav po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
+
+- Codex k `30c6b30`: merge NE. Blokující byly dvě věci: UI dál poznávalo „neodesláno“ podle
+  textu chyby a čekající vstup šlo falešně potvrdit změnou P&L nebo mark ceny. Riziko: po
+  remountu grafu se zapomnělo pořadí, takže stará REST odpověď mohla ukázat flat.
+- **„Neodesláno“ jen podle typu/kódu:** jediný klasifikátor `lib/liveCommandErrors.ts`.
+  `TradovateRequestError` nese strojový `code` z těla odpovědi. Rozhodují tři věci: relay
+  odmítnutí 400/409 s přesným kódem ze seznamu kódů vrácených PŘED frontou workeru (ne
+  `idempotency-conflict`), 405 read-only localhostu, a `LiveCommandNotSentError`. Ta se hází
+  ze všech klientských kontrol před relayem: desk, `liveDeskCommands`, přikoupení, sestavení
+  příkazu (zpráva `invalid-relay-command-payload` zůstala kvůli serveru) a zámek.
+  Textové vzory zmizely ze všech sedmi míst UI. Obyčejná chyba se starým textem = neznámý
+  výsledek (konzervativní).
+- **Potvrzení čekajícího vstupu:** jen důkaz workeru se shodným `operationId` (příkaz u brokera
+  nebo fill) nebo změna tvaru pozice (druh, strana, množství), nikdy ceny, P&L ani mark.
+- **Remount:** evidence posledního zobrazeného stavu workeru se přesunula do modulu
+  `tradovateClientReadOrder` (stejná životnost jako čítač požadavků).
+- copier-design-critic: „OK s výhradami“. Žádnou cestu, která by po zařazení do fronty hlásila
+  „neodesláno“, nenašel; server mapuje chyby builderů dál podle textu (`message` beze změny).
+  Zapracováno: `entry-conflict` vyřazen (stejné operationId může letět, takže neznámý výsledek)
+  a mrtvý `runtime-not-found` (vrací se jako 404) taky. Test hlídá soulad seznamu kódů se
+  serverem (`copierRelayValidationErrorStatus`). `groupLimitCancelExpect` hází typovanou chybu.
+  Testy: odmítnutí workerem po zařazení = neznámý; po `markSent` vede 409 na neodesláno
+  a 502 nebo timeout na neznámý; důkaz workeru během odesílání vstup nepotvrdí.
+- Ověření: tsc 0 nových chyb proti baseline. Celá sada 8588 testů prošla, 3 selhaly — tytéž
+  jako na čistém `main` f4a9d6b (`tradovateBrokerReconnect` 1×, `tradovateRequestControlFileStore`
+  2×). Build prošel. Při souběhu s jinými testy občas padá `liquidityLevelsEquivalence`
+  a `tvPriceClientGuards` (zátěž); samostatně prochází. Na DEMO NEOVĚŘENO.
+
 ### 2026-11-10 — LIVE graf: opravy po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - Codex k `dc91b582`: merge NE. Blokující byly dvě věci. Některé cesty zobrazení ochrany

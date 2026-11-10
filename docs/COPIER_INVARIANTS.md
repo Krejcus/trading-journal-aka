@@ -2225,7 +2225,9 @@ existující ochranu.
   převezme jen když čtení změnilo jeho `positionsAsOf`/`ordersAsOf`), NE podle času příchodu ani
   hodin serveru. Dokud worker žije, jeho stav má přednost. Když zmlkne, REST čtení zahájené dřív,
   než graf naposledy kreslil stav workeru (i kdyby dorazilo později), ho nepřepíše — účet je
-  neutrálně neověřený bez čar, nikdy flat. Pořadí workeru samotného dál řeší fence pollu
+  neutrálně neověřený bez čar, nikdy flat. Evidence „kdy graf naposledy kreslil stav workeru“
+  žije v modulu `tradovateClientReadOrder` (stejná životnost jako čítač), takže remount grafu
+  plot nevynuluje. Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,
@@ -2235,7 +2237,15 @@ existující ochranu.
   Relay obal desku záměr označí `markSent` těsně před požadavkem: výjimka předtím (nebo s kódem
   `not-sent`) = čára zmizí, výjimka potom = neznámý výsledek — nikdy podle textu chyby. Výsledek
   s jiným `operationId` = neznámý; pozdní odpověď po vypršení (45 s odesílání) nic neoživí.
-  Vstup se „potvrdí“ jen změnou pozice proti klíči z okamžiku kliku. Odmítnutí/blokace = hned zmizí;
+  Čekající vstup se „potvrdí“ jen důkazem workeru se SHODNÝM `operationId` (příkaz u brokera nebo
+  fill: `manualEntries[].entryBrokerOrderId` / `timing.orderAt|fillAt|positionAt`) nebo změnou tvaru
+  pozice (druh, strana, množství) proti stavu při kliku — nikdy cenou, P&L ani mark.
+  „Neodesláno“ v celém LIVE UI (runner správy, „Zrušit čekající“, × holé pozice, panel vstupu,
+  telefon, náhled) rozhoduje jen `lib/liveCommandErrors.ts`: `LiveCommandNotSentError` z klienta
+  před relayem, nebo relay odmítnutí HTTP 400/409 s přesným kódem z těla odpovědi
+  (`TradovateRequestError.code`) ze seznamu kódů vrácených PŘED zařazením do fronty, nebo 405
+  read-only localhostu. Text chyby nerozhoduje nikde; obyčejná chyba = neznámý výsledek.
+  Odmítnutí/blokace = hned zmizí;
   ACK ji NEPOTVRDÍ jako ochranu (zůstává tlumená „přijato · čekám na stav brokera“ do potvrzení
   read modelem, nejvýš 20 s); neznámý výsledek 20 s „výsledek neznámý“, nic se neopakuje.
   Skutečné čáry SL/TP/vstupu zůstávají během posunu i odebrání na ceně z read modelu (štítek

@@ -1,3 +1,5 @@
+import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
+import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -113,7 +115,7 @@ describe('sdílený runner správy: jeden příkaz naráz, bez opakování (U10)
     expect(thrown).toHaveBeenCalledTimes(1);
     expect(h.pending()).toBeNull();
     expect(h.busyRef.current).toBe(false);
-    const notSent = harness(async () => { throw new Error('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.'); });
+    const notSent = harness(async () => { throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený nebo chybí spravovatelný obchod — nic se neodeslalo.'); });
     expect(await notSent.run('move-stop', 24_990, 25_000, 'stopLoss')).toMatchObject({ called: true, status: 'not-sent', notice: { tone: 'bad', text: expect.stringMatching(/^Neodesláno: /) } });
   });
 
@@ -134,11 +136,20 @@ describe('texty výsledků (shodné s dosavadním PC runLiveManage)', () => {
     expect(ack('move-target').text).toBe('Posunuto u leadera; kopírka posune kopie.');
     expect(ack('move-stop', 'Noha se mezitím vyplnila — vyplnil se SL.')).toMatchObject({ tone: 'warn', text: 'Noha se mezitím vyplnila — vyplnil se SL.' });
   });
-  it('mapování prokazatelně neodeslaných chyb', () => {
-    expect(liveManageErrorNotice(new Error('entry-busy'), NOW)).toMatchObject({ tone: 'bad', text: 'Neodesláno: jiná změna se právě zpracovává' });
-    expect(liveManageErrorNotice(new Error('entry-superseded'), NOW).text).toBe('Neodesláno: mezitím přišlo vypnutí kopírky (brzda)');
-    expect(liveManageErrorNotice(new Error('entry-not-admitted'), NOW).text).toBe('Neodesláno: server změnu nepřijal');
+  it('mapování prokazatelně neodeslaných chyb — podle kódu relay odmítnutí / typu chyby, ne textu', () => {
+    const relay = (code: string, status = 409) => new TradovateRequestError(code, status, null, code);
+    expect(liveManageErrorNotice(relay('copier-relay-entry-busy'), NOW)).toMatchObject({ tone: 'bad', text: 'Neodesláno: jiná změna se právě zpracovává' });
+    expect(liveManageErrorNotice(relay('copier-relay-entry-superseded'), NOW).text).toBe('Neodesláno: mezitím přišlo vypnutí kopírky (brzda)');
+    expect(liveManageErrorNotice(relay('copier-relay-entry-not-admitted: expired'), NOW).text).toBe('Neodesláno: server změnu nepřijal');
+    expect(liveManageErrorNotice(new LiveCommandNotSentError('Stav není čerstvý — nic se neodeslalo.'), NOW).text).toBe('Neodesláno: Stav není čerstvý — nic se neodeslalo.');
     expect(liveManageErrorNotice('x', NOW)).toMatchObject({ tone: 'warn', text: expect.stringMatching(/Výsledek neznámý \(chyba\)/) });
+    // Samotný text už „neodesláno“ nevyrobí: obyčejná chyba se stejnými slovy = neznámý výsledek.
+    for (const text of ['entry-busy', 'copier-relay-entry-busy', 'Stav kopírky není čerstvě ověřený — nic se neodeslalo.']) {
+      expect(liveManageErrorNotice(new Error(text), NOW).tone).toBe('warn');
+    }
+    // Kód s jiným HTTP stavem (např. 500 po zařazení) ani neznámý kód 409 (idempotence) neodeslané nejsou.
+    expect(liveManageErrorNotice(relay('copier-relay-entry-busy', 500), NOW).tone).toBe('warn');
+    expect(liveManageErrorNotice(relay('copier-relay-idempotency-conflict'), NOW).tone).toBe('warn');
   });
 });
 
@@ -218,7 +229,7 @@ describe('statika: runner posílá jen přes předaný onManageEntry (INV-UI-01)
   const source = readFileSync('hooks/useLiveManageRunner.ts', 'utf8');
   it('žádný relay, fetch ani služby; jediný send je solo/group varianta předaného manage', () => {
     const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-    expect(imports).toEqual(['../lib/groupLimitUiNotice', '../lib/leaderOrderManage', '../lib/liveClickGate', '../lib/liveManagePrices', 'react', 'react']);
+    expect(imports).toEqual(['../lib/groupLimitUiNotice', '../lib/leaderOrderManage', '../lib/liveClickGate', '../lib/liveCommandErrors', '../lib/liveManagePrices', 'react', 'react']);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/leaderOrderManage'/);
     expect(source).toMatch(/import type \{[^}]+\} from '\.\.\/lib\/liveManagePrices'/);
     expect(source).not.toMatch(/fetch\(|executeTradovate|services\/|buildLeaderOrderManageCommand|crypto\./);

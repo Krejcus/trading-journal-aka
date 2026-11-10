@@ -22,9 +22,27 @@ export function currentTradovateClientReadSeq(): number {
   return sequence;
 }
 
+/**
+ * Pro každý účet: sekvence REST požadavků v okamžiku, kdy graf naposledy kreslil jeho stav ze
+ * workeru. Žije v MODULU se stejnou životností jako čítač (ne v komponentě): po remountu grafu
+ * (přepnutí záložky, telefon ↔ PC rozložení) tak pozdní starší REST odpověď znovu nevyrobí flat.
+ * Hodnota jen roste.
+ */
+const workerShownSeq = new Map<number, number>();
+
+/** Graf právě (po renderu) kreslí stav workeru těchto účtů. */
+export function noteTradovateWorkerShown(accountIds: Iterable<number>, seq = sequence): void {
+  for (const id of accountIds) workerShownSeq.set(id, Math.max(workerShownSeq.get(id) ?? 0, seq));
+}
+
+export function tradovateWorkerShownSeq(): ReadonlyMap<number, number> {
+  return workerShownSeq;
+}
+
 /** Jen pro testy. */
 export function resetTradovateClientReadSeqForTests(value = 0): void {
   sequence = value;
+  workerShownSeq.clear();
 }
 
 /**
