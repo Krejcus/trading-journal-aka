@@ -2227,8 +2227,10 @@ existující ochranu.
   než graf naposledy kreslil stav workeru (i kdyby dorazilo později), ho nepřepíše — účet je
   neutrálně neověřený bez čar, nikdy flat. Evidence „kdy graf naposledy kreslil stav workeru“
   žije v modulu `tradovateClientReadOrder` (stejná životnost jako čítač), takže remount grafu
-  plot nevynuluje. Plot platí na VŠECH cestách, i při statusu obnoveném z cache (`trusted: false`
-  jen vypne promítání stavu workeru, ne ochranu pořadí). Pořadí workeru samotného dál řeší fence pollu
+  plot nevynuluje. Plot je PRVNÍ krok projekce (`guardStaleRestReads`), před jakýmkoli overlayem,
+  zkratkou dokladu nebo návratem, takže platí na všech cestách. Stav workeru (s dokladem
+  i bez) graf kreslí jen z čerstvého, neobnoveného statusu této instance (`trusted &&
+  statusFresh`). Obnovená cache se nepromítne ani s časově platným dokladem kontinuity. Pořadí workeru samotného dál řeší fence pollu
   (INV-FRESH-02) a `displaySeq` kanálu. Testy `tests/liveChartExposureProjection.test.ts`,
   `tests/liveChartCommandGuard.test.ts`.
   **Čekající záměry (`lib/liveChartIntent.ts`):** po kliku (vstup, posun/přidání/odebrání SL/TP,

@@ -45,7 +45,10 @@ export function useLiveChartData(input: {
   exposureObservedAt?: number | null;
   /** Čerstvý stav této instance (`armStatusRef.fresh`: ne obnovený, ne po grace). */
   statusFresh: boolean;
-  /** Stav workeru je z pollu této instance, ne obnovená cache (bez toho žádná projekce). */
+  /**
+   * Stav workeru je z pollu této instance, ne obnovená cache. Stav workeru (s dokladem i bez)
+   * graf kreslí jen při `statusTrusted && statusFresh`; sekvenční plot nad REST platí vždy.
+   */
   statusTrusted?: boolean;
   /** Účty se zobrazovacími hodnotami přehledu (dnešní výsledek, limit). */
   displayAccounts: readonly LiveAccount[];

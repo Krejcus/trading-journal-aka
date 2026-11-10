@@ -20,10 +20,12 @@ import type { LiveAccount } from '../services/tradecopiaLiveService';
  * (`observeTradeIngress`), takže graf hned po fillu / posunu SL spadl na starší REST
  * a čáry přišly za 5–22 s nebo zmizely. Tahle projekce je jen pro graf:
  *
- * - účty s dokladem: beze změny (`overlayWorkerExposure`);
+ * - nejdřív vždy sekvenční plot nad REST (`guardStaleRestReads`), pak stav workeru jen
+ *   z čerstvého neobnoveného statusu (`trusted && statusFresh`);
+ * - účty s dokladem: `overlayWorkerExposure` (jen za téže podmínky);
  * - účty, které worker prokazatelně zná, se živým socketem svého připojení, bez dokladu:
  *   pozice a příkazy z workeru označené `displayProjection: 'worker-unverified'` (štítek
- *   „neověřeno“, tlumené čáry bez ovládání) — jen čerstvý neobnovený stav ≤ 8 s;
+ *   „neověřeno“, tlumené čáry; tažení vypnuté) — jen čerstvý neobnovený stav ≤ 8 s;
  * - pořadí: dokud worker žije, jeho stav vždy přednost (REST ho nepřepíše). Když worker
  *   zmlkne, REST čtení ZAHÁJENÉ (sekvence požadavků, `lib/tradovateClientReadOrder.ts`)
  *   dřív, než graf naposledy kreslil stav workeru, je starší, i kdyby dorazilo později —
@@ -108,6 +110,28 @@ export interface LiveChartProjectionResult<T> {
   workerShown: number[];
 }
 
+/**
+ * KROK 1 projekce (vždy první, před jakýmkoli overlayem, zkratkou dokladu nebo návratem):
+ * REST čtení účtu zahájené DŘÍV, než graf naposledy kreslil jeho stav ze workeru, je starší —
+ * jeho pozice a příkazy jsou neutrálně „unavailable“ (nikdy flat), dokud nedorazí čtení
+ * zahájené až potom. Nezávisí na statusu workeru, čerstvosti, cache ani dokladu (INV-UI-01/03).
+ */
+export function guardStaleRestReads<T extends TradovateAccountDataResult>(
+  data: T | null,
+  lastWorkerShownSeq: ReadonlyMap<number, number>,
+): T | null {
+  if (!data) return null;
+  let changed = false;
+  const accounts = data.accounts.map((account): TradovateAccountDataAccount => {
+    const shownSeq = lastWorkerShownSeq.get(account.id);
+    if (shownSeq == null || restReadStartedAfter(account, shownSeq)) return account;
+    changed = true;
+    const { displayStreamCoverage: _proof, displayProjection: _projection, ...rest } = tradovateAccountReadState(account, data);
+    return { ...account, readState: { ...rest, positions: unavailable, orders: unavailable } };
+  });
+  return changed ? { ...data, accounts } : data;
+}
+
 export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   data: T | null,
   status: LocalCopierAgentStatus | null | undefined,
@@ -116,39 +140,30 @@ export function projectLiveChartExposure<T extends TradovateAccountDataResult>(
   owners: ReadonlyMap<number, WorkerCoverageOwner>,
   input: LiveChartProjectionInput,
 ): LiveChartProjectionResult<T> {
-  const proven = overlayWorkerExposure(data, status, observedAtMs, now, owners);
-  if (!proven) return { data: null, workerShown: [] };
-  // Obnovená cache (`trusted: false`) se jako stav workeru NEpromítá a nic neeviduje — ale
-  // ochrana pořadí níže (starší REST nepřepíše naposledy zobrazený stav workeru) platí na
-  // VŠECH cestách, i při obnovení statusu z cache (INV-UI-01/03; review Codexu 10. 11., P1).
+  // KROK 1: sekvenční plot nad REST daty — na všech cestách, bez výjimky.
+  const guarded = guardStaleRestReads(data, input.lastWorkerShownSeq);
+  if (!guarded) return { data: null, workerShown: [] };
+  // KROK 2: stav workeru (s dokladem i bez) graf kreslí JEN z čerstvého statusu této instance.
+  // Obnovená cache (`trusted: false`) ani nečerstvý status se jako stav workeru nepromítnou
+  // — ani s časově platným dokladem kontinuity (review Codexu, 4. kolo).
+  if (!input.trusted || !input.statusFresh) return { data: guarded, workerShown: [] };
+  // KROK 3: overlay — účty s dokladem (`overlayWorkerExposure`), pak známé účty bez dokladu.
+  const proven = overlayWorkerExposure(guarded, status, observedAtMs, now, owners)!;
   const exposure = status?.controller?.exposure;
   const observed = observedAtMs != null && Number.isFinite(observedAtMs) && observedAtMs <= now + 5_000 ? observedAtMs : null;
-  const workerLive = input.trusted && input.statusFresh && observed != null && status?.controller?.connected === true && !!exposure?.orders
+  const workerLive = observed != null && status?.controller?.connected === true && !!exposure?.orders
     && now - observed <= LIVE_CHART_WORKER_PROJECTION_MAX_AGE_MS;
   const known = workerLive ? workerKnownAccounts(status) : new Set<number>();
   const context = workerLive && exposure ? workerExposureOverlayContext(proven, exposure) : null;
   const workerShown: number[] = [];
   let changed = false;
   const accounts = proven.accounts.map((account): TradovateAccountDataAccount => {
-    if (account.readState?.displayStreamCoverage) {
-      if (input.trusted) workerShown.push(account.id);
-      return account;
-    }
+    if (account.readState?.displayStreamCoverage) { workerShown.push(account.id); return account; }
     // Worker žije a účet zná: vždy jeho stav (pořadí workeru řeší fence pollu a `displaySeq` kanálu).
     if (context && observed != null && known.has(account.id) && workerConnectionStreamLive(status, owners.get(account.id))) {
       changed = true;
       workerShown.push(account.id);
       return overlayWorkerAccount(account, proven, context, observed, null);
-    }
-    // Graf účet kreslil ze stavu workeru: REST čtení zahájené dřív (i když dorazilo později)
-    // je starší a ten stav nepřepíše — neutrální „neověřeno“ bez čar, nikdy flat, dokud
-    // nedorazí čtení zahájené až po něm.
-    const shownSeq = input.lastWorkerShownSeq.get(account.id);
-    if (shownSeq != null && !restReadStartedAfter(account, shownSeq)) {
-      changed = true;
-      const readState = tradovateAccountReadState(account, proven);
-      const { displayStreamCoverage: _proof, displayProjection: _projection, ...rest } = readState;
-      return { ...account, readState: { ...rest, positions: unavailable, orders: unavailable } };
     }
     return account;
   });

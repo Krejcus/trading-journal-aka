@@ -23,6 +23,18 @@ describe('„neodesláno“ jen podle typu chyby a přesného kódu relay odmít
     expect(isLiveCommandNotSent(relay('copier-relay-idempotency-conflict'))).toBe(false);
   });
 
+  it('arm-config-conflict (server ho umí hodit až po insertu, kontrola souběžného zařazení) nikdy není „neodesláno“', () => {
+    expect(copierRelayValidationErrorStatus('copier-relay-arm-config-conflict')).toBe(409);
+    expect(LIVE_RELAY_NOT_ADMITTED_CODES).not.toContain('copier-relay-arm-config-conflict');
+    // Ani jako chyba samotného POST (fáze submit), ani z pollu.
+    expect(isLiveCommandNotSent(relay('copier-relay-arm-config-conflict'))).toBe(false);
+    expect(isLiveCommandNotSent(withLiveRelayPhase(new TradovateRequestError('copier-relay-arm-config-conflict', 409, null, 'copier-relay-arm-config-conflict'), 'accepted'))).toBe(false);
+    // Totéž pro všechny 409 kódy serveru mimo bílou listinu (povinné rozhodnutí při přidání nového kódu).
+    for (const code of ['copier-relay-arm-config-conflict', 'copier-relay-idempotency-conflict', 'copier-brake-idempotency-conflict', 'copier-relay-entry-conflict', 'copier-relay-runtime-not-found']) {
+      expect(isLiveCommandNotSent(relay(code))).toBe(false);
+    }
+  });
+
   it('odmítnutí workerem PO zařazení (stejný text) i obyčejná chyba zůstávají neznámým výsledkem', () => {
     expect(isLiveCommandNotSent(new LocalCopierAgentCommandError('copier-relay-entry-busy'))).toBe(false);
     expect(isLiveCommandNotSent(new Error('copier-relay-entry-busy'))).toBe(false);

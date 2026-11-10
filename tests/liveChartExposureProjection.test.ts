@@ -187,6 +187,79 @@ describe('LIVE graf: zobrazovací projekce stavu workeru', () => {
     expect(silentLate.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
   });
 
+  describe('tabulka (review Codexu, 4. kolo): sekvenční plot je první krok, před overlayem i zkratkou dokladu', () => {
+    const flat = (proof: boolean) => {
+      const current = status({ proof });
+      current.controller.exposure!.positions = [];
+      current.controller.exposure!.orders = [];
+      return current;
+    };
+    const rows: Array<{ trusted: boolean; statusFresh: boolean; proof: boolean; worker: 'short2' | 'flat'; restSeq: number }> = [];
+    for (const trusted of [true, false]) for (const statusFresh of [true, false]) for (const proof of [true, false])
+      for (const worker of ['short2', 'flat'] as const) for (const restSeq of [9, 11]) rows.push({ trusted, statusFresh, proof, worker, restSeq });
+
+    it.each(rows)('trusted=$trusted statusFresh=$statusFresh doklad=$proof worker=$worker REST seq=$restSeq (worker zobrazen při seq 10)', row => {
+      const current = row.worker === 'flat' ? flat(row.proof) : status({ proof: row.proof });
+      const out = projectLiveChartExposure(restRead(row.restSeq), current, NOW - 1_000, NOW, owners,
+        { trusted: row.trusted, statusFresh: row.statusFresh, lastWorkerShownSeq: new Map([[100, 10], [200, 10]]) });
+      const leader = out.data!.accounts.find(item => item.id === 100)!;
+      const drawsWorker = row.trusted && row.statusFresh;
+      if (drawsWorker) {
+        // Čerstvý status této instance: graf kreslí stav workeru (s dokladem ověřeně, bez něj „neověřeno“).
+        expect(leader.readState?.positionsAsOf).toBe(iso(NOW - 1_000));
+        expect(leader.positions.filter(position => position.netPosition !== 0).length).toBe(row.worker === 'short2' ? 1 : 0);
+        expect(leader.readState?.displayStreamCoverage != null).toBe(row.proof);
+        expect(out.workerShown).toContain(100);
+      } else {
+        // Obnovená cache / nečerstvý status: stav workeru se nekreslí ani s platným dokladem; rozhoduje jen plot.
+        expect(leader.readState?.displayStreamCoverage).toBeUndefined();
+        expect(leader.readState?.displayProjection).toBeUndefined();
+        expect(out.workerShown).toEqual([]);
+        expect(leader.readState?.positions.availability).toBe(row.restSeq < 10 ? 'unavailable' : 'empty');
+        expect(leader.readState?.orders.availability).toBe(row.restSeq < 10 ? 'unavailable' : 'empty');
+        if (row.restSeq < 10) expect(chartLines(out.data!).position.summary).toBeNull();
+      }
+    });
+
+    it('přesné repro: obnovený FLAT status s časově platným dokladem, trusted:false, statusFresh:false, worker seq 10, REST seq 9 → unavailable', () => {
+      const out = projectLiveChartExposure(restRead(9), flat(true), NOW - 1_000, NOW, owners,
+        { trusted: false, statusFresh: false, lastWorkerShownSeq: new Map([[100, 10], [200, 10]]) });
+      expect(out.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
+    });
+
+    it('dvě projekce po sobě: čerstvý stav (zobrazen, evidence v modulu) → status zestárne → starší REST = unavailable', () => {
+      resetTradovateClientReadSeqForTests(20);
+      const first = projectLiveChartExposure(restRead(19), status(), NOW - 1_000, NOW, owners,
+        { trusted: true, statusFresh: true, lastWorkerShownSeq: tradovateWorkerShownSeq() });
+      expect(first.workerShown).toEqual(expect.arrayContaining([100, 200]));
+      // Jako hook po renderu.
+      noteTradovateWorkerShown(first.workerShown, 20);
+      const stale = projectLiveChartExposure(restRead(19), status(), NOW - 20_000, NOW, owners,
+        { trusted: true, statusFresh: false, lastWorkerShownSeq: tradovateWorkerShownSeq() });
+      expect(stale.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
+      const newer = projectLiveChartExposure(restRead(21), status(), NOW - 20_000, NOW, owners,
+        { trusted: true, statusFresh: false, lastWorkerShownSeq: tradovateWorkerShownSeq() });
+      expect(newer.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('empty');
+      resetTradovateClientReadSeqForTests();
+    });
+
+    it('doklad starší než 8 s při trusted && statusFresh a starší REST = unavailable (doklad nic nezkrátí)', () => {
+      const out = projectLiveChartExposure(restRead(9), status({ proof: true }), NOW - 8_001, NOW, owners,
+        { trusted: true, statusFresh: true, lastWorkerShownSeq: new Map([[100, 10], [200, 10]]) });
+      const leader = out.data!.accounts.find(item => item.id === 100)!;
+      expect(leader.readState?.displayStreamCoverage).toBeUndefined();
+      expect(leader.readState?.positions.availability).toBe('unavailable');
+      expect(out.workerShown).toEqual([]);
+    });
+
+    it('plot je samostatný první krok: bez statusu workeru vůbec (null) platí taky', () => {
+      const out = projectLiveChartExposure(restRead(9), null, null, NOW, owners,
+        { trusted: true, statusFresh: true, lastWorkerShownSeq: new Map([[100, 10]]) });
+      expect(out.data!.accounts.find(item => item.id === 100)!.readState?.positions.availability).toBe('unavailable');
+      expect(out.data!.accounts.find(item => item.id === 200)!.readState?.positions.availability).toBe('empty');
+    });
+  });
+
   it('repro Codex P1: worker zobrazen při seq 10, REST čtení seq 9 = „unavailable“, ne „empty“ — na VŠECH cestách vč. obnovené cache', () => {
     const shown = new Map([[100, 10], [200, 10]]);
     for (const [label, input, current] of [

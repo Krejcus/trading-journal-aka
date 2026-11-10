@@ -288,6 +288,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-10 — LIVE graf: čtvrté kolo — sekvenční plot jako první krok projekce (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
+
+- Codex k `77423f7`: P2 OK, P1 přetrvával u cache s dokladem kontinuity. `overlayWorkerExposure`
+  běžel před kontrolou `trusted` a účet s dokladem se vrátil dřív, než se uplatnil plot.
+  Obnovený flat status s platným dokladem (seq 10) a REST seq 9 tak dal `empty`.
+- **Strukturní oprava** v `projectLiveChartExposure`, tři pevné kroky:
+  1. `guardStaleRestReads`: sekvenční plot nad REST daty, vždy a jako první;
+  2. stav workeru jen při `trusted && statusFresh`, jinak se vrátí ohlídaný REST a nic se
+     neeviduje jako zobrazené;
+  3. overlay: nejdřív účty s dokladem, pak známé účty bez dokladu.
+- Testy: tabulka trusted × statusFresh × s/bez dokladu × worker short/flat × REST seq 9/11
+  (32 řádků), přesné repro a plot bez statusu workeru. Na předchozím kódu padá 13 řádků.
+- `arm-config-conflict` (server ho umí hodit až po insertu) na seznamu „neodesláno“ není;
+  výslovný test hlídá i ostatní 409 kódy mimo seznam.
+- copier-design-critic: „OK s výhradami“, nic neblokuje. Plot jde opravdu první a na stav
+  workeru mimo něj nevede žádná cesta. Změna je jen v grafu: desk i deník volají
+  `overlayWorkerExposure` beze změny. Zapracováno: dva zastaralé komentáře a dva navržené
+  testy (dvě projekce po sobě přes evidenci v modulu; doklad starší 8 s při čerstvém statusu).
+- Ověření: tsc 0 nových chyb proti baseline. Celá sada 8630 testů prošla, 3 selhaly — tytéž
+  jako na čistém `main` f4a9d6b. Build prošel. Na DEMO NEOVĚŘENO.
+
 ### 2026-11-10 — LIVE graf: třetí kolo oprav po review Codexu (Claude, větev `claude/chart-worker-projection-20261110`, NENASAZENO)
 
 - Codex k `f9e286f`: merge NE.
