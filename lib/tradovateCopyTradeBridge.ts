@@ -89,6 +89,15 @@ export function tradovateCopyTradeSnapshot(
         unrealizedPnl: 0,
         updatedAt: position.timestamp,
       }));
+    // Účet bez otevřené pozice nemá otevřený P&L. Číslo v zůstatku pochází ze čtení zůstatků,
+    // které po zavření obchodu chodí později než stav pozic (11. 11. 2026: po zavření svítilo
+    // −16,50 na účet ještě minutu). Když čtení pozic říká flat a není starší než to číslo,
+    // ukazuje se nula s časem čtení pozic. Jen zobrazení; risk workera se tím nemění.
+    const pnlAt = Date.parse(account.balance.openPnlAsOf ?? readState.cashAsOf ?? '');
+    const positionsAt = Date.parse(readState.positionsAsOf ?? '');
+    const flatByPositions = positions.length === 0 && hasCompleteTradovateRead(readState.positions)
+      && Number.isFinite(positionsAt) && (!Number.isFinite(pnlAt) || positionsAt >= pnlAt)
+      && account.balance.openPnL != null && account.balance.openPnL !== 0;
     return {
       id: account.id,
       riskDisplayConfigKey: JSON.stringify([profile?.accountSize, profile?.accountType,
@@ -116,10 +125,10 @@ export function tradovateCopyTradeSnapshot(
       dailyPnlAvailable: currentTradeDate != null
         && account.daily.some(day => day.tradeDate === currentTradeDate && day.reportedRealizedPnl != null),
       weekRealizedPnl: account.balance.weekRealizedPnL ?? 0,
-      unrealizedPnl: account.balance.openPnL ?? 0,
-      unrealizedPnlSource: account.balance.openPnlSource
+      unrealizedPnl: flatByPositions ? 0 : account.balance.openPnL ?? 0,
+      unrealizedPnlSource: flatByPositions ? 'estimated' : account.balance.openPnlSource
         ?? (account.balance.openPnL != null && hasCompleteTradovateRead(account.balance.coverage) ? 'broker' : 'stale'),
-      unrealizedPnlUpdatedAt: account.balance.openPnlAsOf ?? readState.cashAsOf,
+      unrealizedPnlUpdatedAt: flatByPositions ? readState.positionsAsOf : account.balance.openPnlAsOf ?? readState.cashAsOf,
       ...(account.balance.openPnlBehindPosition ? { unrealizedPnlBehindPosition: true } : {}),
       ...(readState.displayStreamCoverage ? { displayStreamCoverage: readState.displayStreamCoverage } : {}),
       ...(readState.displayProjection ? { displayProjection: readState.displayProjection } : {}),

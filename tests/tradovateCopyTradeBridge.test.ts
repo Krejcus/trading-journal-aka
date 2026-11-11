@@ -34,6 +34,36 @@ const profiles = [{
 }] as TradovateAccountProfile[];
 
 describe('Tradovate copy-trade bridge', () => {
+  it('účet bez pozice neukazuje zastaralý otevřený P&L ze staršího čtení zůstatku', () => {
+    const flat = structuredClone(data);
+    flat.accounts[0].positions = [];
+    flat.accounts[0].netPositionCount = 0;
+    flat.accounts[0].balance.openPnL = -16.5;
+    // Čtení zůstatku je starší než čtení pozic (stav po zavření obchodu).
+    flat.accounts[0].balance.openPnlAsOf = '2026-08-15T07:59:00.000Z';
+    const account = tradovateCopyTradeSnapshot(flat, profiles).accounts[0];
+    expect(account.unrealizedPnl).toBe(0);
+    expect(account.unrealizedPnlSource).toBe('estimated');
+    expect(account.unrealizedPnlUpdatedAt).toBe('2026-08-15T08:00:00.000Z');
+  });
+
+  it('novější čtení zůstatku, otevřená pozice nebo neúplné čtení pozic číslo nemění', () => {
+    const newerCash = structuredClone(data);
+    newerCash.accounts[0].positions = [];
+    newerCash.accounts[0].balance.openPnL = -16.5;
+    newerCash.accounts[0].balance.openPnlAsOf = '2026-08-15T08:00:30.000Z';
+    expect(tradovateCopyTradeSnapshot(newerCash, profiles).accounts[0].unrealizedPnl).toBe(-16.5);
+
+    expect(tradovateCopyTradeSnapshot(data, profiles).accounts[0].unrealizedPnl).toBe(-100);
+
+    const unknownPositions = structuredClone(data);
+    unknownPositions.accounts[0].positions = [];
+    unknownPositions.accounts[0].balance.openPnL = -16.5;
+    unknownPositions.accounts[0].balance.openPnlAsOf = '2026-08-15T07:59:00.000Z';
+    unknownPositions.coverage.positions = { availability: 'unavailable', count: 0, httpStatus: 503 } as never;
+    expect(tradovateCopyTradeSnapshot(unknownPositions, profiles).accounts[0].unrealizedPnl).toBe(-16.5);
+  });
+
   it('distinguishes a known plan without DLL from a missing limit or an unsupported live plan', () => {
     const withoutDll = structuredClone(data);
     withoutDll.accounts[0].risk.dailyLossAutoLiq = null;
