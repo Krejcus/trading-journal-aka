@@ -9,7 +9,9 @@ import { monotonicGrantDeadline, isTradovateControlSnapshot, parseTradovateReque
 export class TradovateRequestControlError extends TradovateRemoteControlError {
   readonly status = 503;
   constructor(code: string, retryAfterMs: number | null = null,
-    snapshot?: TradovateRequestControlSnapshot, public readonly notDispatched = true) { super(code, retryAfterMs, snapshot); this.name = 'TradovateRequestControlError'; }
+    snapshot?: TradovateRequestControlSnapshot, public readonly notDispatched = true,
+    /** Odmítnuto poradní kontrolou PŘED jakoukoli rezervací: pokus nic nestál. Jen nápověda pro tempo opakování klienta. */
+    public readonly precheck = false) { super(code, retryAfterMs, snapshot); this.name = 'TradovateRequestControlError'; }
 }
 
 type RpcResult = { allowed?: boolean; code?: string; retryAfterMs?: number; snapshot?: TradovateRequestControlSnapshot; grant?: TradovateRequestGrant };
@@ -97,7 +99,7 @@ export async function assertTradovateBackgroundCapacity(context: ServerTradovate
   const overHour = state.backgroundReservedHour + need > POLICY.backgroundHour
     || (state.totalReservedHour ?? 0) + need > POLICY.totalSoftHour;
   if (overMinute || overHour) {
-    throw new TradovateRequestControlError('tradovate-request-budget', overHour ? 60_000 : BACKGROUND_CAPACITY_RETRY_MS, state);
+    throw new TradovateRequestControlError('tradovate-request-budget', overHour ? 60_000 : BACKGROUND_CAPACITY_RETRY_MS, state, true, true);
   }
 }
 

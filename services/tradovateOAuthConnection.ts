@@ -135,6 +135,8 @@ export class TradovateRequestError extends Error {
     public readonly retryAfterMs: number | null = null,
     /** Strojový kód z těla odpovědi (`body.error`, např. `copier-relay-entry-busy`); null = žádný. */
     public readonly code: string | null = null,
+    /** Server odmítl předem, bez jediné rezervace u brokera (`body.precheck`): pokus nic nestál. */
+    public readonly precheck = false,
   ) {
     super(message);
     this.name = 'TradovateRequestError';
@@ -234,7 +236,7 @@ const authenticatedRequest = async <T>(
     perfDuration(`net:${perfName}:fetch`, fetchMs);
     perfServerTiming(perfName, serverTiming);
     try { observeTiming?.({ authMs, fetchMs, serverTiming: serverTimingValues(serverTiming) }); } catch { /* diagnostika */ }
-    const body = await response.json().catch(() => ({})) as { error?: string; retryAfterMs?: number } & T;
+    const body = await response.json().catch(() => ({})) as { error?: string; retryAfterMs?: number; precheck?: boolean } & T;
     const retryAfterMs = typeof body.retryAfterMs === 'number' ? body.retryAfterMs : null;
     finishTradovateApiRequest(telemetry, response.status, retryAfterMs);
     completed = true;
@@ -244,6 +246,7 @@ const authenticatedRequest = async <T>(
         response.status,
         retryAfterMs,
         typeof body.error === 'string' && body.error ? body.error : null,
+        body.precheck === true,
       );
     }
     return body;

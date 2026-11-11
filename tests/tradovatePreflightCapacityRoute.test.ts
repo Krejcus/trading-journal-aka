@@ -46,7 +46,7 @@ describe('preflight: poradní kontrola kapacity v trase', () => {
     state.minute = 38;
     const result = await call({ connectionId: 'c1', mode: 'full', historicalProbe: false });
     expect(result.status).toBe(503);
-    expect(result.body).toEqual({ error: 'tradovate-request-budget', retryAfterMs: 20_000, notDispatched: true, captchaRequired: false });
+    expect(result.body).toEqual({ error: 'tradovate-request-budget', retryAfterMs: 20_000, notDispatched: true, captchaRequired: false, precheck: true });
     expect(accountData.loadTradovateAccountData).not.toHaveBeenCalled();
     expect(state.modes).toEqual(['read']);
   });
@@ -75,6 +75,8 @@ describe('preflight: poradní kontrola kapacity v trase', () => {
     expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(1);
     expect(result.status).toBe(503);
     expect(result.body.error).toBe('tradovate-request-budget');
+    // Společné seznamy už běžely: odmítnutí zdarma není, příznak se neposílá.
+    expect(result.body.precheck).toBeUndefined();
   });
 
   it('cooldown nechává rozhodnout původní cestu: kontrola nemlží kódem rozpočtu', async () => {

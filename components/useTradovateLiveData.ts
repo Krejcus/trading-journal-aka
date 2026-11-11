@@ -183,6 +183,29 @@ export const tradovateClientBackoffMs = (retryAfterMs: number | null | undefined
 export const tradovateFullRefreshBackoffMs = (failureCount: number): number =>
   Math.min(FULL_REFRESH_RETRY_MAX_MS, FULL_REFRESH_RETRY_BASE_MS * 2 ** Math.max(0, failureCount - 1));
 
+/** Rozptyl opakování po bezplatném odmítnutí, ať se dvě appky nedrží ve stejné fázi. */
+const PRECHECK_RETRY_JITTER_MS = 5_000;
+
+/**
+ * Kdy znovu zkusit úplné načtení připojení. Běžné selhání prodlužuje odstup (15 s → 10 min).
+ * Bezplatné předběžné odmítnutí rozpočtem (`precheck`) nic nestálo a nic neblokuje: zkouší se
+ * stálým tempem hned po odkladu od serveru, počet selhání se nezvyšuje — jinak by „Načítání
+ * omezeno rozpočtem“ svítilo minuty po uvolnění rozpočtu (11. 11. 2026). Jen zobrazení.
+ */
+export function tradovateFullRefreshRetry(options: {
+  now: number; previousFailureCount: number; deferralUntil: number; reason: unknown; random?: number;
+}): { retryAt: number; failureCount: number } {
+  const free = options.reason instanceof TradovateRequestError && options.reason.precheck
+    && options.reason.status === 503 && options.reason.message === 'tradovate-request-budget';
+  if (free) {
+    const jitter = Math.round(Math.min(1, Math.max(0, options.random ?? Math.random())) * PRECHECK_RETRY_JITTER_MS);
+    return { failureCount: options.previousFailureCount,
+      retryAt: Math.max(options.now + FULL_REFRESH_RETRY_BASE_MS, options.deferralUntil) + jitter };
+  }
+  const failureCount = options.previousFailureCount + 1;
+  return { failureCount, retryAt: Math.max(options.now + tradovateFullRefreshBackoffMs(failureCount), options.deferralUntil) };
+}
+
 export const tradovateForegroundRefreshIds = (
   connectionIds: readonly string[],
   states: Readonly<Record<string, TradovateConnectionEnrichmentState>>,
@@ -515,9 +538,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     })));
     const markFailure = (connectionId: string, reason: unknown) => updateEnrichment(current => {
       const previous = current[connectionId] ?? emptyEnrichment();
-      const failureCount = previous.failureCount + 1;
       const rateLimitUntil = softReadDeferralsRef.current.resumeAt(connectionId, rateLimitUntilByConnectionRef.current[connectionId] ?? 0);
-      const retryAt = Math.max(Date.now() + tradovateFullRefreshBackoffMs(failureCount), rateLimitUntil);
+      const { failureCount, retryAt } = tradovateFullRefreshRetry({
+        now: Date.now(), previousFailureCount: previous.failureCount, deferralUntil: rateLimitUntil, reason });
       return {
         ...current,
         [connectionId]: {

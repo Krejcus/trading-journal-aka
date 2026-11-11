@@ -118,7 +118,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         detail: bootstrap ? 'bootstrap' : 'full',
         beforeAccountReads: async accountCount => {
           rememberAccountCount(`${userId}:${connectionId}`, accountCount);
-          await assertTradovateBackgroundCapacity(requestContext, cost.perAccount * accountCount);
+          try { await assertTradovateBackgroundCapacity(requestContext, cost.perAccount * accountCount); }
+          catch (error) {
+            // Společné seznamy už jednotky spotřebovaly: tohle odmítnutí zdarma není, klient má brzdit jako dřív.
+            if (error instanceof TradovateRequestControlError && error.precheck) {
+              throw new TradovateRequestControlError(error.code, error.retryAfterMs, error.snapshot, error.notDispatched, false);
+            }
+            throw error;
+          }
         },
       }),
       bootstrap
@@ -143,6 +150,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,
+      // Bezplatné předběžné odmítnutí: klient smí zkoušet stálým tempem, nic se tím nespotřebuje.
+      ...(error.precheck ? { precheck: true } : {}),
     });
     if (error instanceof TradovateAccountDataError && error.status === 429) {
       const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 3_600_000);
