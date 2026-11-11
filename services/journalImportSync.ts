@@ -14,6 +14,26 @@ export interface JournalConnectionSync {
   reason?: string;
 }
 export interface JournalSyncReport { connections: JournalConnectionSync[]; completedAt: number }
+
+/**
+ * Navazující kolo, když server hlásí „zpracovávám“. Dokud zpracování postupuje, ptá se klient
+ * po 2 s jako dřív. Když stojí na místě (jiný importér drží zámek, připojení se nedá
+ * zpracovat), odstup roste až na 30 s: do 11. 11. 2026 se appka ptala každé 2 s bez konce
+ * a s každým kolem znovu posílala i připojení, které vrací 409.
+ */
+export const JOURNAL_PROCESSING_RETRY_MS = [2_000, 2_000, 4_000, 8_000, 15_000, 30_000] as const;
+
+/** Otisk postupu: mění se, jen když se zpracování někam posunulo. */
+export function journalProcessingSignature(report: JournalSyncReport | null | undefined): string {
+  return JSON.stringify((report?.connections ?? []).map(row => [row.connectionId, row.state, row.through, row.targetThrough ?? null])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
+}
+
+/** `stalledRounds` = kolik kol po sobě se otisk nezměnil (0 = právě se posunul). */
+export function journalProcessingRetryDelay(stalledRounds: number): number {
+  const index = Number.isFinite(stalledRounds) ? Math.max(0, Math.floor(stalledRounds)) : 0;
+  return JOURNAL_PROCESSING_RETRY_MS[Math.min(index, JOURNAL_PROCESSING_RETRY_MS.length - 1)];
+}
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 

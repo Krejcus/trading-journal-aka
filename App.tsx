@@ -53,7 +53,7 @@ import { adjustmentTotal, getFinancialAdjustments } from './services/tradingInci
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
 import { useTradovateLiveData } from './components/useTradovateLiveData';
 import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
-import { syncJournalConnections, mergeImportedJournalTrades, type JournalSyncReport } from './services/journalImportSync';
+import { syncJournalConnections, mergeImportedJournalTrades, journalProcessingRetryDelay, journalProcessingSignature, type JournalSyncReport } from './services/journalImportSync';
 import { mergeTradeAnalytics, type TradeAnalytics } from './lib/tradeAnalyticsMerge';
 import { mergeDeferredAvatar } from './lib/avatarImage';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
@@ -856,6 +856,7 @@ const App: React.FC = () => {
   const [copierImportReport, setCopierImportReport] = useState<JournalSyncReport | null>(null);
   const [copierImportError, setCopierImportError] = useState(false);
   const [copierImportRunning, setCopierImportRunning] = useState(false);
+  const journalProcessingStallRef = useRef<{ signature: string; rounds: number; completedAt?: number }>({ signature: '', rounds: 0 });
   const copierImportAbortRef = useRef<AbortController | null>(null);
   const copierRowsRef = useRef(trades);
   copierRowsRef.current = trades;
@@ -932,6 +933,7 @@ const App: React.FC = () => {
     copierJournalSyncBusyRef.current = false;
     copierJournalLastSyncRef.current = 0;
     journalVerifiedReadsRef.current = new Map();
+    journalProcessingStallRef.current = { signature: '', rounds: 0 };
     setCopierImportReport(null); setCopierImportError(false); setCopierImportRunning(false);
     return () => { copierImportAbortRef.current?.abort(); };
   }, [session?.user?.id]);
@@ -1383,12 +1385,23 @@ const App: React.FC = () => {
   // A failed request stops this chain; reconnect/visibility or manual retry can resume it.
   useEffect(() => {
     if (!isInitialLoadDone || !session?.user?.id || copierImportRunning || copierImportError
-      || !copierImportReport?.connections.some(row => row.state === 'processing')) return;
+      || !copierImportReport?.connections.some(row => row.state === 'processing')) {
+      if (!copierImportRunning) journalProcessingStallRef.current = { signature: '', rounds: 0 };
+      return;
+    }
+    // Postup = rychlé navázání; stání na místě (zámek jiného importéra, 409) odstup prodlužuje.
+    const signature = journalProcessingSignature(copierImportReport);
+    const stall = journalProcessingStallRef.current;
+    if (stall.completedAt !== copierImportReport.completedAt) {
+      journalProcessingStallRef.current = { signature, completedAt: copierImportReport.completedAt,
+        rounds: stall.signature === signature ? stall.rounds + 1 : 0 };
+    }
+    const delay = journalProcessingRetryDelay(journalProcessingStallRef.current.rounds);
     let timer: number | undefined;
     const schedule = () => {
       window.clearTimeout(timer);
       if (document.visibilityState !== 'visible' || !navigator.onLine) return;
-      timer = window.setTimeout(() => { void runCopierJournalSync(true); }, 2000);
+      timer = window.setTimeout(() => { void runCopierJournalSync(true); }, delay);
     };
     schedule();
     window.addEventListener('online', schedule);
