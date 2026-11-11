@@ -1,7 +1,7 @@
 import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
-import { dueFullTickConnections } from '../lib/tradovateFlatTickCadence';
+import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS } from '../lib/tradovateFlatTickCadence';
 import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -1011,6 +1011,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const fullTickConnections = dueFullTickConnections({
           connectionIds: uncoveredConnections, hasOpenPosition: connectionHasPosition,
           lastFlatTickAt: flatTickAtRef.current, now: Date.now(), flatIntervalMs: idleDelay,
+          // Další plné čtení: s pozicí bez ručení workeru nejdřív za 6 s, jinak v příštím kole smyčky.
+          nextRoundMs: FULL_TICK_ROUND_COST_MS + (hasOpenPosition ? ACTIVE_PNL_INTERVAL_MS
+            : tradovatePositionPollDelay(enabled, journalFocus, Object.values(connectionDataRef.current)
+              .some(dataset => dataset.accounts.some(account => account.netPositionCount > 0)))),
         });
         // Na pozadí vždy plný tick: jde o čerstvost pozic a příkazů, ne o P&L.
         const runFullTick = background || !hasOpenPosition

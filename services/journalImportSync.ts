@@ -23,9 +23,11 @@ export interface JournalSyncReport { connections: JournalConnectionSync[]; compl
  */
 export const JOURNAL_PROCESSING_RETRY_MS = [2_000, 2_000, 4_000, 8_000, 15_000, 30_000] as const;
 
-/** Otisk postupu: mění se, jen když se zpracování někam posunulo. */
+/** Otisk postupu zpracovávaných připojení: mění se, jen když se zpracování někam posunulo.
+ * Hotová připojení do něj nepatří — nový fill na jiném připojení není postup toho stojícího. */
 export function journalProcessingSignature(report: JournalSyncReport | null | undefined): string {
-  return JSON.stringify((report?.connections ?? []).map(row => [row.connectionId, row.state, row.through, row.targetThrough ?? null])
+  return JSON.stringify((report?.connections ?? []).filter(row => row.state === 'processing')
+    .map(row => [row.connectionId, row.through, row.targetThrough ?? null])
     .sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
 }
 

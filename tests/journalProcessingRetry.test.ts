@@ -18,12 +18,15 @@ describe('navazující kolo importu deníku', () => {
     for (const rounds of [-3, Number.NaN, Number.POSITIVE_INFINITY]) expect(journalProcessingRetryDelay(rounds)).toBe(2_000);
   });
 
-  it('otisk se mění jen s postupem, ne s časem dokončení ani pořadím připojení', () => {
+  it('otisk se mění jen s postupem zpracovávaných připojení', () => {
     const stalled = report([['b', 'processing', 0, 0], ['a', 'unavailable', 0]], 1);
     expect(journalProcessingSignature(report([['a', 'unavailable', 0], ['b', 'processing', 0, 0]], 2))).toBe(journalProcessingSignature(stalled));
     expect(journalProcessingSignature(report([['b', 'processing', 10, 40], ['a', 'unavailable', 0]]))).not.toBe(journalProcessingSignature(stalled));
     expect(journalProcessingSignature(report([['b', 'processing', 10, 40]]))).not.toBe(journalProcessingSignature(report([['b', 'processing', 20, 40]])));
-    expect(journalProcessingSignature(report([['b', 'ready', 0]]))).not.toBe(journalProcessingSignature(report([['b', 'processing', 0, 0]])));
+    // Nový fill na hotovém připojení není postup toho stojícího.
+    expect(journalProcessingSignature(report([['b', 'processing', 0, 0], ['c', 'ready', 5]])))
+      .toBe(journalProcessingSignature(report([['b', 'processing', 0, 0], ['c', 'ready', 6]])));
+    expect(journalProcessingSignature(report([['b', 'ready', 0]]))).toBe('[]');
     expect(journalProcessingSignature(null)).toBe('[]');
   });
 

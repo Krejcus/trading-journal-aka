@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dueFullTickConnections } from '../lib/tradovateFlatTickCadence';
+import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS } from '../lib/tradovateFlatTickCadence';
 import { tradovatePositionPollDelay } from '../components/useTradovateLiveData';
 import { LIVE_READ_MAX_AGE_MS } from '../lib/liveReadFreshness';
 import { LIVE_CHART_REST_CONFIRM_MAX_AGE_MS } from '../lib/liveChartExposureProjection';
@@ -9,52 +9,76 @@ const now = 1_800_000_000_000;
 const idle = tradovatePositionPollDelay(true, 'off', false);
 const fast = tradovatePositionPollDelay(true, 'off', true);
 
+/** Deset minut smyčky s koly plného čtení po `periodMs`; vrací rozestupy čtení prázdného připojení. */
+const flatReadGaps = (periodMs: number, nextRoundMs: number): number[] => {
+  const lastFlatTickAt: Record<string, number> = { side: now };
+  const gaps: number[] = [];
+  for (let at = now + periodMs; at <= now + 600_000; at += periodMs) {
+    const due = dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => false, lastFlatTickAt, flatIntervalMs: idle, nextRoundMs, now: at });
+    if (due.length) { gaps.push(at - lastFlatTickAt.side); lastFlatTickAt.side = at; }
+  }
+  return gaps;
+};
+
 describe('tempo čtení prázdného připojení', () => {
-  it('pozice na jiném připojení nerozběhne prázdné připojení po 3 s', () => {
-    const lastFlatTickAt: Record<string, number> = { side: now };
-    let reads = 0;
-    // Minuta smyčky v rychlém tempu (pozice jinde): prázdné připojení se čte v tempu klidu.
-    for (let at = now + fast; at <= now + 60_000; at += fast) {
-      const due = dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => false, lastFlatTickAt, flatIntervalMs: idle, now: at });
-      if (due.length) { reads += 1; lastFlatTickAt.side = at; }
+  it('pozice na účtech s ručením workeru nerozběhne prázdné připojení po 3 s', () => {
+    // Smyčka po 3 s (+ doba čtení), plné čtení v každém kole.
+    for (const period of [fast, fast + 300, fast + 1_000]) {
+      const gaps = flatReadGaps(period, fast + FULL_TICK_ROUND_COST_MS);
+      expect(Math.min(...gaps)).toBeGreaterThanOrEqual(10_000);
+      expect(Math.max(...gaps)).toBeLessThanOrEqual(idle);
+      // Dřív 20 čtení za minutu; teď nejvýš 6.
+      expect(gaps.length).toBeLessThanOrEqual(60);
     }
-    expect(reads).toBe(60_000 / idle);
-    expect(reads).toBeLessThan(60_000 / fast / 4);
   });
 
-  it('připojení s pozicí se čte v každém kole, prázdné jen po svém intervalu', () => {
+  it('s pozicí bez ručení workeru (plné čtení po 6–8 s) rozestup nepřekročí interval klidu', () => {
+    for (let period = 6_000; period <= 8_000; period += 250) {
+      const gaps = flatReadGaps(period, 6_000 + FULL_TICK_ROUND_COST_MS);
+      expect(Math.max(...gaps)).toBeLessThanOrEqual(idle + 1_000);
+      expect(Math.max(...gaps)).toBeLessThan(LIVE_CHART_REST_CONFIRM_MAX_AGE_MS);
+      // Nejhůř každé kolo plného čtení (tedy po 6–8 s), nikdy častěji.
+      expect(Math.min(...gaps)).toBeGreaterThanOrEqual(period);
+    }
+  });
+
+  it('připojení s pozicí se čte v každém kole, prázdné ne', () => {
     expect(dueFullTickConnections({
       connectionIds: ['held', 'side'], hasOpenPosition: id => id === 'held',
-      lastFlatTickAt: { held: now, side: now }, flatIntervalMs: idle, now: now + fast,
+      lastFlatTickAt: { held: now, side: now }, flatIntervalMs: idle, nextRoundMs: fast + FULL_TICK_ROUND_COST_MS, now: now + fast,
     })).toEqual(['held']);
   });
 
   it('když je prázdné všechno, čte se každé kolo jako dřív', () => {
     expect(dueFullTickConnections({ connectionIds: ['a', 'b'], hasOpenPosition: () => false,
-      lastFlatTickAt: { a: now, b: now }, flatIntervalMs: idle, now: now + idle })).toEqual(['a', 'b']);
+      lastFlatTickAt: { a: now, b: now }, flatIntervalMs: idle, nextRoundMs: idle + FULL_TICK_ROUND_COST_MS, now: now + idle })).toEqual(['a', 'b']);
+    expect(flatReadGaps(idle, idle + FULL_TICK_ROUND_COST_MS).every(gap => gap === idle)).toBe(true);
   });
 
   it('neznámý, nečíselný nebo budoucí čas posledního čtení = číst hned', () => {
     for (const last of [undefined, Number.NaN, now + 60_000]) {
       expect(dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => false,
-        lastFlatTickAt: { side: last }, flatIntervalMs: idle, now })).toEqual(['side']);
+        lastFlatTickAt: { side: last }, flatIntervalMs: idle, nextRoundMs: 0, now })).toEqual(['side']);
     }
   });
 
   it('časovač probuzený o chlup dřív kolo nepřeskočí', () => {
     expect(dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => false,
-      lastFlatTickAt: { side: now }, flatIntervalMs: idle, now: now + idle - 300 })).toEqual(['side']);
+      lastFlatTickAt: { side: now }, flatIntervalMs: idle, nextRoundMs: 0, now: now + idle - 300 })).toEqual(['side']);
   });
 
-  it('tempo klidu se s rezervou vejde do oken, která na čerstvém čtení stojí', () => {
-    // Nejhorší rozestup v rychlé smyčce je interval + jedno kolo.
-    expect(idle + fast).toBeLessThan(LIVE_READ_MAX_AGE_MS);
-    expect(idle + fast).toBeLessThan(LIVE_CHART_REST_CONFIRM_MAX_AGE_MS);
+  it('interval klidu se vejde do oken, která na čerstvém čtení stojí', () => {
+    expect(idle).toBeLessThan(LIVE_CHART_REST_CONFIRM_MAX_AGE_MS);
+    expect(2 * idle).toBeLessThan(LIVE_READ_MAX_AGE_MS);
   });
 
   it('smyčka čtení v appce používá vlastní tempo prázdných připojení', () => {
     const source = readFileSync(new URL('../components/useTradovateLiveData.ts', import.meta.url), 'utf8');
     expect(source).toMatch(/const fullTickConnections = dueFullTickConnections\(\{[\s\S]{0,300}flatIntervalMs: idleDelay/);
-    expect(source).toContain('flatTickAtRef.current[connectionId] = Date.now();');
+    expect(source).toMatch(/nextRoundMs: FULL_TICK_ROUND_COST_MS \+ \(hasOpenPosition \? ACTIVE_PNL_INTERVAL_MS/);
+    // Razítko až po kontrole platnosti čtení; návrat do popředí a změna uživatele ho mažou.
+    expect(source).toMatch(/if \(!readIsCurrent\(\)\) return;\s*\/\/[^\n]*\n\s*flatTickAtRef\.current\[connectionId\] = Date\.now\(\);/);
+    expect(source.match(/flatTickAtRef\.current = \{\};/g)).toHaveLength(2);
+    expect(source).toContain('const hasOpenPosition = uncoveredConnections.some(connectionHasPosition);');
   });
 });

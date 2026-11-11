@@ -13,10 +13,15 @@
 
 /** Časovač se budí s rozptylem; čtení o chlup dřív nesmí přeskočit celé kolo. */
 const TIMER_SLACK_MS = 500;
+/** Rezerva na dobu samotného čtení při odhadu, kdy přijde další kolo plného čtení. */
+export const FULL_TICK_ROUND_COST_MS = 1_500;
 
 /**
  * Která připojení se v tomto kole čtou plným tickem. Připojení s pozicí vždy (jeho tempo
- * řídí smyčka); prázdné jen po uplynutí intervalu od posledního použitého čtení. Selhané čtení
+ * řídí smyčka); prázdné tak, aby rozestup použitých čtení nepřekročil interval: čte se, jakmile by
+ * čekání na další kolo plného čtení (`nextRoundMs`) interval přetáhlo. Kola plného čtení jsou
+ * s pozicí na připojení bez ručení workeru po ~7 s, takže čisté „až po 15 s“ by dalo až 21 s —
+ * víc než 20s okno potvrzení pozic v grafu (review 5fa36aeb). Selhané čtení
  * čas neposouvá a zkusí se v dalším kole jako dřív (odmítnutí rozpočtem a 429 mají vlastní
  * odklad jinde). Neznámý čas posledního čtení = číst hned.
  */
@@ -25,12 +30,15 @@ export function dueFullTickConnections(options: {
   hasOpenPosition: (connectionId: string) => boolean;
   lastFlatTickAt: Readonly<Record<string, number | undefined>>;
   flatIntervalMs: number;
+  /** Odhad, za jak dlouho smyčka nabídne další plné čtení (raději delší: čte se pak dřív). */
+  nextRoundMs: number;
   now: number;
 }): string[] {
   return options.connectionIds.filter(connectionId => {
     if (options.hasOpenPosition(connectionId)) return true;
     const last = options.lastFlatTickAt[connectionId];
     return last == null || !Number.isFinite(last) || last > options.now
-      || options.now - last >= options.flatIntervalMs - TIMER_SLACK_MS;
+      || options.now - last >= options.flatIntervalMs - TIMER_SLACK_MS
+      || options.now - last + Math.max(0, options.nextRoundMs) > options.flatIntervalMs;
   });
 }
