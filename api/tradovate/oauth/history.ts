@@ -1,4 +1,4 @@
-import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
+import { assertTradovateBackgroundCapacity, TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -12,6 +12,9 @@ import { requestTradovatePerformanceReport } from '../../../server/tradovateHist
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
 const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+
+/** Odhad ceny jednoho čtení historie pro poradní kontrolu: krátké čtení účtů (4 + až 6 účtů) a report. */
+const HISTORY_READ_COST = 12;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -29,16 +32,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!connectionId || !Number.isSafeInteger(accountId) || !datePattern.test(startDate) || !datePattern.test(endDate)) {
       return res.status(400).json({ error: 'invalid-history-request' });
     }
-    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
-      db: createTradovateAdminClient(config),
+    const db = createTradovateAdminClient(config);
+    const { accessToken, apiHosts, fetchImpl, brokerUserId } = await getValidTradovateAccessToken({
+      db,
       config,
       userId,
       connectionId,
     });
+    // Poradní kontrola kapacity před čtením (11. 11. 2026): krátké čtení účtů + report.
+    await assertTradovateBackgroundCapacity({ db, userId, connectionId, brokerUserId }, HISTORY_READ_COST);
+    // Vlastnictví účtu stačí ověřit krátkým čtením (4 + počet účtů dotazů); plné čtení
+    // (9 + 4× počet účtů) tu jen zbytečně ubíralo z rozpočtu sdíleného s kopírkou.
     const accounts = await loadTradovateAccountData({
       baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
       accessToken,
       fetchImpl,
+      detail: 'bootstrap',
     });
     const account = accounts.accounts.find(candidate => candidate.id === accountId);
     if (!account) {
@@ -59,6 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,
+      ...(error.precheck ? { precheck: true } : {}),
     });
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') return res.status(401).json({ error: message });
