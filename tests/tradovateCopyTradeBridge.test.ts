@@ -61,6 +61,14 @@ describe('Tradovate copy-trade bridge', () => {
     unknownPositions.accounts[0].balance.openPnL = -16.5;
     unknownPositions.accounts[0].balance.openPnlAsOf = '2026-08-15T07:59:00.000Z';
     unknownPositions.coverage.positions = { availability: 'unavailable', count: 0, httpStatus: 503 } as never;
+    const unverified = structuredClone(data);
+    unverified.accounts[0].positions = [];
+    unverified.accounts[0].balance.openPnL = -16.5;
+    unverified.accounts[0].balance.openPnlAsOf = '2026-08-15T07:59:00.000Z';
+    (unverified.accounts[0] as { readState?: unknown }).readState = { requestedAt: '2026-08-15T08:00:00.000Z',
+      positions: coverage, orders: coverage, positionsAsOf: '2026-08-15T08:00:00.000Z', ordersAsOf: '2026-08-15T08:00:00.000Z',
+      cashAsOf: '2026-08-15T07:59:00.000Z', dailyAsOf: null, displayProjection: 'worker-unverified' };
+    expect(tradovateCopyTradeSnapshot(unverified, profiles).accounts[0].unrealizedPnl).toBe(-16.5);
     expect(tradovateCopyTradeSnapshot(unknownPositions, profiles).accounts[0].unrealizedPnl).toBe(-16.5);
   });
 

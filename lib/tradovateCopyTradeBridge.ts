@@ -95,7 +95,8 @@ export function tradovateCopyTradeSnapshot(
     // ukazuje se nula s časem čtení pozic. Jen zobrazení; risk workera se tím nemění.
     const pnlAt = Date.parse(account.balance.openPnlAsOf ?? readState.cashAsOf ?? '');
     const positionsAt = Date.parse(readState.positionsAsOf ?? '');
-    const flatByPositions = positions.length === 0 && hasCompleteTradovateRead(readState.positions)
+    // Neověřená projekce workera (bez dokladu i kontinuity) číslo od brokera nulou nepřepisuje.
+    const flatByPositions = positions.length === 0 && hasCompleteTradovateRead(readState.positions) && !readState.displayProjection
       && Number.isFinite(positionsAt) && (!Number.isFinite(pnlAt) || positionsAt >= pnlAt)
       && account.balance.openPnL != null && account.balance.openPnL !== 0;
     return {
