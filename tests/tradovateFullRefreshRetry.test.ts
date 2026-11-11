@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { tradovateFullRefreshRetry } from '../components/useTradovateLiveData';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 
@@ -38,5 +39,13 @@ describe('opakování úplného načtení připojení', () => {
     const other = new TradovateRequestError('tradovate-request-cooldown', 503, 5_000, 'tradovate-request-cooldown', true);
     const rateLimited = new TradovateRequestError('tradovate-request-budget', 429, 5_000, 'tradovate-request-budget', true);
     for (const reason of [other, rateLimited]) expect(tradovateFullRefreshRetry({ now, previousFailureCount: 1, deferralUntil: 0, reason }).failureCount).toBe(2);
+  });
+
+  it('načítání v appce bere odstup z této funkce a klient čte příznak ze serveru', () => {
+    const hook = readFileSync(new URL('../components/useTradovateLiveData.ts', import.meta.url), 'utf8');
+    expect(hook).toMatch(/const \{ failureCount, retryAt \} = tradovateFullRefreshRetry\(\{/);
+    expect(hook).not.toContain('const failureCount = previous.failureCount + 1;\n      const rateLimitUntil');
+    const client = readFileSync(new URL('../services/tradovateOAuthConnection.ts', import.meta.url), 'utf8');
+    expect(client).toContain('body.precheck === true');
   });
 });

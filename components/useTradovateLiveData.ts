@@ -563,7 +563,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           next[id] = {
             ...previous,
             pending: false,
-            retryAt: softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0) || previous.retryAt,
+            // Už naplánovaný pozdější pokus (s rozptylem) se nezkracuje.
+            retryAt: Math.max(previous.retryAt ?? 0, softReadDeferralsRef.current.resumeAt(id, rateLimitUntilByConnectionRef.current[id] ?? 0)) || previous.retryAt,
             error: previous.error ?? 'Tradovate dočasně omezuje načítání dat tohoto připojení.',
           };
         }
