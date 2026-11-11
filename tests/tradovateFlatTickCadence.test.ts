@@ -117,6 +117,22 @@ describe('vedlejší připojení (žádný účet ve skupině workera)', () => {
     expect(isWorkerSideConnection({ status: null, observedAt: now }, [99], now)).toBe(false);
   });
 
+  it('skutečná smyčka: vedlejší login se za 10 minut přečte ~20×, ne 40× (kola po 15 s i po 3 s)', () => {
+    for (const [round, nextRoundMs] of [[idle, idle + FULL_TICK_ROUND_COST_MS], [fast + 300, fast + FULL_TICK_ROUND_COST_MS]] as const) {
+      const lastFlatTickAt: Record<string, number> = { side: now };
+      const gaps: number[] = [];
+      for (let at = now + round; at <= now + 600_000; at += round) {
+        const due = dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => false, lastFlatTickAt, flatIntervalMs: idle,
+          flatIntervalMsOf: () => SIDE_FLAT_TICK_INTERVAL_MS, nextRoundMs, now: at });
+        if (due.length) { gaps.push(at - lastFlatTickAt.side); lastFlatTickAt.side = at; }
+      }
+      expect(Math.min(...gaps)).toBeGreaterThanOrEqual(SIDE_FLAT_TICK_INTERVAL_MS - 500);
+      expect(Math.max(...gaps)).toBeLessThanOrEqual(SIDE_FLAT_TICK_INTERVAL_MS + round);
+      expect(gaps.length).toBeLessThanOrEqual(20);
+      expect(gaps.length).toBeGreaterThanOrEqual(17);
+    }
+  });
+
   it('pozice na vedlejším připojení ho čte v každém kole', () => {
     expect(dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => true, lastFlatTickAt: { side: now },
       flatIntervalMs: idle, flatIntervalMsOf: () => SIDE_FLAT_TICK_INTERVAL_MS, nextRoundMs: 0, now: now + fast })).toEqual(['side']);

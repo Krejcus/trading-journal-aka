@@ -67,9 +67,12 @@ export function dueFullTickConnections(options: {
   return options.connectionIds.filter(connectionId => {
     if (options.hasOpenPosition(connectionId)) return true;
     const last = options.lastFlatTickAt[connectionId];
-    const interval = Math.max(options.flatIntervalMs, options.flatIntervalMsOf?.(connectionId) ?? 0);
-    return last == null || !Number.isFinite(last) || last > options.now
-      || options.now - last >= interval - TIMER_SLACK_MS
-      || options.now - last + Math.max(0, options.nextRoundMs) > interval;
+    const own = options.flatIntervalMsOf?.(connectionId) ?? 0;
+    const interval = Math.max(options.flatIntervalMs, own);
+    if (last == null || !Number.isFinite(last) || last > options.now || options.now - last >= interval - TIMER_SLACK_MS) return true;
+    // Vlastní delší interval (vedlejší login) se nepředbíhá: pohled dopředu by ho při kolech po 15 s
+    // zkrátil zpět na 15 s (review 5afdb327). Nic na něm nestojí, pár sekund navíc nevadí.
+    if (own > options.flatIntervalMs) return false;
+    return options.now - last + Math.max(0, options.nextRoundMs) > interval;
   });
 }
