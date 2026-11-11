@@ -159,7 +159,7 @@ import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierGroupMarket, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, liveFillSlippageNote, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1478,7 +1478,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const controller = agentStatus?.controller;
     return {
       blockedReason: entryBlockedReason,
-      marketSupported: supportsCopierManualEntryMarket(agentStatus),
+      marketSupported: (supportsCopierManualEntryMarket(agentStatus) || supportsCopierGroupMarket(agentStatus)),
       bareSupported: supportsCopierManualEntryBare(agentStatus),
       barePendingSupported: supportsCopierManualEntryBarePending(agentStatus),
       bareLimitSupported: supportsCopierGroupLimitBare(agentStatus),
@@ -2220,7 +2220,7 @@ acceptAgentStatus((await executeAgent({
           manageGroupLimitMoveSupported={groupLimitMoveTrade != null}
           manageGroupLimitStateHash={groupLimitMoveTrade?.stateHash ?? groupLimitPositionTrade?.stateHash ?? groupLimitCancelView?.stateHash ?? null}
           manageMoveBareEntrySupported={(supportsCopierManualOrderMoveLimit(agentStatus) && supportsCopierManualOrderMoveBareEntry(agentStatus) || groupLimitMoveTrade != null) && ownManualEntry?.source === 'own' && ownManualEntry.bare === true}
-          entryMarketSupported={supportsCopierManualEntryMarket(agentStatus)}
+          entryMarketSupported={(supportsCopierManualEntryMarket(agentStatus) || supportsCopierGroupMarket(agentStatus))}
           entryMaxContracts={manualEntryContractCap(agentStatus ? copierWorkerExecutionGroup(agentStatus) : null)}
           entryFrontContract={entryFrontContract}
           entryScaleIn={scaleInPosition ? liveTicketScaleIn(scaleInPosition) : null}

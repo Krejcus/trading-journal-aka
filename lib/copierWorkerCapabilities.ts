@@ -240,3 +240,13 @@ export const supportsCopierGroupLimitBare = (status: { capabilities?: readonly s
   Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_LIMIT_BARE_CAPABILITY);
 export const supportsCopierGroupLimitManage = (status: { capabilities?: readonly string[] } | null | undefined): boolean =>
   Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_LIMIT_MANAGE_CAPABILITY);
+
+/**
+ * Worker umí vlastní Market se SL+TP ve skupině s followery (11. 11. 2026, opt-in
+ * `--group-market on`): followeři dostanou nativní OSO s Market rodičem. Holý Market
+ * ve skupině dál nejde; sólo capability `manual-entry-market-v1` se tím nerozšiřuje.
+ */
+export const COPIER_GROUP_MARKET_CAPABILITY = 'manual-group-market-v1';
+export const supportsCopierGroupMarket = (
+  status: { capabilities?: readonly string[] | null } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_MARKET_CAPABILITY);
