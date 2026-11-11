@@ -183,6 +183,22 @@ export const tradovateClientBackoffMs = (retryAfterMs: number | null | undefined
 export const tradovateFullRefreshBackoffMs = (failureCount: number): number =>
   Math.min(FULL_REFRESH_RETRY_MAX_MS, FULL_REFRESH_RETRY_BASE_MS * 2 ** Math.max(0, failureCount - 1));
 
+/**
+ * Opakované načtení po selhání: připojení, které už data má, čte rovnou plně; připojení bez dat
+ * jde nejdřív krátkým čtením. Rozpracované krátké čtení se nespouští podruhé.
+ */
+export function splitTradovateRetryByData(
+  ids: readonly string[], hasData: (id: string) => boolean, bootstrapInFlight: (id: string) => boolean,
+): { withData: string[]; withoutData: string[] } {
+  const withData: string[] = [], withoutData: string[] = [];
+  for (const id of ids) {
+    // Rozpracované krátké čtení si plné čtení spustí samo; druhé by běželo souběžně.
+    if (bootstrapInFlight(id)) continue;
+    if (hasData(id)) withData.push(id); else withoutData.push(id);
+  }
+  return { withData, withoutData };
+}
+
 /** Rozptyl opakování po bezplatném odmítnutí, ať se dvě appky nedrží ve stejné fázi. */
 const PRECHECK_RETRY_JITTER_MS = 5_000;
 
@@ -277,6 +293,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const livePnlLastFullTickAtRef = useRef(0);
   /** Poslední použité čtení prázdného připojení (vlastní tempo, viz tradovateFlatTickCadence). */
   const flatTickAtRef = useRef<Record<string, number>>({});
+  /** Připojení, u kterých právě běží krátké čtení z plánovače opakování. */
+  const bootstrapRetryInFlightRef = useRef(new Set<string>());
   const rateLimitUntilByConnectionRef = useRef<Record<string, number>>({});
   const softReadDeferralsRef = useRef(createTradovateSoftReadDeferrals());
   const fullRefreshInFlightRef = useRef(new Map<string, symbol>());
@@ -348,6 +366,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     livePnlMarksRef.current = {};
     livePnlLastFullTickAtRef.current = 0;
     flatTickAtRef.current = {};
+    bootstrapRetryInFlightRef.current = new Set();
     rateLimitUntilByConnectionRef.current = {};
     softReadDeferralsRef.current = createTradovateSoftReadDeferrals();
     setStatus(cached?.status ?? persisted?.status ?? null);
@@ -946,7 +965,26 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const ids = due
         .filter(([id, state]) => state.retryAt! <= now + 50 && !fullRefreshInFlightRef.current.has(id))
         .map(([id]) => id);
-      if (ids.length > 0) void refreshData(ids, true, 'merge', 'full');
+      const { withData, withoutData } = splitTradovateRetryByData(ids, id => Boolean(connectionDataRef.current[id]),
+        id => bootstrapRetryInFlightRef.current.has(id));
+      if (withData.length > 0) void refreshData(withData, true, 'merge', 'full');
+      // Připojení, které po selhaném startu nemá žádná data: nejdřív krátké čtení účtů a pozic
+      // (4 + počet účtů dotazů místo 9 + 4× počet), ať má přehled i graf na čem stát; plné hned potom.
+      if (withoutData.length > 0) {
+        // Po dobu krátkého čtení drží připojení i zámek plného čtení: jiná cesta (předstart při
+        // obnově stavu, návrat do popředí) by jinak mezitím pustila druhé plné čtení (26 dotazů).
+        const claims = new Map(withoutData.map(id => [id, Symbol(`bootstrap-retry:${id}`)] as const));
+        for (const [id, claim] of claims) { bootstrapRetryInFlightRef.current.add(id); fullRefreshInFlightRef.current.set(id, claim); }
+        void refreshData(withoutData, true, 'merge', 'bootstrap')
+          .catch(() => false)
+          .then(() => {
+            for (const [id, claim] of claims) {
+              bootstrapRetryInFlightRef.current.delete(id);
+              if (fullRefreshInFlightRef.current.get(id) === claim) fullRefreshInFlightRef.current.delete(id);
+            }
+            return refreshData(withoutData, true, 'merge', 'full');
+          });
+      }
     }, delay);
     return () => window.clearTimeout(timer);
   }, [dataEnrichmentByConnection, enabled, refreshData, status?.connections]);

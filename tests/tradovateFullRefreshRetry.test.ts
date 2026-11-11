@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { tradovateFullRefreshRetry } from '../components/useTradovateLiveData';
+import { splitTradovateRetryByData, tradovateFullRefreshRetry } from '../components/useTradovateLiveData';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 
 const now = 1_800_000_000_000;
@@ -47,5 +47,15 @@ describe('opakování úplného načtení připojení', () => {
     expect(hook).not.toContain('const failureCount = previous.failureCount + 1;\n      const rateLimitUntil');
     const client = readFileSync(new URL('../services/tradovateOAuthConnection.ts', import.meta.url), 'utf8');
     expect(client).toContain('body.precheck === true');
+  });
+
+  it('připojení bez dat jde nejdřív krátkým čtením, s daty rovnou plným; rozpracované se neopakuje', () => {
+    const data = new Set(['a']); const inFlight = new Set(['c']);
+    expect(splitTradovateRetryByData(['a', 'b', 'c'], id => data.has(id), id => inFlight.has(id))).toEqual({ withData: ['a'], withoutData: ['b'] });
+    expect(splitTradovateRetryByData(['a'], () => true, () => true)).toEqual({ withData: [], withoutData: [] });
+    expect(splitTradovateRetryByData([], () => true, () => false)).toEqual({ withData: [], withoutData: [] });
+    const hook = readFileSync(new URL('../components/useTradovateLiveData.ts', import.meta.url), 'utf8');
+    expect(hook).toMatch(/refreshData\(withoutData, true, 'merge', 'bootstrap'\)[\s\S]{0,700}refreshData\(withoutData, true, 'merge', 'full'\)/);
+    expect(hook).toContain("if (withData.length > 0) void refreshData(withData, true, 'merge', 'full');");
   });
 });
