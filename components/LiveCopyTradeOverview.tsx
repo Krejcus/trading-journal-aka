@@ -3733,6 +3733,7 @@ export const CopierAutoResumePanel = ({ resume, now = Date.now(), onCancel }: {
       ? 'border-amber-500/25 bg-amber-500/[0.07] text-amber-600'
       : 'border-blue-500/20 bg-blue-500/[0.06] text-blue-600';
   const until = formatClockTime(resume.armExpiresAt).slice(0, 5);
+  const afterStopOut = (resume as { cause?: string }).cause === 'terminal-fill';
   return (
     <div role="status" data-testid="copier-auto-resume" className={`border-t px-3 py-2.5 ${tone}`}>
       <p className="flex items-center gap-1.5 text-[12px] font-black">
@@ -3740,17 +3741,17 @@ export const CopierAutoResumePanel = ({ resume, now = Date.now(), onCancel }: {
           : resume.phase === 'declined' ? <AlertTriangle aria-hidden="true" size={13} />
             : <RefreshCw aria-hidden="true" size={12} strokeWidth={2.5} className="animate-spin" />}
         {resume.phase === 'resumed'
-          ? `Kopírka po výpadku sama pokračuje · ${formatClockTime(resume.at)}`
+          ? `Kopírka ${afterStopOut ? 'po stop-outu' : 'po výpadku'} sama pokračuje · ${formatClockTime(resume.at)}`
           : resume.phase === 'declined'
-            ? 'Kopírka po výpadku nepokračuje'
-            : 'Po výpadku spojení kopírka pokračuje sama'}
+            ? `Kopírka ${afterStopOut ? 'po stop-outu' : 'po výpadku'} nepokračuje`
+            : afterStopOut ? 'Po stop-outu během posunu kopírka pokračuje sama' : 'Po výpadku spojení kopírka pokračuje sama'}
       </p>
       <p className="mt-1 text-[11px] leading-snug text-[var(--text-secondary)]">
         {resume.phase === 'resumed'
           ? 'Všechny účty ověřené u brokera flat a bez příkazů.'
           : resume.phase === 'declined'
             ? `${resume.reason ?? 'Kontrola nevyšla'}. Zapni ji ručně.`
-            : `Až se spojení vrátí, ověří si všechny účty u brokera a když sedí, zapne se (nejpozději do ${until}).${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
+            : `${afterStopOut ? 'Ochranné příkazy se vyplnily během posunu a všechny účty jsou flat. Kopírka si je u brokera ověří' : 'Až se spojení vrátí, ověří si všechny účty u brokera'} a když sedí, zapne se (nejpozději do ${until}).${resume.reason ? ` Teď: ${resume.reason}.` : ''}`}
       </p>
       {(resume.phase === 'waiting' || resume.phase === 'ready') && onCancel ? (
         <button

@@ -1137,8 +1137,10 @@ export function evaluateCopierIncidents(options: {
         notifications.push({
           userId, deviceId, incidentKey: 'auto-resume', kind: 'opened',
           ...(resume.phase === 'resumed'
-            ? { title: 'Kopírka pokračuje', body: 'Spojení s brokerem je zpět, účty ověřené flat bez příkazů — kopírování jede dál.' }
-            : { title: 'Kopírka po výpadku nepokračuje', body: `${asText(resume.reason) ?? 'Kontrola nevyšla'}. Zapni ji ručně.` }),
+            ? { title: 'Kopírka pokračuje', body: asText((resume as { cause?: unknown }).cause) === 'terminal-fill'
+              ? 'Stop-out během posunu: účty ověřené flat bez příkazů — kopírování jede dál.'
+              : 'Spojení s brokerem je zpět, účty ověřené flat bez příkazů — kopírování jede dál.' }
+            : { title: asText((resume as { cause?: unknown }).cause) === 'terminal-fill' ? 'Kopírka po stop-outu nepokračuje' : 'Kopírka po výpadku nepokračuje', body: `${asText(resume.reason) ?? 'Kontrola nevyšla'}. Zapni ji ručně.` }),
         });
         upserts.push({ userId, deviceId, incidentKey: AUTO_RESUME_MARKER_KEY, active: false, detail, notified: true });
       }

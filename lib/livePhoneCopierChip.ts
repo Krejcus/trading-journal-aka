@@ -29,7 +29,9 @@ export function livePhoneCopierChip(input: {
   const controller = input.controller;
   if (!input.fresh || !controller) return { label: 'Kopírka neověřená', tone: 'warn', armed: false };
   if (controller.armed === false && !copierProvablyOff(controller, true)) {
-    return { label: 'Kopírka se obnovuje', tone: 'warn', armed: false, title: 'Kopírka čeká na automatické pokračování po výpadku spojení.' };
+    return { label: 'Kopírka se obnovuje', tone: 'warn', armed: false, title: (controller.transportResume as { cause?: string } | null | undefined)?.cause === 'terminal-fill'
+      ? 'Kopírka čeká na automatické pokračování po stop-outu během posunu.'
+      : 'Kopírka čeká na automatické pokračování po výpadku spojení.' };
   }
   const value = copierValue(controller, input.now ?? Date.now());
   const armed = controller.armed === true && value.value === 'Zapnutá';
