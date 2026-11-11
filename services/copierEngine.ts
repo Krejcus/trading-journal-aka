@@ -448,7 +448,7 @@ export interface CopierManualOrderActionRecord {
   operationId: string;
   payloadHash: string;
   entryOperationId: string;
-  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg';
+  action: 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg' | 'reduce-position';
   /** SL a TP po jedné: které noze akce patří, fáze sekvence, stará a nová id (dohledání po restartu). */
   leg?: 'stopLoss' | 'takeProfit';
   phase?: 'write-sending' | 'oco-acked' | 'target-canceled';

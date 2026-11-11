@@ -250,3 +250,12 @@ export const COPIER_GROUP_MARKET_CAPABILITY = 'manual-group-market-v1';
 export const supportsCopierGroupMarket = (
   status: { capabilities?: readonly string[] | null } | null | undefined,
 ): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_MARKET_CAPABILITY);
+
+/**
+ * Worker umí částečné zavření pozice (`reduce-position`: celý nejnovější lístek, 11. 11. 2026,
+ * opt-in `--partial-close on`, jen sólo DEMO s přikoupením). Bez ní UI tlačítko nenabídne.
+ */
+export const COPIER_POSITION_REDUCE_CAPABILITY = 'manual-position-reduce-v1';
+export const supportsCopierPositionReduce = (
+  status: { capabilities?: readonly string[] | null } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_POSITION_REDUCE_CAPABILITY);

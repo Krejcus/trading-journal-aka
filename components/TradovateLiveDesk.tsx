@@ -1,3 +1,4 @@
+import { LiveReducePositionButton, type LiveReduceView } from './LiveReducePositionButton';
 import { liveFillMarkersFromStatus, type LiveFillMarker } from '../lib/liveFillMarkers';
 import {
   markLiveCommandManageReady,
@@ -159,7 +160,7 @@ import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierGroupMarket, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierGroupMarket, supportsCopierPositionReduce, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, liveFillSlippageNote, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1389,6 +1390,29 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     return chartGuard.bareLeg(seen, intent, operationId => deskCommands.manageBareLeg(seen, intent, { operationId }));
   }, [chartGuard, deskCommands]);
   const cancelPendingEntries = deskCommands.cancelPendingEntries;
+  // Částečné zavření (11. 11. 2026): jen když worker hlásí capability a zavíratelný lístek; vše ověří worker.
+  const reduceView = useMemo<LiveReduceView | null>(() => (
+    scaleInPosition?.reduceQuantity != null && supportsCopierPositionReduce(agentStatus)
+      ? { symbol: scaleInPosition.symbol, quantity: scaleInPosition.reduceQuantity, positionQuantity: scaleInPosition.quantity } : null
+  ), [agentStatus, scaleInPosition]);
+  const reducePosition = useCallback(async (seen: LiveReduceView): Promise<LeaderOrderManageResult> => {
+    const current = armStatusRef.current;
+    const executionGroup = copierWorkerExecutionGroup(current.status);
+    const position = scaleInPositionRef.current;
+    if (!current.fresh || !executionGroup || executionGroup.leaderAccountId == null || !supportsCopierPositionReduce(current.status)) {
+      throw new LiveCommandNotSentError('Stav kopírky není čerstvě ověřený — nic se neodeslalo.');
+    }
+    if (!position || position.symbol !== seen.symbol || position.quantity !== seen.positionQuantity || position.reduceQuantity !== seen.quantity || position.stopPrice == null) {
+      throw new LiveCommandNotSentError('Pozice se od zobrazení změnila — nic se neodeslalo.');
+    }
+    if (!previewRouteRef.current.relayConnectionId) throw new LiveCommandNotSentError('Změna jde jen přes relay — chybí připojení k workeru, nic se neodeslalo.');
+    const command = buildLeaderOrderManageCommand({
+      groupId: executionGroup.id, operationId: `manage:reduce${globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      leaderAccountId: executionGroup.leaderAccountId, entryOperationId: position.baseEntryOperationId, symbol: position.symbol,
+      action: 'reduce-position', expect: { price: position.stopPrice, quantity: position.quantity }, scope: 'position', reduceQuantity: position.reduceQuantity,
+    });
+    return sendLeaderManage(command, 'Výsledek částečného zavření chybí — zkontroluj leadera v Tradovate.');
+  }, [sendLeaderManage]);
   // Sdílený zámek jednoho příkazu desku (PC: čáry, panel — vstup, Přidat SL/TP, × holé pozice —,
   // Shift+E/X/C, lišta „Zrušit čekající“; telefon: lišta, čáry, list správy, vstup, attach, čip C7;
   // Dashboard „Zrušit“ na PC i telefonu): ref, ne stav — dvojklik v jednom snímku nepošle dva
@@ -2181,6 +2205,9 @@ acceptAgentStatus((await executeAgent({
       <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.
       cancelPending={chartAvailable && cancelPendingBarView ? { view: cancelPendingBarView, lockRef: liveCommandLockRef, cancel: cancelPendingEntries } : null} />
+      {chartAvailable && tab === 'chart' && reduceView ? (
+        <LiveReducePositionButton view={reduceView} lockRef={liveCommandLockRef} reduce={reducePosition} />
+      ) : null}
       {chartAvailable ? (
         <ErrorBoundary name="LiveTradingScreenSlot" onError={() => setChartCrash('outer')} fallback={<LiveSlotFailure label="LIVE graf" />}>
           <LiveTradingScreenSlot

@@ -139,7 +139,7 @@ const ENTRY_COMMAND_TTL_MS = 15_000;
 const CLOSE_COMMAND_TTL_MS = 5_000;
 const isLeaderTradeClose = (command: unknown): boolean => {
   const inner = (command as { type?: unknown; command?: { type?: unknown; action?: unknown } } | null);
-  return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && (inner.command.action === 'close-position' || inner.command.action === 'remove-leg');
+  return inner?.type === 'copy-command' && inner.command?.type === 'manage-leader-order' && (inner.command.action === 'close-position' || inner.command.action === 'remove-leg' || inner.command.action === 'reduce-position');
 };
 const ENTRY_MIN_INTERVAL_MS = MANUAL_ENTRY_MIN_INTERVAL_MS;
 // Filip 30. 10. 2026: 30 nestačilo na aktivní den (26 vstupů do 15:00) → 100 jako u správy.

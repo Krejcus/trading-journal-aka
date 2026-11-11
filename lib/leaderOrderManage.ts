@@ -49,7 +49,7 @@ export function pendingLegSideProblem(
 
 export const LEADER_ORDER_MOVE_LIMIT_CONTRACT = 2;
 
-export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg';
+export type LeaderOrderManageAction = 'move-stop' | 'move-target' | 'move-limit' | 'cancel-entry' | 'close-position' | 'attach-brackets' | 'add-leg' | 'remove-leg' | 'reduce-position';
 
 export interface LeaderOrderManageCommand {
   type: 'manage-leader-order';
@@ -85,6 +85,13 @@ export interface LeaderOrderManageCommand {
    */
   scope?: 'position';
   /**
+   * Jen a povinně `reduce-position` (částečné zavření, 11. 11. 2026): počet kontraktů NEJNOVĚJŠÍHO
+   * lístku pozice, který se zavře celý (zruší se jeho SL+TP, pak Market na jeho množství).
+   * `expect` = nejochrannější SL a |pozice| jako u `close-position`. Nová akce, ne pole u zavření:
+   * starý worker i relay ji odmítnou samy.
+   */
+  reduceQuantity?: number;
+  /**
    * Jen a povinně `move-limit`: klient počítá s tím, že broker posune i nohy OSO.
    * Starý klient (přibalený bundle v iPhonu) pole nepošle a relay ho odmítne; starý worker
    * neznámé pole odmítne sám. Tím je akce vypnutá do nasazení opravy všude, bez přepínače.
@@ -112,8 +119,8 @@ export interface LeaderOrderManageResult {
 const SYMBOL_PATTERN = /^(MNQ|NQ)[HMUZ]\d$/;
 const OPERATION_ID_PATTERN = /^manage:[a-zA-Z0-9_-]{8,100}$/;
 const ENTRY_OPERATION_ID_PATTERN = /^entry:[a-zA-Z0-9_-]{8,100}$/;
-const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'move-limit', 'cancel-entry', 'close-position', 'attach-brackets', 'add-leg', 'remove-leg'];
-const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'leg', 'stopLoss', 'takeProfit', 'scope', 'moveLimitContract', 'groupLimitContract', 'groupLimitStateHash', 'payloadHash'];
+const ACTIONS: readonly LeaderOrderManageAction[] = ['move-stop', 'move-target', 'move-limit', 'cancel-entry', 'close-position', 'attach-brackets', 'add-leg', 'remove-leg', 'reduce-position'];
+const KEYS = ['type', 'groupId', 'operationId', 'leaderAccountId', 'entryOperationId', 'leaderEntryOrderId', 'symbol', 'action', 'expect', 'newPrice', 'leg', 'stopLoss', 'takeProfit', 'scope', 'reduceQuantity', 'moveLimitContract', 'groupLimitContract', 'groupLimitStateHash', 'payloadHash'];
 const LEADER_ORDER_ID_PATTERN = /^[A-Za-z0-9-]{1,40}$/;
 const onTick = (value: number) => Math.abs(value * 4 - Math.round(value * 4)) < 1e-9;
 const price = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 1_000_000 && onTick(value);
@@ -174,7 +181,12 @@ export function validateLeaderOrderManage(value: unknown): LeaderOrderManageComm
   if (attach ? (!own || !price(command.stopLoss) || !price(command.takeProfit) || command.stopLoss === command.takeProfit)
     : (command.stopLoss !== undefined || command.takeProfit !== undefined)) fail();
   if (command.scope !== undefined && (command.scope !== 'position' || !own
-    || !(command.action === 'move-stop' || command.action === 'move-target' || command.action === 'close-position'))) fail();
+    || !(command.action === 'move-stop' || command.action === 'move-target' || command.action === 'close-position' || command.action === 'reduce-position'))) fail();
+  // Částečné zavření: jen celá pozice z vlastních lístků, zavírá se méně než celá pozice.
+  const reduce = command.action === 'reduce-position';
+  if (reduce ? (command.scope !== 'position' || typeof command.reduceQuantity !== 'number' || !Number.isSafeInteger(command.reduceQuantity)
+    || command.reduceQuantity < 1 || command.reduceQuantity >= (expect!.quantity as number) || command.groupLimitContract !== undefined)
+    : command.reduceQuantity !== undefined) fail();
   if (typeof command.payloadHash !== 'string' || !/^[a-z0-9]{8,64}$/.test(command.payloadHash)) fail();
   const typed = command as unknown as LeaderOrderManageCommand;
   if (leaderOrderManagePayloadHash(typed) !== typed.payloadHash) fail();

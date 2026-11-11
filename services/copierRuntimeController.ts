@@ -342,6 +342,8 @@ export interface CopierControllerStatus {
     addBlockedReason?: string;
     canManage: boolean;
     manageBlockedReason?: string;
+    /** Částečné zavření (jen zobrazení): počet kontraktů nejnovějšího lístku, který jde zavřít celý; chybí = nenabízet. */
+    reduceQuantity?: number;
   }>;
   /** Všechny nevyřešené změny ručních vstupů, i starší než posledních 10 — jen zobrazení. */
   unresolvedManualOrderActions?: Array<{
