@@ -1,4 +1,4 @@
-import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
+import { assertTradovateBackgroundCapacity, TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -40,6 +40,21 @@ function coalescePreflight<T>(key: string, now: number, read: () => Promise<T>):
 /** Jen pro testy. */
 export function resetTradovatePreflightCoalescingForTests(): void {
   recentPreflights.clear();
+  accountCountHints.clear();
+}
+
+/**
+ * Kolik dotazů u brokera stojí čtení účtů (viz `loadTradovateAccountData`): společné seznamy
+ * a čtení na každý účet. Jen pro poradní kontrolu kapacity; skutečné jednotky si bere každý dotaz.
+ */
+export function preflightReadCost(detail: 'bootstrap' | 'full'): { base: number; perAccount: number } {
+  return detail === 'bootstrap' ? { base: 4, perAccount: 1 } : { base: 8, perAccount: 4 };
+}
+const accountCountHints = new Map<string, number>();
+function rememberAccountCount(key: string, count: number): void {
+  if (!Number.isSafeInteger(count) || count < 0) return;
+  if (accountCountHints.size > 500 && !accountCountHints.has(key)) accountCountHints.clear();
+  accountCountHints.set(key, count);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -58,8 +73,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
     const skipProbe = !bootstrap && req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
-    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
-      db: createTradovateAdminClient(config),
+    const db = createTradovateAdminClient(config);
+    const { accessToken, apiHosts, fetchImpl, brokerUserId } = await getValidTradovateAccessToken({
+      db,
       config,
       userId,
       connectionId,
@@ -84,19 +100,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sharedFull = recentFull?.settled && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
       ? recentFull.result as ReturnType<typeof readPreflight>
       : null;
-    const readPreflight = () => Promise.all([
+    // Poradní kontrola kapacity: čtení, které se do rozpočtu nevejde, se odmítne dřív, než
+    // spotřebuje jednotky (ty by zablokovaly i další pokus). Počet účtů je znám až z /account/list;
+    // z minulého čtení v téže instanci se bere jako nápověda pro první kontrolu.
+    const requestContext = { db, userId, connectionId, brokerUserId };
+    const cost = preflightReadCost(bootstrap ? 'bootstrap' : 'full');
+    const readPreflight = async () => {
+      await assertTradovateBackgroundCapacity(requestContext, cost.base + cost.perAccount * (accountCountHints.get(`${userId}:${connectionId}`) ?? 0));
+      return Promise.all([
       loadTradovateAccountData({
         baseUrl,
         accessToken,
         fetchImpl,
         detail: bootstrap ? 'bootstrap' : 'full',
+        beforeAccountReads: async accountCount => {
+          rememberAccountCount(`${userId}:${connectionId}`, accountCount);
+          await assertTradovateBackgroundCapacity(requestContext, cost.perAccount * accountCount);
+        },
       }),
       bootstrap
         ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
         : skipProbe
           ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
           : probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
-    ]);
+      ]);
+    };
     const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
       `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
       Date.now(),

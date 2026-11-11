@@ -68,6 +68,35 @@ export function createServerTradovateRequestControl(context: ServerTradovateRequ
   };
 }
 
+/** Opakování po předběžném odmítnutí: klient stejně čeká nejméně 15 s; jednotky drží minutové okno ~65 s. */
+export const BACKGROUND_CAPACITY_RETRY_MS = 20_000;
+
+/**
+ * Předběžná kontrola kapacity pro vícedotazové zobrazovací čtení (plné načtení účtů =
+ * 8 + 4 × účty dotazů). Do 11. 11. 2026 se takové čtení pustilo vždy: narazilo na minutový
+ * strop uprostřed, celé se zahodilo a jeho jednotky zablokovaly i další pokus — dvě appky
+ * se tak navzájem držely v „Načítání omezeno rozpočtem“ celé minuty.
+ *
+ * Jen poradní: nic nerezervuje a nic nepovoluje. Každý fyzický dotaz si dál bere vlastní
+ * jednotku a prochází všemi branami (cooldown, captcha, epocha, penalizace). Selhání
+ * kontroly samotné čtení neblokuje. Cooldown a captcha nechává rozhodnout původní cestu,
+ * aby jejich kód a čas zůstaly beze změny (INV-TRAD-04, INV-TRAD-09).
+ */
+export async function assertTradovateBackgroundCapacity(context: ServerTradovateRequestContext, units: number): Promise<void> {
+  if (!validId(context.brokerUserId) || !Number.isFinite(units) || units <= 0) return;
+  let state: TradovateRequestControlSnapshot;
+  try { state = await createServerTradovateRequestControl(context).read(); } catch { return; }
+  if (state.captchaRequired || (state.blockedUntil != null && state.blockedUntil > state.serverNow)) return;
+  // Čtení větší než celý minutový strop projít nemůže nikdy; smí to zkusit jen do prázdné minuty.
+  const need = Math.min(Math.ceil(units), POLICY.backgroundMinute);
+  const overMinute = state.backgroundReservedMinute + need > POLICY.backgroundMinute;
+  const overHour = state.backgroundReservedHour + need > POLICY.backgroundHour
+    || (state.totalReservedHour ?? 0) + need > POLICY.totalSoftHour;
+  if (overMinute || overHour) {
+    throw new TradovateRequestControlError('tradovate-request-budget', overHour ? 60_000 : BACKGROUND_CAPACITY_RETRY_MS, state);
+  }
+}
+
 // A broker observation is fenced synchronously before attempting the remote
 // persistence. Vercel process loss before DB commit remains an explicit gap;
 // a warm process must never forget the observation after an RPC outage.

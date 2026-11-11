@@ -585,6 +585,8 @@ export async function loadTradovateAccountData(options: {
   fetchImpl?: typeof fetch;
   now?: number;
   detail?: TradovateAccountDataDetail;
+  /** Poradní kontrola před čteními po účtech (počet účtů je znám až z /account/list). Odmítnutí ukončí čtení. */
+  beforeAccountReads?: (accountCount: number) => Promise<void>;
 }): Promise<TradovateAccountDataResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   // Requests already in flight settle normally; once auth/limit failure is
@@ -622,6 +624,14 @@ export async function loadTradovateAccountData(options: {
   // account IDs arrive, while the other global lists and contracts load.
   const enrichmentPromise = accountsPromise.then(async probe => {
     const accounts = requireList(probe);
+    if (options.beforeAccountReads) {
+      try { await options.beforeAccountReads(accounts.length); }
+      catch (error) {
+        // Stejně jako odmítnutí kontroly dotazů u jednotlivého čtení: nic dalšího se nespouští.
+        if (error instanceof TradovateRequestControlError) controlStop ??= error;
+        throw error;
+      }
+    }
     const results = new Map<number, {
       cashAsOf: string;
       probes: [Probe<CashBalanceSnapshot>, Probe<CashBalanceLogEntity[]>, Probe<AccountRiskStatus[]>, Probe<UserAccountAutoLiq[]>];
