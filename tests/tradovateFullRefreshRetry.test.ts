@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { splitTradovateRetryByData, tradovateFullRefreshRetry } from '../components/useTradovateLiveData';
+import { FIRST_BOOTSTRAP_RETRY_MS, splitTradovateRetryByData, tradovateFullRefreshRetry } from '../components/useTradovateLiveData';
 import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 
 const now = 1_800_000_000_000;
@@ -57,5 +57,16 @@ describe('opakování úplného načtení připojení', () => {
     const hook = readFileSync(new URL('../components/useTradovateLiveData.ts', import.meta.url), 'utf8');
     expect(hook).toMatch(/refreshData\(withoutData, true, 'merge', 'bootstrap'\)[\s\S]{0,700}refreshData\(withoutData, true, 'merge', 'full'\)/);
     expect(hook).toContain("if (withData.length > 0) void refreshData(withData, true, 'merge', 'full');");
+  });
+
+  it('studený start bez dat: po prvním odmítnutí kapacitou jde krátké čtení hned, podruhé už stálým tempem', () => {
+    const reason = new TradovateRequestError('tradovate-request-budget', 503, 20_000, 'budget', true);
+    const first = tradovateFullRefreshRetry({ now: 1_000, previousFailureCount: 0, deferralUntil: 21_000, reason, firstWithoutData: true });
+    expect(first).toEqual({ failureCount: 0, retryAt: 1_000 + FIRST_BOOTSTRAP_RETRY_MS });
+    const second = tradovateFullRefreshRetry({ now: 1_500, previousFailureCount: 0, deferralUntil: 21_000, reason, random: 0 });
+    expect(second.retryAt).toBeGreaterThanOrEqual(21_000);
+    // Skutečná chyba (ne bezplatné odmítnutí) okamžité čtení nikdy nedostane.
+    const failed = tradovateFullRefreshRetry({ now: 1_000, previousFailureCount: 0, deferralUntil: 0, reason: new Error('x'), firstWithoutData: true });
+    expect(failed.retryAt).toBeGreaterThan(1_000 + FIRST_BOOTSTRAP_RETRY_MS);
   });
 });

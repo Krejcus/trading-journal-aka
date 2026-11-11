@@ -208,11 +208,22 @@ const PRECHECK_RETRY_JITTER_MS = 5_000;
  * stálým tempem hned po odkladu od serveru, počet selhání se nezvyšuje — jinak by „Načítání
  * omezeno rozpočtem“ svítilo minuty po uvolnění rozpočtu (11. 11. 2026). Jen zobrazení.
  */
+/** Odstup krátkého čtení po prvním odmítnutí plného čtení kapacitou (bez dat na obrazovce). */
+export const FIRST_BOOTSTRAP_RETRY_MS = 400;
 export function tradovateFullRefreshRetry(options: {
   now: number; previousFailureCount: number; deferralUntil: number; reason: unknown; random?: number;
+  /**
+   * Studený start bez dat, první odmítnutí kapacitou: plné čtení (9 + 4× účty) se do minuty
+   * nevešlo, krátké (4 + počet účtů) se nejspíš vejde — zkusit ho hned, ne až za 15–20 s
+   * (11. 11. 2026: telefon po otevření ukazoval „šetří dotazy“ a prázdné účty).
+   */
+  firstWithoutData?: boolean;
 }): { retryAt: number; failureCount: number } {
   const free = options.reason instanceof TradovateRequestError && options.reason.precheck
     && options.reason.status === 503 && options.reason.message === 'tradovate-request-budget';
+  if (free && options.firstWithoutData) {
+    return { failureCount: options.previousFailureCount, retryAt: options.now + FIRST_BOOTSTRAP_RETRY_MS };
+  }
   if (free) {
     const jitter = Math.round(Math.min(1, Math.max(0, options.random ?? Math.random())) * PRECHECK_RETRY_JITTER_MS);
     return { failureCount: options.previousFailureCount,
@@ -295,6 +306,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const flatTickAtRef = useRef<Record<string, number>>({});
   /** Připojení, u kterých právě běží krátké čtení z plánovače opakování. */
   const bootstrapRetryInFlightRef = useRef(new Set<string>());
+  /** Připojení, která už po odmítnutí kapacitou zkusila okamžité krátké čtení (jednou na studený start). */
+  const firstBootstrapTriedRef = useRef(new Set<string>());
   const rateLimitUntilByConnectionRef = useRef<Record<string, number>>({});
   const softReadDeferralsRef = useRef(createTradovateSoftReadDeferrals());
   const fullRefreshInFlightRef = useRef(new Map<string, symbol>());
@@ -551,7 +564,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       };
       return next;
     });
-    const markSuccess = (connectionId: string) => (perfMark('live:conn-ready'), updateEnrichment(current => ({
+    const markSuccess = (connectionId: string) => (firstBootstrapTriedRef.current.delete(connectionId), perfMark('live:conn-ready'), updateEnrichment(current => ({
       ...current,
       [connectionId]: { pending: false, lastFullSuccessAt: Date.now(), retryAt: null, failureCount: 0, error: null },
     })));
@@ -559,7 +572,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const previous = current[connectionId] ?? emptyEnrichment();
       const rateLimitUntil = softReadDeferralsRef.current.resumeAt(connectionId, rateLimitUntilByConnectionRef.current[connectionId] ?? 0);
       const { failureCount, retryAt } = tradovateFullRefreshRetry({
-        now: Date.now(), previousFailureCount: previous.failureCount, deferralUntil: rateLimitUntil, reason });
+        now: Date.now(), previousFailureCount: previous.failureCount, deferralUntil: rateLimitUntil, reason,
+        // Jen jednou na studený start připojení (do prvního úspěchu) a jen bez dat — jinak by se
+        // při trvale plném pruhu krátké a plné čtení střídaly po 0,4 s.
+        firstWithoutData: !connectionDataRef.current[connectionId] && !firstBootstrapTriedRef.current.has(connectionId) });
+      if (!connectionDataRef.current[connectionId]) firstBootstrapTriedRef.current.add(connectionId);
       return {
         ...current,
         [connectionId]: {
