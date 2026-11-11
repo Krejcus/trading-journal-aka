@@ -1924,6 +1924,12 @@ existující ochranu.
   management zápisů ani o garanci brokerovy kvóty. Grant má konkrétní účel;
   čtecím grantem nelze autorizovat write. Worker rezervuje jen čekající práci,
   nikoli spekulativní budoucí balík. Starší autorita neobnovuje freshness.
+- Serverové plné načtení účtů (8–10 společných čtení + 4 na účet) má od 11. 11. 2026
+  poradní předběžnou kontrolu kapacity (`assertTradovateBackgroundCapacity`): čtení, které
+  se do pruhu background nevejde, se odmítne stejným typovaným soft-budget 503 dřív, než
+  cokoli rezervuje. Kontrola nic nerezervuje ani nepovoluje; každý fyzický dotaz si dál
+  bere vlastní jednotku a prochází všemi branami. Při cooldownu, captche, výpadku kontroly,
+  chybějící identitě a čekající lokální penalizaci mlčí a nechává rozhodnout původní cestu.
 - Odmítnutí rozpočtem je jiné než cooldown/captcha nebo výpadek. Skutečný
   hard refusal bez použitelného scoped snapshotu zavře všechny dispatches
   do novějšího autoritativního ověření; starší souběžný read západku nesmaže.

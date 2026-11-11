@@ -47,8 +47,11 @@ export function resetTradovatePreflightCoalescingForTests(): void {
  * Kolik dotazů u brokera stojí čtení účtů (viz `loadTradovateAccountData`): společné seznamy
  * a čtení na každý účet. Jen pro poradní kontrolu kapacity; skutečné jednotky si bere každý dotaz.
  */
-export function preflightReadCost(detail: 'bootstrap' | 'full'): { base: number; perAccount: number } {
-  return detail === 'bootstrap' ? { base: 4, perAccount: 1 } : { base: 8, perAccount: 4 };
+export function preflightReadCost(detail: 'bootstrap' | 'full', withHistoricalProbe = false): { base: number; perAccount: number } {
+  if (detail === 'bootstrap') return { base: 4, perAccount: 1 };
+  // 8 seznamů + čtení kontraktů (běží v každém dni s obchodem nebo příkazem) + případný probe
+  // historických reportů. Raději o jednotku víc: podhodnocená cena vrací plýtvání.
+  return { base: 8 + 1 + (withHistoricalProbe ? 1 : 0), perAccount: 4 };
 }
 const accountCountHints = new Map<string, number>();
 function rememberAccountCount(key: string, count: number): void {
@@ -104,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // spotřebuje jednotky (ty by zablokovaly i další pokus). Počet účtů je znám až z /account/list;
     // z minulého čtení v téže instanci se bere jako nápověda pro první kontrolu.
     const requestContext = { db, userId, connectionId, brokerUserId };
-    const cost = preflightReadCost(bootstrap ? 'bootstrap' : 'full');
+    const cost = preflightReadCost(bootstrap ? 'bootstrap' : 'full', !bootstrap && !skipProbe);
     const readPreflight = async () => {
       await assertTradovateBackgroundCapacity(requestContext, cost.base + cost.perAccount * (accountCountHints.get(`${userId}:${connectionId}`) ?? 0));
       return Promise.all([

@@ -80,10 +80,14 @@ export const BACKGROUND_CAPACITY_RETRY_MS = 20_000;
  * Jen poradní: nic nerezervuje a nic nepovoluje. Každý fyzický dotaz si dál bere vlastní
  * jednotku a prochází všemi branami (cooldown, captcha, epocha, penalizace). Selhání
  * kontroly samotné čtení neblokuje. Cooldown a captcha nechává rozhodnout původní cestu,
- * aby jejich kód a čas zůstaly beze změny (INV-TRAD-04, INV-TRAD-09).
+ * stejně jako čekající lokální penalizaci, aby jejich kód a čas zůstaly beze změny
+ * (INV-TRAD-04, INV-TRAD-09).
  */
 export async function assertTradovateBackgroundCapacity(context: ServerTradovateRequestContext, units: number): Promise<void> {
   if (!validId(context.brokerUserId) || !Number.isFinite(units) || units <= 0) return;
+  // Čekající neuložená penalizace nebo rozbor 423: původní cesta ji musí dál zkoušet uložit a
+  // hlásit jejím kódem a časem; poradní odmítnutí rozpočtem by ji zakrylo (review d03479c1).
+  if (pendingPenalties.has(context.brokerUserId) || penaltyInspections.has(context.brokerUserId)) return;
   let state: TradovateRequestControlSnapshot;
   try { state = await createServerTradovateRequestControl(context).read(); } catch { return; }
   if (state.captchaRequired || (state.blockedUntil != null && state.blockedUntil > state.serverNow)) return;

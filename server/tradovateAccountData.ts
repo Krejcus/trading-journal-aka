@@ -624,7 +624,8 @@ export async function loadTradovateAccountData(options: {
   // account IDs arrive, while the other global lists and contracts load.
   const enrichmentPromise = accountsPromise.then(async probe => {
     const accounts = requireList(probe);
-    if (options.beforeAccountReads) {
+    // Jen po skutečně přečteném seznamu: neúspěšné čtení dává prázdný seznam, ne nula účtů.
+    if (options.beforeAccountReads && probe.ok && Array.isArray(probe.value)) {
       try { await options.beforeAccountReads(accounts.length); }
       catch (error) {
         // Stejně jako odmítnutí kontroly dotazů u jednotlivého čtení: nic dalšího se nespouští.
