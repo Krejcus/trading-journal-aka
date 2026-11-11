@@ -1,6 +1,7 @@
 import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
+import { dueFullTickConnections } from '../lib/tradovateFlatTickCadence';
 import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -251,6 +252,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const livePnlAnchorCursorsRef = useRef<Record<string, number>>({});
   const livePnlMarksRef = useRef<Record<string, TradovateContractMarkMap>>({});
   const livePnlLastFullTickAtRef = useRef(0);
+  /** Poslední použité čtení prázdného připojení (vlastní tempo, viz tradovateFlatTickCadence). */
+  const flatTickAtRef = useRef<Record<string, number>>({});
   const rateLimitUntilByConnectionRef = useRef<Record<string, number>>({});
   const softReadDeferralsRef = useRef(createTradovateSoftReadDeferrals());
   const fullRefreshInFlightRef = useRef(new Map<string, symbol>());
@@ -321,6 +324,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     livePnlAnchorCursorsRef.current = {};
     livePnlMarksRef.current = {};
     livePnlLastFullTickAtRef.current = 0;
+    flatTickAtRef.current = {};
     rateLimitUntilByConnectionRef.current = {};
     softReadDeferralsRef.current = createTradovateSoftReadDeferrals();
     setStatus(cached?.status ?? persisted?.status ?? null);
@@ -998,9 +1002,16 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       try {
         const plans = new Map(available.map(connectionId => [connectionId,
           workerConnectionReadPlan({ ...connectionDataRef.current[connectionId], connectionId }, workerReadCoverageRef.current, Date.now())] as const));
-        const fullTickConnections = available.filter(id => !plans.get(id)?.suppressFullTick);
-        const hasOpenPosition = fullTickConnections.some(connectionId =>
-          connectionDataRef.current[connectionId]?.accounts.some(account => account.netPositionCount > 0));
+        const uncoveredConnections = available.filter(id => !plans.get(id)?.suppressFullTick);
+        const connectionHasPosition = (connectionId: string) =>
+          connectionDataRef.current[connectionId]?.accounts.some(account => account.netPositionCount > 0) ?? false;
+        const hasOpenPosition = uncoveredConnections.some(connectionHasPosition);
+        // Prázdné připojení má vlastní tempo: pozice jinde (i na účtech, za které ručí worker)
+        // ho nesmí rozběhnout po 3 s — to samo vyčerpalo minutový strop čtení (11. 11. 2026).
+        const fullTickConnections = dueFullTickConnections({
+          connectionIds: uncoveredConnections, hasOpenPosition: connectionHasPosition,
+          lastFlatTickAt: flatTickAtRef.current, now: Date.now(), flatIntervalMs: idleDelay,
+        });
         // Na pozadí vždy plný tick: jde o čerstvost pozic a příkazů, ne o P&L.
         const runFullTick = background || !hasOpenPosition
           || Date.now() - livePnlLastFullTickAtRef.current >= ACTIVE_PNL_INTERVAL_MS;
@@ -1057,6 +1068,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
                 );
               }
               if (!readIsCurrent()) return;
+              // Jen použité čtení posouvá tempo; selhané nebo zahozené se zkusí v dalším kole jako dřív.
+              flatTickAtRef.current[connectionId] = Date.now();
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
               if (!dataset) return;
@@ -1130,6 +1143,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const onVisible = (foreground: boolean) => {
       if (cancelled) return;
       foregroundGeneration += 1;
+      // Návrat do popředí čte všechna připojení hned, bez ohledu na tempo prázdných.
+      flatTickAtRef.current = {};
       if (!foreground) return;
       if (livePnlBusyRef.current) {
         rereadAfterBusy = true;
