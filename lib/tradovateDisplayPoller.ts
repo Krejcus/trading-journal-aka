@@ -6,6 +6,13 @@ export interface DisplayPollState {
  worker:{userId:string;receivedAt:number;feeds:TradovateAccountDisplayFeedState[]}|null;
  publish:(userId:string,feeds:TradovateAccountDisplayFeedState[])=>void;
 }
+/**
+ * Rozestup záložních čtení zůstatků na jedno připojení. Do 11. 11. 2026 to bylo 60 s / počet účtů
+ * (4 účty = čtení každých 15 s, 480 jednotek/h z každé otevřené appky) a právě když workeru
+ * docházel rozpočet, začaly ho takhle dojídat všechny appky naráz. Zůstatky jsou záloha za
+ * data z workera, ne zdroj pozic: jedno čtení za minutu na připojení.
+ */
+export const DISPLAY_FALLBACK_INTERVAL_MS = 60_000;
 /** One sequential poller per mounted identity; timers never act as confirmations. */
 export function createTradovateDisplayPoller(options:{
  current:()=>DisplayPollState;
@@ -51,7 +58,7 @@ export function createTradovateDisplayPoller(options:{
             if (stopped || options.current().userId !== owner) return;
             options.current().publish(owner, [{ connectionId:id, environment:connection.environment, snapshots:result.snapshots, pendingAccountIds:[], lastErrorAt:null, retryAt:null }]);
             cursors.set(id, cursor + 1); failed.delete(id); attempts.delete(id);
-            due.set(id, Date.now() + (result.legacy ? 60_000 : Math.max(5_000, 60_000 / ids.length)));
+            due.set(id, Date.now() + DISPLAY_FALLBACK_INTERVAL_MS);
           } catch (error) {
             if (stopped) return;
             failed.add(id);

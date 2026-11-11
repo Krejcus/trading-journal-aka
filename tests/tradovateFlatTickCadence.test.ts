@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS } from '../lib/tradovateFlatTickCadence';
+import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS, isWorkerSideConnection, SIDE_FLAT_TICK_INTERVAL_MS } from '../lib/tradovateFlatTickCadence';
 import { tradovatePositionPollDelay } from '../components/useTradovateLiveData';
 import { LIVE_READ_MAX_AGE_MS } from '../lib/liveReadFreshness';
 import { LIVE_CHART_REST_CONFIRM_MAX_AGE_MS } from '../lib/liveChartExposureProjection';
@@ -80,5 +80,49 @@ describe('tempo čtení prázdného připojení', () => {
     expect(source).toMatch(/if \(!readIsCurrent\(\)\) return;\s*\/\/[^\n]*\n\s*flatTickAtRef\.current\[connectionId\] = Date\.now\(\);/);
     expect(source.match(/flatTickAtRef\.current = \{\};/g)).toHaveLength(2);
     expect(source).toContain('const hasOpenPosition = uncoveredConnections.some(connectionHasPosition);');
+  });
+
+  it('smyčka dává vedlejšímu loginu delší interval jen na LIVE', () => {
+    const source = readFileSync(new URL('../components/useTradovateLiveData.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/flatIntervalMsOf: connectionId => enabled && isWorkerSideConnection\(workerReadCoverageRef\.current,/);
+  });
+});
+
+describe('vedlejší připojení (žádný účet ve skupině workera)', () => {
+  const group = { leaderAccountId: 10, followers: [{ accountId: 11 }, { accountId: 12 }] };
+  const receipt = (overrides: Record<string, unknown> = {}, ageMs = 1_000) => ({
+    status: { controller: { connected: true }, group, ...overrides }, observedAt: now - ageMs });
+
+  it('čte se po 30 s místo 15 s; účty skupiny a smíšené připojení původním tempem', () => {
+    expect(isWorkerSideConnection(receipt(), [99], now)).toBe(true);
+    expect(isWorkerSideConnection(receipt(), [10], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt(), [99, 12], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt(), [], now)).toBe(false);
+    const lastFlatTickAt = { side: now, group: now };
+    const due = (elapsed: number) => dueFullTickConnections({
+      connectionIds: ['side', 'group'], hasOpenPosition: () => false, lastFlatTickAt, flatIntervalMs: idle,
+      flatIntervalMsOf: id => id === 'side' ? SIDE_FLAT_TICK_INTERVAL_MS : 0, nextRoundMs: 0, now: now + elapsed });
+    expect(due(idle)).toEqual(['group']);
+    expect(due(SIDE_FLAT_TICK_INTERVAL_MS)).toEqual(['side', 'group']);
+  });
+
+  it('starý, odpojený nebo neúplný stav workera = původní tempo (porucha nesmí zpomalit čtení)', () => {
+    expect(isWorkerSideConnection(receipt({}, 9_000), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt({}, -5_000), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt({ controller: { connected: false } }), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt({ group: null }), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt({ group: { leaderAccountId: 10 } }), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(receipt({ group: { leaderAccountId: 10, followers: [{}] } }), [99], now)).toBe(false);
+    expect(isWorkerSideConnection(null, [99], now)).toBe(false);
+    expect(isWorkerSideConnection({ status: null, observedAt: now }, [99], now)).toBe(false);
+  });
+
+  it('pozice na vedlejším připojení ho čte v každém kole', () => {
+    expect(dueFullTickConnections({ connectionIds: ['side'], hasOpenPosition: () => true, lastFlatTickAt: { side: now },
+      flatIntervalMs: idle, flatIntervalMsOf: () => SIDE_FLAT_TICK_INTERVAL_MS, nextRoundMs: 0, now: now + fast })).toEqual(['side']);
+  });
+
+  it('delší interval se pořád vejde do ověřovacího okna pozic', () => {
+    expect(SIDE_FLAT_TICK_INTERVAL_MS + idle).toBeLessThanOrEqual(LIVE_READ_MAX_AGE_MS);
   });
 });

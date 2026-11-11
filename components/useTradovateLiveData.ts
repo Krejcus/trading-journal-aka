@@ -1,7 +1,7 @@
 import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
-import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS } from '../lib/tradovateFlatTickCadence';
+import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS, isWorkerSideConnection, SIDE_FLAT_TICK_INTERVAL_MS } from '../lib/tradovateFlatTickCadence';
 import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
 import { perfMark } from '../lib/perfTrace';
 import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
@@ -1035,6 +1035,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const fullTickConnections = dueFullTickConnections({
           connectionIds: uncoveredConnections, hasOpenPosition: connectionHasPosition,
           lastFlatTickAt: flatTickAtRef.current, now: Date.now(), flatIntervalMs: idleDelay,
+          // Vedlejší login (žádný účet ve skupině čerstvého workera) se na LIVE bez pozice čte po 30 s.
+          flatIntervalMsOf: connectionId => enabled && isWorkerSideConnection(workerReadCoverageRef.current,
+            connectionDataRef.current[connectionId]?.accounts.map(account => account.id) ?? [], Date.now()) ? SIDE_FLAT_TICK_INTERVAL_MS : 0,
           // Další plné čtení: s pozicí bez ručení workeru nejdřív za 6 s, jinak v příštím kole smyčky.
           nextRoundMs: FULL_TICK_ROUND_COST_MS + (hasOpenPosition ? ACTIVE_PNL_INTERVAL_MS
             : tradovatePositionPollDelay(enabled, journalFocus, Object.values(connectionDataRef.current)

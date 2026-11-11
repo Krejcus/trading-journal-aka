@@ -11,6 +11,34 @@
  * INV-TRAD-09).
  */
 
+/**
+ * Vedlejší připojení = worker právě hlásí stav a žádný účet tohoto připojení není v jeho skupině
+ * (např. DEMO login vedle skupiny Lucid). Přes appku se na něm neobchoduje, worker za něj neručí
+ * a graf z něj nic nepotvrzuje; bez pozice se čte po 30 s. Každá otevřená appka tak z rozpočtu
+ * toho loginu bere polovinu (11. 11. 2026: dvě appky držely login na hodinovém stropu).
+ * S pozicí, při poruše workera a u účtů skupiny platí původní tempo.
+ */
+export const SIDE_FLAT_TICK_INTERVAL_MS = 30_000;
+const WORKER_RECEIPT_MAX_AGE_MS = 8_000;
+
+export function isWorkerSideConnection(
+  receipt: { status?: unknown; observedAt?: number | null } | null | undefined,
+  accountIds: readonly number[],
+  now: number,
+): boolean {
+  const at = receipt?.observedAt;
+  if (at == null || !Number.isFinite(at) || at > now + 1_000 || now - at > WORKER_RECEIPT_MAX_AGE_MS) return false;
+  const status = receipt?.status as { controller?: { connected?: unknown }; group?: { leaderAccountId?: unknown; followers?: unknown } } | null | undefined;
+  if (status?.controller?.connected !== true) return false;
+  const leader = status.group?.leaderAccountId;
+  if (typeof leader !== 'number' || !Number.isSafeInteger(leader)) return false;
+  const followers = Array.isArray(status.group?.followers) ? status.group.followers as Array<{ accountId?: unknown }> : null;
+  // Neznámé složení skupiny = nevíme, zda účet do ní patří → původní tempo.
+  if (!followers || followers.some(row => typeof row?.accountId !== 'number')) return false;
+  const members = new Set<number>([leader, ...followers.map(row => row.accountId as number)]);
+  return accountIds.length > 0 && accountIds.every(id => !members.has(id));
+}
+
 /** Časovač se budí s rozptylem; čtení o chlup dřív nesmí přeskočit celé kolo. */
 const TIMER_SLACK_MS = 500;
 /** Rezerva na dobu samotného čtení při odhadu, kdy přijde další kolo plného čtení. */
@@ -30,6 +58,8 @@ export function dueFullTickConnections(options: {
   hasOpenPosition: (connectionId: string) => boolean;
   lastFlatTickAt: Readonly<Record<string, number | undefined>>;
   flatIntervalMs: number;
+  /** Vlastní interval pro jednotlivé připojení (vedlejší login); bez něj platí `flatIntervalMs`. */
+  flatIntervalMsOf?: (connectionId: string) => number;
   /** Odhad, za jak dlouho smyčka nabídne další plné čtení (raději delší: čte se pak dřív). */
   nextRoundMs: number;
   now: number;
@@ -37,8 +67,9 @@ export function dueFullTickConnections(options: {
   return options.connectionIds.filter(connectionId => {
     if (options.hasOpenPosition(connectionId)) return true;
     const last = options.lastFlatTickAt[connectionId];
+    const interval = Math.max(options.flatIntervalMs, options.flatIntervalMsOf?.(connectionId) ?? 0);
     return last == null || !Number.isFinite(last) || last > options.now
-      || options.now - last >= options.flatIntervalMs - TIMER_SLACK_MS
-      || options.now - last + Math.max(0, options.nextRoundMs) > options.flatIntervalMs;
+      || options.now - last >= interval - TIMER_SLACK_MS
+      || options.now - last + Math.max(0, options.nextRoundMs) > interval;
   });
 }
