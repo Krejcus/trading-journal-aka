@@ -185,3 +185,27 @@ neodpojoval). Žluté hlášky jsou dokladem chybějícího aktuálního ověře
 nikoli samy o sobě důkazem odpojeného loginu. Worker v 07:07:37 UTC hlásil oba
 loginy ready bez penalizace. Tato oprava žluté varování nepotlačuje ani uměle
 neprodlužuje jeho čerstvost.
+
+## iPhone na 5G: last-known přehled po obnovení tokenu
+
+Video z 08:47 ukázalo Lucid 0 / Aktualizuji data a červenou hlášku rozpočtu,
+zatímco PC mohlo držet starší data. Uživatel následně potvrdil samovolné obnovení
+účtů. Odpovídající serverový mechanismus byl reprodukován v API/SQL testu:
+po změně access tokenu stejného grantu a odmítnutí čtení rozpočtem dostal nový
+klient 503 místo posledního vlastního přehledu. Samotný původní request nebyl
+zpětně traceován. Oprava `20261112075926_preserve_last_known_accounts_after_token_renewal.sql`
+je již v DB a umožňuje pouze last-known účtový display za současného owner,
+connected, env, scope, principal, route a connected_at grantu (nejvýš 24 h).
+Neobnovuje časy dat ani jejich token fingerprint pro čerstvé čtení. Broker
+401/403 a změna/odpojení grantu zůstávají bez fallbacku; starý producer nesmí
+publikovat po změně tokenu. Toto není důkaz o aktuálních pozicích pro obchod.
+
+56 cílených testů + tsc prošlo. Původní chyba v testu 503, po opravě 200,
+stejné účty a původní requestedAt/cashAsOf, refreshPending=true. Tabulka, RLS
+a ACL se neměnily; invoker/service-role-only ověřeno. Žádná nová advisory
+výstraha této změny, starší server-only RLS/no-policy INFO se nezměnilo.
+Záloha funkce před nasazením je v
+`/private/tmp/alphatrade-shared-read-before-phone-fix-20261112.sql`.
+Serverový zásah funguje i pro již instalovaný build 1.0 (2), bez dalšího
+restartu workeru nebo reinstalace telefonu. Reálné vyčerpání rozpočtu se
+nezvyšuje ani neskrývá.

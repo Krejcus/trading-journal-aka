@@ -288,6 +288,110 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: upřesněno 20 MNQ / 2 NQ pro ruční vstupy, limit zatím NEZMĚNĚN
+
+- Uživatel upřesnil „20 mnq 2nq“ a následně opravil předchozí odpověď:
+  nejde o TradingView, nýbrž o ruční vstupy z AlphaTrade. Pracovní scope
+  Ahojda per-account byl vysloven, beze změny kopírovacích násobků.
+- Korekce dřívějšího závěru: není nutné měnit implicitní konstantu 1, protože
+  již existuje safety.leaderMaxContracts pro konkrétního leadera; MNQ20 je
+  validní hodnota (horní limit50). Během už zapnuté broker session je ovšem
+  přidání/zvýšení pravidla odmítnuto jako zmírnění. Zámek zůstává i po OFF.
+- Stav v08:10:33 UTC: Ahojda armed=true, shadow=false, sessionArmedAt>0,
+  groupFlat=false. Žádná změna konfigurace, ARM/DISARM, restart ani broker
+  příkaz nebyl proveden. Přímé dřívější ověření v08:07 bylo positions0/orders0,
+  ale novější groupFlat=false je směrodatnější; nelze používat starší flat.
+- Ruční parser LEADER_ENTRY_SYMBOL_PATTERN dnes pouští pouze MNQ futures.
+  Nelze vydávat nastavení obecného limitu20 za podporu nebo vynucení NQ2.
+  Ruční NQ vyžaduje samostatné doplnění/ověření ceny a celé execution cesty.
+- Konkrétní neaplikovaný návrh a blokace jsou v
+  /private/tmp/alphatrade-manual-entry-limit-request-20261112.json.
+  Risk lock ani povolené symboly se neobcházely. Vstupní požadavek na 20/2
+  není splněn nasazeným nastavením; je výslovně veden jako nedokončený.
+
+
+### 2026-11-12 — Codex: nahrávka iPhonu a serverová oprava posledního přehledu po obnově tokenu
+
+- Nahrávka 08:47:19 (7,03 s, 5G) ukázala Lucid 0 účtů / Aktualizuji data,
+  DEMO Connected a pak červený globální lokální rozpočet, nikoli jen žlutý
+  requestHealth banner. Uživatel poté potvrdil, že hlášky zmizely a účty vidí.
+  Krátká čistá PC kontrola neprokázala spolehlivost studeného telefonu.
+- Reprodukce na skutečném SQL v PGlite: baseline → běžná obnova access tokenu
+  stejného OAuth grantu → odmítnutí nového čtení rozpočtem. Původní RPC odmítlo
+  i last-known display kvůli starému token fingerprintu; API vrátilo 503.
+  Po opravě 200 se stejnými účty, původními časovými doklady a refreshPending.
+  Toto odpovídá mechanismu zaznamenaného výpadku; celý konkrétní request z
+  videa nebyl zpětně traceován. Tokeny se obnovily 07:41 UTC, nový úplný Lucid
+  základ vznikl 07:49:41 UTC; starý dříve změřený byl z 07:35 UTC.
+- Migrace `20261112075926_preserve_last_known_accounts_after_token_renewal.sql`
+  nasazena. Pouze last-known účtový DISPLAY smí přežít změnu tokenu. Nadále
+  vyžaduje aktuální owner/connected status/stejný principal, env, scope, route,
+  původní connected_at grant a hranici 24 h. Fresh cache a publish zachovávají
+  token fence. Cache se tím nepřeznačuje jako čerstvá ani jako execution doklad.
+  Broker 401/403, neplatný login, reconnect, změna scope/principalu cache nevrací.
+- 56 cílených testů, tsc OK. RPC nadále security invoker, execute jen postgres
+  a service_role; anon/authenticated bez EXECUTE. Advisory: žádné nové varování
+  této změny, stávající INFO RLS/no-policy u service-role-only cache očekávané.
+- Samostatný export původní funkce pro návrat před změnou:
+  /private/tmp/alphatrade-shared-read-before-phone-fix-20261112.sql
+  SHA256 b974d060261b8c70c75e873f156c4a98a28b18c967792d13074201bef6047eac.
+  Původní úplná DB záloha z rána zůstává. Neměněna tabulka, RLS ani role.
+- Tato serverová oprava platí ihned i pro již instalovaný iPhone 1.0 (2);
+  žádný nový mobile build ani worker reinstall nebyl potřeba. Limity dotazů
+  se nezvyšují; reálná budget/captcha/cooldown fakta se dál nezakrývají.
+- Nový požadavek: uživatel chce 20 MNQ / 2 NQ, pracovní scope Ahojda per-account.
+  Ještě se upřesňuje, zda jde o vstupy AlphaTrade nebo kopírování TradingView.
+  Žádný contract limit zatím neměněn. V 07:58 UTC runtime hlásil Ahojda ARMED;
+  Codex ARM/DISARM neposlal. Follower maxContracts nejsou nastavena, implicitní
+  manual vstup má 1. Důležité upřesnění: již existuje safety.leaderMaxContracts
+  (překryje implicitní 1), ale při session locku se strop nesmí zvýšit; navíc je
+  dnes symbolově obecný a ruční vstup povoluje pouze MNQ. Nesmí se vydávat
+  generických 20 za současné vynucení 2 NQ. Do obchodů a restartů se nezasahovalo.
+
+
+### 2026-11-12 — Codex: iPhone aktualizován na stejný kód jako web, ověřen build 1.0 (2)
+
+- Uživatel následně přímo potvrdil „Účty se zobrazují“ v LIVE aktualizované
+  iPhone aplikace. Tím je doplněn uživatelsky ověřený fyzický UI výsledek;
+  nejde o měření latence ani ověření obchodů/kopírování.
+- Uživatel výslovně požádal aktualizovat iPhone, bez obchodů či zapnutí kopírky.
+  Zdroj je čistý release `8a55cde506e3ba71a265e36dcc51bcabbbe70d93`, shodný
+  s webem; cizí rozpracované grafy v kanonickém checkoutu nebyly přibaleny.
+- `ios:sync` + doctor před/po syncu OK, nativní build bez service workeru.
+  Z kanonické konfigurace předány jen veřejné VITE_SUPABASE_URL/ANON_KEY,
+  žádné AI/private VITE klíče. Podepsaný Debug iOS build 1.0 (2), App + widgety
+  a notification extension; Xcode BUILD SUCCEEDED a systémové codesign verify
+  valid on disk / designated requirement OK. 229 webových souborů v App.app
+  se hashově shoduje s dist-native. Zkontrolována Supabase konfigurace,
+  plánování podle baselineAsOf i control-expired/warnAfter oprava.
+- Fyzický iPhone 18 Pro Max dostupný přes Wi-Fi; info apps před aktualizací
+  1.0 (1), po aktualizaci 1.0 (2). Instalace proběhla PŘES původní aplikaci,
+  bez odinstalace a mazání dat. devicectl potvrdil install a úspěšný launch.
+  50 cílených native/config/auth/shell/cache/notice testů prošlo.
+- Fyzická obrazovka LIVE nebyla přímo zobrazena. Mac iPhone Mirroring ukázal
+  úvodní nastavení, které Codex nepovoloval; okno bylo zavřeno. Uživateli
+  poslána krátká nepovinná otázka na zobrazení účtů. Instalaci/spuštění
+  nezaměňovat za důkaz fyzické UI latence nebo conformance obchodů.
+  Pozdější čtecí kontrola procesu již neměla dostupné spojení CoreDevice;
+  nepotvrzuje se tím další běh procesu. Úspěšný install/launch a verze2
+  byly ověřeny ještě před ztrátou tohoto přístupu. Uživatel následně potvrdil LIVE účty.
+- Nově hlášený lokální rozpočet nebyl dřívější krátký unknown banner:
+  DEMO v 07:33 UTC dosáhlo 40 background rezervací/min. Serverový full baseline
+  vznikl 07:33:07–08 UTC (13 rezervací); worker log prokázal heartbeat timeout
+  obou WS, nové autorizace 07:33:15–16 a read-only recovery flat/no-working
+  v 07:33:22, runtime zůstal DISARMED. Je to souběh obnovy UI a kontroly po
+  reconnectu, nikoli prokázaná broker 429 penalizace. V 07:40 UTC oba loginy
+  ready bez penalizace; limity a bezpečnostní kontroly nebyly měněny.
+- Worker stále fbd518c0, start 05:21:15 UTC, OFF; žádný broker obchod, ARM,
+  DISARM, změna skupiny, reinstall/restart workeru ani další webový deploy.
+- Doklady /private/tmp: alphatrade-ios-build2-verified-manifest.json,
+  alphatrade-ios-8a55cde5-build2.log, alphatrade-ios-build2-targeted-tests.log,
+  alphatrade-ios-build2-install-20261112.json, alphatrade-ios-build2-launch-20261112.json,
+  alphatrade-ios-build2-installed-20261112.json. Podepsaný App.app je v
+  /private/tmp/alphatrade-ios-8a55cde5-build2/Build/Products/Debug-iphoneos/.
+
+
+
 ### 2026-11-12 — Codex: krátké probliknutí žlutého ověření limitů
 
 - Na produkční stránce Připojení zachyceno 50 DOM vzorků během 20,268 s:

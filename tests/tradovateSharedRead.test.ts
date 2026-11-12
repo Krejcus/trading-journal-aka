@@ -6,13 +6,54 @@ beforeAll(async () => { db = await sharedReadDb(); }, 30_000);
 afterAll(async () => { await db?.pg.close(); });
 beforeEach(async () => {
   await db.pg.exec(`truncate public.tradovate_shared_reads;
-    update public.tradovate_oauth_connections set connection_status='connected', connected_at='2026-01-01', scope='read', encrypted_access_token='test-only';`);
+    update public.tradovate_oauth_connections set connection_status='connected', connected_at='2026-01-01', scope='read', encrypted_access_token='test-only', tradovate_user_id=42;`);
 });
 const read = (options: Partial<Parameters<typeof sharedTradovateRead>[0]> = {}) => sharedTradovateRead({
   context: db.context(), channel: 'accounts:full:v1', ttlMs: 600_000,
   read: async () => ({ capturedAt: '2026-11-12T06:00:00Z', accounts: [7] }), ...options,
 });
 describe('shared reads on actual PostgreSQL, with independent server clients', () => {
+  it('retains only the last-known account display after token renewal; fresh cache reads remain fenced', async () => {
+    await read();
+    await read({ channel: 'cash:7:v1' });
+    await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='renewed-test-token' where id='${CONNECTION}'`);
+    expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1')).toBeNull();
+    expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1', true)).toMatchObject({ accounts: [7] });
+    expect(await peekTradovateSharedRead(db.context(), 'cash:7:v1', true)).toBeNull();
+    // Serving a stale display never upgrades its authorization fingerprint for fresh reads.
+    expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1')).toBeNull();
+  });
+  it.each([
+    "connection_status='disconnected'",
+    "encrypted_access_token=null",
+    "scope='narrower'",
+    "connected_at=clock_timestamp()",
+    'tradovate_user_id=43',
+  ])('does not retain old account display after %s', async mutation => {
+    await read();
+    await db.pg.exec(`update public.tradovate_oauth_connections set ${mutation} where id='${CONNECTION}'`);
+    if (mutation.includes('disconnected') || mutation.includes('=null')) {
+      await expect(peekTradovateSharedRead(db.context(), 'accounts:full:v1', true)).rejects.toThrow('tradovate-not-connected');
+    } else expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1', true)).toBeNull();
+  });
+  it('never publishes an old-token reader after token renewal', async () => {
+    let finish!: () => void;
+    const pending = read({ read: () => new Promise(resolve => { finish = () => resolve({ oldToken: true }); }) });
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 1));
+    await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='renewed-test-token' where id='${CONNECTION}'`);
+    finish();
+    await expect(pending).rejects.toBeInstanceOf(TradovateSharedReadDeferred);
+    expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1', true)).toBeNull();
+  });
+  it('keeps owner, environment, route and the 24-hour bound on the old-token display fallback', async () => {
+    await read();
+    await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='renewed-test-token' where id='${CONNECTION}'`);
+    await expect(peekTradovateSharedRead({ ...db.context(), userId: OTHER_OWNER }, 'accounts:full:v1', true)).rejects.toThrow('tradovate-not-connected');
+    await expect(peekTradovateSharedRead({ ...db.context(), environment: 'live' }, 'accounts:full:v1', true)).rejects.toThrow('tradovate-not-connected');
+    expect(await peekTradovateSharedRead({ ...db.context(), route: 'https://other-route.test' }, 'accounts:full:v1', true)).toBeNull();
+    await db.pg.exec(`update public.tradovate_shared_reads set source_started_at=clock_timestamp()-interval '25 hours',fresh_until='-infinity'`);
+    expect(await peekTradovateSharedRead(db.context(), 'accounts:full:v1', true)).toBeNull();
+  });
   it('coalesces 30 simultaneous cold starts, then 300 warm opens, to one upstream read', async () => {
     const upstream = vi.fn(async () => {
       await new Promise(resolve => setTimeout(resolve, 20));

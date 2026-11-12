@@ -48,6 +48,34 @@ async function call(handler: typeof preflight | typeof pnl, body: Record<string,
 }
 const open = () => call(preflight, { mode: 'full', historicalProbe: false });
 describe('same read model behind existing web and iPhone APIs', () => {
+  it.each([401, 403])('does not hide broker %i behind the last-known display after token renewal', async status => {
+    await open();
+    await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='renewed-test-token' where id='${CONNECTION}'`);
+    state.fetch.mockResolvedValue(new Response('{}', { status }));
+    try {
+      const denied = await open();
+      expect(denied.status).toBe(status);
+      expect(denied.body).toEqual({ error: 'tradovate-read-denied' });
+      expect(denied.body).not.toHaveProperty('accounts');
+    } finally {
+      await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='test-only' where id='${CONNECTION}'`);
+    }
+  });
+  it('keeps the last-known account baseline during a budget refusal after routine token renewal', async () => {
+    const initial = await open();
+    await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='renewed-test-token' where id='${CONNECTION}'`);
+    state.rejectCapacity = true;
+    state.fetch.mockRejectedValue(new TradovateRequestControlError('tradovate-request-budget', 20_000));
+    try {
+      const retained = await open();
+      expect(retained.status).toBe(200);
+      expect(retained.body.accounts).toEqual(initial.body.accounts);
+      expect(retained.body.requestedAt).toBe(initial.body.requestedAt);
+      expect(retained.body.sharedRead.refreshPending).toBe(true);
+    } finally {
+      await db.pg.exec(`update public.tradovate_oauth_connections set encrypted_access_token='test-only' where id='${CONNECTION}'`);
+    }
+  });
   it('serializes the worker tick without leaking the circular server database client or owner context', async () => {
     await open();
     const now = Date.now();
