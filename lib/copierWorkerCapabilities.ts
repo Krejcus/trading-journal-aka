@@ -259,3 +259,12 @@ export const COPIER_POSITION_REDUCE_CAPABILITY = 'manual-position-reduce-v1';
 export const supportsCopierPositionReduce = (
   status: { capabilities?: readonly string[] | null } | null | undefined,
 ): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_POSITION_REDUCE_CAPABILITY);
+
+/**
+ * Worker umí posun SL/TP NEVYPLNĚNÉHO vlastního vstupu ve skupině (12. 11. 2026, opt-in
+ * `--group-pending-legs on` nad group-limits). Bez ní čáry nohou čekajícího vstupu ve skupině táhnout nejdou.
+ */
+export const COPIER_GROUP_PENDING_LEGS_CAPABILITY = 'manual-group-limit-pending-legs-v1';
+export const supportsCopierGroupPendingLegs = (
+  status: { capabilities?: readonly string[] | null } | null | undefined,
+): boolean => Array.isArray(status?.capabilities) && status.capabilities.includes(COPIER_GROUP_PENDING_LEGS_CAPABILITY);

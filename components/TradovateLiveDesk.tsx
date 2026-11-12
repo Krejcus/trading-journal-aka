@@ -160,7 +160,7 @@ import { manualEntryContractCap } from '../services/manualEntryPreview';
 import { liveBareEntryRecord, liveEntryBlockedReason, livePhoneManageFields, livePhonePosition, type LivePhoneTradeBridge } from '../lib/livePhoneOrders';
 import { supportsCopierManualOrderPendingLegs, supportsCopierManualOrderMoveLimit, supportsCopierGroupLimitMove, supportsCopierGroupLimitBare, supportsCopierGroupLimitManage } from '../lib/copierWorkerCapabilities';
 import { groupLimitCommandFields, groupLimitCancelExpect, groupLimitPendingMoveTrade, groupLimitPositionManageTrade, groupLimitCancelTrade, groupLimitLegTrade, groupLimitOwnManageEntry } from '../lib/groupLimitUi';
-import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierGroupMarket, supportsCopierPositionReduce, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
+import { copierWorkerExecutionGroup, supportsCopierManualEntry, supportsCopierManualEntryBare, supportsCopierGroupMarket, supportsCopierPositionReduce, supportsCopierGroupPendingLegs, supportsCopierManualEntryBarePending, supportsCopierManualOrderMoveBareEntry, supportsCopierManualEntryMarket, supportsCopierManualEntryScaleIn, supportsCopierManualOrderClose, supportsCopierManualOrderCloseBare, supportsCopierManualOrderSingleLeg, supportsCopierManualOrderCancelPending, supportsCopierManualOrderManage, supportsCopierFollowerExcludeWithExposure, supportsCopierGroupDelete, supportsCopierTransportAutoResume, supportsCopierIncidentAck, supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { leaderManageBasis, liveFillSlippageNote, NO_LIVE_CHART_POSITION, type LiveChartPosition } from '../lib/liveChartPosition';
 import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, createCopierArmGuard, prepareCopierArmGroup, retireMissingFromError, sendCopierArm } from '../lib/copierArmPreparation';
@@ -1309,12 +1309,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     const groupPath = executionGroup.manualOnly !== true && (supportsCopierGroupLimitMove(current.status) || supportsCopierGroupLimitManage(current.status));
     const ownOperationId = entry.source === 'own' ? entry.entryOperationId : null;
-    const groupTrade = groupPath ? action === 'move-limit'
+    // Posun SL/TP čekajícího vstupu ve skupině: stejný čekající obchod jako posun vstupu, jen s capability workeru.
+    const pendingLegMove = (action === 'move-stop' || action === 'move-target') && groupPath && supportsCopierGroupPendingLegs(current.status)
+      ? groupLimitPendingMoveTrade(current.status, ownOperationId, entry.symbol) : null;
+    const groupTrade = pendingLegMove ?? (groupPath ? action === 'move-limit'
       ? groupLimitPendingMoveTrade(current.status, ownOperationId, entry.symbol)
       : action === 'cancel-entry'
         ? groupLimitCancelTrade(current.status, ownOperationId, entry.symbol)
-        : groupLimitPositionManageTrade(current.status, ownOperationId, entry.symbol) : null;
-    const seenGroup = action === 'move-limit' ? groupLimitMoveTrade
+        : groupLimitPositionManageTrade(current.status, ownOperationId, entry.symbol) : null);
+    const seenGroup = action === 'move-limit' || pendingLegMove ? groupLimitMoveTrade
       : action === 'cancel-entry' ? groupLimitCancelView : groupLimitPositionTrade;
     if ((seenGroup && !groupPath) || (groupPath && (!groupTrade || groupTrade.stateHash !== (seenGroupLimitStateHash ?? seenGroup?.stateHash)))) {
       throw new LiveCommandNotSentError('Stav příkazu není čerstvě ověřený pro všechny účty — nic se neodeslalo.');
@@ -1327,7 +1330,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         groupLimitStateHash: groupTrade.stateHash, action, operationId });
     }
     const groupLeader = groupTrade?.accounts.find(row => row.role === 'leader');
-    const groupQuantity = action === 'move-limit' ? groupLeader?.entry?.quantity : groupLeader?.openQuantity;
+    const groupQuantity = action === 'move-limit' || pendingLegMove ? groupLeader?.entry?.quantity : groupLeader?.openQuantity;
     const command = buildLeaderOrderManageCommand({
       groupId: executionGroup.id, operationId,
       leaderAccountId: executionGroup.leaderAccountId,
@@ -2242,7 +2245,9 @@ acceptAgentStatus((await executeAgent({
           // z pollu nemusí patřit ke kusům v grafu (přikoupení) — BE počká na poll.
           manageEntryAvgPrice={chartLive.status === agentStatus ? ownManualEntry?.entryAvgPrice ?? null : null}
           manageCloseSupported={groupLimitPositionTrade != null || supportsCopierManualOrderClose(agentStatus) && ownManualEntry?.bare !== true}
-          managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)}
+          // Ve skupině jen s vlastní capability a jen u čekajícího vstupu se SL i TP na všech účtech (12. 11. 2026).
+          managePendingLegsSupported={supportsCopierManualOrderPendingLegs(agentStatus)
+            || (supportsCopierGroupPendingLegs(agentStatus) && groupLimitMoveTrade != null && groupLimitMoveTrade.accounts.every(row => row.stop != null && row.target != null))}
           manageMoveLimitSupported={supportsCopierManualOrderMoveLimit(agentStatus) && ownManualEntry?.source === 'own' && ownManualEntry.bare !== true}
           manageGroupLimitMoveSupported={groupLimitMoveTrade != null}
           manageGroupLimitStateHash={groupLimitMoveTrade?.stateHash ?? groupLimitPositionTrade?.stateHash ?? groupLimitCancelView?.stateHash ?? null}
