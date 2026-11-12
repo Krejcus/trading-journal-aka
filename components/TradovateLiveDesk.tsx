@@ -176,10 +176,11 @@ import { mergeCopierLiveExposure, type CopierLiveExposureReceived } from '../lib
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
+import { LIVE_CHART_ENABLED } from '../lib/liveChartEnabled';
 import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash } from './LiveTradingScreenSlot';
 
 /** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
-const liveChartAvailableNow = () => typeof window !== 'undefined'
+const liveChartAvailableNow = () => LIVE_CHART_ENABLED && typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && !window.matchMedia('(max-width: 1023px)').matches
   && !isNativeShell();
@@ -397,8 +398,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   onRequestedTabHandled,
   macCompanionPairingIntent = false,
   onMacCompanionPairingIntentHandled,
-  phoneChart,
+  phoneChart: phoneChartSlot,
 }) => {
+  // Vypnutý LIVE graf: telefonní slot se vůbec nepřipojí (viz `LIVE_CHART_ENABLED`).
+  const phoneChart = LIVE_CHART_ENABLED ? phoneChartSlot : undefined;
   // Desktop: klik na LIVE otevře rovnou živý graf přes celou obrazovku
   // (Filip 29. 10.); deep link s konkrétní záložkou má přednost. Telefon
   // a nativní aplikace zůstávají na přehledu.
@@ -419,7 +422,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [flattenNotice, setFlattenNotice] = useState<LiveSafetyNotice | null>(null);
   // Každá brzda včetně Flatten All synchronně zruší rozběhnuté zapínání (`createCopierArmGuard`).
   const armCancelEpochRef = useRef(0);
-  const chartAvailable = !narrow && !isNativeShell();
+  const chartAvailable = LIVE_CHART_ENABLED && !narrow && !isNativeShell();
   // Telefon a nativní appka: graf dneška z deníku místo desktopového LIVE grafu.
   const phoneChartAvailable = !chartAvailable && Boolean(phoneChart);
   const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
