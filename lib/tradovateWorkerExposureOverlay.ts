@@ -6,8 +6,8 @@ import type {
   TradovateAccountPosition,
 } from './tradovateAccountDataTypes';
 import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
-import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
-import { tradovateAccountReadState } from './tradovateLiveReadState';
+import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage.js';
+import { tradovateAccountReadState } from './tradovateLiveReadState.js';
 
 /** Starší doručení důkazu kontinuity už nepokrývá webové čtení. */
 export const WORKER_EXPOSURE_MAX_AGE_MS = 8_000;

@@ -28,6 +28,7 @@ export function tradovateRequestHealthDisplay(rows: readonly TradovateRequestHea
 
 /** Lidsky čitelný text místo surového kódu chyby Tradovate čtení (jen zobrazení). */
 export function tradovateHumanErrorMessage(message: string): string {
+  if (message === 'tradovate-read-pending') return 'Účty se právě aktualizují. Poslední známá data zůstávají zobrazená.';
   if (message === 'tradovate-request-budget') return 'Aplikace teď šetří dotazy na Tradovate (lokální rozpočet požadavků) — data se doplní za chvilku samy.';
   if (/^tradovate-request-/.test(message)) return 'Dotazy na Tradovate jsou dočasně omezené — data se doplní za chvilku samy.';
   return message;

@@ -7,14 +7,12 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
-import { loadTradovateAccountData } from '../../../server/tradovateAccountData.js';
 import { requestTradovatePerformanceReport } from '../../../server/tradovateHistoricalReport.js';
+import { sharedTradovateRead, TradovateSharedReadDeferred } from '../../../server/tradovateSharedRead.js';
+import { readSharedTradovateAccounts } from '../../../server/tradovateSharedAccountState.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
 const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
-
-/** Odhad ceny jednoho čtení historie pro poradní kontrolu: krátké čtení účtů (4 + až 6 účtů) a report. */
-const HISTORY_READ_COST = 12;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -39,32 +37,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
-    // Poradní kontrola kapacity před čtením (11. 11. 2026): krátké čtení účtů + report.
-    await assertTradovateBackgroundCapacity({ db, userId, connectionId, brokerUserId }, HISTORY_READ_COST);
-    // Vlastnictví účtu stačí ověřit krátkým čtením (4 + počet účtů dotazů); plné čtení
-    // (9 + 4× počet účtů) tu jen zbytečně ubíralo z rozpočtu sdíleného s kopírkou.
-    const accounts = await loadTradovateAccountData({
-      baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
-      accessToken,
-      fetchImpl,
-      detail: 'bootstrap',
-    });
+    const baseUrl = tradovateApiBaseUrl(config.environment, apiHosts);
+    const context = { db, userId, connectionId, environment: config.environment, route: JSON.stringify([baseUrl, apiHosts ?? null]) };
+    const accounts = await readSharedTradovateAccounts({ context, baseUrl, accessToken, fetchImpl, brokerUserId, detail: 'bootstrap' });
     const account = accounts.accounts.find(candidate => candidate.id === accountId);
-    if (!account) {
-      return res.status(403).json({ error: 'account-not-owned' });
-    }
-    const result = await requestTradovatePerformanceReport({
-      environment: config.environment,
-      apiHosts,
-      accessToken,
-      fetchImpl,
-      accountId,
-      accountSpec: account.name,
-      startDate,
-      endDate,
-    });
+    if (!account) return res.status(403).json({ error: 'account-not-owned' });
+    const result = (await sharedTradovateRead({ context, channel: `history:${accountId}:${startDate}:${endDate}:v1`, ttlMs: 120_000,
+      read: async () => {
+        await assertTradovateBackgroundCapacity({ db, userId, connectionId, brokerUserId }, 1);
+        return requestTradovatePerformanceReport({ environment: config.environment, apiHosts, accessToken, fetchImpl,
+          accountId, accountSpec: account.name, startDate, endDate });
+      },
+      cacheable: value => value.status === 'available',
+    })).value;
     return res.status(200).json(result);
   } catch (error) {
+    if (error instanceof TradovateSharedReadDeferred) return res.status(503).json({ error: error.message, retryAfterMs: error.retryAfterMs, notDispatched: true });
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,

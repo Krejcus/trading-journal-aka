@@ -54,6 +54,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.16",
     "@eslint/js": "^10.0.1",
     "@stoqey/ib": "1.6.13",
     "@tailwindcss/vite": "^4.1.18",

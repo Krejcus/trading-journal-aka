@@ -1,5 +1,5 @@
 import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';
-import { hasCompleteTradovateRead } from './tradovateLiveReadState';
+import { hasCompleteTradovateRead } from './tradovateLiveReadState.js';
 import type { TradovateAccountDataResult } from './tradovateAccountDataTypes';
 
 export const WORKER_COVERAGE_MAX_AGE_MS = 8_000;

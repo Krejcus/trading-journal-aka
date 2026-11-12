@@ -1,6 +1,5 @@
 import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { loadTradovateAccountIdentity } from '../../../server/tradovateAccountData.js';
 import {
   loadTradovateHistorySnapshot,
   runTradovatePerformanceBackfillStep,
@@ -12,6 +11,8 @@ import {
   readTradovateServerConfig,
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
+import { sharedTradovateRead, TradovateSharedReadDeferred } from '../../../server/tradovateSharedRead.js';
+import { readSharedTradovateAccounts } from '../../../server/tradovateSharedAccountState.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -52,55 +53,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'invalid-history-sync-request' });
     }
 
-    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
+    const { accessToken, apiHosts, fetchImpl, brokerUserId } = await getValidTradovateAccessToken({
       db,
       config,
       userId,
       connectionId,
     });
-    const existing = await loadTradovateHistorySnapshot({
-      db,
-      userId,
-      environment: config.environment,
-      accountId,
-      limit: 1,
+    const baseUrl = tradovateApiBaseUrl(config.environment, apiHosts);
+    const context = { db, userId, connectionId, environment: config.environment, route: JSON.stringify([baseUrl, apiHosts ?? null]) };
+    const accounts = await readSharedTradovateAccounts({ context, baseUrl, accessToken, fetchImpl, brokerUserId, detail: 'bootstrap' });
+    const identity = accounts.accounts.find(account => account.id === accountId);
+    if (!identity) return res.status(403).json({ error: 'account-not-owned' });
+    const result = await sharedTradovateRead({ context,
+      channel: `history-sync:${accountId}:${startDate ?? 'default'}:${endDate ?? 'today'}:v1`,
+      ttlMs: value => value.sync.status === 'complete' ? 120_000 : 1_000,
+      read: async () => {
+        const sync = await runTradovatePerformanceBackfillStep({
+          db,
+          userId,
+          connectionId,
+          environment: config.environment,
+          accessToken,
+          fetchImpl,
+          apiHosts,
+          accountId,
+          accountName: identity.name,
+          accountCreatedAt: identity.createdAt,
+          startDate,
+          endDate,
+        });
+        const snapshot = await loadTradovateHistorySnapshot({
+          db,
+          userId,
+          environment: config.environment,
+          accountId,
+        });
+        return { ...snapshot, sync };
+      },
     });
-    let accountName = existing.sync?.accountName ?? null;
-    let accountCreatedAt = existing.sync?.accountCreatedAt ?? null;
-    if (!accountCreatedAt) {
-      const identity = await loadTradovateAccountIdentity({
-        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
-        accessToken,
-        fetchImpl,
-        accountId,
-      });
-      accountName = identity?.name ?? accountName;
-      accountCreatedAt = identity?.createdAt ?? null;
-    }
-    if (!accountName) return res.status(403).json({ error: 'account-not-owned' });
-
-    const sync = await runTradovatePerformanceBackfillStep({
-      db,
-      userId,
-      connectionId,
-      environment: config.environment,
-      accessToken,
-      fetchImpl,
-      apiHosts,
-      accountId,
-      accountName,
-      accountCreatedAt,
-      startDate,
-      endDate,
-    });
-    const snapshot = await loadTradovateHistorySnapshot({
-      db,
-      userId,
-      environment: config.environment,
-      accountId,
-    });
-    return res.status(200).json({ ...snapshot, sync });
+    return res.status(200).json(result.value);
   } catch (error) {
+    if (error instanceof TradovateSharedReadDeferred) return res.status(503).json({ error: error.message, retryAfterMs: error.retryAfterMs, notDispatched: true });
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,

@@ -231,6 +231,8 @@ export interface TradovateAccountDataAccount {
 }
 
 export interface TradovateAccountDataResult {
+  /** Shared display baseline metadata; never execution/risk evidence. */
+  sharedRead?: { baselineAsOf: string; refreshPending: boolean; retryAfterMs?: number };
   capturedAt: string;
   requestedAt?: string;
   accounts: TradovateAccountDataAccount[];

@@ -10,40 +10,15 @@ import {
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
 import {
   loadTradovateLivePnlAnchor,
-  loadTradovateLivePnlTick,
   TradovateLivePnlError,
 } from '../../../server/tradovateLivePnl.js';
+import { sharedTradovateRead, TradovateSharedReadDeferred } from '../../../server/tradovateSharedRead.js';
+import { readWorkerSharedCash } from '../../../server/tradovateSharedWorkerRead.js';
+import { readSharedTradovateTick } from '../../../server/tradovateSharedAccountState.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
-/**
- * Krátká paměť ticků na připojení. Web, iPhone a companion pollují nezávisle
- * a každý tick stojí 3–4 Tradovate REST volání se stejným tokenem, který drží
- * i copier worker; Tradovate při překročení limitu zavírá jeho socket a
- * penalizuje sync (18. 9. 2026). Souběžné i těsně následující požadavky na
- * stejné připojení dostanou jeden sdílený výsledek; cache žije jen ve warm
- * instanci a nikdy nevrací starší data než TICK_COALESCE_MS.
- */
-const TICK_COALESCE_MS = 2_500;
-const CASH_COALESCE_MS = 5_000;
-const recentTicks = new Map<string, { at: number; result: Promise<unknown> }>();
-
-function coalesce<T>(key: string, ttlMs: number, now: number, read: () => Promise<T>): Promise<T> & { shared?: boolean } {
-  const cached = recentTicks.get(key);
-  if (cached && now - cached.at < ttlMs) return Object.assign(cached.result.then(value => value) as Promise<T>, { shared: true });
-  const result = read();
-  recentTicks.set(key, { at: now, result });
-  // Selhání se nesdílí: další požadavek zkusí broker znovu.
-  result.catch(() => { if (recentTicks.get(key)?.result === result) recentTicks.delete(key); });
-  if (recentTicks.size > 500) {
-    for (const [candidate, entry] of recentTicks) if (now - entry.at >= Math.max(ttlMs, CASH_COALESCE_MS)) recentTicks.delete(candidate);
-  }
-  return result;
-}
-
-/** Jen pro testy: zapomene sdílené ticky. */
-export function resetTradovateLivePnlCoalescingForTests(): void {
-  recentTicks.clear();
-}
+/** Compatibility test hook; there is no per-process data cache. */
+export function resetTradovateLivePnlCoalescingForTests(): void {}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -56,26 +31,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
-    const contractCursor = typeof req.body?.contractCursor === 'number' ? req.body.contractCursor : 0;
-    const { accessToken, apiHosts, fetchImpl } = await getValidTradovateAccessToken({
-      db: createTradovateAdminClient(config),
+    const db = createTradovateAdminClient(config);
+    const { accessToken, apiHosts, fetchImpl, brokerUserId } = await getValidTradovateAccessToken({
+      db,
       config,
       userId,
       connectionId,
     });
+    const baseUrl = tradovateApiBaseUrl(config.environment, apiHosts);
+    const context = { db, userId, connectionId, environment: config.environment, route: JSON.stringify([baseUrl, apiHosts ?? null]) };
     if (req.body?.mode === 'cash') {
       const accountId = Number(req.body?.accountId);
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
-      const requestedAt = new Date().toISOString();
-      let brokerCalls = 0;
-      const pending = coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
-        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts), accessToken, fetchImpl, accountId, signal: AbortSignal.timeout(8_000), onBrokerRequest: () => { brokerCalls += 1; },
-      }));
-      const fields = await pending;
-      // Counts physical reads; warm currency metadata saves the third call.
-      return res.status(200).json({ kind: 'account-display-v1', brokerCalls: pending.shared ? 0 : brokerCalls, snapshot: {
-        connectionId, environment: config.environment, accountId, requestedAt, confirmedAt: new Date().toISOString(), fields,
-      } });
+      const worker = await readWorkerSharedCash(context, accountId);
+      if (worker) return res.status(200).json({ kind: 'account-display-v1', brokerCalls: 0, snapshot: worker });
+      const result = await sharedTradovateRead({ context, channel: `cash:${accountId}:v1`, ttlMs: 120_000,
+        read: async () => {
+          const requestedAt = new Date().toISOString();
+          let brokerCalls = 0;
+          const fields = await readTradovateAccountDisplay({ baseUrl, accessToken, fetchImpl, accountId,
+            signal: AbortSignal.timeout(8_000), onBrokerRequest: () => { brokerCalls += 1; } });
+          return { brokerCalls, snapshot: { connectionId, environment: config.environment, accountId,
+            requestedAt, confirmedAt: new Date().toISOString(), fields } };
+        },
+      });
+      return res.status(200).json({ kind: 'account-display-v1', brokerCalls: result.shared ? 0 : result.value.brokerCalls,
+        snapshot: { ...result.value.snapshot, connectionId } });
     }
     if (req.body?.mode === 'anchor') {
       const accountId = Number(req.body?.accountId);
@@ -86,28 +67,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!Number.isSafeInteger(contractId) || contractId <= 0) {
         return res.status(400).json({ error: 'invalid-contract-id' });
       }
-      const anchor = await loadTradovateLivePnlAnchor({
-        baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
-        accessToken,
-        fetchImpl,
-        connectionId,
-        environment: config.environment,
-        accountId,
-        contractId,
+      const result = await sharedTradovateRead({ context, channel: `anchor:${accountId}:${contractId}:v1`, ttlMs: 30_000,
+        read: () => loadTradovateLivePnlAnchor({ baseUrl, accessToken, fetchImpl, connectionId,
+          environment: config.environment, accountId, contractId }),
       });
-      return res.status(200).json(anchor);
+      return res.status(200).json({ ...result.value, connectionId, brokerCalls: result.shared ? 0 : result.value.brokerCalls });
     }
-    const pendingTick = coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
-      baseUrl: tradovateApiBaseUrl(config.environment, apiHosts),
-      accessToken,
-      fetchImpl,
-      connectionId,
-      environment: config.environment,
-      contractCursor,
-    }));
-    const tick = await pendingTick;
-    return res.status(200).json(pendingTick.shared ? { ...tick, brokerCalls: 0 } : tick);
+    const tick = await readSharedTradovateTick({ context, baseUrl, accessToken, fetchImpl, brokerUserId });
+    return res.status(200).json(tick);
   } catch (error) {
+    if (error instanceof TradovateSharedReadDeferred) return res.status(503).json({ error: error.message, retryAfterMs: error.retryAfterMs, notDispatched: true });
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,

@@ -1,6 +1,6 @@
 /** Display evidence only; never authorizes execution or removes accounts. */
 export interface TradovateConnectionHealth {
-  state: 'verified' | 'reconnect-required' | 'unavailable' | 'budget-limited' | 'cooldown' | 'captcha';
+  state: 'verified' | 'refreshing' | 'reconnect-required' | 'unavailable' | 'budget-limited' | 'cooldown' | 'captcha';
   requestedAt: number;
 }
 export type TradovateConnectionHealthMap = Record<string, TradovateConnectionHealth>;
@@ -12,6 +12,7 @@ export function applyTradovateConnectionHealth(
   const message = error instanceof Error ? error.message : '';
   const state = error == null ? 'verified'
     : message === 'tradovate-reauthorization-required' ? 'reconnect-required'
+      : message === 'tradovate-read-pending' ? 'refreshing'
       : message === 'tradovate-request-budget' ? 'budget-limited'
       : message === 'tradovate-request-cooldown' ? 'cooldown'
       : message === 'tradovate-request-captcha' ? 'captcha' : 'unavailable';
@@ -23,6 +24,7 @@ export function applyTradovateConnectionHealth(
 export function tradovateConnectionPresentation(connected: boolean, health?: TradovateConnectionHealth) {
   if (!connected) return { label: 'Disconnected', reconnect: true, healthy: false };
   if (health?.state === 'reconnect-required') return { label: 'Obnov přihlášení', reconnect: true, healthy: false };
+  if (health?.state === 'refreshing') return { label: 'Aktualizuji data', reconnect: false, healthy: false };
   if (health?.state === 'budget-limited') return { label: 'Načítání omezeno rozpočtem', reconnect: false, healthy: false };
   if (health?.state === 'cooldown') return { label: 'Broker dočasně omezil požadavky', reconnect: false, healthy: false };
   if (health?.state === 'captcha') return { label: 'Broker vyžaduje ověření', reconnect: false, healthy: false };

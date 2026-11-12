@@ -658,7 +658,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         (connectionId, result) => {
           if (!isCurrent()) return;
           setConnectionHealth(current => applyTradovateConnectionHealth(
-            current, connectionId, healthRequestedAt, result.status === 'rejected' ? result.reason : undefined,
+            current, connectionId, healthRequestedAt, result.status === 'rejected' ? result.reason : result.value.sharedRead?.refreshPending ? new Error('tradovate-read-pending') : undefined,
           ));
           if (detail === 'full') {
             if (result.status === 'rejected') {
@@ -666,8 +666,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               markFailure(connectionId, result.reason);
             } else {
               const limitedFor = datasetRateLimitMs(result.value);
-              if (limitedFor == null) markSuccess(connectionId);
-              else markFailure(connectionId, new TradovateRequestError('Tradovate rate limited a partial read.', 429, limitedFor));
+              if (limitedFor != null) markFailure(connectionId, new TradovateRequestError('Tradovate rate limited a partial read.', 429, limitedFor));
+              else if (result.value.sharedRead?.refreshPending) {
+                const pending = new TradovateRequestError('tradovate-read-pending', 503, result.value.sharedRead.retryAfterMs ?? 5_000);
+                recordRateLimit(connectionId, pending);
+                markFailure(connectionId, pending);
+              } else markSuccess(connectionId);
             }
           }
         },

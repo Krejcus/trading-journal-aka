@@ -288,6 +288,53 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: implementován společný čtecí stav LIVE (zatím lokální)
+
+Uživatel schválil předělání společného stavu web/telefon a testy, výslovně bez
+obchodů a zapnutí kopírky. Implementace je v oddělené větvi
+`codex/shared-live-state-20261112` nad `30f87879`, checkout:
+`/Users/filipkrejca/Documents/trading-journal-aka/.codex-worktrees/shared-live-state-20261112`.
+Rozpracované grafy v hlavním checkoutu zůstaly zachované. Žádný push ani commit.
+
+- `preflight`, `live-pnl`, `history`, `history-sync` používají sdílené SQL snímky
+  a atomické lease napříč instancemi/zařízeními. Stejný broker login se může
+  sdílet i přes dvě připojení téhož vlastníka; cizí uživatel, prostředí, hosty,
+  scope a odvolaná autorizace zůstávají oddělené. Součástí je sdílený odklad
+  po chybě a odmítnutí pozdního výsledku starého čtenáře.
+- Přednost má již uložený čerstvý worker stream s přísným dokladem všech účtů,
+  nikoli samotná kontinuita. Kopie stejného procesu přes více OAuth zařízení
+  se slučují; dvě různé instance jsou nejednoznačné. Nové OAuth přihlášení
+  vyžaduje novou baseline; běžné prodloužení tokenu neruší existující WS session.
+- Úplný základ 10 min, REST tick jako společná 30s záloha, cash záloha 120 s,
+  kotva 30 s. Historické reporty a capability se nesbírají pro každý telefon
+  zvlášť. Cursory rychlého čtení vlastní společný sběrač, nikoli klient.
+- Při dočasné chybě zůstane poslední známý účet s původními časy a pending
+  metadaty (nejdéle 24 h od sběru). Nový hook jej nepovažuje za dokončenou
+  obnovu a znovu ji naplánuje. Žádná falešná nula/flat ani nová risk autorita.
+- Připravena, NEAPLIKOVÁNA migrace
+  `20261112055954_tradovate_shared_read_state.sql`: jedna nová tabulka, index
+  a invoker funkce, přístup pouze service role, RLS zapnuté, bez broker tokenů.
+  Pro uvedení do provozu je navržena nejprve samostatná záloha/export vzdálené
+  DB + záznam současného nasazení, potom samostatně schválená migrace/advisory
+  a nasazení webu. Worker se kvůli tomu nepřeinstalovává ani nepřepíná.
+- Ověřeno: npm ci, typecheck (6GB limit; výchozí 2GB nestačí celému repu),
+  web build, native build/boot kontrola, Node ESM cold-load. Celá sada:
+  8764 passed / 1 todo, 812 passed / 1 skipped souborů (281,57 s).
+  Po kontrole navíc 130 cílených testů a posledních 76 testů prošlo.
+  SQL testy běží na skutečném lokálním PostgreSQL/PGlite bez produkčních dat.
+- Laboratorní měření: 30 souběžných + 300 následných otevření = 1 upstream
+  čtení (220 ms studená dávka při umělé 20ms odpovědi). API se dvěma účty:
+  12 souběžných + 30 následných otevření = 1 úplná dávka / 16 testovacích
+  broker čtení (270 ms celý scénář). Nejde o broker→PC/iPhone latence.
+- Jediná živá kontrola byla SELECT metadat runtime (07:21 SEČ): instalace
+  fbd518c0 posílá build time, členství, 4 řádky dokladu a 2 display feedy.
+  Žádný broker dotaz, skutečný obchod, ARM/DISARM, restart či reinstall.
+- Není nasazeno; současný telefon začne sdílet server po nasazení bez nutnosti
+  rebuildovat appku. Nový text aktualizace se objeví až s dalším nativním buildem.
+  Živý test dvou webů + telefonu a měření dotazů musí následovat po schváleném
+  nasazení, bez obchodních úkonů. Report: `docs/reviews/shared-live-state-20261112.md`.
+
+
 ### 2026-11-10 22:12 — Claude: NASAZENO c40faab1 (chart-worker-projection), Filip „nasaď to a otestuj“
 
 - `main`: revert revertu 97774d38 + merge větve (strom shodný s 1b015607). Vercel READY.

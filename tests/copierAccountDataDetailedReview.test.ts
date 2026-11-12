@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sharedReadDb, OWNER, CONNECTION } from './helpers/tradovateSharedReadDb';
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+const database=vi.hoisted(()=>({client:null as any}));
+let db:Awaited<ReturnType<typeof sharedReadDb>>;
+beforeAll(async()=>{db=await sharedReadDb();database.client=db.client();},30_000);
+afterAll(async()=>{await db?.pg.close();});
+vi.mock('../server/tradovateServerRequestControl.js',async original=>({...await original<typeof import('../server/tradovateServerRequestControl')>(),assertTradovateBackgroundCapacity:async()=>{}}));
 vi.mock('../server/tradovateOAuthStore.js', () => ({
   readTradovateServerConfig: () => ({ environment: 'demo' }),
-  requireSupabaseUserId: async () => 'mock-user',
-  createTradovateAdminClient: () => ({}),
+  requireSupabaseUserId: async () => OWNER,
+  createTradovateAdminClient: () => database.client,
   getValidTradovateAccessToken: async () => ({ accessToken: 'mock-only' }),
 }));
 vi.mock('../server/tradovateHistoricalProbe.js', () => ({
@@ -28,7 +34,7 @@ const response = () => {
   res.json.mockReturnValue(res);
   return res;
 };
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { await db.pg.exec('truncate public.tradovate_shared_reads'); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('server account-data stop and rate-limit propagation', () => {
   it.each([401, 429])('stops queued account reads after an observed %i', async status => {
@@ -101,7 +107,7 @@ describe('server account-data stop and rate-limit propagation', () => {
   it.each([401, 403])('preserves account-list %i without leaking broker payload', async status => {
     vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({ errorText: 'private broker diagnostic' }, status) }));
     const res = response();
-    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'c', mode: 'bootstrap' } } as never, res as never);
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: CONNECTION, mode: 'bootstrap' } } as never, res as never);
     expect(res.status).toHaveBeenLastCalledWith(status);
     expect(res.json).toHaveBeenLastCalledWith({ error: 'tradovate-read-denied' });
   });
@@ -110,7 +116,7 @@ describe('server account-data stop and rate-limit propagation', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({ errorText: 'private broker diagnostic' }, 429, { 'Retry-After': '120' }) }));
     const res = response();
-    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'c', mode: 'bootstrap' } } as never, res as never);
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: CONNECTION, mode: 'bootstrap' } } as never, res as never);
     expect(res.status).toHaveBeenLastCalledWith(429);
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '3600');
     expect(res.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 3_600_000 });
@@ -120,13 +126,14 @@ describe('server account-data stop and rate-limit propagation', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({ 'p-ticket': 'private', 'p-time': 42 }, 200) }));
     const timed = response();
-    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'p-time', mode: 'bootstrap' } } as never, timed as never);
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: CONNECTION, mode: 'bootstrap' } } as never, timed as never);
     expect(timed.setHeader).toHaveBeenCalledWith('Retry-After', '42');
     expect(timed.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 42_000 });
 
+    await db.pg.exec('truncate public.tradovate_shared_reads');
     vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({}, 429) }));
     const fallback = response();
-    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'fallback', mode: 'bootstrap' } } as never, fallback as never);
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: CONNECTION, mode: 'bootstrap' } } as never, fallback as never);
     expect(fallback.setHeader).toHaveBeenCalledWith('Retry-After', '3600');
     expect(fallback.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 3_600_000 });
   });

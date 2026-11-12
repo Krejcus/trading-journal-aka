@@ -1,15 +1,21 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sharedReadDb, OWNER, CONNECTION } from './helpers/tradovateSharedReadDb';
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+const database = vi.hoisted(() => ({ client: null as any }));
+let db: Awaited<ReturnType<typeof sharedReadDb>>;
+beforeAll(async () => { db = await sharedReadDb(); database.client = db.client(); }, 30_000);
+afterAll(async () => { await db?.pg.close(); });
+vi.mock('../server/tradovateServerRequestControl.js', async original => ({...await original<typeof import('../server/tradovateServerRequestControl')>(), assertTradovateBackgroundCapacity: async()=>{}}));
 const probe = vi.hoisted(() => ({
   probeTradovateHistoricalSync: vi.fn(async () => ({ status: 'available' })),
   unavailableTradovateHistoricalSync: vi.fn(() => ({ status: 'unavailable' })),
   notCheckedTradovateHistoricalSync: vi.fn(() => ({ status: 'not-checked' })),
 }));
-const accountData = vi.hoisted(() => ({ loadTradovateAccountData: vi.fn(async () => ({ accounts: [], contracts: [] })) }));
+const accountData = vi.hoisted(() => ({ loadTradovateAccountData: vi.fn(async () => ({ capturedAt: new Date().toISOString(), accounts: [], contracts: [], coverage: { accounts: { availability: 'empty', count: 0 } } })) }));
 vi.mock('../server/tradovateOAuthStore.js', () => ({
   readTradovateServerConfig: () => ({ environment: 'demo' }),
-  requireSupabaseUserId: async () => 'mock-user',
-  createTradovateAdminClient: () => ({}),
+  requireSupabaseUserId: async () => OWNER,
+  createTradovateAdminClient: () => database.client,
   getValidTradovateAccessToken: async () => ({ accessToken: 'mock-only' }),
 }));
 vi.mock('../server/tradovateHistoricalProbe.js', () => probe);
@@ -32,49 +38,50 @@ const call = async (body: Record<string, unknown>) => {
   return res.json.mock.calls.at(-1)?.[0];
 };
 
-afterEach(() => vi.clearAllMocks());
+afterEach(async () => { vi.clearAllMocks(); await db.pg.exec('truncate public.tradovate_shared_reads'); });
 
 describe('preflight: probe historických reportů mimo kritickou cestu LIVE', () => {
   it('úplné čtení s historicalProbe=false nečeká na probe a vrátí „not-checked“', async () => {
-    const body = await call({ connectionId: 'skip-probe', mode: 'full', historicalProbe: false });
+    const body = await call({ connectionId: CONNECTION, mode: 'full', historicalProbe: false });
     expect(probe.probeTradovateHistoricalSync).not.toHaveBeenCalled();
     expect(accountData.loadTradovateAccountData).toHaveBeenCalledWith(expect.objectContaining({ detail: 'full' }));
     expect(body.historicalSync).toEqual({ status: 'not-checked' });
   });
 
   it('běžné úplné čtení probe dál obsahuje', async () => {
-    const body = await call({ connectionId: 'with-probe', mode: 'full' });
+    const body = await call({ connectionId: CONNECTION, mode: 'full' });
     expect(probe.probeTradovateHistoricalSync).toHaveBeenCalledTimes(1);
     expect(body.historicalSync).toEqual({ status: 'available' });
   });
 
   it('samostatný probe nečte účty', async () => {
-    const body = await call({ connectionId: 'probe-only', mode: 'historical-probe' });
+    const body = await call({ connectionId: CONNECTION, mode: 'historical-probe' });
     expect(accountData.loadTradovateAccountData).not.toHaveBeenCalled();
-    expect(body).toEqual({ connectionId: 'probe-only', environment: 'demo', historicalSync: { status: 'available' } });
+    expect(body).toEqual({ connectionId: CONNECTION, environment: 'demo', historicalSync: { status: 'available' } });
   });
 
   it('čtení bez probe převezme čerstvé úplné čtení s probe (jedna dávka na login)', async () => {
-    await call({ connectionId: 'shared', mode: 'full' });
-    const body = await call({ connectionId: 'shared', mode: 'full', historicalProbe: false });
+    await call({ connectionId: CONNECTION, mode: 'full' });
+    const body = await call({ connectionId: CONNECTION, mode: 'full', historicalProbe: false });
     expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(1);
     expect(body.historicalSync).toEqual({ status: 'available' });
   });
 
-  it('úplné čtení s probe nikdy nepřevezme výsledek bez probe', async () => {
-    await call({ connectionId: 'one-way', mode: 'full', historicalProbe: false });
-    const body = await call({ connectionId: 'one-way', mode: 'full' });
-    expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(2);
+  it('doplnění probe použije společný účet bez druhého úplného čtení', async () => {
+    await call({ connectionId: CONNECTION, mode: 'full', historicalProbe: false });
+    const body = await call({ connectionId: CONNECTION, mode: 'full' });
+    expect(accountData.loadTradovateAccountData).toHaveBeenCalledTimes(1);
     expect(body.historicalSync).toEqual({ status: 'available' });
   });
 
   it('běžící full s probe se nesdílí — studený start na probe nečeká', async () => {
     let release!: () => void;
     probe.probeTradovateHistoricalSync.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ status: 'available' }); }));
-    const slow = call({ connectionId: 'running', mode: 'full' });
+    const slow = call({ connectionId: CONNECTION, mode: 'full' });
     await Promise.resolve();
-    const body = await call({ connectionId: 'running', mode: 'full', historicalProbe: false });
+    const body = await call({ connectionId: CONNECTION, mode: 'full', historicalProbe: false });
     expect(body.historicalSync).toEqual({ status: 'not-checked' });
+    while (!release) await new Promise(resolve => setTimeout(resolve, 1));
     release();
     await slow;
   });

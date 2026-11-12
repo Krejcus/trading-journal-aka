@@ -1,4 +1,4 @@
-import { assertTradovateBackgroundCapacity, TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
+import { TradovateRequestControlError } from '../../../server/tradovateServerRequestControl.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -7,41 +7,18 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
-import { loadTradovateAccountData, TradovateAccountDataError } from '../../../server/tradovateAccountData.js';
+import { TradovateAccountDataError } from '../../../server/tradovateAccountData.js';
 import {
   notCheckedTradovateHistoricalSync,
   probeTradovateHistoricalSync,
   unavailableTradovateHistoricalSync,
 } from '../../../server/tradovateHistoricalProbe.js';
+import { peekTradovateSharedRead, sharedTradovateRead, TradovateSharedReadDeferred } from '../../../server/tradovateSharedRead.js';
+import { readSharedTradovateAccounts } from '../../../server/tradovateSharedAccountState.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
-/**
- * Sdílení preflightu na (uživatel, připojení, režim). Jeden „full" preflight
- * je ~17–30 Tradovate volání na login během sekundy; každé načtení LIVE nebo
- * zapnutí kopírky ho spouští znovu a 18. 9. 2026 každý pád session workeru
- * přišel uprostřed takové dávky. Web, iPhone a companion tak dostanou týž
- * výsledek, dokud není starší než PREFLIGHT_COALESCE_MS.
- */
-const PREFLIGHT_COALESCE_MS = 20_000;
-const recentPreflights = new Map<string, { at: number; result: Promise<unknown>; settled?: boolean }>();
-function coalescePreflight<T>(key: string, now: number, read: () => Promise<T>): Promise<T> {
-  const cached = recentPreflights.get(key);
-  if (cached && now - cached.at < PREFLIGHT_COALESCE_MS) return cached.result as Promise<T>;
-  const result = read();
-  const entry: { at: number; result: Promise<unknown>; settled?: boolean } = { at: now, result };
-  recentPreflights.set(key, entry);
-  result.then(() => { entry.settled = true; }, () => undefined);
-  result.catch(() => { if (recentPreflights.get(key)?.result === result) recentPreflights.delete(key); });
-  if (recentPreflights.size > 200) {
-    for (const [candidate, entry] of recentPreflights) if (now - entry.at >= PREFLIGHT_COALESCE_MS) recentPreflights.delete(candidate);
-  }
-  return result;
-}
-/** Jen pro testy. */
-export function resetTradovatePreflightCoalescingForTests(): void {
-  recentPreflights.clear();
-  accountCountHints.clear();
-}
+/** Compatibility test hook: shared state now lives in Postgres, not process memory. */
+export function resetTradovatePreflightCoalescingForTests(): void {}
 
 /**
  * Kolik dotazů u brokera stojí čtení účtů (viz `loadTradovateAccountData`): společné seznamy
@@ -53,13 +30,6 @@ export function preflightReadCost(detail: 'bootstrap' | 'full', withHistoricalPr
   // historických reportů. Raději o jednotku víc: podhodnocená cena vrací plýtvání.
   return { base: 8 + 1 + (withHistoricalProbe ? 1 : 0), perAccount: 4 };
 }
-const accountCountHints = new Map<string, number>();
-function rememberAccountCount(key: string, count: number): void {
-  if (!Number.isSafeInteger(count) || count < 0) return;
-  if (accountCountHints.size > 500 && !accountCountHints.has(key)) accountCountHints.clear();
-  accountCountHints.set(key, count);
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
   // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
@@ -83,63 +53,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
-    if (probeOnly) {
-      const historicalSync = await coalescePreflight(
-        `${userId}:${connectionId}:historical-probe`,
-        Date.now(),
-        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
-      );
-      return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
-    }
     const baseUrl = tradovateApiBaseUrl(config.environment, apiHosts);
-    const fullKey = `${userId}:${connectionId}:full`;
-    // Úplné čtení s probe je nadmnožina čtení bez něj: běžící nebo čerstvé
-    // `full` se sdílí, ať starší klient (iPhone) a nový studený start
-    // nepouštějí dvě dávky na stejný login. Opačně ne — starý klient by bez
-    // samostatného probe zůstal u „not-checked“.
-    // Jen hotové `full`: běžící čeká i na probe (až 8 s), na který studený
-    // start čekat nemá.
-    const recentFull = skipProbe && !bootstrap ? recentPreflights.get(fullKey) : undefined;
-    const sharedFull = recentFull?.settled && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
-      ? recentFull.result as ReturnType<typeof readPreflight>
-      : null;
-    // Poradní kontrola kapacity: čtení, které se do rozpočtu nevejde, se odmítne dřív, než
-    // spotřebuje jednotky (ty by zablokovaly i další pokus). Počet účtů je znám až z /account/list;
-    // z minulého čtení v téže instanci se bere jako nápověda pro první kontrolu.
-    const requestContext = { db, userId, connectionId, brokerUserId };
-    const cost = preflightReadCost(bootstrap ? 'bootstrap' : 'full', !bootstrap && !skipProbe);
-    const readPreflight = async () => {
-      await assertTradovateBackgroundCapacity(requestContext, cost.base + cost.perAccount * (accountCountHints.get(`${userId}:${connectionId}`) ?? 0));
-      return Promise.all([
-      loadTradovateAccountData({
-        baseUrl,
-        accessToken,
-        fetchImpl,
-        detail: bootstrap ? 'bootstrap' : 'full',
-        beforeAccountReads: async accountCount => {
-          rememberAccountCount(`${userId}:${connectionId}`, accountCount);
-          try { await assertTradovateBackgroundCapacity(requestContext, cost.perAccount * accountCount); }
-          catch (error) {
-            // Společné seznamy už jednotky spotřebovaly: tohle odmítnutí zdarma není, klient má brzdit jako dřív.
-            if (error instanceof TradovateRequestControlError && error.precheck) {
-              throw new TradovateRequestControlError(error.code, error.retryAfterMs, error.snapshot, error.notDispatched, false);
-            }
-            throw error;
-          }
-        },
-      }),
-      bootstrap
-        ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
-        : skipProbe
-          ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
-          : probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
-      ]);
-    };
-    const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
-      `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
-      Date.now(),
-      readPreflight,
-    ));
+    const context = { db, userId, connectionId, environment: config.environment, route: JSON.stringify([baseUrl, apiHosts ?? null]) };
+    const probe = async () => (await sharedTradovateRead({ context, channel: 'history:capability:v1', ttlMs: 600_000,
+      read: () => probeTradovateHistoricalSync({ environment: config.environment, accessToken, apiHosts, fetchImpl }),
+      cacheable: value => value.status === 'available',
+    })).value;
+    if (probeOnly) {
+      return res.status(200).json({ connectionId, environment: config.environment, historicalSync: await probe() });
+    }
+    const [result, historicalSync] = await Promise.all([
+      readSharedTradovateAccounts({ context, baseUrl, accessToken, fetchImpl, brokerUserId, detail: bootstrap ? 'bootstrap' : 'full' }),
+      bootstrap ? unavailableTradovateHistoricalSync({ environment: config.environment })
+        : skipProbe ? peekTradovateSharedRead(context, 'history:capability:v1').then(cached => cached ?? notCheckedTradovateHistoricalSync({ environment: config.environment })) : probe(),
+    ]);
     return res.status(200).json({
       connectionId,
       environment: config.environment,
@@ -147,6 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...result,
     });
   } catch (error) {
+    if (error instanceof TradovateSharedReadDeferred) return res.status(503).json({ error: error.message, retryAfterMs: error.retryAfterMs, notDispatched: true });
     if (error instanceof TradovateRequestControlError) return res.status(503).json({
       error: error.code, retryAfterMs: error.retryAfterMs, notDispatched: error.notDispatched,
       captchaRequired: error.snapshot?.captchaRequired === true,

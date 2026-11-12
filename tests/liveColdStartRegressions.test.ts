@@ -163,11 +163,6 @@ describe('oponentura cfe904bf', () => {
     expect(desk).toContain("&& agentStatus?.controller.armed !== true;");
     expect(desk).toContain("hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection && !holdColdReveal");
   });
-  it('preflight sdílí jen hotové full a jen pro full bez probe', () => {
-    const api = source('api/tradovate/oauth/preflight.ts');
-    expect(api).toContain('const skipProbe = !bootstrap && req.body?.historicalProbe === false;');
-    expect(api).toContain('const sharedFull = recentFull?.settled &&');
-  });
   it('záměr LIVE z navigace nepředává React event jako volby', () => {
     for (const path of ['components/Sidebar.tsx', 'components/BottomNav.tsx']) {
       expect(source(path), path).not.toMatch(/\? onLiveIntent : undefined/);
