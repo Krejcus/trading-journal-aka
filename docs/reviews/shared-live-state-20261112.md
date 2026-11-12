@@ -1,7 +1,8 @@
 # Společný stav LIVE pro web a iPhone — 12. 11. 2026
 
-Stav: implementace v lokální větvi `codex/shared-live-state-20261112` nad
-`30f87879`. Nenahráno na main, databázová migrace není aplikovaná v produkci.
+Stav: hlavní oprava je nasazená v produkci od 12. 11. 2026 přibližně 07:47 SEČ,
+první produkční commit `4aa2de5b`. Migrace `20261112064034` je aplikovaná.
+Zdrojová větev: `codex/shared-live-state-20261112` nad `30f87879`.
 Žádný skutečný obchod, změna skupiny, ARM/DISARM, restart nebo reinstall workeru.
 
 ## Co se změnilo
@@ -121,3 +122,26 @@ na výsledek načítání nemá vliv.
 Nelze zatím tvrdit, že byly odstraněny všechny příčiny skutečných broker/WS
 výpadků. Cron a execution ověřování mají své stávající nezávislé odpovědnosti;
 opravovaná příčina je násobení zobrazovacího načítání mezi klienty a instancemi.
+
+## První produkční ověření
+
+- Vercel `dpl_VA8BmB5vEMTkHnEdTFe7xDPbu3wx` READY, hlavní alias ověřen přímo
+  proti tomuto deploymentu a commitu `4aa2de5b`.
+- Po obnovení hlavního webu se oba platné loginy zobrazily jako Connected,
+  celkem pět účtů. Žádný broker obchod nebo příkaz workeru se neposlal.
+- DB potvrdila po otevření druhého zobrazení stejné dva úplné základy:
+  DEMO zdroj 06:47:11.575 UTC / 1 účet; Lucid zdroj 06:47:12.228 UTC / 4 účty.
+  Přidání klienta tedy nevytvořilo druhou úplnou dávku.
+- Serverová doba prvního sestavení společného základu (rozdíl SQL claim a publish):
+  DEMO **1,673 s**, Lucid **1,641 s**. Není to doba od kliknutí po vykreslení na
+  PC ani měření fyzického iPhonu. Pozdější čtení přebírají tento základ.
+- Zjištěna další příčina zavádějícího varování: staré prázdné připojení
+  „Tradovate OAuth“ nemá broker identitu. `tradovate-request-identity-unavailable`
+  se dříve mapovalo na obecnou hlášku o dočasném omezení dotazů, i když oba
+  platné loginy neměly blokaci ani penalizaci. Doplněno přesné vysvětlení a
+  regresní test; připojení se nearchivuje, neodpojuje ani znovu nepřihlašuje.
+  Tato hláška je součástí UI balíčku: stará nativní aplikace ji získá až při
+  aktualizaci; serverové sdílení používá již nyní.
+- Původní cron dál hlásí `tradovate-request-identity-unavailable` u neověřeného
+  připojení. Není to nový broker rate-limit ani chyba ukládání společných dat.
+  Tento release nemění cron, připojení ani broker nastavení.

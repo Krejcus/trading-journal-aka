@@ -288,6 +288,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: společný stav nasazen a první živé ověření
+
+- Migrace `20261112064034_tradovate_shared_read_state.sql` aplikovaná; první
+  produkční web `4aa2de5b`, Vercel READY
+  `dpl_VA8BmB5vEMTkHnEdTFe7xDPbu3wx`, alias ověřen přímo.
+- Oba platné loginy na webu Connected, všech 5 účtů dostupných. Druhé zobrazení
+  převzalo stejný úplný základ pro oba loginy; SQL časy zdroje se nezměnily.
+  První serverové sestavení: DEMO1,673s, Lucid1,641s (SQL claim→publish,
+  nikoli kliknutí→pixel a nikoli fyzický iPhone).
+- Při testu nalezena zavádějící stará hláška: prázdné „Tradovate OAuth“ má
+  `tradovate-request-identity-unavailable`, obecný mapper to vydával za dočasné
+  omezení dotazů. Doplněno konkrétní vysvětlení + regresní test (20 cílených
+  testů a build prošly). Žádná změna/archivace/přihlášení tohoto připojení.
+- Před nasazením worker fbd518c0 OFF, bez pozic/příkazů. Během práce žádný
+  příkaz brokerovi či workeru, žádný ARM/DISARM, restart nebo reinstall.
+  Závěrečná kontrola následuje. Report: `docs/reviews/shared-live-state-20261112.md`.
+
+
 ### 2026-11-12 — Codex: schválené nasazení společného stavu, databáze připravena
 
 Filip výslovně povolil samostatnou zálohu, migraci a nasazení webu. Na následnou

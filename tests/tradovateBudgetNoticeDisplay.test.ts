@@ -7,6 +7,11 @@ const budget = [{ key: '77', tone: 'warn' as const, text: 'Lokální rozpočet p
 const captcha = [{ key: '77', tone: 'danger' as const, text: 'Tradovate vyžaduje ruční ověření captcha. Požadavky k brokerovi jsou blokované.', title: 't' }];
 
 describe('DEMO 10. 11. bod 8: rozpočet požadavků lidsky a bez spamu', () => {
+  it('neoznačuje chybějící broker identitu za omezení dotazů, které se samo opraví', () => {
+    const message = tradovateHumanErrorMessage('tradovate-request-identity-unavailable');
+    expect(message).toMatch(/identitu Tradovate/);
+    expect(message).not.toMatch(/omezen|rozpočet|limit|za chvilku samy/);
+  });
   it('surový kód se nikdy neukáže', () => {
     expect(tradovateHumanErrorMessage('tradovate-request-budget')).toMatch(/šetří dotazy/);
     expect(tradovateHumanErrorMessage('tradovate-request-budget')).not.toMatch(/tradovate-request/);
