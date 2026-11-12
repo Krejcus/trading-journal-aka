@@ -1,3 +1,4 @@
+import { tradovateSharedBaselineRefresh } from '../lib/tradovateSharedBaselineRefresh';
 import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
@@ -564,9 +565,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       };
       return next;
     });
-    const markSuccess = (connectionId: string) => (firstBootstrapTriedRef.current.delete(connectionId), perfMark('live:conn-ready'), updateEnrichment(current => ({
+    const markSuccess = (connectionId: string, shared?: TradovatePreflightResult['sharedRead']) => (firstBootstrapTriedRef.current.delete(connectionId), perfMark('live:conn-ready'), updateEnrichment(current => ({
       ...current,
-      [connectionId]: { pending: false, lastFullSuccessAt: Date.now(), retryAt: null, failureCount: 0, error: null },
+      [connectionId]: { pending: false, ...tradovateSharedBaselineRefresh(shared, Date.now()), failureCount: 0, error: null },
     })));
     const markFailure = (connectionId: string, reason: unknown) => updateEnrichment(current => {
       const previous = current[connectionId] ?? emptyEnrichment();
@@ -671,7 +672,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
                 const pending = new TradovateRequestError('tradovate-read-pending', 503, result.value.sharedRead.retryAfterMs ?? 5_000);
                 recordRateLimit(connectionId, pending);
                 markFailure(connectionId, pending);
-              } else markSuccess(connectionId);
+              } else markSuccess(connectionId, result.value.sharedRead);
             }
           }
         },

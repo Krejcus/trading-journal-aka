@@ -145,3 +145,21 @@ opravovaná příčina je násobení zobrazovacího načítání mezi klienty a 
 - Původní cron dál hlásí `tradovate-request-identity-unavailable` u neověřeného
   připojení. Není to nový broker rate-limit ani chyba ukládání společných dat.
   Tento release nemění cron, připojení ani broker nastavení.
+
+## Obnova podle skutečného stáří společného základu
+
+Závěrečná kontrola doplnila zdrojové plánování obnovy v novém klientovi:
+převzetí devět minut starého společného základu se nepovažuje za nové úplné
+načtení na dalších deset minut. `lastFullSuccessAt` drží čas zdroje a další
+obnova vychází z něj (10 min + 5s rezerva pro dokončení sběru). Různě otevření
+klienti proto míří na stejnou obnovu, kterou v DB sloučí lease. Vadný nebo
+budoucí čas nesmí obnovu odkládat donekonečna; po termínu je opakování omezené
+na nejdříve jednu sekundu. Přenos tohoto plánování do již nainstalované nativní
+appky vyžaduje její příští aktualizaci; sdílení serverových čtení ji nevyžaduje.
+
+Prošlo 36 cílených testů včetně scénáře „devět minut stará data v novém klientovi“,
+typecheck a oba buildy. Poslední minutové čtení rezervací v07:55 SEČ ukázalo
+background Lucid1 / DEMO7 jednotek; jde o krátký vzorek rezervací, nikoli přímý
+počet brokerových fyzických volání nebo dlouhodobý průměr. Risk rezervace workeru
+se do něj nepočítají a nebyly změněny. CORS pro `capacitor://localhost` ověřen na
+produkčním API (204); nepřihlášené čtení správně odmítnuto (401).

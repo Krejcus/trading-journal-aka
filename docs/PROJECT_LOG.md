@@ -288,6 +288,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: závěrečná kontrola obnovy společného základu
+
+- Nový klient plánuje další úplné čtení podle `sharedRead.baselineAsOf`, nikoli
+  podle času, kdy zrovna dostal starší cache. Nové otevření devět minut starých
+  dat tak neposune obnovu o dalších deset minut. Klienti sdílejí termín obnovy;
+  po termínu není nulová smyčka. 36 cílených testů, typecheck a web/native build OK.
+- Produkční CORS pro starší Capacitor klient ověřen (204 / správný Origin), bez
+  přihlášení endpoint odmítá 401. Fyzický iPhone nebyl v této fázi přímo ovládán
+  ani měřen; stará nativní verze používá serverové sdílení, nové texty a plánování
+  získá při aktualizaci aplikace.
+- V07:55 SEČ krátké minutové měření: background rezervace Lucid1, DEMO7 jednotek.
+  Rezervace nejsou totéž co fyzické broker volání; nevydávat vzorek za celodenní
+  průměr. Při opakovaném otevření dvou webových zobrazení se neobnovily zdrojové
+  časy úplných základů (DEMO06:47:11.575UTC, Lucid06:47:12.228UTC).
+- Worker fbd518c0 při kontrole v07:58SEČ stále OFF, pozice0/příkazy0; během
+  celého nasazení žádný obchod, ARM/DISARM, změna skupiny ani reinstall.
+- Hláška chybějící identity starého prázdného připojení je nyní na webu přesná;
+  obě platná připojení Connected a 5 účtů viditelných, potvrzeno v obou zobrazeních.
+
+
 ### 2026-11-12 — Codex: společný stav nasazen a první živé ověření
 
 - Migrace `20261112064034_tradovate_shared_read_state.sql` aplikovaná; první
