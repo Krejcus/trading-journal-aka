@@ -163,3 +163,25 @@ background Lucid1 / DEMO7 jednotek; jde o krátký vzorek rezervací, nikoli př
 počet brokerových fyzických volání nebo dlouhodobý průměr. Risk rezervace workeru
 se do něj nepočítají a nebyly změněny. CORS pro `capacitor://localhost` ověřen na
 produkčním API (204); nepřihlášené čtení správně odmítnuto (401).
+
+## Živá regrese worker ticku a její oprava (08:10 SEČ)
+
+Po uživatelském hlášení „Lucid — Data nedostupná“ prokázal produkční log
+v 07:07:44.514 UTC chybu HTTP 502: `Converting circular structure to JSON`.
+Worker tick omylem rozbaloval plný serverový kontext do odpovědi. Ten za běhu
+obsahuje cyklický Supabase klient; TypeScript `Pick` neodstraňuje dodatečná
+pole skutečného objektu. Oprava vybírá connectionId a environment explicitně.
+Nemění čerstvost důkazů, čtení brokera, risk brány ani worker.
+
+Doplněný API test používá skutečnou projekci workeru, cyklický serverový klient
+a skutečnou JSON serializaci odpovědi. Před opravou vracel 502, po opravě 200
+s nulou dalších broker čtení a bez interních polí či testovacího credentialu
+v těle. Prošlo všech 40 cílených testů. Starší plný běh 8764 testů tuto chybu
+nezachytil, protože předchozí mock `res.json` nic neserializoval a API harness
+worker větev vždy přeskakoval.
+
+Při čtecí kontrole bylo prázdné OAuth připojení již Disconnected (Codex je
+neodpojoval). Žluté hlášky jsou dokladem chybějícího aktuálního ověření kapacity,
+nikoli samy o sobě důkazem odpojeného loginu. Worker v 07:07:37 UTC hlásil oba
+loginy ready bez penalizace. Tato oprava žluté varování nepotlačuje ani uměle
+neprodlužuje jeho čerstvost.

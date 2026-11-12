@@ -288,6 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: oprava pádu společného worker ticku po živém hlášení Lucidu
+
+- Produkční log 07:07:44 UTC prokázal HTTP 502 při serializaci worker ticku:
+  `Converting circular structure to JSON` přes interní `SupabaseAuthClient`.
+  Příčinou byl spread plného serverového contextu v `workerSharedTick`, nikoli
+  broker 429. Návrat nyní explicitně obsahuje pouze connectionId/environment
+  a veřejná data ticku; DB klient ani owner/route se do odpovědi nedostanou.
+- Nový API regresní test se skutečnou worker projekcí a cyklickým DB klientem
+  před opravou vracel 502, po opravě 200 bez dalšího broker čtení. Mock JSON
+  odpovědi nově skutečně serializuje. 40 cílených testů prošlo.
+- Prázdný OAuth záznam je při následné živé kontrole odpojený; Codex ho
+  neodpojoval ani nearchivoval. Žlutý stav ověření kapacity je samostatný od
+  dostupnosti účtů: neprodlužovat jeho čerstvost podle staré cache nebo pouhého
+  připojeného transportu. V 07:07:37 UTC worker hlásil oba loginy ready, bez
+  penalizace, armed=false. Žádný obchod, ARM/DISARM, změna skupiny ani workeru.
+
+
 ### 2026-11-12 — Codex: závěrečná kontrola obnovy společného základu
 
 - Nový klient plánuje další úplné čtení podle `sharedRead.baselineAsOf`, nikoli

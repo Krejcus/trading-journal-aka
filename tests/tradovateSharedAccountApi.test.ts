@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sharedReadDb, OWNER, CONNECTION } from './helpers/tradovateSharedReadDb';
-const state = vi.hoisted(() => ({ db: null as any, fetch: vi.fn(), rejectCapacity: false }));
+const state = vi.hoisted(() => ({ db: null as any, fetch: vi.fn(), rejectCapacity: false, worker: null as any }));
 vi.mock('../server/tradovateOAuthStore.js', () => ({
   readTradovateServerConfig: () => ({ environment: 'demo' }), requireSupabaseUserId: async () => OWNER,
   createTradovateAdminClient: () => state.db,
@@ -12,7 +12,11 @@ vi.mock('../server/tradovateServerRequestControl.js', async original => {
     if (state.rejectCapacity) throw new actual.TradovateRequestControlError('tradovate-request-budget', 20_000);
   } };
 });
-vi.mock('../server/tradovateSharedWorkerRead.js', () => ({ readWorkerSharedTick: async () => null, readWorkerSharedCash: async () => null }));
+vi.mock('../server/tradovateSharedWorkerRead.js', async original => {
+  const actual = await original<typeof import('../server/tradovateSharedWorkerRead')>();
+  return { ...actual, readWorkerSharedTick: async (context: any, baseline: any) => state.worker
+    ? actual.workerSharedTick(context, baseline, state.worker, Date.now()) : null, readWorkerSharedCash: async () => null };
+});
 vi.mock('../server/nativeCors.js', () => ({ handleNativeCors: () => false }));
 import preflight from '../api/tradovate/oauth/preflight';
 import pnl from '../api/tradovate/oauth/live-pnl';
@@ -23,6 +27,7 @@ afterAll(async () => { await db?.pg.close(); });
 beforeEach(async () => {
   await db.pg.exec('truncate public.tradovate_shared_reads');
   state.rejectCapacity = false;
+  state.worker = null;
   state.fetch.mockReset().mockImplementation(async (input: string, init?: RequestInit) => {
     const path = new URL(input).pathname.replace('/v1', '');
     // Hard assertion: the harness permits only broker reads, including read-only POST cash snapshots.
@@ -35,12 +40,36 @@ beforeEach(async () => {
 });
 async function call(handler: typeof preflight | typeof pnl, body: Record<string, unknown>) {
   const res = { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() };
-  res.status.mockReturnValue(res); res.json.mockReturnValue(res);
+  res.status.mockReturnValue(res);
+  // Vercel serializes responses; a mock accepting arbitrary objects misses circular server clients.
+  res.json.mockImplementation(body => { JSON.stringify(body); return res; });
   await handler({ method: 'POST', headers: { authorization: 'Bearer test-app' }, body: { connectionId: CONNECTION, ...body } } as never, res as never);
   return { status: res.status.mock.calls.at(-1)?.[0], body: res.json.mock.calls.at(-1)?.[0] };
 }
 const open = () => call(preflight, { mode: 'full', historicalProbe: false });
 describe('same read model behind existing web and iPhone APIs', () => {
+  it('serializes the worker tick without leaking the circular server database client or owner context', async () => {
+    await open();
+    const now = Date.now();
+    state.worker = { environment: 'demo', displayBuiltAt: now, controller: { connected: true, exposure: {
+      verifiedAt: now, positions: [], orders: [], followers: [],
+      streamCoverage: [7, 8].map(accountId => ({ accountId, connectionId: CONNECTION, environment: 'demo',
+        routeEpoch: 1, currentRouteEpoch: 1, sessionId: 'test-session', currentSessionId: 'test-session',
+        baselineAt: now, lastDataAt: now, observedAt: now, socketLive: true, synchronized: true,
+        gap: false, backlog: false, mergeInProgress: false })),
+    } } };
+    state.db.auth = { client: state.db, testCredential: 'test-only-server-credential' };
+    const reads = state.fetch.mock.calls.length;
+    try {
+      const response = await call(pnl, {});
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ connectionId: CONNECTION, environment: 'demo', brokerCalls: 0, positions: [], orders: [] });
+      const serialized = JSON.stringify(response.body);
+      for (const privateField of ['db', 'userId', 'route', 'auth']) expect(response.body).not.toHaveProperty(privateField);
+      expect(serialized).not.toContain('test-only-server-credential');
+      expect(state.fetch).toHaveBeenCalledTimes(reads);
+    } finally { delete state.db.auth; }
+  });
   it('12 simultaneous cold starts and 30 subsequent opens share a complete baseline and its source timestamps', async () => {
     const started = performance.now();
     const cold = await Promise.all(Array.from({ length: 12 }, open));

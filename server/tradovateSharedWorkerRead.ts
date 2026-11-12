@@ -25,7 +25,9 @@ export function workerSharedTick(context: Pick<TradovateSharedReadContext, 'conn
     new Map(baseline.accounts.map(account => [account.id, context])))!;
   const observedAt = Math.min(receivedAt, builtAt, ...[...plan.covered.values()].map(row => row.observedAt));
   const at = new Date(observedAt).toISOString();
-  return { ...context, requestedAt: at, capturedAt: at, anchor: null,
+  // Callers pass the full server context (including a circular Supabase client).
+  // Only the public connection identity belongs in the wire response.
+  return { connectionId: context.connectionId, environment: context.environment, requestedAt: at, capturedAt: at, anchor: null,
     positions: data.accounts.flatMap(account => account.positions.map(position => ({ id: position.id,
       accountId: account.id, contractId: position.contractId, netPosition: position.netPosition,
       averagePrice: position.averagePrice, timestamp: position.timestamp }))),
