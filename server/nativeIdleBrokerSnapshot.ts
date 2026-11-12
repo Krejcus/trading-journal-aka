@@ -42,7 +42,22 @@ export function workerRuntimeReportsIdle(runtime: Pick<NativeLiveActivityRuntime
   if (exposure.positions.length > 0 || exposure.orders.length > 0) return false;
   const verifiedAt = exposure.verifiedAt;
   if (typeof verifiedAt !== 'number' || !Number.isFinite(verifiedAt) || verifiedAt > now + 5_000) return false;
-  return now - verifiedAt >= IDLE_BROKER_SNAPSHOT_SETTLE_MS;
+  // 12. 11. 2026: `verifiedAt` je čas posledního autoritativního čtení a worker si ho v klidu sám
+  // obnovuje (~každé 3 min) — jako měřítko „expozice se nezměnila" nikdy neuzrál a cron četl brokera
+  // každou minutu pořád (~400 dotazů/h na login). Klid se měří od poslední ZMĚNY: `changedAt`, když
+  // ho worker posílá, jinak od poslední známé aktivity ve stavu (vstupy, správa, kopie, zavřené obchody).
+  const changedAt = (exposure as { changedAt?: unknown }).changedAt;
+  if (changedAt !== undefined) {
+    if (typeof changedAt !== 'number' || !Number.isFinite(changedAt) || changedAt > now + 5_000) return false;
+    return now - changedAt >= IDLE_BROKER_SNAPSHOT_SETTLE_MS;
+  }
+  const stamps = (rows: unknown): unknown[] => (Array.isArray(rows) ? rows.flatMap(row => (row && typeof row === 'object'
+    ? ['at', 'updatedAt', 'createdAt', 'closedAt', 'exitAt'].map(field => (row as Record<string, unknown>)[field]) : [])) : []);
+  const activity = [
+    ...stamps(controller.manualEntries), ...stamps(controller.manualOrderActions), ...stamps(controller.recentCopyEvents),
+    ...stamps((controller.dailyStats as { recentClosedTrades?: unknown } | null | undefined)?.recentClosedTrades),
+  ];
+  return !activity.some(recent);
 }
 
 /**

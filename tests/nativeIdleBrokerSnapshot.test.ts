@@ -12,6 +12,12 @@ const idle = (patch: Record<string, unknown> = {}, exposure: Record<string, unkn
 });
 
 describe('cron broker snapshot is slowed down only when the worker reports a settled flat state', () => {
+  it('worker re-verifies exposure on its own: a fresh verifiedAt alone no longer keeps the cron reading every minute', () => {
+    expect(workerRuntimeReportsIdle(idle({}, { verifiedAt: NOW - 20_000 }), NOW)).toBe(true);
+    expect(workerRuntimeReportsIdle(idle({}, { verifiedAt: NOW - 20_000, changedAt: NOW - 10 * 60_000 }), NOW)).toBe(true);
+    expect(workerRuntimeReportsIdle(idle({ manualEntries: [{ updatedAt: NOW - 10 * 60_000 }], recentCopyEvents: [{ at: NOW - 4 * 60_000 }] }, { verifiedAt: NOW - 20_000 }), NOW)).toBe(true);
+  });
+
   it('idle worker: four of five minutes skip the display read', () => {
     expect(workerRuntimeReportsIdle(idle(), NOW)).toBe(true);
     expect([...idleBrokerSnapshotUsers([{ ...idle(), user_id: 'u1' }], NOW, true)]).toEqual(['u1']);
@@ -26,7 +32,13 @@ describe('cron broker snapshot is slowed down only when the worker reports a set
     ['disconnected', idle({ connected: false })],
     ['needs reconciliation', idle({ reconciliationRequired: true })],
     ['incident', idle({ lastError: 'x' })],
-    ['exposure changed under three minutes ago', idle({}, { verifiedAt: NOW - 60_000 })],
+    ['exposure changed under three minutes ago (worker sends changedAt)', idle({}, { changedAt: NOW - 60_000 })],
+    ['changedAt in the future', idle({}, { changedAt: NOW + 60_000 })],
+    ['changedAt not a number', idle({}, { changedAt: null })],
+    ['manual entry a minute ago (older worker)', idle({ manualEntries: [{ updatedAt: NOW - 60_000 }] })],
+    ['order managed a minute ago (older worker)', idle({ manualOrderActions: [{ updatedAt: NOW - 60_000 }] })],
+    ['copy event a minute ago (older worker)', idle({ recentCopyEvents: [{ at: NOW - 60_000 }] })],
+    ['trade closed a minute ago (older worker)', idle({ dailyStats: { recentClosedTrades: [{ closedAt: NOW - 60_000 }] } })],
     ['exposure never verified', idle({}, { verifiedAt: undefined })],
     ['exposure missing', runtime({ connected: true, groupFlat: true, exposure: null })],
     ['verified in the future', idle({}, { verifiedAt: NOW + 60_000 })],
