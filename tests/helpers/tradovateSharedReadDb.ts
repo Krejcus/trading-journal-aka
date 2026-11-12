@@ -21,7 +21,7 @@ export async function sharedReadDb() {
       ('${OTHER_CONNECTION}','${OTHER_OWNER}','demo','connected','test-only',42,'read','2026-01-01');
     grant usage on schema public to service_role, anon, authenticated;
     grant select on public.tradovate_oauth_connections to service_role;`);
-  await pg.exec(readFileSync(new URL('../../supabase/migrations/20261112055954_tradovate_shared_read_state.sql', import.meta.url), 'utf8'));
+  await pg.exec(readFileSync(new URL('../../supabase/migrations/20261112064034_tradovate_shared_read_state.sql', import.meta.url), 'utf8'));
   const client = () => ({ rpc: async (name: string, args: Record<string, unknown>) => {
     if (name !== 'tradovate_shared_read_v1') throw new Error(`unexpected RPC ${name}`);
     try {

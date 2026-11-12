@@ -288,6 +288,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: schválené nasazení společného stavu, databáze připravena
+
+Filip výslovně povolil samostatnou zálohu, migraci a nasazení webu. Na následnou
+volbu odpověděl „Ověř hlavní web po nasazení“: chráněné preview se tedy dál
+nezpřístupňuje a nevzniká veřejný share link ani nový přístupový klíč.
+
+- Nová úplná logická DB záloha: `~/AlphaTrade-backups/supabase/20261112T063103Z`,
+  db.dump + role bez hesel + schéma + seznam objektů a počty řádků. Dokončena
+  v07:38 SEČ, 4 979 718 řádků / 145 datových tabulek, 386 MB celý adresář;
+  celý archiv přečten, SHA256SUMS ověřeny. Storage a git bundle byly vynechány,
+  starší zálohy se nemažou. Žádná obnova produkce.
+- Návrat webu uložen: main `30f87879`, deployment
+  `dpl_3NavnUWVkkf3cYkUuYVwpaHe2T5Z`; alias před změnou na něj skutečně směřoval.
+- Commit opravy `d0f43074` je nahraný ve vlastní větvi; Vercel preview
+  `dpl_FhQXFMfxtJVKYQ7gQLGhejCiWxJX` je READY. Obsah chráněného preview se
+  netestoval přístupovým bypassem (automatická kontrola odmítla share i CLI;
+  uživatel následně zvolil ověření hlavního webu).
+- DB migrace `tradovate_shared_read_state` aplikována přes MCP v06:40:34 UTC;
+  místní verzovaný soubor přejmenován podle skutečného záznamu na
+  `20261112064034_tradovate_shared_read_state.sql`, aby historie migrací souhlasila.
+- Ověřeno přímo v DB: RLS true, invoker (security_definer false), anon/authenticated
+  nesmějí SELECT ani EXECUTE, service_role smí číst/zapisovat a volat funkci.
+  Security/performance advisory neobsahuje nález pro novou tabulku/funkci;
+  cizí předchozí nálezy se v rámci této opravy nemění.
+- Další krok: schválený fast-forward main a ověření hlavního webu, účtů a sdílení
+  přes dvě zobrazení. Worker, ARM/DISARM, skupiny a obchody se nemění.
+
+
 ### 2026-11-12 — Codex: implementován společný čtecí stav LIVE (zatím lokální)
 
 Uživatel schválil předělání společného stavu web/telefon a testy, výslovně bez

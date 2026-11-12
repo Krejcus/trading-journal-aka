@@ -105,7 +105,7 @@ na výsledek načítání nemá vliv.
 1. Nejprve samostatná záloha/export vzdáleného schématu a záznam současného
    nasazení a směrování webu. Zvlášť potvrdit existenci použitelné DB zálohy;
    souborová záloha repozitáře ji nenahrazuje.
-2. Po souhlasu aplikovat pouze `20261112055954_tradovate_shared_read_state.sql`.
+2. Po souhlasu aplikovat pouze `20261112064034_tradovate_shared_read_state.sql`.
    Přidává jednu novou tabulku, její index a jednu funkci; nemění tabulky
    broker tokenů, účtů, příkazů nebo risk nastavení. Spustit security/performance
    advisory a ověřit role. Neinstalovat worker, nepřepínat skupiny ani ARM.
