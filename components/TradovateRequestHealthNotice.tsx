@@ -13,6 +13,7 @@ export default function TradovateRequestHealthNotice({ rows, now, floating = fal
   return <div className={floating ? 'pointer-events-none fixed left-3 right-3 z-[330] mx-auto max-w-[900px] space-y-1' : 'space-y-1'}
     style={floating ? { top: 'calc(env(safe-area-inset-top, 0px) + 64px)' } : undefined}>
     {notices.map(notice => <p key={notice.key} role="status" title={notice.title} data-tradovate-health={notice.tone}
+      data-tradovate-health-key={notice.key} data-tradovate-health-cause={notice.cause}
       className={`rounded-md border px-3 py-2 text-xs font-semibold shadow-sm ${notice.tone === 'danger'
         ? 'border-rose-500/40 bg-[var(--bg-card)] text-rose-600' : 'border-amber-500/40 bg-[var(--bg-card)] text-amber-600'}`}>
       {notice.text}

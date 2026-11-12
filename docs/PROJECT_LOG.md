@@ -288,6 +288,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-12 — Codex: krátké probliknutí žlutého ověření limitů
+
+- Na produkční stránce Připojení zachyceno 50 DOM vzorků během 20,268 s:
+  dvě shodné žluté hlášky pouze v jednom vzorku, účty zůstaly Connected.
+  Samotný DOM tehdy ještě nerozlišoval prošlou kapacitu od starého statusu;
+  k hlášce proto přidány neviditelné diagnostické atributy příčiny a loginu.
+- Úzce omezená oprava zobrazení: pouze nedávno pozorovaný ready stav bez
+  penalizace/chyby má nejvýše 2 s rezervu po původním controlFreshUntil.
+  Nový render, klient ani heartbeat s týmž certifikátem termín neposouvá.
+  Syrový stav zůstává unknown, skutečná čerstvost ani execution brány se nemění.
+  Explicitní unavailable, chybějící/starý/budoucí status, captcha a cooldown
+  zůstávají okamžité. 38 cílených testů včetně hraničních a render scénářů.
+- Odpojený prázdný OAuth je vyřazen z běžného načítání; odstranění není
+  opravou tohoto problikávání. Existující Skrýt je vratná archivace, ne smazání
+  historie. Codex neprovedl archivaci, odpojení, obchod ani změnu kopírky.
+
+
 ### 2026-11-12 — Codex: oprava pádu společného worker ticku po živém hlášení Lucidu
 
 - Produkční log 07:07:44 UTC prokázal HTTP 502 při serializaci worker ticku:
