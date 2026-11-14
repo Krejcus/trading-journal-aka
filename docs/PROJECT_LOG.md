@@ -288,9 +288,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-14 — Claude: pohyb na dashboardu (stejná větev, NENASAZENO)
+### 2026-11-14 — Claude: pohyb na dashboardu (web NASAZEN 14. 11., iPhone ne)
 
-Větev `claude/live-background-20261114`, jen localhost. Filip schválil
+Větev `claude/live-background-20261114`, po Filipově „nasaď“ pushnuto na
+main (jen web; iPhone se pushem neaktualizuje a pohyb tam zatím není). Filip schválil
 náhled `mockups/dashboard-motion.html` a řekl „můžeš přenést“.
 
 - **Co je v appce**: karty se při načtení vynoří jedna po druhé, čísla
@@ -320,11 +321,11 @@ náhled `mockups/dashboard-motion.html` a řekl „můžeš přenést“.
   nových chyb; ostatní stránky prošly v tmavém režimu bez chyb (po změně
   řazení společného náběhu). Neověřeno: iPhone, Filipův Chrome, stránka LIVE.
 
-### 2026-11-14 — Claude: živé pozadí a kouř za myší (větev, NENASAZENO)
+### 2026-11-14 — Claude: živé pozadí a kouř za myší (web NASAZEN 14. 11., iPhone ne)
 
 Větev `claude/live-background-20261114`, worktree
-`~/alphatrade-worktrees/live-background`. Jen lokálně — nic nepushnuto,
-Filip řekl „zatím vše na localhostu“.
+`~/alphatrade-worktrees/live-background`. Stavěno jen lokálně, po Filipově
+„nasaď“ pushnuto na main spolu s pohybem na dashboardu.
 
 - **Co si Filip vybral** (z náhledů `mockups/live-backgrounds.html`):
   pozadí Hlubiny, Skvrny (dosavadní „Barevné pole“, jen přejmenované),
