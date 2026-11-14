@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, ReferenceLine, LabelList, Line
+  BarChart, Bar, ReferenceLine, ReferenceDot, LabelList, Line
 } from 'recharts';
 import { EquityPoint, TradeStats } from '../types';
 import { Info, Calendar, Clock, ShieldCheck, Activity } from 'lucide-react';
@@ -510,6 +510,20 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   activeDot={(props) => <CustomActiveDot {...props} onTradeClick={onTradeClick} onEventClick={onEventClick} />}
                   style={{ cursor: 'pointer' }}
                 />
+                {/* Konec křivky jemně pulzuje — jen ozdoba, na myš nereaguje. */}
+                {equityData.length > 1 && (() => {
+                  const last = equityData[equityData.length - 1];
+                  if (!Number.isFinite(last.equity)) return null;
+                  const color = last.equity >= initialCap ? COLORS.profit : COLORS.loss;
+                  return (
+                    <ReferenceDot x={last.name} y={last.equity} shape={(dot: any) => (
+                      <g className="equity-end" pointerEvents="none">
+                        <circle className="equity-end__pulse" cx={dot.cx} cy={dot.cy} r={4} fill={color} />
+                        <circle cx={dot.cx} cy={dot.cy} r={3.5} fill={color} />
+                      </g>
+                    )} />
+                  );
+                })()}
                 {!isRRMode && equityData.some(point => Number.isFinite(point.propDrawdownFloor)) && (
                   <Line
                     type="stepAfter"

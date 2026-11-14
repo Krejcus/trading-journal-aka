@@ -11,6 +11,8 @@ import { getTradeEntryMinuteOfDay, getTradeEntryDate } from '../services/tradeTi
 import Charts from './Charts';
 import { simulateBacktestMonteCarlo } from '../services/backtestMonteCarlo';
 import DashboardCalendar from './DashboardCalendar';
+import CountUpText from './CountUpText';
+import { useTilt } from '../lib/useTilt';
 import DisciplineDashboard from './DisciplineDashboard';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, ReferenceLine, LabelList, PieChart, Pie, Sector, AreaChart, Area, Rectangle
@@ -629,7 +631,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
       <div className="flex-1 min-h-0 flex flex-col gap-2.5">
         {/* Equity fan chart s osami */}
         <div className="relative flex-1 min-h-[96px]">
-          <svg viewBox={`0 0 ${W} ${H}`} className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+          <svg viewBox={`0 0 ${W} ${H}`} className="absolute inset-0 w-full h-full mc-reveal" preserveAspectRatio="none">
             <defs>
               <linearGradient id="mc-outer" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.16" />
@@ -990,6 +992,8 @@ const ProKpiCard: React.FC<{
   const [activeIndex, setActiveIndex] = useState(-1);
   const onPieEnter = (_: any, index: number) => setActiveIndex(index);
   const onPieLeave = () => setActiveIndex(-1);
+  // Lehký náklon karty za myší (jen zobrazení; v úpravách je obal bez myši).
+  const tilt = useTilt<HTMLDivElement>();
 
   // Helper to remove unnecessary .00 decimals.
   // Zachová sufixy (R, %, Kč, €) a prefixy (+/-) — bug-fix: dřív zahodil 'R'
@@ -1031,9 +1035,9 @@ const ProKpiCard: React.FC<{
       return (
         <div className="flex flex-col items-center w-full">
           <span className="text-2xl font-bold tracking-tight tabular-nums leading-none mb-1">
-            {displayValue}
+            <CountUpText text={displayValue} />
           </span>
-          <div className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
+          <div className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative kpi-sweep kpi-sweep--gauge">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
@@ -1105,7 +1109,7 @@ const ProKpiCard: React.FC<{
       return (
         <div className="flex flex-col items-center">
           <div className="h-16 w-16 lg:h-20 lg:w-20 min-w-[1px] min-h-[1px] cursor-pointer relative">
-            <div className="absolute inset-0">
+            <div className="absolute inset-0 kpi-sweep kpi-sweep--donut">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
@@ -1136,7 +1140,7 @@ const ProKpiCard: React.FC<{
             </ResponsiveContainer>
             </div>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="text-[13px] font-bold tracking-tight tabular-nums text-[var(--text-primary)]">{displayValue}</span>
+              <span className="text-[13px] font-bold tracking-tight tabular-nums text-[var(--text-primary)]"><CountUpText text={displayValue} /></span>
             </div>
           </div>
           <div className="flex gap-2 mt-2.5">
@@ -1158,7 +1162,7 @@ const ProKpiCard: React.FC<{
   };
 
   return (
-    <div className="p-4 rounded-lg flex flex-col justify-between h-full relative overflow-visible border border-[var(--border-subtle)] bg-[var(--bg-card)] transition-colors">
+    <div ref={tilt.ref} onPointerMove={tilt.onPointerMove} onPointerLeave={tilt.onPointerLeave} className="tilt-card p-4 rounded-lg flex flex-col justify-between h-full relative overflow-visible border border-[var(--border-subtle)] bg-[var(--bg-card)]">
       <div className="flex justify-between items-start mb-2">
         <div className="text-[11px] font-semibold text-[var(--text-secondary)] flex items-center gap-1.5">
           {label}
@@ -1168,7 +1172,7 @@ const ProKpiCard: React.FC<{
       <div className="flex-1 flex flex-col items-center justify-center min-h-[60px]">
         {type === 'text' && (
           <div className="text-center">
-            <p className="text-2xl lg:text-[28px] font-bold tracking-tight tabular-nums leading-none">{displayValue}</p>
+            <p className="text-2xl lg:text-[28px] font-bold tracking-tight tabular-nums leading-none"><CountUpText text={displayValue} /></p>
             {subValue && <p className="text-[11px] font-medium theme-text-secondary mt-2">{subValue}</p>}
           </div>
         )}
@@ -2444,7 +2448,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               onBreakpointChange={handleBreakpointChange}
               autoSize
             >
-              {currentLayout.map(widget => {
+              {currentLayout.map((widget, widgetIndex) => {
                 const grid = (rglLayouts as Record<string, { i: string; minW?: number; minH?: number; maxW?: number; maxH?: number }[]>)[currentBreakpoint]
                   ?.find(item => item.i === widget.id);
                 // Minimum i maximum drží i během tažení rohu: mřížka by jinak
@@ -2474,7 +2478,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
                       />
                     )}
-                    <div className={`dashboard-widget-shell dbe-shell ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
+                    <div style={{ ['--dash-i' as string]: Math.min(widgetIndex, 10) }} className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
                       {renderWidget(widget.id, widget)}
                     </div>
                   </div>

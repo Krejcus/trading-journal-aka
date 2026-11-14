@@ -5,6 +5,8 @@ import { formatPnL, formatTradePnL, calculateTotalRR, formatRMultiple } from '..
 import { tradeRMultiple } from '../utils/tradeRisk';
 import { ExchangeRates } from '../services/currencyService';
 import ImageZoomModal from './ImageZoomModal';
+import CalendarLandscape, { type LandscapeDay } from './CalendarLandscape';
+import CountUpText from './CountUpText';
 import {
    ChevronLeft,
    ChevronRight,
@@ -369,6 +371,29 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
    const DAY_LABELS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'Týden'];
 
+   // Směr posunu při listování měsíci (jen pro animaci příjezdu dnů).
+   const monthKey = year * 12 + month;
+   const [nav, setNav] = useState({ key: monthKey, dir: 0 });
+   if (nav.key !== monthKey) setNav({ key: monthKey, dir: monthKey > nav.key ? 1 : -1 });
+
+   // „Krajina měsíce“: stejná čísla jako plochý kalendář, jen jako sloupce. Se skrytými výsledky se nenabízí.
+   const [landscape, setLandscape] = useState(false);
+   const landscapeWeeks = useMemo<Array<Array<LandscapeDay | null>>>(() => gridRows.map(row => row.filter(cell => cell.type !== 'summary').map(cell => {
+      if (cell.type === 'empty' || !cell.data) return null;
+      const day = cell.data;
+      const ghost = cell.type === 'ghost';
+      const metric = pnlFormat === 'rr' ? calculateTotalRR(day.trades.filter(t => t.executionStatus !== 'Missed')) : day.pnl;
+      const drawable = !ghost && day.hasTrades && metric !== null && Number.isFinite(metric) && Number.isFinite(day.pnl);
+      return {
+         key: `${ghost ? 'g' : 'd'}-${day.dateObj.getTime()}`,
+         dayNum: day.dayNum,
+         dim: ghost,
+         bar: drawable ? { positive: (metric as number) >= 0, size: Math.max(0.15, Math.min(1, Math.abs(day.pnl) / maxDayPnL)), title: `${day.dateObj.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long' })}: ${formatPnLCompact(day.pnl, pnlFormat as PnLDisplayMode, day.trades, initialBalance)}` } : null,
+         onOpen: () => onDayClick(day),
+      };
+   })), [gridRows, pnlFormat, maxDayPnL, initialBalance, onDayClick]);
+   const showLandscape = landscape && !resultsHidden;
+
    return (
       <div className="rounded-lg border overflow-visible transition-all flex flex-col h-full bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-[var(--shadow-card)]">
          {/* Plochy z proměnných motivu: ve stylu Aurora sklo, v OLED čistá černá. */}
@@ -400,16 +425,21 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
                   <button onClick={onPrev} disabled={!canPrev} className={`p-1.5 rounded-lg transition-all ${!canPrev ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronLeft size={18} /></button>
                   <div className="min-w-[130px]"><h3 className={`text-xl font-extrabold capitalize leading-none tracking-tight text-[var(--text-primary)]`}>{monthName}</h3></div>
                   <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-lg transition-all ${!canNext ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronRight size={18} /></button>
+                  {!resultsHidden && (
+                     <button type="button" onClick={() => setLandscape(value => !value)} aria-pressed={landscape} title="Krajina měsíce: dny jako sloupce podle výsledku, tažením se otáčí"
+                        className={`h-[30px] px-2.5 rounded-lg border text-[11px] font-bold transition-colors ${landscape ? 'bg-blue-500 border-blue-500 text-white' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>3D</button>
+                  )}
                </div>
             </div>
             <div className="flex flex-col items-end gap-1 px-5 py-3 rounded-lg border bg-[var(--bg-page)] border-[var(--border-subtle)]">
                <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Měsíční P&amp;L</span>
                <span className={`text-2xl font-mono font-bold tracking-tight ${totalMonthColorMetric === null || !Number.isFinite(totalMonthColorMetric) ? 'text-slate-400' : monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
+                  <CountUpText text={String(formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined))} />
                </span>
             </div>
          </div>
 
+         {showLandscape ? <CalendarLandscape key={monthKey} weeks={landscapeWeeks} /> : (<>
          <div className="grid grid-cols-6 gap-1.5 md:gap-2 px-3 md:px-4 pt-3 md:pt-4 pb-0">
             {DAY_LABELS.map((label, idx) => (
                <div key={label} className={`py-1 text-center text-[11px] md:text-xs font-semibold ${idx === 5 ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
@@ -418,15 +448,16 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
             ))}
          </div>
 
-         <div className="px-3 md:px-4 pb-3 md:pb-4 pt-2 flex-1 min-h-0 flex flex-col gap-1.5 md:gap-2">
+         <div key={monthKey} className={`cal-rows ${nav.dir > 0 ? 'cal-rows--next' : nav.dir < 0 ? 'cal-rows--prev' : ''} px-3 md:px-4 pb-3 md:pb-4 pt-2 flex-1 min-h-0 flex flex-col gap-1.5 md:gap-2`}>
             {gridRows.map((row, rIdx) => (
-               <div key={rIdx} className="grid grid-cols-6 gap-1.5 md:gap-2 flex-1 min-h-0">
+               <div key={rIdx} style={{ ['--cal-r' as string]: rIdx }} className="grid grid-cols-6 gap-1.5 md:gap-2 flex-1 min-h-0">
                   {row.map((cell, cIdx) => (
                      <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} currency={currency} rates={rates} />
                   ))}
                </div>
             ))}
          </div>
+         </>)}
       </div>
    );
 };
@@ -522,7 +553,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
    const textColor = dayColorMetric === null || !Number.isFinite(dayColorMetric) ? 'text-slate-400' : dayIsPositive ? (theme === 'light' ? 'text-emerald-700' : 'text-emerald-300') : (theme === 'light' ? 'text-rose-700' : 'text-rose-300');
    return (
-      <div onClick={() => onDayClick(day)} className={`cal-cell rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/20 ${borderClass} bg-[var(--bg-page)]`} style={bgStyle}>
+      <div onClick={() => onDayClick(day)} className={`cal-cell cal-lift rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/20 ${borderClass} bg-[var(--bg-page)]`} style={bgStyle}>
          {/* Day number */}
          <div className="flex justify-end">
             <span className={`font-mono text-[9px] md:text-xs font-semibold leading-none ${!day.hasTrades ? (theme !== 'light' ? 'text-slate-600' : 'text-slate-400') : 'text-[var(--text-secondary)]'}`}>{day.dayNum}</span>

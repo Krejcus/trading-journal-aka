@@ -288,6 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-14 — Claude: pohyb na dashboardu (stejná větev, NENASAZENO)
+
+Větev `claude/live-background-20261114`, jen localhost. Filip schválil
+náhled `mockups/dashboard-motion.html` a řekl „můžeš přenést“.
+
+- **Co je v appce**: karty se při načtení vynoří jedna po druhé, čísla
+  v KPI kartách a měsíční P&L doběhnou (`CountUpText`, `lib/countUp.ts`),
+  kroužky win rate / profit factor se naplní, horní dlaždice se lehce
+  naklání za myší (`lib/useTilt.ts`), Monte Carlo se rozevře, konec equity
+  křivky pulzuje, dny v kalendáři naskočí postupně, měsíc přijede ze strany,
+  den se při najetí zvedne. Kalendář má tlačítko **3D** („krajina měsíce“,
+  `components/CalendarLandscape.tsx`) — jiný pohled na stejná čísla.
+- **Rozhodnutí**: equity křivka se rozjede jen při načtení a pak stojí
+  (Filip výslovně nechtěl, aby jela pořád). Vnitřek dlaždic se nemění.
+  Kroužky se plní CSS maskou, ne animací Recharts — ta zůstala vypnutá,
+  aby se při najetí myší nepřekreslovaly. 3D se nenabízí se skrytými výsledky.
+- **Nepřeneseno z náhledu**: nové rozložení (šest dlaždic, poslední obchody
+  pod kalendářem) — dashboard je skládací, rozložení si Filip mění sám.
+  Pohyb je zatím jen v mřížce pro počítač, telefon beze změny.
+- **Ověření**: přihlášený náhled na localhostu (světlý režim, šířka počítače),
+  24 souvisejících sad testů (534) zelených, tsc bez nových chyb. Neověřeno:
+  tmavý režim v appce, iPhone, plná sada testů a build.
+
 ### 2026-11-14 — Claude: živé pozadí a kouř za myší (větev, NENASAZENO)
 
 Větev `claude/live-background-20261114`, worktree
