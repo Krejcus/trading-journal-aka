@@ -1,5 +1,6 @@
 
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
+import { MotionReadyContext } from './CountUpText';
 import { createPortal } from 'react-dom';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -280,6 +281,8 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
 };
 
 const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribution, isEditing, showDisciplinedCurve, onToggleDisciplined, onTradeClick, onEventClick, pnlDisplayMode = 'usd' }) => {
+  // Dojezd křivky začne, až je dashboard usazený (mimo dashboard hned).
+  const motionReady = useContext(MotionReadyContext);
   const axisColor = theme !== 'light' ? '#64748b' : '#94a3b8';
   const gridColor = theme !== 'light' ? '#334155' : '#e2e8f0';
 
@@ -417,6 +420,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
           <div className="flex-1 min-h-0 w-full min-w-[1px]" style={{ outline: 'none' }}>
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <AreaChart
+                className={`equity-reveal ${motionReady ? 'equity-reveal--on' : ''}`}
                 data={equityData}
                 margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
                 onClick={(data: any) => {
@@ -507,6 +511,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   strokeWidth={2.5}
                   fill="url(#splitFill)"
                   dot={false}
+                  isAnimationActive={false}
                   activeDot={(props) => <CustomActiveDot {...props} onTradeClick={onTradeClick} onEventClick={onEventClick} />}
                   style={{ cursor: 'pointer' }}
                 />
@@ -517,7 +522,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   const color = last.equity >= initialCap ? COLORS.profit : COLORS.loss;
                   return (
                     <ReferenceDot x={last.name} y={last.equity} shape={(dot: any) => (
-                      <g className="equity-end" pointerEvents="none">
+                      <g className={`equity-end ${motionReady ? 'equity-end--on' : ''}`} pointerEvents="none">
                         <circle className="equity-end__pulse" cx={dot.cx} cy={dot.cy} r={4} fill={color} />
                         <circle cx={dot.cx} cy={dot.cy} r={3.5} fill={color} />
                       </g>

@@ -11,7 +11,7 @@ import { getTradeEntryMinuteOfDay, getTradeEntryDate } from '../services/tradeTi
 import Charts from './Charts';
 import { simulateBacktestMonteCarlo } from '../services/backtestMonteCarlo';
 import DashboardCalendar from './DashboardCalendar';
-import CountUpText from './CountUpText';
+import CountUpText, { MotionReadyContext } from './CountUpText';
 import { useTilt } from '../lib/useTilt';
 import DisciplineDashboard from './DisciplineDashboard';
 import {
@@ -1650,6 +1650,18 @@ const Dashboard: React.FC<DashboardProps> = ({
   onNavigateToSettings,
   defaultLayouts,
 }) => {
+  // Pohyb na dashboardu (vynoření karet, dopočty, dojezdy grafů) začne až po
+  // prvním těžkém vykreslení — během něj by proběhl v záseku a nebyl vidět.
+  const [motionReady, setMotionReady] = useState(false);
+  useEffect(() => {
+    const idle = (window as any).requestIdleCallback as ((cb: () => void, opts?: { timeout: number }) => number) | undefined;
+    if (idle) {
+      const id = idle(() => setMotionReady(true), { timeout: 1500 });
+      return () => (window as any).cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(() => setMotionReady(true), 300);
+    return () => window.clearTimeout(timer);
+  }, []);
   // Odstraněné dlaždice (AI „Insight Dne“, 12. 10. 2026) můžou zůstat v uloženém
   // rozvržení; bez filtru by po nich zůstala prázdná karta.
   const layouts = useMemo(() => withoutRetiredWidgets(savedLayouts), [savedLayouts]);
@@ -2288,7 +2300,8 @@ const Dashboard: React.FC<DashboardProps> = ({
 
 
   return (
-    <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
+    <MotionReadyContext.Provider value={motionReady}>
+    <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${motionReady ? 'dash-motion-ready' : ''} ${isEditing ? 'canvas-grid' : ''}`}>
       <div className={`space-y-6 lg:space-y-10 relative z-10 w-full mx-auto transition-[padding] duration-500 ${isEditing ? 'pb-[420px]' : 'pb-40'}`}>
         <div className={`flex justify-between items-center px-4 pt-4 ${!isEditing ? 'hidden lg:flex' : ''}`}>
           <div>
@@ -2599,6 +2612,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         />
       )}
     </div >
+    </MotionReadyContext.Provider>
   );
 };
 export default Dashboard;
