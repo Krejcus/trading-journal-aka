@@ -27,8 +27,8 @@ function backdrop(settings: AppearanceSettings, dark: boolean, background = sett
 }
 
 /**
- * Nastavení → Vzhled. Kompaktní (bez scrollu): každá volba na jednom řádku,
- * vpravo zmenšený dashboard. Posuvníky mění vzhled živě přes CSS proměnné
+ * Nastavení → Vzhled. Kompaktní: každá volba na jednom řádku přes celou šířku
+ * (změny jsou hned vidět na skutečném pozadí za kartou). Posuvníky mění vzhled živě přes CSS proměnné
  * a ukládají se až po puštění — aplikace se nepřekresluje při každém pohybu.
  */
 export default function AppearanceSettings({ appearance, onChange, theme, onThemeChange }: {
@@ -70,7 +70,7 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
   const ends = 'text-[11px] font-semibold text-[var(--text-secondary)] whitespace-nowrap';
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(260px,1fr)] items-start max-w-[1100px]">
+    <div className="w-full">
       <section aria-label="Vzhled" className="theme-card rounded-lg overflow-hidden">
         <div className={row}>
           <span className={label}>Režim</span>
@@ -116,7 +116,7 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
 
           <div className={row}>
             <span className={label}>Síla pozadí</span>
-            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[420px]">
+            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[560px]">
               <span className={ends}>Jemné</span>
               <input type="range" min={0} max={100} value={strength} aria-label="Síla pozadí" className="flex-1 accent-indigo-500"
                 onChange={e => { const v = Number(e.target.value); setStrength(v); live('--aurora-strength', String(v / 100)); }}
@@ -127,7 +127,7 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
 
           <div className={`${row} ${still ? 'opacity-45' : ''}`}>
             <span className={label}>Rychlost pohybu</span>
-            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[420px]">
+            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[560px]">
               <span className={ends}>Stojí</span>
               <input type="range" min={0} max={100} step={5} value={speed} disabled={still} aria-label="Rychlost pohybu pozadí" className="flex-1 accent-indigo-500"
                 onChange={e => setSpeed(Number(e.target.value))}
@@ -138,7 +138,7 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
 
           <div className={row}>
             <span className={label}>Reakce na myš<small className="block mt-0.5 text-[11px] font-medium text-[var(--text-secondary)]">jen na počítači</small></span>
-            <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2 w-full max-w-[420px]">
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2 w-full max-w-[560px]">
               <div className="inline-flex gap-0.5 p-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)]">
                 {([['none', 'Žádná'], ['smoke', 'Kouř']] as const).map(([value, text]) => (
                   <button key={value} type="button" onClick={() => set({ mouseEffect: value })} className={segBtn(appearance.mouseEffect === value)} aria-pressed={appearance.mouseEffect === value}>{text}</button>
@@ -156,7 +156,7 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
 
           <div className={row}>
             <span className={label}>Průhlednost karet</span>
-            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[420px]">
+            <div className="ml-auto flex items-center gap-2.5 w-full max-w-[560px]">
               <span className={ends}>Neprůhledné</span>
               <input type="range" min={CARD_TRANSPARENCY_MIN} max={CARD_TRANSPARENCY_MAX} value={transparency} aria-label="Průhlednost karet" className="flex-1 accent-indigo-500"
                 onChange={e => { const v = Number(e.target.value); setTransparency(v); live('--aurora-card-opacity', `${100 - v}%`); }}
@@ -170,31 +170,6 @@ export default function AppearanceSettings({ appearance, onChange, theme, onThem
           <span>{oled ? 'V režimu OLED je pozadí vypnuté — čistě černá šetří baterii.' : 'Uloženo k účtu · platí na všech zařízeních'}</span>
           <button type="button" onClick={() => onChange(DEFAULT_APPEARANCE)} className="h-[30px] px-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-xs font-semibold text-[var(--text-primary)]">Obnovit výchozí</button>
         </div>
-      </section>
-
-      {/* Zmenšený dashboard — reaguje na všechna nastavení vlevo. */}
-      <section aria-label="Náhled vzhledu" className="theme-card rounded-lg p-2.5">
-        <div className="relative grid grid-cols-[22px_1fr] grid-rows-[auto_1fr] gap-1.5 h-[230px] lg:h-[268px] p-2 rounded-md overflow-hidden"
-          style={{ background: oled ? '#000' : backdrop(appearance, dark) }}>
-          {!oled && <span aria-hidden="true" className="absolute inset-0" style={{ background: dark ? '#05070f' : '#eceff7', opacity: `calc(1 - (0.3 + 0.7 * var(--aurora-strength, ${appearance.strength / 100})))` }} />}
-          <span className="relative row-span-2 rounded-lg bg-[var(--bg-card)] border border-[var(--glass-border)] shadow-[var(--shadow-card)] flex flex-col items-center gap-1.5 pt-2">
-            {Array.from({ length: 6 }, (_, i) => <i key={i} className={`w-2 h-2 rounded-[3px] ${i === 1 ? 'bg-[var(--text-primary)] opacity-70' : 'bg-[var(--text-secondary)] opacity-30'}`} />)}
-          </span>
-          <span className="relative h-6 rounded-lg bg-[var(--bg-card)] border border-[var(--glass-border)] px-2.5 flex items-center text-[10.5px] font-extrabold text-[var(--text-primary)]">Dashboard</span>
-          <span className="relative grid grid-cols-2 grid-rows-[auto_1fr] gap-1.5 min-h-0">
-            {[
-              ['Net P&L', <b key="v" className="text-[15px] font-extrabold tabular-nums text-emerald-500">+$17 719</b>],
-              ['Win rate', <b key="v" className="text-[15px] font-extrabold tabular-nums text-[var(--text-primary)]">45,6 %</b>],
-              ['Equity', <svg key="v" viewBox="0 0 100 40" preserveAspectRatio="none" className="w-full flex-1 min-h-[40px]"><path d="M0,34 L12,30 L22,32 L34,24 L44,27 L56,30 L64,22 L74,18 L84,12 L100,4" fill="none" stroke="#10b981" strokeWidth="1.6" vectorEffect="non-scaling-stroke" /></svg>],
-              ['Září', <span key="v" className="grid grid-cols-5 gap-[3px] mt-auto">{[1, -1, 1, -1, 1, 1, -1, 1, -1, 1].map((sign, i) => <i key={i} className={`aspect-[1.2] rounded-[3px] ${sign > 0 ? 'bg-emerald-500/55' : 'bg-rose-500/50'}`} />)}</span>],
-            ].map(([title, body]) => (
-              <span key={String(title)} className="flex flex-col gap-1 min-w-0 rounded-lg p-2 bg-[var(--bg-card)] border border-[var(--glass-border)] shadow-[var(--shadow-card)]">
-                <span className="text-[8.5px] font-semibold text-[var(--text-secondary)]">{title}</span>{body}
-              </span>
-            ))}
-          </span>
-        </div>
-        <p className="flex justify-between gap-2 px-1 pt-2 text-[11px] text-[var(--text-secondary)]"><b className="text-[var(--text-primary)]">Náhled</b>takhle bude vypadat dashboard</p>
       </section>
     </div>
   );
