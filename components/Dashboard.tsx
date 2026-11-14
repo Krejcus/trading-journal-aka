@@ -2299,6 +2299,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
 
+  // Pořadí vynoření karet podle místa v mřížce (shora dolů, zleva doprava),
+  // ne podle pořadí v uloženém rozvržení — jinak karty naskakují napřeskáčku.
+  const appearRank = new Map<string, number>(
+    (((rglLayouts as Record<string, { i: string; x?: number; y?: number }[]>)[currentBreakpoint]) ?? [])
+      .slice().sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+      .map((item, index) => [item.i, index]),
+  );
   return (
     <MotionReadyContext.Provider value={motionReady}>
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${motionReady ? 'dash-motion-ready' : ''} ${isEditing ? 'canvas-grid' : ''}`}>
@@ -2491,7 +2498,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
                       />
                     )}
-                    <div style={{ ['--dash-i' as string]: Math.min(widgetIndex, 10) }} className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
+                    <div style={{ ['--dash-i' as string]: Math.min(appearRank.get(widget.id) ?? widgetIndex, 14) }} className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
                       {renderWidget(widget.id, widget)}
                     </div>
                   </div>

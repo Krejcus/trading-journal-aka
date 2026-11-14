@@ -4515,10 +4515,11 @@ html.aurora .theme-card {
 /* Karty se při prvním zobrazení vynoří jedna po druhé. */
 /* Všechen pohyb čeká na `.dash-motion-ready` (Dashboard ji přidá po prvním vykreslení). */
 .dash-in { opacity: 0; }
-.dash-motion-ready .dash-in { opacity: 1; animation: dash-in 0.42s cubic-bezier(0.2, 0.8, 0.3, 1) backwards; animation-delay: calc(var(--dash-i, 0) * 55ms); }
+.dash-motion-ready .dash-in { opacity: 1; animation: dash-in 0.42s cubic-bezier(0.2, 0.8, 0.3, 1) backwards; animation-delay: calc(var(--dash-i, 0) * 45ms); }
 @keyframes dash-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
 /* Kroužky u čísel se při načtení naplní (maska platí jen po dobu animace). */
-.dash-motion-ready .kpi-sweep { animation: kpi-sweep 1.1s cubic-bezier(0.45, 0.05, 0.2, 1) 0.4s backwards; }
+/* Kroužek se plní hned s vynořením své karty (stejné zpoždění), ne až po všech ostatních. */
+.dash-motion-ready .kpi-sweep { animation: kpi-sweep 0.8s cubic-bezier(0.25, 0.6, 0.3, 1) backwards; animation-delay: calc(var(--dash-i, 0) * 45ms + 120ms); }
 @keyframes kpi-sweep {
   from { --kpi-sweep: 0deg; -webkit-mask-image: var(--kpi-mask); mask-image: var(--kpi-mask); }
   to { --kpi-sweep: var(--kpi-sweep-end); -webkit-mask-image: var(--kpi-mask); mask-image: var(--kpi-mask); }
