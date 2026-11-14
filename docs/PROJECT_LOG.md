@@ -304,6 +304,14 @@ náhled `mockups/dashboard-motion.html` a řekl „můžeš přenést“.
   (Filip výslovně nechtěl, aby jela pořád). Vnitřek dlaždic se nemění.
   Kroužky se plní CSS maskou, ne animací Recharts — ta zůstala vypnutá,
   aby se při najetí myší nepřekreslovaly. 3D se nenabízí se skrytými výsledky.
+- **Past (stálo to tři kola oprav)**: vynoření karet už dělá společný náběh
+  stránky (`lib/pageEnter.ts`, `BootTransition`) přes WAAPI. Druhá animace
+  náběhu na `.dashboard-widget-shell` se s ním pere — karty pak naskakují
+  napřeskáčku. Vlastní náběh karet jsem proto zrušil a společný náběh nově
+  řadí bloky podle polohy na obrazovce (`sortByScreenPosition`), ne podle
+  pořadí v dokumentu. Pohyb uvnitř karet (dopočty, kroužky, křivka) čeká na
+  `MotionReadyContext` — první vteřina po připojení dashboardu je zásek.
+  Odlesk za myší na dlaždicích zrušen (rozmazával čísla), náklon zůstal 3°.
 - **Nepřeneseno z náhledu**: nové rozložení (šest dlaždic, poslední obchody
   pod kalendářem) — dashboard je skládací, rozložení si Filip mění sám.
   Pohyb je zatím jen v mřížce pro počítač, telefon beze změny.

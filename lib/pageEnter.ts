@@ -34,6 +34,18 @@ export function isEnterBlock(rect: EnterRect, viewportHeight: number): boolean {
   return rect.height <= viewportHeight * 0.75;
 }
 
+/**
+ * Seřadí bloky tak, jak leží na obrazovce (shora dolů, zleva doprava). Pořadí
+ * v dokumentu nestačí: dashboard si widgety skládá do mřížky podle uloženého
+ * rozvržení, takže by karty naskakovaly napřeskáčku.
+ */
+export function sortByScreenPosition<T extends Element>(blocks: readonly T[]): T[] {
+  return blocks
+    .map(block => ({ block, rect: block.getBoundingClientRect() }))
+    .sort((a, b) => Math.round(a.rect.top / 24) - Math.round(b.rect.top / 24) || a.rect.left - b.rect.left)
+    .map(item => item.block);
+}
+
 export function collectEnterBlocks(root: ParentNode, viewportHeight = window.innerHeight, max = MAX_BLOCKS): HTMLElement[] {
   const picked: HTMLElement[] = [];
   for (const element of root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)) {
@@ -46,7 +58,7 @@ export function collectEnterBlocks(root: ParentNode, viewportHeight = window.inn
     if (position === 'fixed' || position === 'sticky') continue;
     picked.push(element);
   }
-  return picked;
+  return sortByScreenPosition(picked);
 }
 
 const reducedMotion = () => {

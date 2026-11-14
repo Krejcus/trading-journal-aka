@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useRef } from 'react';
 import { whenFramesSettle } from '../lib/settledFrame';
-import { collectEnterBlocks } from '../lib/pageEnter';
+import { collectEnterBlocks, sortByScreenPosition } from '../lib/pageEnter';
 
 /**
  * Přechod z načítání do appky (jen při startu dokumentu): točící se logo
@@ -133,7 +133,7 @@ export default function BootTransition({ allowFlight, onDone }: { allowFlight: b
       // Dashboard: widgety; ostatní stránky: jejich karty a sekce (lib/pageEnter)
       // — start appky na Historii nebo Účtech naběhne stejně jako dashboard.
       const content = document.querySelector<HTMLElement>('[data-boot="content"]');
-      const gridWidgets = [...document.querySelectorAll('[data-boot="content"] .react-grid-item > *')].slice(0, 14);
+      const gridWidgets = sortByScreenPosition([...document.querySelectorAll('[data-boot="content"] .react-grid-item > *')]).slice(0, 14);
       const widgets = gridWidgets.length > 0 || !content ? gridWidgets : collectEnterBlocks(content);
       widgets.forEach((widget, index) => enter(widget, { transform: 'translateY(22px) scale(.98)' }, lead + 90 + index * 45, 600));
       root.classList.remove('boot-pre');

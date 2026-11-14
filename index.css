@@ -4512,14 +4512,11 @@ html.aurora .theme-card {
 
 /* ── Pohyb na dashboardu (jen zobrazení; „omezit pohyb“ ho vypíná) ───────── */
 @property --kpi-sweep { syntax: '<angle>'; inherits: false; initial-value: 360deg; }
-/* Karty se při prvním zobrazení vynoří jedna po druhé. */
-/* Všechen pohyb čeká na `.dash-motion-ready` (Dashboard ji přidá po prvním vykreslení). */
-.dash-in { opacity: 0; }
-.dash-motion-ready .dash-in { opacity: 1; animation: dash-in 0.42s cubic-bezier(0.2, 0.8, 0.3, 1) backwards; animation-delay: calc(var(--dash-i, 0) * 45ms); }
-@keyframes dash-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+/* Vynoření karet dělá společný náběh stránky (lib/pageEnter, BootTransition); tady je jen pohyb uvnitř karet.
+   Ten čeká na `.dash-motion-ready` (Dashboard ji přidá po prvním vykreslení). */
 /* Kroužky u čísel se při načtení naplní (maska platí jen po dobu animace). */
 /* Kroužek se plní hned s vynořením své karty (stejné zpoždění), ne až po všech ostatních. */
-.dash-motion-ready .kpi-sweep { animation: kpi-sweep 0.8s cubic-bezier(0.25, 0.6, 0.3, 1) backwards; animation-delay: calc(var(--dash-i, 0) * 45ms + 120ms); }
+.dash-motion-ready .kpi-sweep { animation: kpi-sweep 0.8s cubic-bezier(0.25, 0.6, 0.3, 1) 0.12s backwards; }
 @keyframes kpi-sweep {
   from { --kpi-sweep: 0deg; -webkit-mask-image: var(--kpi-mask); mask-image: var(--kpi-mask); }
   to { --kpi-sweep: var(--kpi-sweep-end); -webkit-mask-image: var(--kpi-mask); mask-image: var(--kpi-mask); }
@@ -4573,7 +4570,7 @@ html.aurora .theme-card {
 .cal-land__e { top: 0; bottom: 0; right: 0; width: var(--bar-h); transform-origin: right; transform: rotateY(90deg); filter: brightness(0.68); }
 .cal-land__w { top: 0; bottom: 0; left: 0; width: var(--bar-h); transform-origin: left; transform: rotateY(-90deg); filter: brightness(0.9); }
 @media (prefers-reduced-motion: reduce) {
-  .dash-in, .dash-motion-ready .dash-in, .dash-motion-ready .kpi-sweep, .dash-motion-ready .mc-reveal, .equity-reveal--on, .equity-end--on, .equity-end--on .equity-end__pulse, .cal-rows > div > *, .cal-land__plane, .cal-land__bar { animation: none; }
+  .dash-motion-ready .kpi-sweep, .dash-motion-ready .mc-reveal, .equity-reveal--on, .equity-end--on, .equity-end--on .equity-end__pulse, .cal-rows > div > *, .cal-land__plane, .cal-land__bar { animation: none; }
   .tilt-card, .cal-lift { transition: none; }
 }
 

@@ -1662,16 +1662,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     const timer = window.setTimeout(() => setMotionReady(true), 300);
     return () => window.clearTimeout(timer);
   }, []);
-  // Pořadí vynoření podle toho, kde karta na obrazovce skutečně leží (shora dolů,
-  // zleva doprava). Uložené rozvržení nestačí — mřížka si karty sama sráží nahoru,
-  // takže uložená poloha se od zobrazené liší a karty pak naskakují napřeskáčku.
-  useLayoutEffect(() => {
-    if (!motionReady) return;
-    Array.from(document.querySelectorAll<HTMLElement>('.dash-in'))
-      .map(element => ({ element, box: element.getBoundingClientRect() }))
-      .sort((a, b) => Math.round(a.box.top / 24) - Math.round(b.box.top / 24) || a.box.left - b.box.left)
-      .forEach(({ element }, index) => element.style.setProperty('--dash-i', String(Math.min(index, 14))));
-  }, [motionReady]);
   // Odstraněné dlaždice (AI „Insight Dne“, 12. 10. 2026) můžou zůstat v uloženém
   // rozvržení; bez filtru by po nich zůstala prázdná karta.
   const layouts = useMemo(() => withoutRetiredWidgets(savedLayouts), [savedLayouts]);
@@ -2501,7 +2491,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
                       />
                     )}
-                    <div className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
+                    <div className={`dashboard-widget-shell dbe-shell ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
                       {renderWidget(widget.id, widget)}
                     </div>
                   </div>
