@@ -288,6 +288,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-14 — Claude: iPhone sestaven a nainstalován z a0dc5088
+
+Po Filipově „udělej i sestavení pro iPhone“: `npm run ios:sync` a `xcodebuild`
+z worktree `~/alphatrade-worktrees/live-background` (vlastní `node_modules`,
+symlink `.env.local`, `Package.swift` beze změny), čistá reinstalace
+(uninstall + install + launch). Appka naběhla přihlášená na Dashboard; iOS
+se znovu zeptal na oznámení — povolit musí Filip. Telefon teď zná nová
+pozadí; kouř a pohyb na dashboardu jsou jen na počítači. Neověřeno v telefonu:
+nová pozadí ve Vzhledu a plynulost s animovaným pozadím (baterie).
+
 ### 2026-11-14 — Claude: pohyb na dashboardu (web NASAZEN 14. 11., iPhone ne)
 
 Větev `claude/live-background-20261114`, po Filipově „nasaď“ pushnuto na
