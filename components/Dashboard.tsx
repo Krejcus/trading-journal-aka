@@ -1662,6 +1662,16 @@ const Dashboard: React.FC<DashboardProps> = ({
     const timer = window.setTimeout(() => setMotionReady(true), 300);
     return () => window.clearTimeout(timer);
   }, []);
+  // Pořadí vynoření podle toho, kde karta na obrazovce skutečně leží (shora dolů,
+  // zleva doprava). Uložené rozvržení nestačí — mřížka si karty sama sráží nahoru,
+  // takže uložená poloha se od zobrazené liší a karty pak naskakují napřeskáčku.
+  useLayoutEffect(() => {
+    if (!motionReady) return;
+    Array.from(document.querySelectorAll<HTMLElement>('.dash-in'))
+      .map(element => ({ element, box: element.getBoundingClientRect() }))
+      .sort((a, b) => Math.round(a.box.top / 24) - Math.round(b.box.top / 24) || a.box.left - b.box.left)
+      .forEach(({ element }, index) => element.style.setProperty('--dash-i', String(Math.min(index, 14))));
+  }, [motionReady]);
   // Odstraněné dlaždice (AI „Insight Dne“, 12. 10. 2026) můžou zůstat v uloženém
   // rozvržení; bez filtru by po nich zůstala prázdná karta.
   const layouts = useMemo(() => withoutRetiredWidgets(savedLayouts), [savedLayouts]);
@@ -2299,13 +2309,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
 
-  // Pořadí vynoření karet podle místa v mřížce (shora dolů, zleva doprava),
-  // ne podle pořadí v uloženém rozvržení — jinak karty naskakují napřeskáčku.
-  const appearRank = new Map<string, number>(
-    (((rglLayouts as Record<string, { i: string; x?: number; y?: number }[]>)[currentBreakpoint]) ?? [])
-      .slice().sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
-      .map((item, index) => [item.i, index]),
-  );
   return (
     <MotionReadyContext.Provider value={motionReady}>
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${motionReady ? 'dash-motion-ready' : ''} ${isEditing ? 'canvas-grid' : ''}`}>
@@ -2468,7 +2471,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               onBreakpointChange={handleBreakpointChange}
               autoSize
             >
-              {currentLayout.map((widget, widgetIndex) => {
+              {currentLayout.map(widget => {
                 const grid = (rglLayouts as Record<string, { i: string; minW?: number; minH?: number; maxW?: number; maxH?: number }[]>)[currentBreakpoint]
                   ?.find(item => item.i === widget.id);
                 // Minimum i maximum drží i během tažení rohu: mřížka by jinak
@@ -2498,7 +2501,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                         onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
                       />
                     )}
-                    <div style={{ ['--dash-i' as string]: Math.min(appearRank.get(widget.id) ?? widgetIndex, 14) }} className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
+                    <div className={`dashboard-widget-shell dbe-shell dash-in ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
                       {renderWidget(widget.id, widget)}
                     </div>
                   </div>
