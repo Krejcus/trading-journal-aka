@@ -288,6 +288,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-14 — Claude: živé pozadí a kouř za myší (větev, NENASAZENO)
+
+Větev `claude/live-background-20261114`, worktree
+`~/alphatrade-worktrees/live-background`. Jen lokálně — nic nepushnuto,
+Filip řekl „zatím vše na localhostu“.
+
+- **Co si Filip vybral** (z náhledů `mockups/live-backgrounds.html`):
+  pozadí Hlubiny, Skvrny (dosavadní „Barevné pole“, jen přejmenované),
+  Svíčky, Equity křivka a Žádné; reakce na myš jen **Kouř** nebo žádná
+  + síla; rychlost pohybu; barvy nechat všechny (zůstaly stávající palety
+  appky, žádné nové). Reflektor, čočka, vlnky, paralaxa a měkká „trading“
+  pozadí zamítnuty; zaměřovací kříž v grafu také.
+- **Graf v pozadí je ozdoba**: náhodná procházka v `lib/backgroundCharts.ts`,
+  žádné obchody ani cena z trhu, nic se z ní nepočítá.
+- **Kouř** = malá simulace tekutiny ve WebGL (`lib/smokeFluid.ts`), vlastní
+  vrstva `.aurora-smoke` nad pozadím a pod obsahem, `pointer-events: none`.
+  Běží jen na zařízení s myší, v klidu se po 9 s smyčka zastaví, respektuje
+  „omezit pohyb“. Na dotykových zařízeních se nekreslí.
+- **Proč výchozí rychlost 0 u Hlubin**: po nasazení má appka vypadat stejně
+  jako dnes, dokud si Filip něco nezapne. Starší uložené nastavení bez
+  `speed` → Hlubiny stojí, Skvrny jedou dosavadním tempem (`defaultSpeedFor`).
+- **Ověření**: `tests/qa/appearance.html` (pozadí + Nastavení → Vzhled bez
+  přihlášení), 4 související sady testů zelené, tsc bez nových chyb
+  (jen dávné chyby v `extension/`). Neověřeno: přihlášená appka se
+  skutečnými daty, iPhone, Filipův Chrome, plná sada testů a build.
+
 ### 2026-11-12 — Codex: upřesněno 20 MNQ / 2 NQ pro ruční vstupy, limit zatím NEZMĚNĚN
 
 - Uživatel upřesnil „20 mnq 2nq“ a následně opravil předchozí odpověď:

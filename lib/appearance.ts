@@ -4,7 +4,13 @@
  * na počítači i v telefonu. Téma (světlé / tmavé / OLED) zůstává zvlášť.
  */
 
-export type AppearanceBackground = 'depths' | 'field';
+/** depths = Hlubiny, field = Skvrny, candles/equity = živý graf v pozadí, none = jen čistá barva. */
+export type AppearanceBackground = 'depths' | 'field' | 'candles' | 'equity' | 'none';
+export const APPEARANCE_BACKGROUNDS: AppearanceBackground[] = ['depths', 'field', 'candles', 'equity', 'none'];
+export const BACKGROUND_NAMES: Record<AppearanceBackground, string> = {
+  depths: 'Hlubiny', field: 'Skvrny', candles: 'Svíčky', equity: 'Equity křivka', none: 'Žádné',
+};
+export type AppearanceMouseEffect = 'none' | 'smoke';
 export type AppearancePalette = 'default' | 'polar' | 'ocean' | 'sunset' | 'forest' | 'graphite' | 'custom';
 
 export interface AppearanceSettings {
@@ -16,6 +22,12 @@ export interface AppearanceSettings {
   strength: number;
   /** Průhlednost karet 10–90 % (neprůhledné → průhledné). */
   cardTransparency: number;
+  /** Rychlost pohybu pozadí 0–100 (0 = stojí). */
+  speed: number;
+  /** Reakce na myš: kouř za kurzorem, nebo nic. Jen na zařízení s myší. */
+  mouseEffect: AppearanceMouseEffect;
+  /** Síla reakce na myš 0–100. */
+  mouseStrength: number;
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -24,7 +36,13 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   customColor: '#6366f1',
   strength: 80,
   cardTransparency: 54,
+  speed: 0,
+  mouseEffect: 'none',
+  mouseStrength: 50,
 };
+
+/** Rychlost, kterou dostane pozadí, když ji uložené nastavení ještě nezná: Hlubiny stály, Skvrny se přelévaly. */
+export const defaultSpeedFor = (background: AppearanceBackground) => (background === 'depths' || background === 'none' ? 0 : 50);
 
 export const CARD_TRANSPARENCY_MIN = 10;
 export const CARD_TRANSPARENCY_MAX = 90;
@@ -39,7 +57,7 @@ export const APPEARANCE_PALETTES: Record<Exclude<AppearancePalette, 'default' | 
 };
 
 /** Výchozí barvy každého pozadí (paleta „Výchozí“). */
-const DEFAULT_COLORS: Record<AppearanceBackground, Pair> = {
+const DEFAULT_COLORS: Record<'depths' | 'field', Pair> = {
   depths: { light: ['#a5b4fc', '#7dd3fc', '#f0abfc', '#c7d2fe', '#bae6fd'], dark: ['#6366f1', '#0ea5e9', '#d946ef', '#4338ca', '#0369a1'] },
   field:  { light: ['#8d9bff', '#6fe3d4', '#ffb7d5', '#c7b6ff', '#9fd4ff'], dark: ['#4f46e5', '#0e7490', '#be185d', '#6d28d9', '#0369a1'] },
 };
@@ -55,7 +73,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 /** Bezpečně načte uložené nastavení (staré, chybějící nebo poškozené hodnoty → výchozí). */
 export function normalizeAppearance(raw: unknown): AppearanceSettings {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppearanceSettings>;
-  const background: AppearanceBackground = input.background === 'field' ? 'field' : 'depths';
+  const background: AppearanceBackground = APPEARANCE_BACKGROUNDS.includes(input.background as AppearanceBackground) ? input.background as AppearanceBackground : 'depths';
   const palette: AppearancePalette = input.palette && (input.palette === 'default' || input.palette === 'custom' || input.palette in APPEARANCE_PALETTES)
     ? input.palette : DEFAULT_APPEARANCE.palette;
   const customColor = typeof input.customColor === 'string' && /^#[0-9a-f]{6}$/i.test(input.customColor) ? input.customColor.toLowerCase() : DEFAULT_APPEARANCE.customColor;
@@ -63,7 +81,10 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
   const cardTransparency = Number.isFinite(input.cardTransparency)
     ? clamp(Math.round(input.cardTransparency as number), CARD_TRANSPARENCY_MIN, CARD_TRANSPARENCY_MAX)
     : DEFAULT_APPEARANCE.cardTransparency;
-  return { background, palette, customColor, strength, cardTransparency };
+  const speed = Number.isFinite(input.speed) ? clamp(Math.round(input.speed as number), 0, 100) : defaultSpeedFor(background);
+  const mouseEffect: AppearanceMouseEffect = input.mouseEffect === 'smoke' ? 'smoke' : 'none';
+  const mouseStrength = Number.isFinite(input.mouseStrength) ? clamp(Math.round(input.mouseStrength as number), 0, 100) : DEFAULT_APPEARANCE.mouseStrength;
+  return { background, palette, customColor, strength, cardTransparency, speed, mouseEffect, mouseStrength };
 }
 
 function hexToHsl(hex: string): [number, number, number] {
@@ -100,7 +121,7 @@ export function customPaletteColors(hex: string, dark: boolean): string[] {
 /** Pět barev pozadí pro dané nastavení a téma. */
 export function paletteColors(settings: AppearanceSettings, dark: boolean, palette: AppearancePalette = settings.palette): string[] {
   if (palette === 'custom') return customPaletteColors(settings.customColor, dark);
-  const pair = palette === 'default' ? DEFAULT_COLORS[settings.background] : APPEARANCE_PALETTES[palette];
+  const pair = palette === 'default' ? DEFAULT_COLORS[settings.background === 'field' ? 'field' : 'depths'] : APPEARANCE_PALETTES[palette];
   return dark ? pair.dark : pair.light;
 }
 

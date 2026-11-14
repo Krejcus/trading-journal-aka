@@ -14,14 +14,24 @@ describe('vzhled Aurora', () => {
   });
 
   it('platné nastavení zůstane beze změny', () => {
-    const value = { background: 'field', palette: 'ocean', customColor: '#10b981', strength: 35, cardTransparency: 70 } as const;
+    const value = { background: 'equity', palette: 'ocean', customColor: '#10b981', strength: 35, cardTransparency: 70, speed: 40, mouseEffect: 'smoke', mouseStrength: 65 } as const;
     expect(normalizeAppearance(value)).toEqual(value);
+  });
+
+  it('starší uložené nastavení bez rychlosti vypadá jako dřív: Hlubiny stojí, Skvrny se přelévají, myš nic', () => {
+    expect(normalizeAppearance({ background: 'depths' })).toMatchObject({ speed: 0, mouseEffect: 'none' });
+    expect(normalizeAppearance({ background: 'field' })).toMatchObject({ speed: 50, mouseEffect: 'none' });
+  });
+
+  it('rychlost a síla reakce na myš se drží v rozsahu, neznámá reakce → žádná', () => {
+    expect(normalizeAppearance({ speed: 300, mouseStrength: -4, mouseEffect: 'laser' })).toMatchObject({ speed: 100, mouseStrength: 0, mouseEffect: 'none' });
+    expect(normalizeAppearance({ background: 'candles' })).toMatchObject({ background: 'candles', speed: 50 });
   });
 
   it('každá paleta dává pět barev pro světlé i tmavé téma', () => {
     for (const palette of ['default', 'polar', 'ocean', 'sunset', 'forest', 'graphite', 'custom'] as const) {
-      for (const dark of [false, true]) {
-        const colors = paletteColors({ ...DEFAULT_APPEARANCE, palette }, dark);
+      for (const dark of [false, true]) for (const background of ['depths', 'field', 'candles', 'equity', 'none'] as const) {
+        const colors = paletteColors({ ...DEFAULT_APPEARANCE, background, palette }, dark);
         expect(colors).toHaveLength(5);
         colors.forEach(color => expect(color).toMatch(/^#[0-9a-f]{6}$/i));
       }

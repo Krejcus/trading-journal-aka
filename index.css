@@ -4515,11 +4515,13 @@ html.aurora .theme-card {
 .aurora-bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; transition: opacity 0.4s ease, filter 0.4s ease;
   opacity: calc(0.3 + 0.7 * var(--aurora-strength, 0.8)); filter: saturate(calc(0.12 + 0.88 * var(--aurora-strength, 0.8))); }
 .aurora-bg__canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.aurora-bg__blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.7; animation: aurora-drift 26s ease-in-out infinite; }
+/* Kouř za kurzorem: nad pozadím, pod obsahem; nikdy nezachytává myš. */
+.aurora-smoke { position: fixed; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; }
+.aurora-bg__blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.7; animation: aurora-drift calc(26s * var(--aurora-drift-scale, 1)) ease-in-out infinite; }
 .aurora-bg__blob:nth-child(1) { width: 52%; height: 58%; left: -12%; top: -14%; }
-.aurora-bg__blob:nth-child(2) { width: 44%; height: 52%; right: -10%; top: 14%; animation-duration: 32s; animation-direction: reverse; }
+.aurora-bg__blob:nth-child(2) { width: 44%; height: 52%; right: -10%; top: 14%; animation-duration: calc(32s * var(--aurora-drift-scale, 1)); animation-direction: reverse; }
 .aurora-bg__blob:nth-child(3) { width: 54%; height: 46%; left: 22%; bottom: -20%; }
-.aurora-bg__blob:nth-child(4) { width: 26%; height: 32%; left: 52%; top: 34%; opacity: 0.55; animation-duration: 32s; animation-direction: reverse; }
+.aurora-bg__blob:nth-child(4) { width: 26%; height: 32%; left: 52%; top: 34%; opacity: 0.55; animation-duration: calc(32s * var(--aurora-drift-scale, 1)); animation-direction: reverse; }
 .aurora-bg__blob:nth-child(5) { width: 24%; height: 30%; left: 6%; top: 52%; opacity: 0.55; }
 .light-theme .aurora-bg__blob { opacity: 0.75; }
 html:not(.light-theme) .aurora-bg__blob { opacity: 0.45; }
