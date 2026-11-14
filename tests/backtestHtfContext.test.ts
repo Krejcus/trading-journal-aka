@@ -129,6 +129,20 @@ describe('createHtfContextSource — FVG', () => {
     expect(inside.inside15?.dist).toBe(0);
   });
 
+  it('najde 5m FVG, ve kterém vstup leží, až po zavření třetí 5m svíčky', () => {
+    const bars = [];
+    for (let index = 0; index < 5; index += 1) bars.push(candle(START + index * MINUTE, 100, 101, 99, 100));
+    for (let index = 5; index < 10; index += 1) bars.push(candle(START + index * MINUTE, 100, 130, 100, 128));
+    for (let index = 10; index < 15; index += 1) bars.push(candle(START + index * MINUTE, 128, 132, 120, 130));
+    const source = createHtfContextSource({ candles: bars });
+    expect(source.fvg(START + 14 * MINUTE, 110).inside5).toBeNull();
+    const read = source.fvg(START + 15 * MINUTE, 110);
+    expect(read.inside5).toMatchObject({ tf: '5', dir: 'bull', dist: 0 });
+    // 5m zóna se nemíchá do HTF přehledu.
+    expect(read.zones.some(item => item.tf === '5')).toBe(false);
+    expect(source.fvg(START + 15 * MINUTE, 125).inside5).toBeNull();
+  });
+
   it('bez hodinových svíček zůstane 1h část prázdná', () => {
     const source = createHtfContextSource({ candles: minuteSeries() });
     expect(source.fvg(START + 44 * MINUTE, 130).inside60).toBeNull();

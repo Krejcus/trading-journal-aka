@@ -234,6 +234,8 @@ export interface BacktestRuntimeState {
   managedPositionPlans?: BacktestManagedPositionPlan[];
   /** Optional so sessions saved before the journal existed load without it. */
   orderEvents?: BacktestOrderEvent[];
+  /** Popisy rozhodnutí (plán session, vstupy, posuny, nevzaté obchody). */
+  notes?: import('./backtestSessionNotes').BacktestNote[];
   replay: ChartReplayState;
 }
 

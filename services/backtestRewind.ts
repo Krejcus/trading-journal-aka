@@ -1,3 +1,4 @@
+import { trimBacktestNotes } from './backtestSessionNotes';
 import type { BacktestClosedTrade, BacktestPosition, BacktestRuntimeState } from './backtestTypes';
 
 /**
@@ -77,6 +78,7 @@ export function applyBacktestRewind(runtime: BacktestRuntimeState, plan: Backtes
     closedTrades: runtime.closedTrades.filter(trade => !removedTradeIds.has(trade.id)),
     managedPositionPlans: runtime.managedPositionPlans?.filter(plan => keptOrderIds.has(plan.orderId)),
     orderEvents: runtime.orderEvents?.filter(event => event.marketTime <= target && keptOrderIds.has(event.orderId)),
+    notes: trimBacktestNotes(runtime.notes, target, keptOrderIds),
     replay: { ...runtime.replay, cursorTime: target, startTime: target, playing: false, phase: 'active' },
   };
 }

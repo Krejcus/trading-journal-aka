@@ -113,6 +113,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
   }
   if (fvg) {
     // Entry uvnitř HTF FVG = silná konfluence → zvýrazni; jinak ukaž nejbližší netknuté zóny.
+    if (fvg.inside5) htfChips.push(chip(`V 5m FVG ${fvg.inside5.dir === 'bull' ? '▲' : '▼'}${fvg.inside5.tested ? ' · testovaná' : ''}`, 'violet', 'in5'));
     if (fvg.inside15) htfChips.push(chip(`V 15m FVG ${fvg.inside15.dir === 'bull' ? '▲' : '▼'}${fvg.inside15.tested ? ' · testovaná' : ''}`, 'violet', 'in15'));
     if (fvg.inside60) htfChips.push(chip(`V 1H FVG ${fvg.inside60.dir === 'bull' ? '▲' : '▼'}${fvg.inside60.tested ? ' · testovaná' : ''}`, 'violet', 'in60'));
     if (fvg.nearestUntestedAbove) htfChips.push(chip(`${fvg.nearestUntestedAbove.tf}m FVG ↑ ${Math.round(fvg.nearestUntestedAbove.dist)} b`, 'slate', 'fvgUp'));

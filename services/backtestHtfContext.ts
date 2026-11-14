@@ -49,7 +49,7 @@ export interface HtfStructureRead {
 }
 
 export interface HtfFvgZone {
-  tf: HtfTimeframeLabel;
+  tf: HtfTimeframeLabel | '5';
   dir: 'bull' | 'bear';
   top: number;
   bot: number;
@@ -60,6 +60,12 @@ export interface HtfFvgZone {
 }
 
 export interface HtfFvgRead {
+  /**
+   * 5m FVG, ve kterém vstup leží. Drží se zvlášť: do `zones` ani do nejbližších
+   * netestovaných zón se 5m nepočítá, aby HTF přehled zůstal 15m/1h. Chybí
+   * u obchodů spočítaných před 14. 11. 2026.
+   */
+  inside5?: HtfFvgZone | null;
   inside15: HtfFvgZone | null;
   inside60: HtfFvgZone | null;
   nearestUntestedAbove: HtfFvgZone | null;
@@ -112,11 +118,11 @@ export const htfStructureAt = (
 const zonesAt = (
   candles: readonly MarketCandle[],
   minuteCandles: readonly MarketCandle[],
-  tf: HtfTimeframeLabel,
+  tf: HtfFvgZone['tf'],
   entryTime: number,
   entryPrice: number,
 ): HtfFvgZone[] => {
-  const duration = HTF_SECONDS[tf];
+  const duration = tf === '5' ? STRUCTURE_SECONDS['5'] : HTF_SECONDS[tf];
   // Pine creates HTF FVGs from [1]/[3], i.e. confirmed HTF bars only.
   const history = candles.filter(candle => candle.time + duration <= entryTime);
   if (history.length < 3) return [];
@@ -251,7 +257,9 @@ export const createHtfContextSource = (input: HtfContextInput): HtfContextSource
       const below = untested
         .filter(zone => zone.top < entryPrice)
         .sort((left, right) => left.dist - right.dist)[0] ?? null;
+      candles5 ??= input.candles.length >= 5 ? aggregateCandles([...input.candles], '5m') : [];
       const read: HtfFvgRead = {
+        inside5: zonesAt(candles5, input.candles, '5', entryTime, entryPrice).find(zone => zone.dist === 0) ?? null,
         inside15: inside('15'),
         inside60: inside('60'),
         nearestUntestedAbove: above,

@@ -1,4 +1,24 @@
 import BacktestEvidenceDialog from './BacktestEvidenceDialog';
+import {
+  BacktestNotesBarControls,
+  BacktestSessionNotesLayer,
+  EMPTY_BACKTEST_NOTES_UI,
+  readBacktestNotesPrefs,
+  writeBacktestNotesPrefs,
+  type BacktestNotesPrefs,
+  type BacktestNotesUiState,
+} from './BacktestSessionNotes';
+import {
+  addBacktestNote,
+  backtestReachFromExcursion,
+  backtestSkipAsClosedTrade,
+  backtestSkipContextFromTrade,
+  backtestTradeNoteFields,
+  pendingBacktestSkips,
+  removeBacktestNote,
+  type BacktestNote,
+  type BacktestSkipOutcome,
+} from '../services/backtestSessionNotes';
 import { buildBacktestStoreEvidence } from '../services/backtestStoreEvidence';
 import { backtestResearchRecordedAt } from '../services/backtestResearchClock';
 import { type BacktestAnalyticsRefreshCandidate } from '../services/backtestAnalyticsRefresh';
@@ -503,7 +523,14 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
             researchBinding: config.researchBinding, replayHorizonTime: captured.replay.cursorTime ?? closed.exitTime,
             slippageTicks: config.slippageTicks[closed.instrument],
           }, { signal });
-          return { ...mapped, recordedAt: backtestResearchRecordedAt(closed, captured.orderEvents ?? []) ?? null };
+          // Popis vstupu a bias session patří k obchodu v deníku; ruční text má přednost.
+          const described = backtestTradeNoteFields(captured, closed);
+          return {
+            ...mapped,
+            ...(described.notes && !mapped.notes ? { notes: described.notes } : {}),
+            ...(described.sessionBias && !mapped.sessionBias ? { sessionBias: described.sessionBias } : {}),
+            recordedAt: backtestResearchRecordedAt(closed, captured.orderEvents ?? []) ?? null,
+          };
         },
         persist: trade => {
           if (!isCurrent() || !emissionCallbacksRef.current.onTradeClosed) throw new DOMException('Session byla změněna.', 'AbortError');
@@ -590,6 +617,66 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     }
     return trade;
   }), [sessionJournalTrades, analyticsPreview, run.id, run.runtimeState.replay.cursorTime]);
+
+  // Kam by obchod došel s původním SL do konce dne — u vzatých z jejich analytiky,
+  // u nevzatých stejným výpočtem nad odkrytými svíčkami.
+  const tradeReach = useMemo(() => {
+    const reach: Record<string, BacktestSkipOutcome> = {};
+    const horizon = run.runtimeState.replay.cursorTime;
+    if (horizon === null) return reach;
+    revealedJournalTrades.forEach(trade => {
+      const summary = backtestReachFromExcursion(trade.excursion, horizon);
+      if (summary) reach[String(trade.id)] = summary;
+    });
+    return reach;
+  }, [revealedJournalTrades, run.runtimeState.replay.cursorTime]);
+  const [skipReach, setSkipReach] = useState<Record<string, BacktestSkipOutcome>>({});
+  const skipReachBusyRef = useRef(false);
+  useEffect(() => {
+    if (loading) return;
+    let disposed = false;
+    const controller = new AbortController();
+    const refresh = async () => {
+      const current = runRef.current;
+      const horizon = current.runtimeState.replay.cursorTime;
+      if (skipReachBusyRef.current || restoringRef.current || horizon === null) return;
+      const pending = pendingBacktestSkips(current.runtimeState.notes).filter(note => note.marketTime <= horizon);
+      if (!pending.length) return;
+      skipReachBusyRef.current = true;
+      try {
+        for (const note of pending) {
+          const mapped = await analyticsWorker().mapClosedTrade(backtestSkipAsClosedTrade(note, current.id, current.executionSymbol), {
+            accountId: current.accountId, orderEvents: [], timeZone: current.config.timezone,
+            flatTimeZone: current.config.flatTimeZone, flatByMinute: current.config.flatByMinute,
+            replayHorizonTime: horizon, slippageTicks: current.config.slippageTicks[current.executionSymbol],
+          }, { signal: controller.signal });
+          if (disposed) return;
+          const outcome = backtestReachFromExcursion(mapped.excursion, horizon);
+          // Kontext vstupu (struktura, FVG) se ukládá jednou; hotový dopočet dosahu
+          // také — návrat replaye ho zase smaže.
+          const context = note.context === undefined ? backtestSkipContextFromTrade(mapped) : undefined;
+          if (context || outcome?.complete) {
+            updateRun(latest => {
+              const live = latest.runtimeState.notes?.find(candidate => candidate.id === note.id);
+              if (!live || live.kind !== 'skip') return latest;
+              const keepOutcome = outcome?.complete && (latest.runtimeState.replay.cursorTime ?? 0) >= horizon;
+              return {
+                ...latest,
+                runtimeState: addBacktestNote(latest.runtimeState, {
+                  ...live, ...(context && live.context === undefined ? { context } : {}), ...(keepOutcome ? { outcome } : {}),
+                }),
+                updatedAt: Date.now(),
+              };
+            });
+          }
+          if (outcome && !outcome.complete) setSkipReach(previous => ({ ...previous, [note.id]: outcome }));
+        }
+      } catch { /* další pokus v příštím taktu */ }
+      finally { skipReachBusyRef.current = false; }
+    };
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => { disposed = true; controller.abort(); window.clearInterval(timer); };
+  }, [analyticsWorker, loading, updateRun]);
 
   const handleReplayChange = useCallback((replay: ChartReplayState) => {
     if (restoringRef.current) return;
@@ -737,6 +824,20 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     if (fresh.length) setToasts(fresh);
   }, [runtimeOrders, runtimeFills, runtimeClosedTrades, toastSeen]);
 
+  // Popisy rozhodnutí: plán session, proč vstupuju, proč posouvám, co jsem nevzal.
+  const [notesUi, setNotesUi] = useState<BacktestNotesUiState>(EMPTY_BACKTEST_NOTES_UI);
+  const patchNotesUi = useCallback((patch: Partial<BacktestNotesUiState>) => setNotesUi(current => ({ ...current, ...patch })), []);
+  const [notesPrefs, setNotesPrefs] = useState<BacktestNotesPrefs>(readBacktestNotesPrefs);
+  const notesPrefsRef = useRef(notesPrefs);
+  notesPrefsRef.current = notesPrefs;
+  const changeNotesPrefs = useCallback((prefs: BacktestNotesPrefs) => { setNotesPrefs(prefs); writeBacktestNotesPrefs(prefs); }, []);
+  const addNote = useCallback((note: BacktestNote) => {
+    updateRun(current => ({ ...current, runtimeState: addBacktestNote(current.runtimeState, note), updatedAt: Date.now() }));
+  }, [updateRun]);
+  const removeNote = useCallback((id: string) => {
+    updateRun(current => ({ ...current, runtimeState: removeBacktestNote(current.runtimeState, id), updatedAt: Date.now() }));
+  }, [updateRun]);
+
   const executeOrder = useCallback((input: {
     side: 'buy' | 'sell'; type: BacktestOrderType; quantity: number; price?: number; stopLoss?: number; takeProfit?: number; reduceOnly?: boolean;
   }, candle: MarketCandle | null, sourceDrawing?: PositionDrawing) => {
@@ -769,6 +870,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
       void emitClosedTrades(runtime);
       return { ...current, runtimeState: runtime, updatedAt: Date.now() };
     });
+    // Důvod vstupu se ptá hned při zadání — u limitu tedy v okamžiku rozhodnutí, ne až při plnění.
+    if (!input.reduceOnly && notesPrefsRef.current.ask) setNotesUi(current => ({ ...current, plan: false, skip: false, entry: { orderId: order.id, late: false } }));
     return order;
   }, [emitClosedTrades, updateRun]);
 
@@ -1128,6 +1231,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     }));
     lastProcessedCursorRef.current = plan.targetTime;
     setDraft(null);
+    setNotesUi(current => ({ ...current, entry: null, move: null }));
     const removedIds = plan.removedTrades.map(trade => trade.id);
     if (removedIds.length && onTradesDiscarded) {
       void onTradesDiscarded(removedIds).catch(reason => {
@@ -1173,7 +1277,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     onWorkspaceChange: handleWorkspaceChange,
     registerWorkspaceCheckpoint,
     maxRevealedTime: run.runtimeState.maxRevealedTime,
-    pauseReplayForDialog: evidenceOpen || sessionInfoOpen || rewindRequest !== null,
+    pauseReplayForDialog: evidenceOpen || sessionInfoOpen || rewindRequest !== null
+      || notesUi.plan || notesUi.skip || (notesUi.entry !== null && (notesUi.entry.late || notesPrefs.pauseOnEntry)),
     onSaveWorkspace: async () => ({ localSaved: await flush({ cloud: true }), cloudSaved: !cloudDirtyRef.current && !conflictRef.current }),
     onQuickOrder: ({ drawing, candle, instrument }) => executeQuickOrder(drawing, candle, instrument),
     chartOrderQuantity,
@@ -1205,6 +1310,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         position={positionSummary}
         onCancel={cancelOrder}
         onClosePosition={closePosition}
+        notesControls={<BacktestNotesBarControls runtime={runRef.current.runtimeState} isDark={isDark} ui={notesUi} onUi={patchNotesUi} />}
         onOpenSessionInfo={() => {
           updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } }));
           setSessionInfoOpen(true);
@@ -1245,7 +1351,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         <LiveTradeToasts events={undefined} copierArmed={false} isDark={isDark} extra={toasts} placement={{ left: 68, bottom: 84 }} />
       </>
     ),
-  }), [scratch?.replayStopAt, addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeOrderLine, chartOrderQuantity, closePosition, draft, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, instrument, isDark, lineNotice, markCandle?.time, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLineAction, orderLines, positionSummary, quote, recalculateTrade, registerWorkspaceCheckpoint, setTicketOpen, startDraft, submitTicket, ticketOpen, toasts, units, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.config.timezone, run.endAt, run.executionSymbol, run.id, run.name, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [scratch?.replayStopAt, addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeOrderLine, chartOrderQuantity, closePosition, draft, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, instrument, isDark, lineNotice, markCandle?.time, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLineAction, orderLines, positionSummary, quote, recalculateTrade, registerWorkspaceCheckpoint, setTicketOpen, startDraft, submitTicket, ticketOpen, toasts, units, onTradesDiscarded, requestRewind, evidenceOpen, sessionInfoOpen, rewindRequest, updateRun, run.config.instruments, run.config.timezone, run.endAt, run.executionSymbol, run.id, run.name, run.runtimeState, run.startAt, run.workspaceState, notesUi, notesPrefs.pauseOnEntry, patchNotesUi]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -1357,6 +1463,24 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         tradeIndicators={startIndicators}
         embedded={Boolean(scratch)}
       />
+      <BacktestSessionNotesLayer
+        runtime={run.runtimeState}
+        isDark={isDark}
+        timeZone={run.config.timezone || 'Europe/Prague'}
+        price={markPrice ?? undefined}
+        draft={draft ? {
+          side: draft.side, price: draft.type === 'market' ? markPrice ?? draft.price : draft.price,
+          stopLoss: draft.stopLoss ?? undefined, takeProfit: draft.takeProfit ?? undefined,
+        } : null}
+        ui={notesUi}
+        onUi={patchNotesUi}
+        prefs={notesPrefs}
+        onPrefs={changeNotesPrefs}
+        tradeReach={tradeReach}
+        skipReach={skipReach}
+        onAdd={addNote}
+        onRemove={removeNote}
+      />
       {/* Selhání dalšího segmentu se dřív jen zapsalo do stavu a nikde
           neukázalo — chart už svíčky měl, takže chybová obrazovka výš se
           nespustila a uživatel viděl jen zamčené přehrávání bez vysvětlení. */}
@@ -1437,13 +1561,15 @@ interface TradingPanelProps {
   onCancel: (id: string, candle: MarketCandle | null) => void;
   onClosePosition: (quantity: number, candle: MarketCandle | null) => void;
   onOpenSessionInfo: () => void;
+  /** Tlačítka popisů (plán session, nevzatý obchod, deník). */
+  notesControls?: React.ReactNode;
 }
 
 /**
  * Spodní lišta session: tlačítko panelu Objednávka (jako v hlavičce LIVE),
  * účet, pozice a čekající příkazy. Zadávání příkazů je v panelu.
  */
-const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, ticketOpen, onToggleTicket, position, onCancel, onClosePosition, onOpenSessionInfo }) => {
+const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, ticketOpen, onToggleTicket, position, onCancel, onClosePosition, onOpenSessionInfo, notesControls }) => {
   const runtime = run.runtimeState;
   const pending = runtime.orders.filter(order => order.status === 'pending');
   const field = `h-7 rounded-md border px-2 text-[11px] tabular-nums outline-none transition-colors focus:border-blue-500/70 ${isDark
@@ -1509,6 +1635,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
       </>}
       </div>
       <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+        {notesControls}
         <span className="font-mono text-[11px] tabular-nums text-slate-400">{candle ? <><span className="font-sans font-bold text-slate-500">{run.executionSymbol}</span> {priceText(candle.close)}</> : 'Bez ceny'}</span>
         <button type="button" onClick={onOpenSessionInfo} className="h-7 rounded-md px-2 text-[10.5px] font-bold text-slate-500 transition-colors hover:bg-slate-500/10 hover:text-blue-500">Stav session</button>
       </div>
