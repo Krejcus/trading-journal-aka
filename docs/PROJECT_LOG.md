@@ -316,8 +316,9 @@ náhled `mockups/dashboard-motion.html` a řekl „můžeš přenést“.
   pod kalendářem) — dashboard je skládací, rozložení si Filip mění sám.
   Pohyb je zatím jen v mřížce pro počítač, telefon beze změny.
 - **Ověření**: přihlášený náhled na localhostu (světlý režim, šířka počítače),
-  24 souvisejících sad testů (534) zelených, tsc bez nových chyb. Neověřeno:
-  tmavý režim v appce, iPhone, plná sada testů a build.
+  plná sada testů (8806 v 817 souborech) a produkční build zelené, tsc bez
+  nových chyb; ostatní stránky prošly v tmavém režimu bez chyb (po změně
+  řazení společného náběhu). Neověřeno: iPhone, Filipův Chrome, stránka LIVE.
 
 ### 2026-11-14 — Claude: živé pozadí a kouř za myší (větev, NENASAZENO)
 
