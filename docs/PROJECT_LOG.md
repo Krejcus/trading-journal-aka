@@ -288,7 +288,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-15 — Claude: zásek při Go To v backtestu (oprava ve větvi, NENASAZENO)
+### 2026-11-15 — Claude: zásek při Go To v backtestu (web NASAZEN 15. 11., iPhone ne)
 
 Filip: po Go To na London / New York se appka „sekne“. Změřeno v jeho
 skutečné session na localhostu (dev build, dva grafy, plná sada indikátorů):
@@ -303,10 +303,12 @@ snímku. **Data to nejsou** — „Načítám data…“ trvalo ~0,1 s a engine
   pod tím. Stejné skoky pak 0,10–0,12 s. Krok po svíčce a přehrávání beze změny.
 - **Past měření**: JS Self-Profiling (`new Profiler`) tenhle zásek skoro
   nevidí — rozhodlo až dočasné `performance.now()` kolem podezřelých bloků.
-- **Pozor — vedlejší účinek měření**: devět skoků posunulo kurzor Filipovy
-  session „Na tupouna pokračování“ z 2. 12. 15:49 na 5. 12. 22:59. Session má
-  uzavřené obchody, takže kurzor nejde vrátit zpět (pojistka enginu). Filip
-  svolil k posunu kurzoru, ale o nevratnosti jsem mu předem neřekl.
+- **Vedlejší účinek měření**: skoky posunuly kurzor Filipovy session
+  „Na tupouna pokračování“ z 2. 12. 15:49 na 8. 12. 09:59. Nejdřív jsem mu
+  řekl, že je to nevratné — chyba: krokem zpět to u session s obchody nejde,
+  ale nůžkami (výběr startu, `services/backtestRewind.ts`) ano; po 2. 12.
+  15:49 nejsou žádné obchody, takže návrat nic nesmaže. Příště měřit
+  v jednorázové session a vybírat ji podle názvu, ne přes „Navázat na poslední“.
 - **Druhá chyba, stejný den — Go To „uvízne“ na konci pátku**: Filip to znal
   („seklo se to na 23:59, musel jsem ručně dát pár svíček“). Go To na seanci
   bere nejbližší výskyt času bez ohledu na to, jestli se obchoduje; v pátek
@@ -318,7 +320,9 @@ snímku. **Data to nejsou** — „Načítám data…“ trvalo ~0,1 s a engine
   s otevřením trhu). Skok na přesné datum se nepřesouvá. Nastavení „dny
   k přeskočení“ v menu zůstává; svátky teď řeší data sama. Ověřeno jen testy
   (víkend, otevření po pauze, běžný den), ve skutečné session ne — Filipův
-  kurzor teď stojí v sobotu 6. 12. 09:59 a další skok by ho zase posunul.
+  kurzor stál v sobotu 6. 12. 09:59; se svolením jeden skok Go To London →
+  pondělí 8. 12. 09:59, 0,1 s. Po rebase na main (fbf759f7) plná sada
+  8840 testů, build a tsc zelené; pak push.
 - Ověřeno: 10 sad testů grafu (124) a tsc. Neověřeno: plná sada, produkční
   build, přehrávání vyšší rychlostí, telefon. Náhled animace čekání je
   v `mockups/goto-loading.html` (zatím nepřeneseno).
