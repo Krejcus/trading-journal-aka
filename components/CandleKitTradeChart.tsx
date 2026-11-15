@@ -424,6 +424,8 @@ interface CandleKitBar {
  */
 const FUTURE_AXIS_BARS = 120;
 
+/** Od kolika nových barů se při posunu replaye vymění data naráz místo přidávání po jednom. */
+const REPLAY_BULK_APPEND_BARS = 12;
 const candleKitBar = (candle: MarketCandle): CandleKitBar => ({
   ts: candle.time * 1000,
   open: candle.open,
@@ -3858,8 +3860,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
     // Include the matching last bar: on higher timeframes a replay step often
     // changes OHLC of the still-open candle without increasing bar count.
-    for (let index = firstUpdateIndex; index < visibleCandles.length; index += 1) {
-      controller.updateBar(candleKitBar(visibleCandles[index]));
+    // Velký skok (Go To na další seanci, krok o hodiny): přidávat stovky barů po
+    // jednom stálo ~4 ms na bar a graf na vteřiny zamrzl. Od pár barů výš dostane
+    // graf data naráz; pohled a cenové měřítko se níže obnoví stejně jako dosud.
+    const appendedBars = visibleCandles.length - firstUpdateIndex;
+    if (appendedBars > REPLAY_BULK_APPEND_BARS) {
+      controller.setData(visibleCandles.map(candleKitBar));
+    } else {
+      for (let index = firstUpdateIndex; index < visibleCandles.length; index += 1) {
+        controller.updateBar(candleKitBar(visibleCandles[index]));
+      }
     }
 
     if (viewportBeforeUpdate) {

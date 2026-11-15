@@ -288,6 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-15 — Claude: zásek při Go To v backtestu (oprava ve větvi, NENASAZENO)
+
+Filip: po Go To na London / New York se appka „sekne“. Změřeno v jeho
+skutečné session na localhostu (dev build, dva grafy, plná sada indikátorů):
+skok o ~3 h = 0,8 s, ~6 h = 1,4 s, ~15–18 h = 3,5–4 s jednoho zablokovaného
+snímku. **Data to nejsou** — „Načítám data…“ trvalo ~0,1 s a engine
+(`processBacktestCandles`) zpracoval 840 svíček za 1 ms.
+
+- **Příčina**: `CandleKitTradeChart` při posunu kurzoru dopředu volal
+  `controller.updateBar()` pro každou novou svíčku zvlášť (~4 ms na bar).
+- **Oprava**: od 12 nových barů výš `controller.setData()` naráz
+  (`REPLAY_BULK_APPEND_BARS`); pohled i cenové měřítko obnovuje stávající kód
+  pod tím. Stejné skoky pak 0,10–0,12 s. Krok po svíčce a přehrávání beze změny.
+- **Past měření**: JS Self-Profiling (`new Profiler`) tenhle zásek skoro
+  nevidí — rozhodlo až dočasné `performance.now()` kolem podezřelých bloků.
+- **Pozor — vedlejší účinek měření**: devět skoků posunulo kurzor Filipovy
+  session „Na tupouna pokračování“ z 2. 12. 15:49 na 5. 12. 22:59. Session má
+  uzavřené obchody, takže kurzor nejde vrátit zpět (pojistka enginu). Filip
+  svolil k posunu kurzoru, ale o nevratnosti jsem mu předem neřekl.
+- Ověřeno: 10 sad testů grafu (124) a tsc. Neověřeno: plná sada, produkční
+  build, přehrávání vyšší rychlostí, telefon. Náhled animace čekání je
+  v `mockups/goto-loading.html` (zatím nepřeneseno).
+
 ### 2026-11-14 — Claude: iPhone sestaven a nainstalován z a0dc5088
 
 Po Filipově „udělej i sestavení pro iPhone“: `npm run ios:sync` a `xcodebuild`
