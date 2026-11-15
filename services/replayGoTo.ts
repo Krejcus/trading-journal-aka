@@ -268,6 +268,27 @@ export const nextReplayCandleAtPrice = (
   return null;
 };
 
+/** Jak daleko od cíle smí být nejbližší svíčka, aby se čas bral jako obchodní. */
+export const REPLAY_GO_TO_MARKET_GAP_SECONDS = 15 * 60;
+
+/**
+ * Obchoduje se v cílový čas? Ano, když je svíčka krátce před cílem nebo krátce
+ * po něm. Sobota, neděle dopoledne a svátky svíčky nemají — skok tam by kurzor
+ * zaparkoval v mrtvém čase a graf by zůstal stát na poslední páteční svíčce.
+ * Volat jen nad daty, která cíl (a kousek za ním) pokrývají.
+ */
+export const replayTargetHasMarket = (
+  candles: MarketCandle[],
+  targetTime: number,
+  gapSeconds: number = REPLAY_GO_TO_MARKET_GAP_SECONDS,
+): boolean => {
+  const after = upperBound(candles, targetTime - 1);
+  const next = candles[after]?.time;
+  const previous = candles[after - 1]?.time;
+  return (next !== undefined && next - targetTime <= gapSeconds)
+    || (previous !== undefined && targetTime - previous <= gapSeconds);
+};
+
 export type ReplayGoToRequest =
   | { kind: 'time'; target: Exclude<ReplayGoToTargetId, 'price' | 'future_date'> }
   | { kind: 'price'; price: number }
@@ -312,6 +333,11 @@ export const resolveReplayGoTo = (
      * posledního načteného bloku. Když chybí, bere se konec `candles`.
      */
     dataEndTime?: number | null;
+    /**
+     * Odkud hledat další výskyt cíle (výchozí: kurzor). Backtest tím přeskakuje
+     * dny bez obchodování, které odhalí až dotažená data.
+     */
+    searchFromTime?: number | null;
   },
 ): ReplayGoToResult => {
   const { candles, settings } = options;
@@ -328,15 +354,28 @@ export const resolveReplayGoTo = (
     return { kind: 'ok', value: { cursorTime: found, targetTime: found } };
   }
 
-  const targetTime = request.kind === 'date'
-    ? request.unixSeconds
-    : nextTimeOccurrence(cursorTime, settings.times[request.target], options.timeZone, settings.daysToSkip);
+  let targetTime: number | null = null;
+  let searchFrom = Math.max(cursorTime, Number.isFinite(options.searchFromTime as number) ? options.searchFromTime as number : cursorTime);
+  // Nejvýš dva týdny dopředu: delší souvislá pauza trhu neexistuje.
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    targetTime = request.kind === 'date'
+      ? request.unixSeconds
+      : nextTimeOccurrence(searchFrom, settings.times[request.target], options.timeZone, settings.daysToSkip);
 
-  if (targetTime === null || !Number.isFinite(targetTime)) return { kind: 'error', reason: 'invalid_target' };
-  if (targetTime <= cursorTime) return { kind: 'error', reason: 'invalid_target' };
+    if (targetTime === null || !Number.isFinite(targetTime)) return { kind: 'error', reason: 'invalid_target' };
+    if (targetTime <= cursorTime) return { kind: 'error', reason: 'invalid_target' };
 
-  // Až za koncem celé session — dál se nedostaneme ani po dotažení dat.
-  if (targetTime > dataEndTime) return { kind: 'error', reason: 'target_beyond_data' };
+    // Až za koncem celé session — dál se nedostaneme ani po dotažení dat.
+    if (targetTime > dataEndTime) return { kind: 'error', reason: 'target_beyond_data' };
+
+    // Seance v den, kdy se neobchoduje (víkend, svátek): zkusit další den.
+    // Jde poznat jen tam, kde načtená data cíl i kousek za ním pokrývají.
+    const covered = targetTime + REPLAY_GO_TO_MARKET_GAP_SECONDS <= lastCandleTime;
+    if (request.kind !== 'time' || !covered || replayTargetHasMarket(candles, targetTime)) break;
+    searchFrom = targetTime;
+    targetTime = null;
+  }
+  if (targetTime === null) return { kind: 'error', reason: 'invalid_target' };
 
   // Když cíl padne do už načtených dat, kurzor sedne na konkrétní svíčku —
   // zbytek replay logiky s časy skutečných barů počítá. Když je cíl až za

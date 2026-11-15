@@ -29,6 +29,21 @@ describe('backtest replay data preparation', () => {
     // target-1 reveals 180 and 240; the parent now has both before processing.
   });
 
+  it('Go To on a Friday evening skips the closed weekend once the fetched data reveals it', async () => {
+    const utc = (iso: string) => Math.floor(Date.parse(`${iso}Z`) / 1_000);
+    const span = (fromIso: string, toIso: string) => { const out: MarketCandle[] = []; for (let time = utc(fromIso); time < utc(toIso); time += 60) out.push(bar(time)); return out; };
+    const friday = span('2025-12-05T00:00:00', '2025-12-05T22:00:00');
+    const full = [...friday, ...span('2025-12-07T23:00:00', '2025-12-08T12:00:00')];
+    const ensure = vi.fn(async (endMs: number) => full.filter(candle => candle.time * 1_000 < endMs));
+    const settings = { ...DEFAULT_REPLAY_GO_TO_SETTINGS, times: { ...DEFAULT_REPLAY_GO_TO_SETTINGS.times, sb_london: { hour: 10, minute: 0 } } };
+    const result = await prepareBacktestReplayGoTo({
+      candles: friday, loadedUntilMs: utc('2025-12-05T22:00:00') * 1_000, endMs: utc('2025-12-20T00:00:00') * 1_000, ensure,
+    }, { kind: 'time', target: 'sb_london' }, { cursorTime: utc('2025-12-05T19:00:00'), settings, timeZone: 'UTC' });
+    // Saturday and Sunday 10:00 have no market; the jump lands before Monday 10:00.
+    expect(result).toEqual({ kind: 'ok', value: { targetTime: utc('2025-12-08T10:00:00'), cursorTime: utc('2025-12-08T09:59:00') } });
+    expect(ensure).toHaveBeenCalled();
+  });
+
   it('coalesces duplicate Go To requests into one load and one commit', async () => {
     const pending = deferred<number>();
     const task = vi.fn(() => pending.promise);

@@ -7,6 +7,7 @@ import {
   nextReplayCandleAtPrice,
   parseClockTime,
   replayCandleBeforeTarget,
+  replayTargetHasMarket,
   resolveReplayGoTo,
   wallClockToUnix,
   zonedClockParts,
@@ -284,5 +285,47 @@ describe('parseClockTime', () => {
     expect(parseClockTime('25:00')).toBeNull();
     expect(parseClockTime('09:60')).toBeNull();
     expect(parseClockTime('nope')).toBeNull();
+  });
+});
+
+describe('Go To přeskočí den, kdy se neobchoduje', () => {
+  const utc = (iso: string) => Math.floor(Date.parse(`${iso}Z`) / 1_000);
+  const minuteBars = (fromIso: string, toIso: string): MarketCandle[] => {
+    const out: MarketCandle[] = [];
+    for (let time = utc(fromIso); time < utc(toIso); time += 60) out.push({ time, open: 100, high: 101, low: 99, close: 100, volume: 1 });
+    return out;
+  };
+  // Pátek 5. 12. 2025 do 22:00, víkendová pauza, znovu od neděle 23:00.
+  const week = [...minuteBars('2025-12-05T00:00:00', '2025-12-05T22:00:00'), ...minuteBars('2025-12-07T23:00:00', '2025-12-08T12:00:00')];
+  const at = (hour: number) => ({ ...DEFAULT_REPLAY_GO_TO_SETTINGS, times: { ...DEFAULT_REPLAY_GO_TO_SETTINGS.times, sb_london: { hour, minute: 0 } } });
+  const friday19 = utc('2025-12-05T19:00:00');
+
+  it('pátek večer → London: sobotu a neděli dopoledne přeskočí, skončí v pondělí', () => {
+    const result = resolveReplayGoTo({ kind: 'time', target: 'sb_london' }, { candles: week, cursorTime: friday19, settings: at(10), timeZone: 'UTC' });
+    expect(result).toEqual({ kind: 'ok', value: { targetTime: utc('2025-12-08T10:00:00'), cursorTime: utc('2025-12-08T09:59:00') } });
+  });
+
+  it('seance přesně s otevřením trhu po pauze se nepřeskočí', () => {
+    const result = resolveReplayGoTo({ kind: 'time', target: 'sb_london' }, { candles: week, cursorTime: friday19, settings: at(23), timeZone: 'UTC' });
+    // Kurzor sedne na poslední páteční svíčku; nedělní otevírací svíčka vznikne dalším krokem.
+    expect(result).toEqual({ kind: 'ok', value: { targetTime: utc('2025-12-07T23:00:00'), cursorTime: utc('2025-12-05T21:59:00') } });
+  });
+
+  it('běžný obchodní den se chová jako dřív', () => {
+    const result = resolveReplayGoTo({ kind: 'time', target: 'sb_london' }, { candles: week, cursorTime: utc('2025-12-05T03:00:00'), settings: at(10), timeZone: 'UTC' });
+    expect(result).toEqual({ kind: 'ok', value: { targetTime: utc('2025-12-05T10:00:00'), cursorTime: utc('2025-12-05T09:59:00') } });
+  });
+
+  it('skok na konkrétní datum do pauzy se nepřesouvá (uživatel řekl přesný čas)', () => {
+    const target = utc('2025-12-06T10:00:00');
+    const result = resolveReplayGoTo({ kind: 'date', unixSeconds: target }, { candles: week, cursorTime: friday19, settings: at(10), timeZone: 'UTC' });
+    expect(result).toMatchObject({ kind: 'ok', value: { targetTime: target } });
+  });
+
+  it('replayTargetHasMarket: svíčka těsně před nebo po cíli = obchoduje se', () => {
+    expect(replayTargetHasMarket(week, utc('2025-12-05T10:00:00'))).toBe(true);
+    expect(replayTargetHasMarket(week, utc('2025-12-07T23:00:00'))).toBe(true);
+    expect(replayTargetHasMarket(week, utc('2025-12-06T10:00:00'))).toBe(false);
+    expect(replayTargetHasMarket([], utc('2025-12-06T10:00:00'))).toBe(false);
   });
 });

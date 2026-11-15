@@ -307,6 +307,18 @@ snímku. **Data to nejsou** — „Načítám data…“ trvalo ~0,1 s a engine
   session „Na tupouna pokračování“ z 2. 12. 15:49 na 5. 12. 22:59. Session má
   uzavřené obchody, takže kurzor nejde vrátit zpět (pojistka enginu). Filip
   svolil k posunu kurzoru, ale o nevratnosti jsem mu předem neřekl.
+- **Druhá chyba, stejný den — Go To „uvízne“ na konci pátku**: Filip to znal
+  („seklo se to na 23:59, musel jsem ručně dát pár svíček“). Go To na seanci
+  bere nejbližší výskyt času bez ohledu na to, jestli se obchoduje; v pátek
+  večer tak mířil na sobotu 10:00, kurzor zaparkoval v mrtvém čase a graf stál
+  na poslední páteční svíčce (další Go To → neděle, zase nic). Oprava:
+  `replayTargetHasMarket` (svíčka do 15 min před/po cíli) a přeskok na další
+  výskyt v `resolveReplayGoTo` i v `prepareBacktestReplayGoTo` (tam až po
+  dotažení dat; dotahuje se o 15 min za cíl, aby šla poznat seance přesně
+  s otevřením trhu). Skok na přesné datum se nepřesouvá. Nastavení „dny
+  k přeskočení“ v menu zůstává; svátky teď řeší data sama. Ověřeno jen testy
+  (víkend, otevření po pauze, běžný den), ve skutečné session ne — Filipův
+  kurzor teď stojí v sobotu 6. 12. 09:59 a další skok by ho zase posunul.
 - Ověřeno: 10 sad testů grafu (124) a tsc. Neověřeno: plná sada, produkční
   build, přehrávání vyšší rychlostí, telefon. Náhled animace čekání je
   v `mockups/goto-loading.html` (zatím nepřeneseno).

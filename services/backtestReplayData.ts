@@ -1,6 +1,9 @@
 import { advanceReplayTimeByInterval, type ChartReplayStepMinutes } from './chartReplay';
 import type { MarketCandle, MarketDataSchema } from './marketData';
-import { resolveReplayGoTo, type ReplayGoToRequest, type ReplayGoToResult, type ReplayGoToSettings } from './replayGoTo';
+import {
+  REPLAY_GO_TO_MARKET_GAP_SECONDS, replayTargetHasMarket, resolveReplayGoTo,
+  type ReplayGoToRequest, type ReplayGoToResult, type ReplayGoToSettings,
+} from './replayGoTo';
 
 const DAY_MS = 86_400_000;
 const FORWARD_CHUNK_MS = 3 * DAY_MS;
@@ -55,19 +58,34 @@ export async function prepareBacktestReplayGoTo(
   checkCurrent(access);
   let candles = access.candles;
   let coveredUntil = access.loadedUntilMs;
-  const resolve = (target: ReplayGoToRequest) => resolveReplayGoTo(target, {
-    ...options, candles, dataEndTime: Math.floor(access.endMs / 1_000),
+  const resolve = (target: ReplayGoToRequest, searchFromTime?: number) => resolveReplayGoTo(target, {
+    ...options, candles, dataEndTime: Math.floor(access.endMs / 1_000), searchFromTime,
   });
   let result = resolve(request);
   if (request.kind !== 'price') {
-    if (result.kind === 'error') return result;
-    const targetTime = result.value.targetTime;
-    if (targetTime * 1_000 > coveredUntil) {
-      candles = await access.ensure(Math.min(access.endMs, targetTime * 1_000));
-      checkCurrent(access);
+    // Cíl může padnout na den bez obchodování (sobota, svátek). Pozná se to až
+    // z dotažených dat: pak se hledá další výskyt, místo aby kurzor zůstal
+    // viset v mrtvém čase za poslední páteční svíčkou.
+    const gapMs = REPLAY_GO_TO_MARKET_GAP_SECONDS * 1_000;
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      if (result.kind === 'error') return result;
+      const targetTime = result.value.targetTime;
+      // Dotáhnout i kousek za cíl: seance začínající přesně s otevřením trhu
+      // má první svíčku až v cílovém čase.
+      const neededUntil = Math.min(access.endMs, targetTime * 1_000 + (request.kind === 'time' ? gapMs : 0));
+      if (neededUntil > coveredUntil) {
+        candles = await access.ensure(neededUntil);
+        checkCurrent(access);
+        coveredUntil = neededUntil;
+      }
+      const knowable = targetTime * 1_000 + gapMs <= coveredUntil;
+      if (request.kind !== 'time' || !knowable || replayTargetHasMarket(candles, targetTime)) {
+        // Re-resolve against the returned source, not the pre-fetch React closure.
+        return resolve({ kind: 'date', unixSeconds: targetTime });
+      }
+      result = resolve(request, targetTime);
     }
-    // Re-resolve against the returned source, not the pre-fetch React closure.
-    return resolve({ kind: 'date', unixSeconds: targetTime });
+    return { kind: 'error', reason: 'invalid_target' };
   }
   if (!Number.isFinite(request.price)) return { kind: 'error', reason: 'invalid_target' };
   while (result.kind === 'error' && result.reason === 'price_not_reached' && coveredUntil < access.endMs) {
