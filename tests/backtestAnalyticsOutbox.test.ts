@@ -76,6 +76,19 @@ describe('progressive analytics durable queue', () => {
     expect((await flushBacktestAnalytics(api)).error).toContain('jinou verzi dat');
     expect(api.updateBacktestTradeReview).not.toHaveBeenCalled();
   });
+  it('rozpor u jednoho obchodu nezastaví dopočty ostatních a sám zůstane ve frontě', async () => {
+    const api = storage();
+    const other = { ...candidate('source-c'), tradeId: 'trade-b', recalculated: { ...candidate().recalculated, id: 'trade-b' } };
+    await enqueueBacktestAnalytics([candidate('source-a'), other], 'alice');
+    (api.prepareBacktestTradeReview as unknown as { mockImplementation(fn: (id: string) => Promise<unknown>): void })
+      .mockImplementation(async id => ({ ownerId: 'alice', authVersion: 1,
+        data: id === 'trade-a' ? { ...trade, backtestAnalyticsRefresh: candidate('source-b').stamp } : { ...trade, id: 'trade-b' } }));
+    const result = await flushBacktestAnalytics(api);
+    expect(result.error).toContain('jinou verzi dat');
+    expect(result.confirmed.map(item => item.tradeId)).toEqual(['trade-b']);
+    expect(result.pendingCount).toBe(1);
+    expect((await getPendingBacktestAnalytics('alice')).map(item => item.tradeId)).toEqual(['trade-a']);
+  });
   it('coalesces concurrent flushes and rejects malformed enqueue', async () => {
     const api = storage(); await enqueueBacktestAnalytics([candidate()], 'alice');
     await Promise.all([flushBacktestAnalytics(api), flushBacktestAnalytics(api)]);

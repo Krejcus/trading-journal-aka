@@ -14,6 +14,7 @@ import {
   backtestSkipAsClosedTrade,
   backtestSkipContextFromTrade,
   backtestTradeNoteFields,
+  isDefaultBacktestTradeNote,
   pendingBacktestSkips,
   removeBacktestNote,
   type BacktestNote,
@@ -527,7 +528,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
           const described = backtestTradeNoteFields(captured, closed);
           return {
             ...mapped,
-            ...(described.notes && !mapped.notes ? { notes: described.notes } : {}),
+            // Mapper vždy vyplní „Backtest session · důvod výstupu“; popis vstupu ho nahrazuje.
+            ...(described.notes && isDefaultBacktestTradeNote(mapped.notes) ? { notes: described.notes } : {}),
             ...(described.sessionBias && !mapped.sessionBias ? { sessionBias: described.sessionBias } : {}),
             recordedAt: backtestResearchRecordedAt(closed, captured.orderEvents ?? []) ?? null,
           };

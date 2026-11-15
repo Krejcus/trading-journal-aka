@@ -17,7 +17,7 @@ import {
   type HtfStructureRead,
 } from './backtestHtfContext';
 import { backtestTickSize } from './backtestEngine';
-import { readBacktestStructure } from './backtestStructureLevels';
+import { readBacktestStructure, type BacktestPriorFvgRead } from './backtestStructureLevels';
 import type { BacktestClosedTrade } from './backtestTypes';
 
 /**
@@ -193,6 +193,37 @@ export interface BacktestEntryMap {
   entryFvgCountInImpulse: number;
   entryFvgParentProtectedPrice: number | null;
   entryFvgParentImpulseExtreme: number | null;
+  /**
+   * Otevřená 1m FVG z dřívějších zlomů téže série (cena je před vstupem
+   * nevyplnila). Chybí u obchodů spočítaných před 15. 11. 2026.
+   */
+  priorFvgs?: BacktestPriorFvgRead[];
+  /** Kolik z nich je úplně netknutých. */
+  priorFvgUntested?: number;
+  /** Kolikrát se do pozice vstupovalo (1 = bez přikoupení). */
+  entryCount?: number;
+  /** Stav trhu u každého přikoupení — stejná čtení jako u prvního vstupu. */
+  addOns?: BacktestAddOnRead[];
+}
+
+/** Přikoupení do otevřené pozice. */
+export interface BacktestAddOnRead {
+  time: number;
+  price: number;
+  quantity: number;
+  structureType: 'CHoCH' | 'BoS' | null;
+  structureOrder: number;
+  structureBarsAgo: number | null;
+  reactionLevels: string[];
+  entryFvgValid: boolean;
+  priorFvgs: number;
+  vwapDistSigma: number | null;
+  s1: HtfStructureRead | null;
+  s5: HtfStructureRead | null;
+  s15: HtfStructureRead | null;
+  inFvg5: boolean;
+  inFvg15: boolean;
+  inFvg60: boolean;
 }
 
 export type BacktestReactionStatus = 'confirmed' | 'rejected' | 'unmatched' | 'unavailable';
@@ -709,6 +740,7 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
         entryFvgParentId: null, entryFvgParentType: null, entryFvgParentOrder: 0,
         entryFvgParentBreakTime: null, entryFvgIndexInImpulse: 0, entryFvgCountInImpulse: 0,
         entryFvgParentProtectedPrice: null, entryFvgParentImpulseExtreme: null,
+        priorFvgs: [], priorFvgUntested: 0,
       };
     }
     const long = trade.direction === 'Long';
@@ -840,6 +872,8 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
       entryFvgCountInImpulse: structure.entryFvg?.fvgCountInImpulse ?? 0,
       entryFvgParentProtectedPrice: round2(structure.entryFvg?.parentProtectedPrice),
       entryFvgParentImpulseExtreme: round2(structure.entryFvg?.parentImpulseExtreme),
+      priorFvgs: structure.priorOpenFvgs,
+      priorFvgUntested: structure.priorOpenFvgs.filter(zone => !zone.tested).length,
     };
   };
 

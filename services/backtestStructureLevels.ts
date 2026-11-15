@@ -50,6 +50,27 @@ export interface BacktestEntryFvgRead {
   fvgCountInImpulse: number;
 }
 
+/**
+ * FVG z dřívějšího zlomu téže série, do kterého se cena před vstupem ještě
+ * nevrátila celá. `tested` = cena se dotkla bližší hrany, ale mezeru nevyplnila.
+ */
+export interface BacktestPriorFvgRead {
+  /** Pořadí rodičovského zlomu v sérii (1 = CHoCH, 2+ = BoS). */
+  parentOrder: number;
+  parentType: 'CHoCH' | 'BoS';
+  bornTime: number;
+  top: number;
+  bottom: number;
+  tested: boolean;
+  /** Vzdálenost vstupu od bližší hrany v ticích. */
+  distanceTicks: number;
+}
+
+/** Jak daleko před vstup se hledají otevřená FVG dřívějších zlomů. */
+const PRIOR_FVG_LOOKBACK_BARS = 600;
+/** Kolik otevřených FVG dřívějších zlomů se k obchodu ukládá. */
+const PRIOR_FVG_LIMIT = 12;
+
 export interface BacktestStructureRead {
   available: boolean;
   events: BacktestStructureEvent[];
@@ -65,11 +86,13 @@ export interface BacktestStructureRead {
   fvg: number | null;
   /** Potvrzené a v okamžiku před vstupní svíčkou stále aktivní 1m FVG. */
   entryFvg: BacktestEntryFvgRead | null;
+  /** Otevřená 1m FVG z dřívějších zlomů téže série, od nejstaršího zlomu. */
+  priorOpenFvgs: BacktestPriorFvgRead[];
 }
 
 const emptyRead = (): BacktestStructureRead => ({
   available: false, events: [], structureType: null, structureOrder: 0,
-  odrazPrice: null, odrazIndex: null, swing: null, ote: null, fvg: null, entryFvg: null,
+  odrazPrice: null, odrazIndex: null, swing: null, ote: null, fvg: null, entryFvg: null, priorOpenFvgs: [],
 });
 
 /** Index svíčky, na které obchod vstoupil. `-1` když čas v datech není. */
@@ -248,6 +271,59 @@ export const readBacktestStructure = (
   const run = parentEventIndex >= 0 ? events.slice(runStart, parentEventIndex + 1) : [];
   const structureOrder = run.length;
 
+  // ── Otevřená FVG z dřívějších zlomů téže série ──
+  // Série = nepřerušená řada zlomů mým směrem. S vybraným vstupním FVG končí
+  // jeho rodičem (ten a jeho FVG už nese `entryFvg`); bez něj je to poslední
+  // řada před vstupem a „dřívější“ jsou všechny její zlomy.
+  let seriesEvents: BacktestStructureEvent[] = [];
+  if (parent) seriesEvents = run.slice(0, -1);
+  else {
+    let end = events.length - 1;
+    if (end >= 0 && events[end].direction === myDirection) {
+      let start = end;
+      while (start > 0 && events[start - 1].direction === myDirection) start -= 1;
+      seriesEvents = events.slice(start, end + 1);
+    }
+  }
+  const priorOpenFvgs: BacktestPriorFvgRead[] = [];
+  if (seriesEvents.length) {
+    const seriesOrder = new Map(seriesEvents.map((event, index) => [event.id, index + 1]));
+    const first = seriesEvents[0];
+    const from = Math.max(1, first.protectedIndex ?? first.atIndex, entryIndex - PRIOR_FVG_LOOKBACK_BARS);
+    for (let index = from; index <= entryIndex - 2; index += 1) {
+      const before = history[index - 1];
+      const after = history[index + 1];
+      if (!before || !after) continue;
+      const gap = long
+        ? (after.low > before.high ? { top: after.low, bottom: before.high } : null)
+        : (after.high < before.low ? { top: before.low, bottom: after.high } : null);
+      if (!gap) continue;
+      const bornIndex = index + 1;
+      const gapParent = parentForGap(index, bornIndex);
+      const order = gapParent ? seriesOrder.get(gapParent.id) : undefined;
+      if (!gapParent || order === undefined) continue;
+      let tested = false;
+      let filled = false;
+      for (let scan = bornIndex + 1; scan < entryIndex; scan += 1) {
+        const candle = history[scan];
+        if (long) {
+          if (candle.low <= gap.bottom) { filled = true; break; }
+          if (candle.low <= gap.top) tested = true;
+        } else {
+          if (candle.high >= gap.top) { filled = true; break; }
+          if (candle.high >= gap.bottom) tested = true;
+        }
+      }
+      if (filled) continue;
+      const proximal = long ? gap.top : gap.bottom;
+      priorOpenFvgs.push({
+        parentOrder: order, parentType: gapParent.type, bornTime: after.time,
+        top: roundTick(gap.top) as number, bottom: roundTick(gap.bottom) as number, tested,
+        distanceTicks: tickSize > 0 ? Math.round(Math.abs(entryPrice - proximal) / tickSize) : 0,
+      });
+    }
+  }
+
   const entryFvg: BacktestEntryFvgRead | null = selectedCandidate ? {
     timeframe: selectedCandidate.timeframe,
     direction: selectedCandidate.direction,
@@ -285,6 +361,8 @@ export const readBacktestStructure = (
       proximal: roundTick(entryFvg.proximal) as number,
       distal: roundTick(entryFvg.distal) as number,
     } : null,
+    // Nejbližší minulost je pro vstup nejdůležitější; strop drží velikost záznamu.
+    priorOpenFvgs: priorOpenFvgs.slice(-PRIOR_FVG_LIMIT),
   };
 };
 

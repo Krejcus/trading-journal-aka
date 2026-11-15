@@ -118,6 +118,9 @@ export interface BacktestSkipContext {
   reactionLevels?: string[];
   /** Vstup na hraně platného 1m FVG. */
   entryFvg?: boolean;
+  /** Otevřená 1m FVG z dřívějších zlomů téže série (počet / z toho netknutých). */
+  priorFvgs?: number;
+  priorFvgUntested?: number;
 }
 
 /** Obchod, který uživatel viděl a nevzal. */
@@ -240,8 +243,15 @@ export const trimBacktestNotes = (
   return rest;
 });
 
-export const backtestEntryNoteLabel = (note: Pick<BacktestEntryNote, 'reaction' | 'level'>): string => (
-  [note.reaction ? BACKTEST_ENTRY_REACTION_LABELS[note.reaction] : '', note.level ?? ''].filter(Boolean).join(' ')
+/** Zápisy z první verze (14. 11. 2026) nesly volné štítky místo reakce a úrovně. */
+export const backtestEntryNoteLabel = (note: Pick<BacktestEntryNote, 'reaction' | 'level'> & { tags?: readonly string[] }): string => (
+  [note.reaction ? BACKTEST_ENTRY_REACTION_LABELS[note.reaction] : '', note.level ?? '', ...(note.reaction || note.level ? [] : note.tags ?? [])]
+    .filter(Boolean).join(' ')
+);
+
+/** Poznámka, kterou k obchodu doplní mapper sám („Backtest session · stop-loss“), není ruční text. */
+export const isDefaultBacktestTradeNote = (notes: string | null | undefined): boolean => (
+  !notes || !notes.trim() || /^Backtest session · [a-z-]+$/.test(notes.trim())
 );
 
 const skipHasRisk = (note: BacktestSkipNote): boolean => Number.isFinite(note.stopLoss as number) && note.stopLoss !== note.price;
@@ -260,7 +270,7 @@ export const backtestSkipContextFromTrade = (trade: { entryContext?: unknown; en
   } | undefined;
   const map = trade.entryMap as {
     available?: boolean; structureType?: 'CHoCH' | 'BoS' | null; structureOrder?: number; structureBarsAgo?: number | null;
-    odrazLevels?: string[]; entryFvgValid?: boolean;
+    odrazLevels?: string[]; entryFvgValid?: boolean; priorFvgs?: unknown[]; priorFvgUntested?: number;
   } | undefined;
   if (!context?.available && !map?.available) return { available: false };
   return {
@@ -270,6 +280,7 @@ export const backtestSkipContextFromTrade = (trade: { entryContext?: unknown; en
     vwapDistSigma: context?.vwapDistSigma ?? null,
     structureType: map?.structureType ?? null, structureOrder: map?.structureOrder, structureBarsAgo: map?.structureBarsAgo ?? null,
     reactionLevels: map?.odrazLevels ?? [], entryFvg: Boolean(map?.entryFvgValid),
+    priorFvgs: map?.priorFvgs?.length ?? 0, priorFvgUntested: map?.priorFvgUntested ?? 0,
   };
 };
 

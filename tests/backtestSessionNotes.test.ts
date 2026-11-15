@@ -16,7 +16,9 @@ import {
   buildBacktestJournal,
   summarizeBacktestNotes,
   unexplainedBacktestMoves,
+  backtestEntryNoteLabel,
   backtestReachFromExcursion,
+  isDefaultBacktestTradeNote,
   backtestSkipAsClosedTrade,
   backtestSkipContextFromTrade,
   pendingBacktestSkips,
@@ -96,6 +98,15 @@ describe('popisy v backtest session', () => {
 
   it('do deníkového obchodu předá text vstupu a bias session', () => {
     expect(backtestTradeNoteFields(runtime, runtime.closedTrades[0])).toEqual({ notes: 'Odraz −1σ — první FVG po zlomu', sessionBias: 'Long' });
+  });
+
+  it('výchozí poznámku mapperu pozná a ruční text ne', () => {
+    expect(isDefaultBacktestTradeNote('Backtest session · stop-loss')).toBe(true);
+    expect(isDefaultBacktestTradeNote('')).toBe(true);
+    expect(isDefaultBacktestTradeNote(undefined)).toBe(true);
+    expect(isDefaultBacktestTradeNote('Backtest session · stop-loss, ale vstup byl pozdě')).toBe(false);
+    expect(backtestEntryNoteLabel({ tags: ['Průraz'] })).toBe('Průraz');
+    expect(backtestEntryNoteLabel({ reaction: 'bounce', level: 'VWAP', tags: ['Průraz'] })).toBe('Odraz VWAP');
   });
 
   it('plán změněný až po vstupu se obchodu nepřipíše', () => {

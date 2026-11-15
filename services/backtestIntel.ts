@@ -936,12 +936,44 @@ const calculateBacktestTradeIntel = (
       slippageTicks: options.slippageTicks,
     }),
     entryContext: context.entryContext(trade),
-    entryMap: context.entryMap(trade),
+    entryMap: { ...context.entryMap(trade), ...backtestAddOns(trade, options.orderEvents, context) },
     htfContext: context.htfContext(trade),
     placement: context.placement(trade),
     htfConfluence: confluence.htf,
     ltfConfluence: confluence.ltf,
   };
+};
+
+/**
+ * Přikoupení do pozice. Deník vede pozici od flat do flat jako jeden obchod,
+ * takže druhý a další vstup by jinak zmizel v průměrné ceně. Každé přikoupení
+ * dostane stejná mechanická čtení jako první vstup, spočítaná k jeho času.
+ */
+export const backtestAddOns = (
+  trade: BacktestClosedTrade,
+  orderEvents: readonly BacktestOrderEvent[],
+  context: Pick<BacktestContextSource, 'entryContext' | 'entryMap'>,
+): Pick<BacktestEntryMap, 'entryCount' | 'addOns'> => {
+  if (!trade.positionId) return { entryCount: 1, addOns: [] };
+  const side = trade.direction === 'Long' ? 'buy' : 'sell';
+  const fills = orderEvents
+    .filter(event => event.kind === 'filled' && event.positionId === trade.positionId && event.side === side
+      && !(Number(event.closedQuantity) > 0) && Number.isFinite(event.price as number))
+    .sort((left, right) => left.marketTime - right.marketTime);
+  const addOns = fills.slice(1).map(event => {
+    const at = { ...trade, entryTime: event.marketTime, entryPrice: Number(event.price) };
+    const map = context.entryMap(at);
+    const read = context.entryContext(at);
+    return {
+      time: event.marketTime, price: Number(event.price), quantity: Number(event.quantity ?? 0),
+      structureType: map.structureType, structureOrder: map.structureOrder, structureBarsAgo: map.structureBarsAgo,
+      reactionLevels: map.odrazLevels, entryFvgValid: map.entryFvgValid, priorFvgs: map.priorFvgs?.length ?? 0,
+      vwapDistSigma: read.vwapDistSigma,
+      s1: read.ctx?.s1 ?? null, s5: read.ctx?.s5 ?? null, s15: read.ctx?.s15 ?? null,
+      inFvg5: Boolean(read.htfFvg?.inside5), inFvg15: Boolean(read.htfFvg?.inside15), inFvg60: Boolean(read.htfFvg?.inside60),
+    };
+  });
+  return { entryCount: Math.max(1, fills.length), addOns };
 };
 
 export const backtestTradeIntel = (trade: BacktestClosedTrade, options: BacktestIntelOptions): BacktestTradeIntel => calculateBacktestTradeIntel(trade, options);
