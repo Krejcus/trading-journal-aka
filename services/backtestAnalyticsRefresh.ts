@@ -14,7 +14,28 @@ export interface BacktestAnalyticsRefreshStamp {
   sourceHash: string;
   lastCandleTime: number | null;
   complete: boolean;
+  /**
+   * Nejstarší 1m svíčka, kterou měl výpočet k dispozici. Session po znovuotevření
+   * načítá svíčky až od dvou dnů před kurzorem; přepočet obchodu s horším
+   * pokrytím by mu přepsal dobrou analytiku prázdnou. Chybí u starších razítek.
+   */
+  firstCandleTime?: number | null;
 }
+/** Bez záznamu o původním pokrytí musí data sahat aspoň den před vstup. */
+const MIN_HISTORY_BEFORE_ENTRY_SECONDS = 24 * 60 * 60;
+/** Smí se obchod přepočítat z právě načtených svíček, aniž by se mu analytika zhoršila? */
+export const backtestRefreshCoverageOk = (
+  firstCandleTime: number | null | undefined,
+  entryTime: number,
+  prior: Pick<BacktestAnalyticsRefreshStamp, 'firstCandleTime'> | undefined,
+): boolean => {
+  // První výpočet běží nad stejnými daty jako samotné uzavření obchodu.
+  if (!prior) return true;
+  if (!Number.isFinite(firstCandleTime as number)) return false;
+  const first = Number(firstCandleTime);
+  if (first <= entryTime - MIN_HISTORY_BEFORE_ENTRY_SECONDS) return true;
+  return Number.isFinite(prior.firstCandleTime as number) && first <= Number(prior.firstCandleTime);
+};
 export type BacktestRefreshTrade = Trade & { backtestAnalyticsRefresh?: BacktestAnalyticsRefreshStamp };
 export interface BacktestAnalyticsRefreshInput {
   trades: readonly BacktestRefreshTrade[];
@@ -89,6 +110,7 @@ const planRefresh = (input: BacktestAnalyticsRefreshInput, cache?: ReturnType<ty
       }
       sources.set(sourceKey, source);
     }
+    if (!backtestRefreshCoverageOk(source.candles[0]?.time, closed.entryTime, prior)) continue;
     const { orderEvents, sourceHash } = cache ? cache.fingerprint(input, closed, source.hash, horizon) : fingerprint(input, closed, source.hash, horizon);
     if (compatible && prior.sourceHash === sourceHash) continue;
     const recalculated = (cache?.mapper.map ?? backtestClosedTradeToTrade)(closed, { ...input.mappingOptions,
@@ -97,7 +119,8 @@ const planRefresh = (input: BacktestAnalyticsRefreshInput, cache?: ReturnType<ty
     candidates.push({ tradeId: closed.id, expectedSourceHash: prior?.sourceHash, runId: closed.runId, instrument: closed.instrument, recalculated,
       updates: buildBacktestTradeRecalculationUpdates(current, recalculated),
       stamp: { version: 1, schemaVersion: BACKTEST_TRADE_SCHEMA_VERSION, horizonTime: horizon, sourceHash,
-        lastCandleTime: source.candles.at(-1)?.time ?? null, complete: !backtestAnalyticsArePending(recalculated) },
+        lastCandleTime: source.candles.at(-1)?.time ?? null, complete: !backtestAnalyticsArePending(recalculated),
+        firstCandleTime: source.candles[0]?.time ?? null },
     });
   }
   return candidates;

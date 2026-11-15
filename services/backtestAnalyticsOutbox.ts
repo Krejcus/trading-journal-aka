@@ -16,7 +16,6 @@ export interface AnalyticsFlushResult {
   pendingCount: number;
   error: string | null;
 }
-const SAME_HORIZON_CONFLICT = 'Stejný úsek má na jiném zařízení jinou verzi dat. Obnovte session a porovnejte analýzu.';
 const requireOwner = async (expected?: string) => {
   const owner = await getUserId();
   if (!owner || (expected && owner !== expected)) throw new Error('Přihlášený uživatel se změnil. Analýzy zůstávají ve frontě původního uživatele.');
@@ -61,6 +60,14 @@ const flushOwner = async (storage: Pick<BacktestTradeReviewStorage, 'prepareBack
         || latest.accountId !== entry.candidate.recalculated.accountId) {
         throw new Error('Změnila se identita obchodu; analýzu nelze bezpečně připojit.');
       }
+      const drop = () => update<State>(keyOf(owner), previous => {
+        if (previous?.[entry.candidate.tradeId]?.token !== entry.token) return previous ?? {};
+        const next = { ...previous }; delete next[entry.candidate.tradeId]; return next;
+      });
+      // Přepočet nad neúplnými svíčkami (session znovuotevřená dál v čase) umí
+      // vrátit „kontext nedostupný“. Takový výsledek nesmí přepsat dobrý záznam.
+      const available = (value: unknown) => (value as { available?: boolean } | null | undefined)?.available === true;
+      if (available(latest.entryContext) && !available(entry.candidate.recalculated.entryContext)) { await drop(); continue; }
       const latestStamp = latest.backtestAnalyticsRefresh;
       const superseded = latestStamp && newerThan(latestStamp, entry.candidate.stamp);
       const currentPending = (await get<State>(keyOf(owner)))?.[entry.candidate.tradeId];
@@ -69,7 +76,10 @@ const flushOwner = async (storage: Pick<BacktestTradeReviewStorage, 'prepareBack
         && latestStamp.horizonTime === entry.candidate.stamp.horizonTime
         && latestStamp.sourceHash !== entry.candidate.stamp.sourceHash
         && latestStamp.sourceHash !== entry.candidate.expectedSourceHash) {
-        throw new Error(SAME_HORIZON_CONFLICT);
+        // Server už pro tentýž úsek analýzu má a tahle vznikla bez znalosti její
+        // verze — typicky nad jiným výřezem svíček. Platí serverová; položka by
+        // jinak ve frontě zůstala navždy (15. 11. 2026: 94 takových).
+        await drop(); continue;
       }
       // Rebase only computed values against the fresh server review. A same-field
       // race is rejected atomically by the RPC and retried from a new snapshot.
@@ -97,10 +107,6 @@ const flushOwner = async (storage: Pick<BacktestTradeReviewStorage, 'prepareBack
         continue;
       }
       result.error = `Dopočet analýz čeká na uložení. ${reason instanceof Error ? reason.message : String(reason)}`;
-      // Rozpor dvou zařízení se týká jen tohoto obchodu. Položka zůstává ve frontě
-      // k porovnání, ale nesmí zastavit dopočty všech ostatních obchodů
-      // (14. 11. 2026: jedna taková položka zablokovala 89 dopočtů).
-      if (reason instanceof Error && reason.message === SAME_HORIZON_CONFLICT) continue;
       // Offline/missing migration should not generate one failing request per trade.
       break;
     }

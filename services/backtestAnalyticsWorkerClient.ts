@@ -25,7 +25,7 @@ export const trimBacktestWorkerTrade = (trade: BacktestRefreshTrade): BacktestRe
   htfConfluence: strings(trade.htfConfluence), ltfConfluence: strings(trade.ltfConfluence),
   autoConfluence: trade.autoConfluence ? { htf: strings(trade.autoConfluence.htf) ?? [], ltf: strings(trade.autoConfluence.ltf) ?? [] } : undefined,
   backtestAnalyticsRefresh: trade.backtestAnalyticsRefresh ? pick(trade.backtestAnalyticsRefresh,
-    ['version', 'schemaVersion', 'horizonTime', 'sourceHash', 'lastCandleTime', 'complete']) as unknown as BacktestRefreshTrade['backtestAnalyticsRefresh'] : undefined,
+    ['version', 'schemaVersion', 'horizonTime', 'sourceHash', 'lastCandleTime', 'complete', 'firstCandleTime']) as unknown as BacktestRefreshTrade['backtestAnalyticsRefresh'] : undefined,
 } as BacktestRefreshTrade);
 const trimOptions = (options: BacktestWorkerMappingOptions | BacktestWorkerPlanInput['mappingOptions']) => {
   const fields = pick(options, ['accountId', 'timeZone', 'flatTimeZone', 'flatByMinute', 'strategy', 'sessionBias', 'replayHorizonTime', 'slippageTicks']);

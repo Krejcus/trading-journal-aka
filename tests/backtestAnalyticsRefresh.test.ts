@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planBacktestAnalyticsRefresh, backtestAnalyticsArePending, type BacktestAnalyticsRefreshInput, type BacktestRefreshTrade } from '../services/backtestAnalyticsRefresh';
+import { planBacktestAnalyticsRefresh, backtestAnalyticsArePending, backtestRefreshCoverageOk, type BacktestAnalyticsRefreshInput, type BacktestRefreshTrade } from '../services/backtestAnalyticsRefresh';
 import { backtestClosedTradeToTrade } from '../services/backtestIntel';
 import type { BacktestClosedTrade } from '../services/backtestTypes';
 const T = Date.UTC(2026,8,4,12)/1000;
@@ -73,5 +73,22 @@ describe('progressive derived analytics refresh',()=>{
  it('lacking an initial stop is terminal unavailability, not an endless pending refresh',()=>{
   const [candidate]=planBacktestAnalyticsRefresh({...input,closedTrades:[{...closed,initialStopLoss:undefined,riskAmount:undefined}]});
   expect(candidate.stamp.complete).toBe(true);
+ });
+ it('obchod se nepřepočítá, když načtené svíčky pokrývají méně než při původním výpočtu',()=>{
+  const saved=commit(current,planBacktestAnalyticsRefresh(input)[0]);
+  expect(saved.backtestAnalyticsRefresh?.firstCandleTime).toBe(T-60);
+  // Session znovuotevřená dál v čase: svíčky začínají až po vstupu obchodu.
+  const later=[bar(1),bar(2,110),bar(3,110)];
+  expect(planBacktestAnalyticsRefresh({...input,trades:[saved],candlesByInstrument:{MNQ:later},replayHorizonTime:T+180})).toEqual([]);
+  // Stejné nebo lepší pokrytí přepočet povolí.
+  expect(planBacktestAnalyticsRefresh({...input,trades:[saved],candlesByInstrument:{MNQ:[...known,bar(2,110)]},replayHorizonTime:T+120})).toHaveLength(1);
+ });
+ it('pravidlo pokrytí: první výpočet vždy, starší razítko jen s dnem historie před vstupem',()=>{
+  expect(backtestRefreshCoverageOk(T+60,T,undefined)).toBe(true);
+  expect(backtestRefreshCoverageOk(null,T,{})).toBe(false);
+  expect(backtestRefreshCoverageOk(T-3600,T,{})).toBe(false);
+  expect(backtestRefreshCoverageOk(T-25*3600,T,{})).toBe(true);
+  expect(backtestRefreshCoverageOk(T-3600,T,{firstCandleTime:T-3600})).toBe(true);
+  expect(backtestRefreshCoverageOk(T-1800,T,{firstCandleTime:T-3600})).toBe(false);
  });
 });
