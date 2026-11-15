@@ -228,13 +228,26 @@ export const removeBacktestNote = (runtime: BacktestRuntimeState, id: string): B
  * Návrat replaye: zápisy za cílovým časem zmizí spolu s obchody, které už
  * v novém čase neproběhly. Popisy vstupů a posunů zrušených příkazů také.
  */
+/**
+ * Záznam o otevřené pozici (posun SL/TP) má místo příkazu vlastníka
+ * „position:<instrument>“. Zůstává, pokud jeho pozice návratem nezanikla.
+ */
+export const keepsPositionRecord = (
+  ownerId: string,
+  positionId: string | undefined,
+  removedPositionIds: ReadonlySet<string>,
+): boolean => ownerId.startsWith('position:') && !(positionId && removedPositionIds.has(positionId));
+
 export const trimBacktestNotes = (
   notes: readonly BacktestNote[] | undefined,
   targetTime: number,
   keptOrderIds: ReadonlySet<string>,
+  removedPositionIds: ReadonlySet<string> = new Set(),
 ): BacktestNote[] | undefined => notes?.filter(note => {
   if (note.marketTime > targetTime) return false;
-  if (note.kind === 'entry' || note.kind === 'move') return keptOrderIds.has(note.orderId);
+  if (note.kind === 'entry') return keptOrderIds.has(note.orderId);
+  // Důvod posunu patří pozici, ne příkazu; čas už ho zařadil před cíl návratu.
+  if (note.kind === 'move') return keptOrderIds.has(note.orderId) || keepsPositionRecord(note.orderId, undefined, removedPositionIds);
   return true;
 }).map(note => {
   // Dopočet nevzatého obchodu ze svíček za cílem by prozradil budoucnost.

@@ -1,4 +1,4 @@
-import { trimBacktestNotes } from './backtestSessionNotes';
+import { keepsPositionRecord, trimBacktestNotes } from './backtestSessionNotes';
 import type { BacktestClosedTrade, BacktestPosition, BacktestRuntimeState } from './backtestTypes';
 
 /**
@@ -77,8 +77,12 @@ export function applyBacktestRewind(runtime: BacktestRuntimeState, plan: Backtes
     positions: [],
     closedTrades: runtime.closedTrades.filter(trade => !removedTradeIds.has(trade.id)),
     managedPositionPlans: runtime.managedPositionPlans?.filter(plan => keptOrderIds.has(plan.orderId)),
-    orderEvents: runtime.orderEvents?.filter(event => event.marketTime <= target && keptOrderIds.has(event.orderId)),
-    notes: trimBacktestNotes(runtime.notes, target, keptOrderIds),
+    // Posuny SL/TP otevřené pozice nepatří žádnému příkazu (vlastník je
+    // „position:<instrument>“). Dřív je proto každý návrat smazal všechny —
+    // i u dávno uzavřených obchodů — a s nimi zmizelo, jak se obchod vedl.
+    orderEvents: runtime.orderEvents?.filter(event => event.marketTime <= target
+      && (keptOrderIds.has(event.orderId) || keepsPositionRecord(event.orderId, event.positionId, removedPositionIds))),
+    notes: trimBacktestNotes(runtime.notes, target, keptOrderIds, removedPositionIds),
     replay: { ...runtime.replay, cursorTime: target, startTime: target, playing: false, phase: 'active' },
   };
 }

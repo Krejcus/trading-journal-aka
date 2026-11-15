@@ -130,6 +130,22 @@ describe('popisy v backtest session', () => {
     expect(summarizeBacktestNotes(runtime)).toEqual({ plans: 1, skips: 1, entries: 1, entriesDescribed: 1, moves: 1, movesExplained: 0 });
   });
 
+  it('návrat replaye nesmaže posun stopky ani jeho důvod u obchodu před cílem', () => {
+    const moved = unexplainedBacktestMoves(runtime.orderEvents, runtime.notes)[0];
+    const explained = addBacktestNote(runtime, {
+      id: 'move-keep', kind: 'move', marketTime: at(3), recordedAt: 4, eventId: moved.id, orderId: moved.orderId,
+      field: 'stop', from: 90, to: 100, reason: 'breakeven', text: '',
+    });
+    expect(moved.orderId.startsWith('position:')).toBe(true);
+    const rewound = applyBacktestRewind(explained, planBacktestRewind(explained, at(8)), 50_000);
+    expect(rewound.orderEvents?.some(event => event.id === moved.id)).toBe(true);
+    expect(rewound.notes?.some(note => note.id === 'move-keep')).toBe(true);
+    // Návrat před samotný posun ho smaže i s důvodem.
+    const earlier = applyBacktestRewind(explained, planBacktestRewind(explained, at(2)), 50_000);
+    expect(earlier.orderEvents?.some(event => event.id === moved.id)).toBe(false);
+    expect(earlier.notes?.some(note => note.id === 'move-keep')).toBe(false);
+  });
+
   it('návrat replaye smaže zápisy za cílem a popisy smazaných obchodů', () => {
     const second = marketLong(runtime, 10, 110, 100, 130);
     let later = addBacktestNote(second.runtime, {
