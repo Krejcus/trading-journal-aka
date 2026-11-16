@@ -152,3 +152,63 @@ Směr drží, tyto věci se musí do návrhu doplnit, než vznikne kód:
 10. **Test na skutečném iPhonu je podmínka:** HTTPS/CORS, uspání při
     odesílání, Wi-Fi/LTE, vypnutý Tailscale, odhlášení/odvolání, ztracená
     odpověď. Stav řadit podle instance a revize; `/status` nesmí omladit starý stav.
+
+### copier-design-critic — OPRAVIT (jako kód by nález 1 byl BLOKUJE)
+
+Shoduje se s Codexem a přidává:
+
+1. **Brzda přes relay × vstup přímo je slabší než dnes.** Dnes brzda platí od
+   zápisu na serveru (zneplatní čekající vstupy v téže transakci, okno 500 ms).
+   Přímý vstup server nevidí: telefon mimo tailnet dá OFF přes relay, PC
+   v tailnetu pošle vstup přímo o 200 ms později a proces ho provede, protože
+   o brzdě ještě neví. → Každý nebrzdový příkaz nese v podepsaném těle plot
+   `{startedAt procesu, brakeEpoch, revize statusu}`; neshoda = odmítnuto,
+   znovu ověřit těsně před zápisem. Pořadí = monotónní čítač přidělený
+   synchronně při příchodu, ne `Date.now()`. Tvrzení „přísnější než dnes"
+   z návrhu vypustit.
+2. **Brzdy nesmí potřebovat klíč zařízení.** Jinak nový nebo přeinstalovaný
+   telefon nezabrzdí žádnou cestou. Brzdy přes relay autorizuje přihlášení
+   uživatele jako dnes; klíč je povinný jen pro příkazy zvyšující riziko.
+3. **Brzdy bez kontroly času klienta** (telefon s rozhozenými hodinami musí
+   zabrzdit); konec session pro zámek dne z hodin procesu; podpis zámku dne
+   vázat na `startedAt`, aby jeho přehrání nezamklo další den.
+4. **Relay se „nemění" neplatí.** Se dvěma živými procesy (Tradovate worker
+   + Rithmic proces) může brzda skončit u nesprávného; výběr cíle a SQL
+   admission stojí na Tradovate připojení. → Výslovné adresování cílového
+   procesu a rozhodnutí, zda globální OFF/Kill míří na oba.
+5. **Restart mezi „uloženo" a „provedeno"** = `unknown`, blokuje ARM, nikdy se
+   neprovede znovu (shodně s Codexem, bod 2).
+6. **Lhůty se mezi cestami sčítají** (ztracený přímý požadavek + 15 s ve frontě
+   + 5 s v procesu = Market až ~20 s po kliku). → Tvrdý podepsaný čas vzniku
+   s limitem rovným lhůtě vstupu; po jejím uplynutí klient už jen čte stav.
+7. **`GET /v1/status` musí být podepsaný** — přes Tailscale Serve by jinak
+   pozice a účty četl každý uzel tailnetu. Podpisy vázat na `startedAt`
+   (restart zneplatní vše rozeslané). Klíč neexportovatelný (iOS Keychain /
+   Secure Enclave přes nativní plugin). Registraci klíče povolit jen při
+   vypnuté kopírce a flat, s auditem a stropem počtu.
+8. **Seznam povolených příkazů pro přímý kanál** (v1 bez změn konfigurace,
+   odemčení dne, řešení zaseknutých operací, registrace klíče); zachovat
+   slučování ARM a Flatten, zámek „jeden nevyřízený" globálně v procesu,
+   výjimky z brzdy pro `cancel-entry` / `attach-brackets` / přidání SL.
+9. Záznamy `operationId` držet nejméně 24 h, nevyřízené nikdy neořezávat.
+10. Singleton procesu: výlučný zámek souboru a portu před načtením stavu.
+
+**Doporučení k otevřeným bodům (oba recenzenti se shodují):** krátkodobý
+token ano (10–15 min, vydává proces přes ověřenou cestu); tabulka operací ve
+stejném durable stavu a commitu jako `sending`; souběh přes synchronní
+rezervaci; **relay jen pro snižování rizika** (brzdy, Flatten, zrušení
+vlastního vstupu, zavření, odvolání klíče, čtení stavu) — vstup, ARM a posuny
+jen přímo; chování v nativním shellu změřit na iPhonu.
+
+Potřeba nový invariant (pracovně INV-DIRECT-01) a omezit věty „poll relaye je
+jediná cesta příkazů" a „jen přes relay" (INV-MANUAL-01) výslovně na Tradovate
+worker. Další dotčená pravidla: INV-ARM-01/03, INV-BRAKE-04, INV-RECON-04,
+INV-OUTBOX-02, INV-FRESH-02, INV-UI-03, INV-WORKER-04.
+
+### Rozhodnutí potřebná od Filipa (až se kanál začne stavět)
+
+- Odhlášení na dálku nezabere okamžitě, když je výpadek spojení (token doběhne
+  do 10–15 min). Přijatelné?
+- Má globální OFF/Kill v appce mířit na oba procesy (Tradovate i Rithmic)?
+- Běžné příkazy (vstup, zapnutí, posuny) jen přes přímý kanál, tedy jen
+  s Tailscale na telefonu; bez něj zůstanou jen brzdy a zavření. Přijatelné?
