@@ -9,9 +9,11 @@ const root = path.resolve(dir, '../..');
 const server = await createServer({
   configFile: false, root, envDir: path.join(dir, 'empty-env'),
   cacheDir: path.join(root, 'node_modules/.vite-rithmic-qa'),
-  optimizeDeps: { entries: [path.join(dir, 'rithmic-live.html')] },
+  // Jedna kopie Reactu pro stránku i knihovnu grafu (jinak „Invalid hook call").
+  resolve: { dedupe: ['react', 'react-dom'] },
+  optimizeDeps: { entries: [path.join(dir, 'rithmic-live.html'), path.join(dir, 'rithmic-screen.html')], include: ['react', 'react-dom', 'react-dom/client', '@getcandlekit/charts/react', '@getcandlekit/charts/react/workspace'] },
   plugins: [{ name: 'isolated-qa-service-boundary', enforce: 'pre', resolveId(source) {
-    if (/(?:^|\/)supabase(?:\.ts)?$/.test(source)) return path.join(dir, 'supabase.ts');
+    if (/(?:^|\/)supabase(?:\.ts)?$/.test(source)) return path.join(dir, 'rithmic-supabase.ts');
   } }, react({ exclude: [/node_modules/] }), tailwindcss()],
   server: { host: '127.0.0.1', port: 4185, strictPort: true, hmr: false, allowedHosts: ['.ts.net', 'macbook-air'], headers: {
     'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:4185 ws://127.0.0.1:3311 ws://*.ts.net:8080 ws://macbook-air:8080; img-src 'self' data: blob:; font-src 'self' data:;",

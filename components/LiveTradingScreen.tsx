@@ -233,6 +233,8 @@ interface Props {
   manageLockRef?: React.MutableRefObject<boolean> | null;
   /** Přehrávání v grafu (U3-PC) pro desk — lišta pod grafem pak „Zrušit čekající“ nenabídne. */
   onReplayChange?: (active: boolean) => void;
+  /** Náhradní zdroj svíček a živé ceny (výchozí = uložený den + živý zdroj appky). */
+  marketData?: LiveTradingMarketData | null;
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
@@ -295,16 +297,21 @@ function useMinuteNow() {
   return now;
 }
 
+/** Podklady grafu a ceny lístku, které lze obrazovce dodat zvenku místo `useDayChartData`. */
+export type LiveTradingMarketData = Omit<ReturnType<typeof useDayChartData>, 'chartTrades' | 'window'>;
+
 const LiveTradingScreen: React.FC<Props> = ({
   isDark, themePreference = 'app', tabs, onNavigate, navigationBlocked = false, copier, copyEvents, liveExposurePaint, chartOpenPerformanceAt = 0, leaving = false,
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
-  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange,
+  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
-  const chart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live' });
+  const dayChart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live' });
+  // Jiný zdroj svíček a ceny než uložený den (zkušební napojení na Rithmic Test). Jen zobrazení.
+  const chart = marketData ?? dayChart;
   const chartComponentMeasured = useRef(false);
   const chartCandlesMeasured = useRef(false);
   const chartCandlesDataMeasured = useRef(false);

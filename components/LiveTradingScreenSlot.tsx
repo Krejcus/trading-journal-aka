@@ -3,7 +3,7 @@ import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { createPortal } from 'react-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
-import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingTab } from './LiveTradingScreen';
+import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData, LiveTradingTab } from './LiveTradingScreen';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -164,6 +164,8 @@ interface Props {
   onReplayChange?: (active: boolean) => void;
   /** Pád grafu: desk nad FallbackLayer vrátí nouzovou lištu (`liveSafetyBarNeed`). */
   onCrash?: () => void;
+  /** Náhradní zdroj svíček a živé ceny (zkušební napojení); chybí = výchozí zdroj appky. */
+  marketData?: LiveTradingMarketData | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -260,6 +262,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.onAttachBrackets === right.onAttachBrackets
   && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
   && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
+  && left.marketData === right.marketData
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)
