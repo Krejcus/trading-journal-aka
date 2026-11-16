@@ -161,6 +161,12 @@ export class RithmicOrderBook {
   private readonly accounted = new Map<string, number>();
   /** Kolik kusů Rithmic ohlásil jako vyplněné, aniž by zpráva nesla množství (COMPLETE s důvodem F). */
   private readonly owed = new Map<string, number>();
+  /**
+   * Kolik kusů prokazatelně vyplnila burza, ale zpráva o exekuci byla nepoužitelná (FILL bez ID,
+   * ceny nebo množství). Lepkavý počet: přičítá se k mezeře a maže ho jen nový výchozí stav
+   * nebo `reset()` — nikdy zrušení příkazu ani fill jiné exekuce.
+   */
+  private readonly proven = new Map<string, number>();
 
   constructor(options: RithmicOrderBookOptions) {
     this.options = options;
@@ -187,7 +193,10 @@ export class RithmicOrderBook {
     const key = this.key(accountId, brokerOrderId);
     const order = this.orders.get(key);
     if (!order) return 0;
-    return Math.max(0, Math.max(order.filledQuantity, this.owed.get(key) ?? 0) - (this.accounted.get(key) ?? 0));
+    // Dluh nikdy nepřesáhne aktuální množství příkazu (odhad ze staršího, většího množství).
+    const owed = Math.min(this.owed.get(key) ?? 0, order.quantity);
+    // Ztracené kusy (`proven`) se přičítají: doručený fill JINÉ exekuce je nesmí vyrovnat.
+    return Math.max(0, Math.max(order.filledQuantity, owed) - (this.accounted.get(key) ?? 0)) + (this.proven.get(key) ?? 0);
   }
 
   /** Složí příkaz z jedné notifikace nebo řádku snímku; null, když chybí účet nebo ID. */
@@ -282,8 +291,11 @@ export class RithmicOrderBook {
           }
           if (!wasTerminal) status = next.quantity > 0 && next.filledQuantity >= next.quantity ? 'filled' : 'working';
         } else {
-          // Bez exekuce nevydáme ani konečný stav: stav se musí dohledat čtením.
-          next.filledQuantity = previous?.filledQuantity ?? 0;
+          // Bez exekuce nevydáme fill ani konečný stav, ale pozice se změnila: zapíšeme, že jádru
+          // exekuce chybí (`fillGap`), aby to volající nenechal být.
+          const before = previous?.filledQuantity ?? 0;
+          next.filledQuantity = before;
+          this.proven.set(key, (this.proven.get(key) ?? 0) + Math.max(update.fillSize ?? 0, 1));
           delta.attention = `FILL u příkazu ${update.basketId} bez ID, ceny nebo množství exekuce`;
         }
       } else if (update.notifyType === 'CANCEL') {
@@ -313,7 +325,8 @@ export class RithmicOrderBook {
         } else if (reason === 'F') {
           // Vyplněno podle Rithmicu, ale exekuce z burzy ještě nedorazila: stav neposouváme,
           // jen si zapíšeme, že jádru dlužíme exekuce na celé množství (viz `fillGap`).
-          this.owed.set(key, next.quantity);
+          // Množství bere ze zprávy samotné (může být menší než to, které kniha zná z dřívějška).
+          this.owed.set(key, update.quantity ?? next.quantity);
           delta.awaitingFill = true;
         } else {
           delta.attention = `COMPLETE u příkazu ${update.basketId} s neznámým důvodem (${update.completionReason || update.status || 'neuvedeno'})`;
@@ -322,6 +335,11 @@ export class RithmicOrderBook {
       }
     }
     next.status = status;
+    if (!wasTerminal && (status === 'canceled' || status === 'rejected')) {
+      // Konečný stav z burzy nebo od Rithmicu: odhad „bude vyplněno celé" už neplatí.
+      // Prokázaná exekuce (`proven`) zůstává.
+      this.owed.delete(key);
+    }
     if (wasTerminal && previous) {
       // Konečný stav se neoživí a jeho verze se nemění (jinak by jádro vydalo druhé
       // `canceled`/`rejected`); propíše se jen vyšší vyplněné množství.
@@ -391,7 +409,7 @@ export class RithmicOrderBook {
     rows: readonly RithmicOrderUpdate[],
     skip: ReadonlySet<string> = new Set(),
     options: { baseline?: boolean } = {},
-  ): { orders: BrokerOrder[]; missingActive: BrokerOrder[]; changed: BrokerOrder[]; seenIds: Set<string> } {
+  ): { orders: BrokerOrder[]; missingActive: BrokerOrder[]; changed: BrokerOrder[]; added: Set<string>; seenIds: Set<string> } {
     const composed: BrokerOrder[] = [];
     const seenIds = new Set<string>();
     for (const row of rows) {
@@ -403,13 +421,34 @@ export class RithmicOrderBook {
     }
     // Zapisuje se až po úspěšném složení všech řádků: chyba nenechá knihu napůl přepsanou.
     const changed: BrokerOrder[] = [];
+    /** Příkazy, které kniha před tímto snímkem neznala. */
+    const added = new Set<string>();
+    if (options.baseline) {
+      // Nový výchozí stav srovná ztracené kusy u všech příkazů účtu — i u konečných, které
+      // snímek už nevrací (jinak by je probudila pozdní notifikace). Příkaz živě dotčený
+      // během skládání (`skip`) si je nechává.
+      const prefix = `${accountId}:`;
+      for (const key of [...this.proven.keys()]) {
+        if (key.startsWith(prefix) && !skip.has(key.slice(prefix.length))) this.proven.delete(key);
+      }
+    }
     for (const next of composed) {
       const key = this.key(accountId, next.brokerOrderId);
       const previous = this.orders.get(key);
-      if (!previous) {
-        // Výchozí stav: vyplněné množství jádro přebírá ze snímku (filly se nevysílají).
+      if (options.baseline) {
+        // Výchozí stav (první i po obnově) je pro jádro nová pravda: vyplněné množství přebírá
+        // ze snímku — i u příkazu, který kniha znala před výpadkem. Dluh ohlášený živě BĚHEM
+        // tohoto připojování (`owed`) se tím nemaže: snímek ho buď potvrdí vyšším vyplněním,
+        // nebo zůstane a po připojení ho dořeší hlídání. Starý dluh maže `clearOwed()`.
+        this.accounted.set(key, next.filledQuantity);
+        this.proven.delete(key);
+      } else {
         // Příkaz poprvé viděný až za běhu takovou výjimku nemá — jeho exekuce jádru chybí.
-        this.accounted.set(key, options.baseline ? next.filledQuantity : 0);
+        if (!previous) {
+          this.accounted.set(key, 0);
+          added.add(next.brokerOrderId);
+        }
+        if (next.status === 'canceled' || next.status === 'rejected') this.owed.delete(key);
       }
       if (
         !previous ||
@@ -431,6 +470,20 @@ export class RithmicOrderBook {
     }
     // `orders` jsou jen příkazy, které snímek skutečně obsahoval (ne zbytky v paměti).
     const orders = this.list(accountId).filter((order) => seenIds.has(order.brokerOrderId));
-    return { orders, missingActive, changed, seenIds };
+    return { orders, missingActive, changed, added, seenIds };
+  }
+
+  /** Nová relace: dluhy exekucí z minulého spojení neplatí, pravdu dá nový výchozí stav. */
+  clearOwed(): void {
+    this.owed.clear();
+  }
+
+  /** Zahodí všechno (ruční nové spuštění po zastavení: obsluha stav potvrdila). */
+  reset(): void {
+    this.orders.clear();
+    this.fillIds.clear();
+    this.accounted.clear();
+    this.owed.clear();
+    this.proven.clear();
   }
 }

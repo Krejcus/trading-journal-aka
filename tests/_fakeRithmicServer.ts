@@ -40,6 +40,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   const sockets: FakeSocket[] = [];
   const received: Array<{ templateId: number; fields: RithmicFields }> = [];
   let basketSeq = 100;
+  /** Háček pro testy závodů: zavolá se při každém přijatém požadavku, před jeho zpracováním. */
+  const hooks: { onRequest?: (templateId: number, fields: RithmicFields, socket: FakeSocket) => void } = {};
   const controls = {
     /** Přijme další nový příkaz, ale spojení shodí dřív, než pošle potvrzení. */
     dropNextOrderBeforeAck: false,
@@ -51,6 +53,14 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     frontMonth: 'ESZ6' as string | null,
     /** Server přestane odpovídat na heartbeat (tiché spojení bez zavření). */
     silent: false,
+    /** FCM, který vrátí seznam účtů (302) — změna za běhu = jiná identita účtu. */
+    accountFcm: 'FCM',
+    /** Dotaz na RMS (304) selže. */
+    rmsFails: false,
+    /** Na snímek příkazů (320) server neodpoví (timeout). */
+    ignoreShowOrders: false,
+    /** Text stavu, který snímek vrátí u pracujících příkazů (pro test nevyložitelného řádku). */
+    openStatusText: 'open',
     /** Stav účtu v RMS (dotaz 304). */
     rmsStatus: 'active',
     /** Zrušení neexistujícího příkazu vrátí „ok" (změřené chování). */
@@ -91,6 +101,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       if (this.readyState !== 1) throw new Error('socket closed');
       for (const message of decodeRithmicFrames(data)) {
         received.push({ templateId: message.templateId, fields: message.fields });
+        hooks.onRequest?.(message.templateId, message.fields, this);
         handle(this, message.templateId, message.fields);
       }
     }
@@ -123,7 +134,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       trigger_price: order.triggerPrice,
       transaction_type: order.side,
       price_type: order.priceType,
-      status: order.status === 'open' ? 'open' : 'complete',
+      status: order.status === 'open' ? (snapshotTo ? controls.openStatusText : 'open') : 'complete',
       linked_basket_ids: order.linked,
       total_fill_size: order.filled,
       total_unfilled_size: order.quantity - order.filled,
@@ -239,11 +250,15 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         ok({ fcm_id: 'FCM', ib_id: 'IB', user_type: 3 });
         return;
       case 302:
-        for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, account_name: `Name ${account}` });
+        for (const account of accounts) row({ fcm_id: controls.accountFcm, ib_id: 'IB', account_id: account, account_name: `Name ${account}` });
         if (controls.duplicateAccount) row({ fcm_id: 'FCM2', ib_id: 'IB', account_id: accounts[0], account_name: 'dup' });
         ok();
         return;
       case 304:
+        if (controls.rmsFails) {
+          socket.push(305, { user_msg: userMsg, rp_code: ['6', 'rms unavailable'] });
+          return;
+        }
         for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, status: controls.rmsStatus, max_order_quantity: 40 });
         ok();
         return;
@@ -336,6 +351,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         return;
       }
       case 320:
+        if (controls.ignoreShowOrders) return;
         // Změřeno: 320 vrací pracující i dnešní dokončené; odmítnuté na RMS jen jako 351.
         for (const order of orders.values()) {
           if (order.accountId !== String(f.account_id)) continue;
@@ -358,6 +374,19 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
 
   return {
     socketFactory: () => new FakeSocket(),
+    hooks,
+    /** Živá zpráva o pozici z PnL plantu (průběžný P&L posílá stejné množství opakovaně). */
+    pushLivePosition(accountId: string, symbol: string, net: number): void {
+      for (const s of sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
+        s.push(450, { account_id: accountId, symbol, exchange: 'CME', net_quantity: net });
+      }
+    },
+    /** Živá burzovní notifikace o příkazu (pro testy závodů). */
+    notifyLive(basketId: string, exchangeType: number, extra: RithmicFields = {}): void {
+      const order = orders.get(basketId);
+      if (!order) throw new Error(`fake: příkaz ${basketId} neexistuje`);
+      notify(order, exchangeType, null, extra);
+    },
     orders,
     positions,
     received,

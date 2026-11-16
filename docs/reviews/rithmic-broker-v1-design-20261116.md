@@ -179,3 +179,107 @@ Většinu nálezů v0 měření zavřelo. Před napsáním adaptéru platí tyto
 9. Podmínky zapojení navíc: typy DB sloupců pro `accountId` (~9e12);
    testy s jádrem (odmítnutí RMS před odpovědí na příkaz, kopie followera
    v letu, restart uprostřed `sending`, obchod v mezeře × preflight).
+
+## Implementace a dvě kola review diffu (16. 11. 2026)
+
+`services/rithmic/rithmicBroker.ts` je napsaný. První diff vrátili critic
+i Codex („OPRAVIT PŘED COMMITEM", chyby reprodukovali), druhé kolo po opravách
+znovu — s pěti (critic) a šesti (Codex) novými nálezy z přepracování. Všechny
+jsou opravené a pokryté testy (`tests/rithmicBrokerRegression.test.ts`);
+25 pojistek ověřeno záměrným rozbitím kódu.
+
+Jak adaptér nakonec řeší sporné body:
+
+- **Účtování exekucí.** Kniha vede, kolik kusů příkazu jádro „ví" (součet
+  vyslaných fillů; u výchozího stavu množství ze snímku) a kolik Rithmic
+  ohlásil jako vyplněné bez exekuce. Rozdíl = chybějící exekuce → lhůta →
+  incident `fill-missing` a odpojení k plné obnově. Dílčí fill hlídání neruší;
+  nový výchozí stav účtování srovná; konečné zrušení dluh maže; dluh nikdy
+  nepřesáhne aktuální množství příkazu; dluh vzniklý během připojování se
+  hlídá hned po připojení.
+- **Snímek za běhu.** Co snímek změní u příkazu, který kniha zná, se vyšle
+  jako `order` (jinak by pozdější živá notifikace téhož přechodu nevyslala
+  nic). **Příkaz poprvé nalezený ve snímku se nevysílá** — jádro by ho
+  zkopírovalo jako nový vstup; adaptér se odpojí a příkaz je součástí nového
+  výchozího stavu. (V tomhle se recenzenti rozešli; zvolena přísnější varianta.)
+- **Ochrana proti zastaralému snímku.** Každé čtení má vlastní hranici
+  (`liveSeq` svého začátku); příkaz živě změněný po ní snímek nepřepíše, ani
+  když další čtení čeká ve frontě. Řádek snímku doručený mimo požadavek nikdy
+  nepřepíše známý příkaz.
+- **Pozice.** Čtení se opakuje jen při skutečné změně množství na čteném účtu;
+  průběžný P&L ani jiný účet ho neruší.
+- **Obnova.** Výpadky spojení se zkoušejí bez omezení (po návratu Rithmicu se
+  adaptér připojí sám, i kvůli brzdám). Strop (5) platí jen pro selhání na
+  stavu — odmítnuté přihlášení, nevyložitelný snímek. Chybějící dříve pracující
+  příkaz = zastavení hned. Ruční `start()` po zastavení začíná s čistou knihou.
+
+### Další podmínky zapojení (z druhého kola)
+
+- Změřit četnost živých zpráv 450/451 s otevřenou pozicí a zda živá 451 nese
+  všechna pole (jinak by přepsala P&L na `null`).
+- Ověřit s jádrem, že z události `order: filled` bez fillu u leadera nic nekopíruje.
+- Rozhodnout, zda neúplný řádek 351 (odmítnutí RMS) ve snímku má zastavit
+  čtení na celý den, nebo se u konečného příkazu s nulovým vyplněním přeskočit.
+- `duration` je `DAY`: samostatný ochranný stop na konci seance vyprší.
+- Heartbeat přichází v klidu jednou za ~30 s — ověřit proti hlídači jádra.
+
+## Třetí kolo review diffu (16. 11. 2026)
+
+Critic potvrdil, že osm bodů z druhého kola je vyřešených, a vrátil diff
+kvůli dvěma novým nálezům. Opraveno a pokryto testy:
+
+- **FILL bez ID × zrušení zbytku.** Burzovní FILL bez ID exekuce je důkaz, že
+  se pozice změnila; následné zrušení ho dřív smazalo spolu s odhadem. Kniha
+  teď vede zvlášť odhad (`owed`, z `COMPLETE`/`F`, zrušení ho maže) a
+  prokázanou exekuci (`proven`, maže ji jen doručený fill nebo nový výchozí
+  stav). Obě pořadí zpráv končí `fill-missing` a odpojením.
+- **Úklid po nezdařeném připojení.** Jedna funkce `clearSessionState()` pro
+  konec relace i pro pokus, který spadl během skládání výchozího stavu
+  (živé pozice, P&L, hranice čtení, rozpracovaná dohledání).
+- **Strop vlastních odpojení.** Adaptér se smí kvůli stavu sám odpojit nejvýš
+  5× za 10 minut (`maxSelfDrops`, `selfDropWindowMs`), pak se zastaví —
+  opakující se příčina už nevede k přihlašování každých pár sekund.
+- **Čtení příkazů**, které samo odhalilo důvod k odpojení, končí výjimkou
+  (dřív vrátilo výsledek z mrtvé relace).
+- **Hlídání po připojení** jen pro příkazy z nového výchozího stavu (starý
+  konečný příkaz mimo snímek už nevyvolá smyčku).
+- **Ruční spuštění s čistou knihou** hlásí `resync.complete: false`
+  (`book-reset`) — netvrdí, že se v mezeře nic nestalo.
+
+Šest nových pojistek ověřeno záměrným rozbitím kódu (podmínka `!wasTerminal`
+u mazání odhadu je jen obranná — testem nedosažitelná). 164 testů.
+
+### Neopraveno — podmínky zapojení (z třetího kola)
+
+- **Selhání po úspěšném přihlášení bez stropu.** Trvale neodpovězený snímek
+  příkazů nebo požadavek, který server tiše ignoruje, se počítá jako výpadek
+  spojení: dvě úspěšná přihlášení zhruba každých 40 s bez konce. Před
+  zapojením doplnit samostatný strop nebo dlouhou prodlevu; nesestavitelný
+  požadavek (`not-sent`) počítat jako logické selhání. Skutečný limit
+  přihlášení na straně Rithmicu není změřen.
+- **Dohledání při tichém zaseknutí spojení.** Dva vypršené pokusy o čtení
+  (2 × 10 s) přijdou dřív než hlídač ticha, takže výpadek transportu během
+  dohledávání skončí zastavením a ručním spuštěním. Je to fail-closed, ale
+  brzdy pak nemají spojení — sladit lhůty.
+- **Živý FILL během skládání výchozího stavu.** Adaptér vysílá `fill` i před
+  `connected: true`. Ověřit testem s jádrem, že fill leadera v tomto okně nic
+  nezkopíruje.
+- Kniha (`orders`, ID exekucí, účtování) za běhu procesu neroste omezeně —
+  jen paměť, vyčistit při denním restartu.
+
+## Čtvrté (potvrzovací) kolo — verdikt critika: OK K COMMITU (s výhradami)
+
+Opravy třetího kola potvrzeny. Z výhrad opraveno hned: ztracené kusy
+(FILL bez ID) jsou lepkavý počet přičítaný k mezeře — nevyrovná je ani
+platný fill jiné exekuce; nový výchozí stav je srovná u všech příkazů účtu
+včetně těch, které snímek už nevrací.
+
+Další podmínky zapojení:
+
+- **Zastavený adaptér nesmí worker ani jádro spouštět samy.** `start()` po
+  zastavení nuluje strop vlastních odpojení a maže knihu (i ID exekucí);
+  automatický restart by vrátil přihlašování dokola. `halted` musí být
+  v jádře viditelný incident — zastavený adaptér neumí brzdy ani Flatten.
+- Doplnit testy: vlastní odpojení rozložená mimo okno adaptér nezastaví;
+  síťový pád se do stropu nepočítá.
+- Nezměřeno: zda burzovní FILL vždy nese `total_fill_size`.

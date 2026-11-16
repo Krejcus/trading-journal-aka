@@ -285,6 +285,54 @@ describe('RithmicOrderBook', () => {
     expect(b.fillGap(ACCOUNT, 'B1')).toBe(2);
     b.apply(update({ notifyType: 'FILL', fillId: 'F2', fillSize: 2, fillPrice: 25000, totalFillSize: 3, quantity: 3 }));
     expect(b.fillGap(ACCOUNT, 'B1')).toBe(0);
+    // nová relace: starý dluh neplatí a výchozí stav srovná účtování i u známého příkazu
+    b.apply(update({ basketId: 'K1', notifyType: 'STATUS', quantity: 3 }));
+    b.apply(update({ basketId: 'K1', source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'F', quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'K1')).toBe(3);
+    b.clearOwed();
+    b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'K1', isSnapshot: true, status: 'open', quantity: 3, totalFillSize: 1 })], new Set(), { baseline: true });
+    expect(b.fillGap(ACCOUNT, 'K1')).toBe(0);
+    b.apply(update({ basketId: 'K1', notifyType: 'FILL', fillId: 'K-2', fillSize: 1, fillPrice: 25000, totalFillSize: 2, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'K1')).toBe(0);
+    // dluh ohlášený živě během skládání výchozího stavu snímek nemaže
+    b.apply(update({ basketId: 'K1', source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'F', quantity: 3 }));
+    b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'K1', isSnapshot: true, status: 'open', quantity: 3, totalFillSize: 2 })], new Set(), { baseline: true });
+    expect(b.fillGap(ACCOUNT, 'K1')).toBe(1);
+    // dluh nepřesáhne aktuální množství: příkaz se mezitím zmenšil z 3 na 1
+    b.apply(update({ basketId: 'Q1', notifyType: 'STATUS', quantity: 3 }));
+    b.apply(update({ basketId: 'Q1', source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'F', quantity: null }));
+    expect(b.fillGap(ACCOUNT, 'Q1')).toBe(3);
+    b.apply(update({ basketId: 'Q1', notifyType: 'MODIFY', quantity: 1 }));
+    expect(b.fillGap(ACCOUNT, 'Q1')).toBe(1);
+    b.apply(update({ basketId: 'Q1', notifyType: 'FILL', fillId: 'Q-1', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 1 }));
+    expect(b.fillGap(ACCOUNT, 'Q1')).toBe(0);
+    // FILL bez ID je důkaz exekuce: následné zrušení zbytku ho nesmaže (varianta A)
+    b.apply(update({ basketId: 'P1', notifyType: 'STATUS', quantity: 2 }));
+    b.apply(update({ basketId: 'P1', notifyType: 'FILL', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 2 }));
+    expect(b.fillGap(ACCOUNT, 'P1')).toBe(1);
+    b.apply(update({ basketId: 'P1', notifyType: 'CANCEL', quantity: 2 }));
+    expect(b.fillGap(ACCOUNT, 'P1')).toBe(1);
+    // i když FILL bez ID přijde až po zrušení (varianta B)
+    b.apply(update({ basketId: 'P2', notifyType: 'STATUS', quantity: 2 }));
+    b.apply(update({ basketId: 'P2', notifyType: 'CANCEL', quantity: 2 }));
+    b.apply(update({ basketId: 'P2', notifyType: 'FILL', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 2 }));
+    expect(b.fillGap(ACCOUNT, 'P2')).toBe(1);
+    // platný fill JINÉ exekuce (i bez celkového množství) ztracený kus nevyrovná — obě pořadí
+    b.apply(update({ basketId: 'P4', notifyType: 'STATUS', quantity: 3 }));
+    b.apply(update({ basketId: 'P4', notifyType: 'FILL', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 3 }));
+    b.apply(update({ basketId: 'P4', notifyType: 'FILL', fillId: 'x-p4', fillSize: 1, fillPrice: 25000, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'P4')).toBe(1);
+    b.apply(update({ basketId: 'P5', notifyType: 'STATUS', quantity: 3 }));
+    b.apply(update({ basketId: 'P5', notifyType: 'FILL', fillId: 'x-p5', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 3 }));
+    b.apply(update({ basketId: 'P5', notifyType: 'FILL', fillSize: 1, fillPrice: 25000, totalFillSize: 0, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'P5')).toBe(1);
+    // výchozí stav bez tohoto příkazu ve snímku ztracené kusy srovná také
+    b.replaceFromSnapshot(ACCOUNT, [], new Set(['P1', 'P2', 'P5']), { baseline: true });
+    expect(b.fillGap(ACCOUNT, 'P4')).toBe(0);
+    expect(b.fillGap(ACCOUNT, 'P5')).toBe(1);
+    // nový výchozí stav prokázanou exekuci převezme ze snímku
+    b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'P2', isSnapshot: true, status: 'complete', notifyType: 'CANCEL', quantity: 2, totalFillSize: 1 })], new Set(), { baseline: true });
+    expect(b.fillGap(ACCOUNT, 'P2')).toBe(0);
     // výchozí stav: vyplněný příkaz ze snímku nic nedluží
     b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'S1', isSnapshot: true, status: 'complete', notifyType: 'FILL', totalFillSize: 2 })], new Set(), { baseline: true });
     expect(b.fillGap(ACCOUNT, 'S1')).toBe(0);
