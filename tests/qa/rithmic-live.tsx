@@ -52,7 +52,12 @@ function App() {
   apiRef.current = api;
   const firstBars = useRef<Bar[] | null>(null);
   const [chartData, setChartData] = useState<Array<{ ts: number; open: number; high: number; low: number; close: number }> | null>(null);
-  const say = useCallback((text: string, tone: 'ok' | 'bad' | 'warn' = 'ok') => setNotice({ text, tone }), []);
+  const [failures, setFailures] = useState<string[]>([]);
+  const say = useCallback((text: string, tone: 'ok' | 'bad' | 'warn' = 'ok') => {
+    setNotice({ text, tone });
+    // Chyby se nepřepisují další hláškou — zůstávají v seznamu pod tabulkou.
+    if (tone === 'bad') setFailures((current) => [...current.slice(-5), `${new Date().toLocaleTimeString('cs-CZ')} ${text}`]);
+  }, []);
 
   useEffect(() => {
     const socket = new WebSocket(SERVER);
@@ -221,8 +226,8 @@ function App() {
     }
   }, [busy, cancel, flatten, move, placeEntry, say, snap, symbol]);
   useEffect(() => {
-    (window as unknown as { __rithmicQa?: unknown }).__rithmicQa = { results, measure, busy, link, state, price };
-  }, [results, measure, busy, link, state, price]);
+    (window as unknown as { __rithmicQa?: unknown }).__rithmicQa = { results, measure, busy, link, state, price, failures };
+  }, [results, measure, busy, link, state, price, failures]);
 
   const panel = isDark ? '#121823' : '#fff';
   const ink = isDark ? '#e6ebf3' : '#0f172a';
@@ -309,6 +314,7 @@ function App() {
                 ))}</tbody>
               </table>
             )}
+            {failures.length > 0 && <div data-qa-failures style={{ marginTop: 6, color: '#ef4444' }}>{failures.map((text) => <div key={text}>{text}</div>)}</div>}
           </div>
         </div>
       </div>
