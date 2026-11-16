@@ -609,8 +609,11 @@ describe('nálezy z review diffu', () => {
       queueMicrotask(() => t.server.positions.set('ACC1|ESZ6', 1));
     };
     const result = await flatten(t, 'fp');
-    expect(result.status).toBe('indeterminate');
-    expect(t.incidents.some((i) => i.kind === 'flatten-orders-remain' && /přišlo vyplnění/.test(i.message))).toBe(true);
+    // čtení (0) odporuje součtu exekucí (+1) → druhé čtení po odstupu ukáže pravdu → zavře se
+    expect(result.status).not.toBe('already-flat');
+    expect(result.status).toBe('submitted');
+    await sleep(80);
+    expect(t.net()).toBe(0);
     t.broker.stop();
   });
 

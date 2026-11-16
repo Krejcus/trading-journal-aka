@@ -172,7 +172,6 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
    * na kontraktu; jinak se čte.
    */
   let eventSeq = 0;
-  const positionSeenAt = new Map<string, number>();
   const fillSeenAt = new Map<string, number>();
   /** Zavření odešlo a odpověď nepřišla (`účet:kontrakt`) — dokud požadavek nedoběhne, nic dalšího. */
   /**
@@ -190,12 +189,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   const expectedNet = new Map<string, number | null>();
   /** Příkazy (`účet:příkaz`), které měly ve výchozím stavu relace nenulové vyplnění. */
   const baselineFilled = new Set<string>();
-  /** Pořadí (`eventSeq`), kdy byla na kontraktu důvěryhodně vidět nulová pozice. */
-  const zeroSeenAt = new Map<string, number>();
-  /** Pořadí posledního vyplnění vlastního vstupu (`účet:vstup`). */
-  const entryFilledAt = new Map<string, number>();
   /** Zápisy na cestě (značka → `účet:kontrakt`): odeslané, ale ještě nepotvrzené ani v knize. */
-  const inflight = new Map<string, { key: string; at: number }>();
+  const inflight = new Map<string, { key: string; at: number; uncertain: boolean }>();
   /** Značky příkazů zadaných AŽ PO posledním zavírání — jen ty nejsou „zbytek po zavření". */
   const postFlattenTags = new Map<string, Set<string>>();
   /** Kolikrát po sobě kontrola ochrany nedokázala stav určit. */
@@ -340,12 +335,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     bracketReported.clear();
     bracketUnknown.clear();
     inflight.clear();
-    // Pořadí událostí patří jedné relaci: stará „důvěryhodná nula" nesmí zavřít vstup vyplněný za výpadku.
-    zeroSeenAt.clear();
-    entryFilledAt.clear();
     for (const entry of bracketTimers.values()) clearTimeout(entry.timer);
     bracketTimers.clear();
-    positionSeenAt.clear();
     fillSeenAt.clear();
     expectedNet.clear();
     baselineFilled.clear();
@@ -407,14 +398,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         }
         // Samotné „vyplněno" od Rithmicu (bez exekuce) dopočet nemění — exekuce z burzy teprve přijde;
         // kdyby nepřišla, adaptér se pro chybějící exekuci odpojí a dopočet začne znovu.
-        // Pozice, která přišla těsně PŘED touto zprávou a s dopočtem sedí, je tím potvrzená.
-        if (livePositions.get(fillKey) === 0 && expectedNet.get(fillKey) === 0) markZero(account, symbol, 'live');
+        // Pozice, která přišla těsně PŘED touto exekucí a s dopočtem sedí, je tím potvrzená.
+        if (delta.fill && livePositions.get(fillKey) === 0 && validExpectedNet(account, symbol) === 0) strongZero(account, symbol);
       }
-      if (protection.bracketByEntry(account, update.basketId)) {
-        entryFilledAt.set(`${account}:${update.basketId}`, eventSeq);
-        // Vyplnění vstupu, který už byl uzavřený (zrušení × vyplnění): západka padá.
-        if (protection.reopenBracket(account, update.basketId)) void saveProtection();
-      }
+      // Vyplnění vstupu, který už byl uzavřený (zrušení × vyplnění): západka padá.
+      if (protection.bracketByEntry(account, update.basketId) && protection.reopenBracket(account, update.basketId)) void saveProtection();
     }
     if (update.userTag && delta.order) inflight.delete(update.userTag); // příkaz je v knize
     if (delta.order) emit({ type: 'order', order: delta.order, receivedAt: update.receivedAt });
@@ -494,14 +482,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     if (position.netQuantity === null) {
       positionSeq.set(account, (positionSeq.get(account) ?? 0) + 1);
       livePositions.delete(`${account}:${position.symbol}`);
-      positionSeenAt.delete(`${account}:${position.symbol}`);
       incident('attention', `pozice ${position.symbol} bez množství — neznámá, ne nulová`);
       return;
     }
     const positionKey = `${account}:${position.symbol}`;
-    positionSeenAt.set(positionKey, (eventSeq += 1));
-    if (position.netQuantity === 0) markZero(account, position.symbol, 'live');
-    else zeroSeenAt.delete(positionKey); // nenulová pozice každou dřívější nulu ruší
     if (livePositions.get(positionKey) !== position.netQuantity) {
       livePositions.set(positionKey, position.netQuantity);
       positionSeq.set(account, (positionSeq.get(account) ?? 0) + 1);
@@ -509,6 +493,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         if (intent.entryId && intent.closedAt === undefined) scheduleBracketCheck(source, account, intent.entryId);
       }
     }
+    // Nula, která sedí s dopočtem z exekucí, je silná: uzavře skončené vstupy a vyřeší zavírání.
+    if (position.netQuantity === 0 && validExpectedNet(account, position.symbol) === 0) strongZero(account, position.symbol);
     emit({
       type: 'position',
       position: { accountId: account, symbol: position.symbol, netQuantity: position.netQuantity },
@@ -660,6 +646,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       // Hranice tohoto čtení: cokoli živě změněného po ní je novější než snímek.
       const sinceSeq = options.sinceSeq ?? liveSeq;
       if (!options.baseline) snapshotDirty = false;
+      const readStartedAt = now();
       const rows = await source.showOrders(text);
       if (client !== source) throw new Error('Rithmic: spojení spadlo během čtení příkazů');
       const newer = touchedSince(sinceSeq);
@@ -671,17 +658,21 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           if (order.filledQuantity <= 0) continue;
           fillSeenAt.set(`${account}:${order.symbol}`, (eventSeq += 1));
           expectedNet.set(`${account}:${order.symbol}`, null);
-          if (protection.bracketByEntry(account, order.brokerOrderId)) {
-            entryFilledAt.set(`${account}:${order.brokerOrderId}`, eventSeq);
-            if (protection.reopenBracket(account, order.brokerOrderId)) void saveProtection();
-          }
+          if (protection.bracketByEntry(account, order.brokerOrderId) && protection.reopenBracket(account, order.brokerOrderId)) void saveProtection();
         }
       }
       // Vazby noh na rodiče nese snímek celé — po restartu je odjinud nezjistíme.
+      const seenTags = new Set<string>();
       for (const row of rows) {
         if (numberByText.get(row.accountId) !== account) continue;
-        if (row.userTag) inflight.delete(row.userTag); // snímek příkaz vidí → už není „na cestě"
+        if (row.userTag) seenTags.add(row.userTag);
         observeProtection(source, account, row);
+      }
+      // Snímek zápis „na cestě" vyřeší: buď ho obsahuje, nebo — když začal aspoň 2 s po odeslání —
+      // dokládá, že příkaz nevznikl.
+      for (const [tag, entry] of [...inflight]) {
+        if (!entry.key.startsWith(`${account}:`)) continue;
+        if (seenTags.has(tag) || readStartedAt - entry.at >= 2_000) inflight.delete(tag);
       }
       // Živě změněný příkaz se do výsledku čtení počítá se svým novějším stavem z knihy.
       const orders = book.list(account).filter((order) => result.seenIds.has(order.brokerOrderId) || newer.has(order.brokerOrderId));
@@ -729,7 +720,6 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         const out: BrokerPosition[] = [];
         for (const [symbol, netQuantity] of collector.rows) {
           if (netQuantity === null) throw new Error(`Rithmic: pozice ${symbol} bez množství — neznámá, ne nulová`);
-          if (netQuantity !== 0) zeroSeenAt.delete(`${account}:${symbol}`);
           out.push({ accountId: account, symbol, netQuantity });
         }
         return out;
@@ -868,11 +858,30 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         }
         for (const row of positions) if (row.accountId === id) expectedNet.set(`${id}:${row.symbol}`, row.netQuantity);
         if (protection.resolveAllExits(id)) void saveProtection();
-        // Vlastní vyplněné vstupy z výchozího stavu: jejich vyplnění je „teď" — žádná dřívější
-        // nula je nezavře. (Snímek pozic může být za snímkem příkazů pozadu, proto se z výchozího
-        // stavu důvěryhodná nula neodvozuje vůbec.)
+        // Snímek pozic může být za snímkem příkazů pozadu. Kontrakt, kde vlastní vstup má podle
+        // příkazů ještě expozici, ale pozice je 0, je rozpor → dopočtu se tam nevěří.
+        const recheck = new Set<string>();
         for (const intent of protection.bracketsFor(id)) {
-          if (intent.entryId && (book.get(id, intent.entryId)?.filledQuantity ?? 0) > 0) entryFilledAt.set(`${id}:${intent.entryId}`, (eventSeq += 1));
+          if (!intent.entryId || intent.closedAt !== undefined) continue;
+          const entry = book.get(id, intent.entryId);
+          if (!entry || entry.filledQuantity === 0) continue;
+          const legFills = protection.legsOf(id, intent.entryId).reduce((sum, leg) => sum + (book.get(id, leg.orderId)?.filledQuantity ?? 0), 0);
+          if (entry.filledQuantity - legFills > 0) {
+            recheck.add(intent.symbol);
+            if ((expectedNet.get(`${id}:${intent.symbol}`) ?? 0) === 0) expectedNet.set(`${id}:${intent.symbol}`, null);
+          }
+        }
+        // Druhé, pozdější čtení rozhodne (a dopočet ukotví): vstup zavřený za výpadku se tím
+        // uzavře, místo aby při první cizí pozici spustil falešný poplach.
+        for (const symbol of recheck) {
+          const later = setTimeout(() => {
+            if (client !== created) return;
+            void contractProof(created, id, symbol, config.flattenStepMs ?? 1_000).then(() => {
+              if (client !== created) return;
+              for (const intent of protection.bracketsFor(id, symbol)) if (intent.entryId && intent.closedAt === undefined) scheduleBracketCheck(created, id, intent.entryId);
+            });
+          }, Math.min(config.legsWaitMs ?? 3_000, 1_500));
+          (later as { unref?: () => void }).unref?.();
         }
       }
       for (const record of interruptedFlattens.splice(0)) {
@@ -946,21 +955,12 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     }
   }
   /**
-   * Na kontraktu byla vidět nulová pozice.
-   *  - SILNÁ nula: sedí s dopočtem z exekucí (`expectedNet === 0`). Hned uzavře skončené vlastní
-   *    vstupy a vyřeší probíhající zavírání.
-   *  - Nula, která dopočtu ODPORUJE (dopočet platí a není 0), je zastaralá zpráva — ignoruje se.
-   *  - Slabá nula (dopočet neplatí): zapíše se jen pořadí; rozhodne až kontrola ochrany, která
-   *    navíc vyžaduje aktuální nulu. Zavírání vyřeší jen když pochází ze stabilního důkazu.
+   * SILNÁ nula: nulová pozice doložená dvěma zdroji (živá zpráva + dopočet z exekucí, nebo
+   * stabilní důkaz čtením). Uzavře skončené vlastní vstupy a vyřeší probíhající zavírání.
+   * Nic slabšího (jedna zpráva, jedno čtení, pořadí doručení) tyhle účinky nemá.
    */
-  function markZero(account: number, symbol: string, from: 'live' | 'proof'): void {
-    const key = `${account}:${symbol}`;
-    const expected = expectedNet.has(key) ? expectedNet.get(key) : undefined;
-    if (expected !== null && expected !== undefined && expected !== 0) return;
-    zeroSeenAt.set(key, (eventSeq += 1));
-    const strong = expected === 0;
-    if (strong || from === 'proof') resolveClosing(account, symbol);
-    if (!strong) return;
+  function strongZero(account: number, symbol: string): void {
+    resolveClosing(account, symbol);
     let latched = false;
     for (const intent of protection.bracketsFor(account, symbol)) {
       if (!intent.entryId || intent.closedAt !== undefined) continue;
@@ -974,15 +974,29 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     if (latched) void saveProtection();
   }
 
-  /** Živá pozice, jen když je novější než poslední vyplnění na kontraktu; jinak `undefined`. */
+  /**
+   * Dopočet pozice z exekucí, jen když platí: nebyl zneplatněn a u žádného příkazu kontraktu
+   * nechybí exekuce (vyplněné množství větší než součet doručených fillů — např. „vyplněno" od
+   * Rithmicu, ke kterému exekuce z burzy teprve přijde). Jinak `null`.
+   */
+  function validExpectedNet(account: number, symbol: string): number | null {
+    const key = `${account}:${symbol}`;
+    const expected = expectedNet.has(key) ? expectedNet.get(key) : undefined;
+    if (expected === null || expected === undefined) return null;
+    for (const order of book.list(account)) {
+      if (order.symbol === symbol && book.fillGap(account, order.brokerOrderId) > 0) return null;
+    }
+    return expected;
+  }
+
+  /**
+   * Živé pozici se věří JEN když sedí s dopočtem z exekucí (dva nezávislé zdroje). Když dopočet
+   * neplatí nebo s ní nesedí, vrací `undefined` a rozhodnout musí čtení.
+   */
   function trustedLivePosition(account: number, symbol: string): number | undefined {
     const key = `${account}:${symbol}`;
     const live = livePositions.get(key);
-    if (live === undefined) return undefined;
-    const expected = expectedNet.has(key) ? expectedNet.get(key) : undefined;
-    // Hodnota, která platnému dopočtu z exekucí ODPORUJE, je zastaralá — ať přišla kdykoli.
-    if (expected !== null && expected !== undefined) return expected === live ? live : undefined;
-    return (positionSeenAt.get(key) ?? 0) > (fillSeenAt.get(key) ?? 0) ? live : undefined;
+    return live !== undefined && validExpectedNet(account, symbol) === live ? live : undefined;
   }
 
   /** Čistá pozice kontraktu: důvěryhodná živá hodnota, jinak čtením. `null` = neznámá. */
@@ -1038,8 +1052,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           scheduleBracketCheck(source, account, entryId, Boolean(mine?.retried));
           return;
         }
-        const closedByZero = (zeroSeenAt.get(fillKey) ?? 0) > (entryFilledAt.get(key) ?? 0);
-        const result = protection.bracketState(account, entryId, orderOf, net, closedByZero);
+        // Natrvalo uzavírá jen silná nula (`strongZero`); kontrola sama bracket z nuly nezavírá.
+        const result = protection.bracketState(account, entryId, orderOf, net, false);
         if (result.latch) {
           protection.closeBracket(account, entryId);
           bracketReported.delete(key);
@@ -1138,6 +1152,14 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       await sleepMs(Math.min(15, Math.max(1, until - now())));
     }
   }
+  /**
+   * Zápis na cestě na kontraktu: čerstvě odeslaný (do 3 s čeká na první zprávu), nebo s NEZNÁMÝM
+   * výsledkem — ten platí, dokud ho nevyřeší zpráva se značkou, snímek, nebo nová relace.
+   */
+  function writeOnTheWay(key: string): boolean {
+    return [...inflight.values()].some((entry) => entry.key === key && (entry.uncertain || now() - entry.at < 3_000));
+  }
+
   function assertNotFlattening(accountId: number, symbol: string, what: string): void {
     if (flattening.has(`${accountId}:${symbol}`)) {
       throw new BrokerRequestNotSentError(`Rithmic: na ${symbol} právě běží zavírání pozice — ${what} neodesílám`);
@@ -1158,11 +1180,28 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     const key = `${accountId}:${symbol}`;
     const before = fillSeenAt.get(key) ?? 0;
     const orders = await limited(readOrders(active, accountId), stepMs);
-    if (trustedLivePosition(accountId, symbol) === undefined && fillSeenAt.has(key)) await sleepMs(Math.min(150, stepMs));
-    const positions = await limited(readPositions(active, accountId), stepMs);
-    const net = positions.ok ? positions.value.find((row) => row.symbol === symbol)?.netQuantity ?? 0 : null;
+    const readNet = async (): Promise<number | null> => {
+      const positions = await limited(readPositions(active, accountId), stepMs);
+      return positions.ok ? positions.value.find((row) => row.symbol === symbol)?.netQuantity ?? 0 : null;
+    };
+    let net = await readNet();
+    const expected = validExpectedNet(accountId, symbol);
+    let confirmed = net !== null;
+    if (net !== null && expected !== null && expected !== net) {
+      // Čtení odporuje dopočtu z exekucí: snímek pozic může být pozadu. Rozhodne druhé čtení
+      // po odstupu — teprve dvě shodná čtení mají přednost před dopočtem.
+      await sleepMs(Math.min(300, stepMs));
+      const again = await readNet();
+      confirmed = again !== null && again === net;
+      net = again;
+    }
     const working = book.list(accountId).filter((o) => o.symbol === symbol && !TERMINAL.has(o.status)).map((o) => o.brokerOrderId);
-    const stable = (fillSeenAt.get(key) ?? 0) === before;
+    const stable = confirmed && (fillSeenAt.get(key) ?? 0) === before;
+    if (client === active && orders.ok && stable && net !== null) {
+      // Stabilní důkaz dopočet ukotví (i opraví, když se rozešel).
+      expectedNet.set(key, net);
+      if (net === 0) strongZero(accountId, symbol);
+    }
     return { net, ordersOk: orders.ok, stable, working };
   }
 
@@ -1207,13 +1246,14 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const entry = book.get(accountId, intent.entryId);
       return Boolean(entry && entry.filledQuantity > 0 && protection.legsOf(accountId, intent.entryId).length === 0);
     });
+    const inflightHere = (): boolean => writeOnTheWay(key);
     // „Flat" neplatí, dokud je na kontraktu zápis na cestě (odeslaný vstup, který kniha ještě nezná).
     const flat = (proof: Awaited<ReturnType<typeof contractProof>>): boolean =>
       proof.ordersOk && proof.stable && proof.net === 0 && proof.working.length === 0 && !awaitingLegs()
-      && ![...inflight.values()].some((entry) => entry.key === `${accountId}:${symbol}` && now() - entry.at < 3_000);
+      && !inflightHere();
     const settleMs = config.exitSettleMs ?? 1_500;
-    /** Pracující tržní příkaz na kontraktu = dřívější zavírací příkaz se ještě nevyplnil. */
-    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market');
+    /** Pracující tržní příkaz BEZ značky = zavírací příkaz (jen ten Rithmic vytváří neoznačený) se ještě nevyplnil. */
+    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market' && !o.tag);
     /** Návrat bez jediného zápisu: záznam operace se zahodí, ať stejná značka smí zavřít později. */
     const abandon = async (result: BrokerLiquidateResult): Promise<BrokerLiquidateResult> => {
       protection.dropFlatten(request.tag);
@@ -1222,13 +1262,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       return result;
     };
     const fillsAtStart = fillSeenAt.get(key) ?? 0;
-    // Zápis, ke kterému do 3 s nepřišla žádná zpráva, už rychlou cestu nezdržuje (odmítnutý, ztracený).
-    const inflightHere = (): boolean => [...inflight.values()].some((entry) => entry.key === key && now() - entry.at < 3_000);
-    const proveFlat = (proof: Awaited<ReturnType<typeof contractProof>>): boolean => {
-      if (!flat(proof)) return false;
-      markZero(accountId, symbol, 'proof');
-      return true;
-    };
+    const proveFlat = (proof: Awaited<ReturnType<typeof contractProof>>): boolean => flat(proof);
 
     // 1) Rozhodnutí, zda vůbec smíme zavřít, padne DŘÍV, než se sáhne na ochranu.
     const prior = closing.get(key);
@@ -1239,9 +1273,13 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const proof = await contractProof(active, accountId, symbol, stepMs);
       if (proveFlat(proof)) return finish({ status: 'already-flat' });
       const age = prior ? now() - prior.sentAt : Number.POSITIVE_INFINITY;
-      // Druhé zavření může pozici otočit jen dokud první požadavek běží nebo se jeho příkaz
-      // ještě nevyplnil. Jen po tu dobu se nezavírá (a nesahá na ochranu); pak brzda nestojí.
-      if ((prior && (!prior.requestDone || age < settleMs)) || exitOrderWorking()) {
+      // Druhé zavření může pozici otočit jen dokud je první fyzicky „ve vzduchu": požadavek běží,
+      // jeho příkaz se ještě nevyplnil, nebo to nejde zjistit. Po tu dobu se nezavírá a na ochranu
+      // se nesahá. Doba je PEVNĚ omezená (timeout požadavku + doba na vyplnění) — pak brzda vždy
+      // pokračuje běžnou cestou: zruší vše pracující (i visící zavírací příkaz) a zavře znovu.
+      const hardCapMs = settleMs + (config.requestTimeoutMs ?? 10_000);
+      const inTheAir = !prior?.requestDone || age < settleMs || exitOrderWorking() || !proof.ordersOk || proof.net === null;
+      if (prior && age < hardCapMs && inTheAir) {
         if (proof.net === null) incident('flatten-orders-remain', `${symbol}: předchozí zavření právě probíhá a pozici teď nejde přečíst — další neposílám, ochrana zůstává`);
         return abandon({ status: 'indeterminate', reason: 'předchozí zavření pozice právě probíhá — další neposílám' });
       }
@@ -1341,7 +1379,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           return;
         }
         if (after.net === 0 && after.stable) {
-          markZero(accountId, symbol, 'proof');
+          // (silnou nulu už zapsal sám důkaz)
         } else if (after.net !== 0 && mine.requestDone && closing.get(key) === mine) {
           if (exitOrderWorking()) {
             // Zavírací příkaz ještě pracuje: výsledek není znám, blokace trvá (druhé zavření by pozici otočilo).
@@ -1466,7 +1504,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       assertNotFlattening(request.accountId, request.symbol, 'nový příkaz');
       const orderKey = `${request.accountId}:${request.symbol}`;
       postFlattenTags.get(orderKey)?.add(request.tag);
-      inflight.set(request.tag, { key: orderKey, at: now() });
+      inflight.set(request.tag, { key: orderKey, at: now(), uncertain: false });
       try {
         const ack = await active.placeOrder({
           accountId: text,
@@ -1483,6 +1521,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         return { brokerOrderId: ack.basketId, accepted: true, definitive: true };
       } catch (error) {
         if (error instanceof RithmicRequestError && error.outcome !== 'unknown') inflight.delete(request.tag);
+        else if (inflight.has(request.tag)) inflight.get(request.tag)!.uncertain = true;
         return rethrowWrite(error, 'nový příkaz');
       }
     },
@@ -1523,7 +1562,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         throw new BrokerRequestNotSentError(brakeMoved ? `Rithmic: na ${request.symbol} mezitím začalo zavírání pozice — vstup neodesílám` : 'Rithmic: spojení není připravené');
       }
       postFlattenTags.get(brakeKey)?.add(request.tag);
-      inflight.set(request.tag, { key: brakeKey, at: now() });
+      inflight.set(request.tag, { key: brakeKey, at: now(), uncertain: false });
       try {
         const ack = await active.placeBracketOrder({
           accountId: text,
@@ -1553,6 +1592,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           protection.dropBracket(request.tag);
           void saveProtection();
         } else {
+          if (inflight.has(request.tag) && !(error instanceof RithmicRequestError && error.outcome === 'rejected')) inflight.get(request.tag)!.uncertain = true;
           watchUnboundBracket(request.accountId, request.tag);
         }
         return rethrowWrite(error, 'nový vstup s ochranou');
@@ -1601,10 +1641,9 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       if (earlier) {
         // Tatáž operace už proběhla (i v minulém běhu): jen dočíst stav, nikdy znovu neposílat.
         const proof = await contractProof(active, request.accountId, request.symbol, config.flattenStepMs ?? 1_000);
-        const onTheWay = [...inflight.values()].some((entry) => entry.key === key && now() - entry.at < 3_000);
+        const onTheWay = writeOnTheWay(key);
         if (proof.ordersOk && proof.stable && proof.net === 0 && proof.working.length === 0 && !onTheWay) {
           // Stav je prokázaný — nejistota po dřívějším zavření končí.
-          markZero(request.accountId, request.symbol, 'proof');
           return { status: 'already-flat' };
         }
         return { status: 'indeterminate', reason: `zavření se značkou ${request.tag} už proběhlo (fáze ${earlier.phase}) — neopakuji, ověř stav` };
