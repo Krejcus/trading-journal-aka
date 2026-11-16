@@ -14,6 +14,12 @@ import { supabase } from './supabase';
 
 export const tvPriceStore = createTvPriceStore();
 
+/**
+ * Jediná výjimka mimo zobrazení (16. 11. 2026): data LIVE se ptají jen „teče živá cena?“.
+ * Když ne, čtou otevřený P&L od brokera sami. Hodnota nic neautorizuje a čtení jen PŘIDÁVÁ.
+ */
+export const tvPriceLiveForPnl = (): boolean => tvPriceStore.diagnostics().state === 'live';
+
 const presenceKey = () => {
   try {
     return crypto.randomUUID();

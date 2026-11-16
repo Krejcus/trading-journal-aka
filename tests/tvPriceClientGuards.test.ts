@@ -81,7 +81,12 @@ const TV_CLIENT_MODULES = [
 
 describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
   it('singleton kanálu smí importovat jen listová komponenta; LIVE desk jen úzké rozhraní grantu', () => {
-    expect(importersOf('services/tvPriceChannel.ts')).toEqual(['components/LiveOpenPnlValue.tsx', 'components/day/LivePhoneChart.tsx', 'hooks/useTvLiveCandleFeed.ts', 'services/tvPriceGrant.ts']);
+    expect(importersOf('services/tvPriceChannel.ts')).toEqual(['components/LiveOpenPnlValue.tsx', 'components/day/LivePhoneChart.tsx', 'components/useTradovateLiveData.ts', 'hooks/useTvLiveCandleFeed.ts', 'services/tvPriceGrant.ts']);
+    // Data LIVE smí znát jen „teče živá cena?“ (bez ní čtou P&L od brokera sama), nic z ceny samotné.
+    const liveData = readFileSync(join(root, 'components/useTradovateLiveData.ts'), 'utf8');
+    expect(liveData.match(/from '\.\.\/services\/tvPriceChannel'/g)).toHaveLength(1);
+    expect(liveData).toMatch(/import \{ tvPriceLiveForPnl \} from '\.\.\/services\/tvPriceChannel'/);
+    expect(liveData).not.toMatch(/tvPriceStore|tvPriceChannel\.|addPnlInterest/);
     expect(importersOf('services/tvPriceGrant.ts')).toEqual(['components/TradovateLiveDesk.tsx', 'hooks/useTvLiveCandleFeed.ts']);
     // Živou svíčku grafu dne zapíná jen data grafu dne; graf sám dostane neutrální rozhraní.
     expect(importersOf('hooks/useTvLiveCandleFeed.ts')).toEqual(['hooks/useDayChartData.ts']);

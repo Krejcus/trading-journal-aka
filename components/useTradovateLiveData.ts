@@ -2,7 +2,7 @@ import { tradovateSharedBaselineRefresh } from '../lib/tradovateSharedBaselineRe
 import { tradovateHumanErrorMessage } from '../lib/tradovateRequestHealthDisplay';
 import { createTradovateSoftReadDeferrals } from '../lib/tradovateSoftReadDeferrals';
 import { livePnlReadPlan, workerConnectionReadPlan, type WorkerCoverageReceipt } from '../lib/tradovateWorkerCoverage';
-import { tvPriceStore } from '../services/tvPriceChannel';
+import { tvPriceLiveForPnl } from '../services/tvPriceChannel';
 import { dueFullTickConnections, FULL_TICK_ROUND_COST_MS, isWorkerSideConnection, SIDE_FLAT_TICK_INTERVAL_MS } from '../lib/tradovateFlatTickCadence';
 import { nextTradovateClientReadSeq, stampTradovateClientReads } from '../lib/tradovateClientReadOrder';
 import { perfMark } from '../lib/perfTrace';
@@ -1086,7 +1086,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       livePnlBusyRef.current = true;
       try {
         // Bez živé ceny (IBKR Gateway neběží) se P&L připojení s pozicí čte od brokera (`livePnlReadPlan`).
-        const livePriceFlowing = tvPriceStore.diagnostics().state === 'live';
+        const livePriceFlowing = tvPriceLiveForPnl();
         const plans = new Map(available.map(connectionId => {
           const plan = workerConnectionReadPlan({ ...connectionDataRef.current[connectionId], connectionId }, workerReadCoverageRef.current, Date.now());
           const hasPosition = connectionDataRef.current[connectionId]?.accounts.some(account => account.netPositionCount > 0) ?? false;
