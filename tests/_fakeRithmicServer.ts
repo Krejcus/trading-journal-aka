@@ -22,6 +22,10 @@ export interface FakeOrder {
   stopTicks?: number;
   targetTicks?: number;
   linked?: string;
+  /** Rodič nohy bracketu (original_basket_id). */
+  parent?: string;
+  /** Číselný BracketType (6 = TARGET_AND_STOP_STATIC); nesou ho rodič i nohy. */
+  bracketType?: number;
 }
 
 export interface FakeRithmicOptions {
@@ -71,6 +75,15 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     positionWithoutQuantity: false,
     /** Seznam účtů vrátí stejný účet dvakrát. */
     duplicateAccount: false,
+    /** Po vyplnění vstupu bracketu nohy nevzniknou vůbec / vznikne jen TP. */
+    legsNeverAppear: false,
+    onlyTargetLeg: false,
+    /** Nohy vzniknou, ale žádná zpráva nenese vazbu na rodiče. */
+    legsWithoutLink: false,
+    /** Zrušení odpoví „ok", ale příkaz pracuje dál. */
+    cancelStuck: false,
+    /** Zavření pozice (3504): 'ignore' = bez odpovědi, text = odmítnutí. */
+    exitPosition: 'ok' as 'ok' | 'ignore' | string,
     /** Snímek P&L bez řádků pozic i bez ukončení (pro test neúplného snímku). */
     pnlSnapshotFails: false,
   };
@@ -136,6 +149,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       price_type: order.priceType,
       status: order.status === 'open' ? (snapshotTo ? controls.openStatusText : 'open') : 'complete',
       linked_basket_ids: order.linked,
+      original_basket_id: order.parent,
+      bracket_type: order.bracketType,
       total_fill_size: order.filled,
       total_unfilled_size: order.quantity - order.filled,
       ssboe: 1_800_000_000,
@@ -178,6 +193,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       filled: 0,
       stopTicks: fields.stop_ticks as number | undefined,
       targetTicks: fields.target_ticks as number | undefined,
+      bracketType: fields.bracket_type as number | undefined,
     };
     orders.set(order.basketId, order);
     return order;
@@ -198,23 +214,36 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     const opposite = order.side === 1 ? 2 : 1;
     const direction = order.side === 1 ? 1 : -1;
     const legs: FakeOrder[] = [];
-    if (order.stopTicks) {
+    if (controls.legsNeverAppear) return;
+    // Změřeno (scénář H): nohy nenesou user_tag; množství = množství vstupu.
+    if (order.stopTicks && !controls.onlyTargetLeg) {
       legs.push(createOrder({
-        account_id: order.accountId, user_tag: order.userTag, symbol: order.symbol, exchange: order.exchange,
+        account_id: order.accountId, symbol: order.symbol, exchange: order.exchange,
         transaction_type: opposite, price_type: 4, quantity: order.quantity,
         trigger_price: price - direction * order.stopTicks * tickSize,
       }));
     }
     if (order.targetTicks) {
       legs.push(createOrder({
-        account_id: order.accountId, user_tag: order.userTag, symbol: order.symbol, exchange: order.exchange,
+        account_id: order.accountId, symbol: order.symbol, exchange: order.exchange,
         transaction_type: opposite, price_type: 1, quantity: order.quantity,
         price: price + direction * order.targetTicks * tickSize,
       }));
     }
     for (const leg of legs) {
-      leg.linked = [order.basketId, ...legs.filter((l) => l !== leg).map((l) => l.basketId)].join(',');
-      notify(leg, 1, 13, { original_basket_id: order.basketId });
+      leg.bracketType = order.bracketType ?? 6;
+      // První zpráva nohy nese jen bracket_type; vazby až od druhé.
+      for (const socket of orderSockets()) socket.push(351, { ...rithmicFields(leg), bracket_type: leg.bracketType, notify_type: 1, status: 'Order received from client' });
+    }
+    for (const leg of legs) {
+      if (!controls.legsWithoutLink) {
+        leg.parent = order.basketId;
+        leg.linked = legs.map((l) => l.basketId).join(',');
+      }
+      for (const socket of orderSockets()) {
+        socket.push(351, { ...rithmicFields(leg), bracket_type: leg.bracketType, original_basket_id: leg.parent, linked_basket_ids: leg.linked, notify_type: 4, status: 'open pending' });
+      }
+      notify(leg, 1, leg.priceType === 4 ? 18 : 13);
     }
     if (legs.length) {
       for (const socket of orderSockets()) {
@@ -341,13 +370,37 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       case 316: {
         const order = orders.get(String(f.basket_id));
         if (!order || order.status !== 'open') {
-          if (controls.cancelUnknownOk) ok();
-          else socket.push(317, { user_msg: userMsg, rp_code: ['6', 'order not found'] });
+          if (controls.cancelUnknownOk) {
+            ok();
+            // Změřeno: zrušení už dokončeného příkazu = „ok" a pak 351 CANCELLATION_FAILED.
+            if (order) for (const s of orderSockets()) s.push(351, { account_id: order.accountId, basket_id: order.basketId, transaction_type: order.side, notify_type: 17, status: 'Cancellation Failed', text: 'Cancellation rejected by the Order Management System' });
+          } else socket.push(317, { user_msg: userMsg, rp_code: ['6', 'order not found'] });
           return;
         }
-        order.status = 'cancelled';
         ok();
-        notify(order, 3, 15);
+        if (controls.cancelStuck) return;
+        // Změřeno: zrušení jedné nohy bracketu zruší i sestru.
+        const group = order.parent ? [...orders.values()].filter((o) => o.parent === order.parent && o.status === 'open') : [order];
+        for (const member of [order, ...group.filter((o) => o !== order)]) {
+          member.status = 'cancelled';
+          notify(member, 3, 15);
+        }
+        return;
+      }
+      case 3504: {
+        if (controls.exitPosition === 'ignore') return;
+        if (controls.exitPosition !== 'ok') {
+          socket.push(3505, { user_msg: userMsg, rp_code: ['6', controls.exitPosition] });
+          return;
+        }
+        ok();
+        // Změřeno: na flat účtu nevznikne nic; jinak samostatný MARKET bez značky a bez vazby.
+        const posKey = `${String(f.account_id)}|${String(f.symbol)}`;
+        const net = positions.get(posKey) ?? 0;
+        if (net === 0) return;
+        const exit = createOrder({ account_id: f.account_id, symbol: f.symbol, exchange: f.exchange, transaction_type: net > 0 ? 2 : 1, price_type: 2, quantity: Math.abs(net) });
+        notify(exit, 1, 13);
+        fill(exit.basketId, 7000);
         return;
       }
       case 320:

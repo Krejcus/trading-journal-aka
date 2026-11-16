@@ -447,6 +447,117 @@ async function main(): Promise<void> {
     console.log('G', JSON.stringify({ rejections: rejections.length, pnlSnapshot: g.pnlSnapshot, historyRows: g.historyRows, basketIdsNumeric: g.basketIdsNumeric }));
   }
 
+  // ---- H: nohy bracketu — zrušení jedné nohy, zavření, flat, více kontraktů ---
+  if (ONLY.has('H')) {
+    const h: Record<string, unknown> = {};
+    const working = async () => (await s.client.showOrders(account)).filter((u) => !/complete/i.test(u.status)).map(brief);
+    const net = async () => {
+      const from = s.positions.length;
+      await s.client.requestPnlSnapshot(account);
+      await sleep(400);
+      return s.positions.slice(from).find((p) => p.symbol === contract)?.netQuantity ?? 'bez řádku';
+    };
+    const openBracket = async (label: string, quantity: number, stopTicks: number, targetTicks: number) => {
+      const from = s.orders.length;
+      const entry = await s.client.placeBracketOrder({ ...base, quantity, userTag: tag(label), side: 'BUY', priceType: 'MARKET', stopTicks, targetTicks });
+      await waitFor(() => stage(from, entry.basketId, 'exchange', 'FILL'), 8_000);
+      const legs = () => since(from).filter((u) => u.source === 'exchange' && u.basketId !== entry.basketId && u.notifyType === 'STATUS');
+      await waitFor(() => (legs().length >= 2 ? true : undefined), 5_000);
+      await sleep(400);
+      const ids = [...new Set(legs().map((u) => u.basketId))];
+      const tp = ids.find((id) => legs().some((u) => u.basketId === id && /LIMIT/i.test(u.priceType) && !/STOP/i.test(u.priceType)));
+      const sl = ids.find((id) => id !== tp);
+      return { from, entry: entry.basketId, tp, sl, legs: since(from).filter((u) => u.basketId !== entry.basketId).map(brief) };
+    };
+    const cancelAndWatch = async (basket: string) => {
+      const from = s.orders.length;
+      const t = performance.now();
+      const response = await s.client.cancelOrder(account, basket).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+      const done = await waitFor(() => stage(from, basket, 'exchange', 'CANCEL'), 5_000);
+      const ms = done ? Math.round(performance.now() - t) : null;
+      await sleep(1_000);
+      return { response, cancelMs: ms, notifications: since(from).map(brief) };
+    };
+
+    // H1: zrušit jen TP — zůstane SL? Pak zavřít pozici — zůstane SL? Pak zrušit SL.
+    const a = await openBracket('h1', 1, 40, 80);
+    h.h1 = { legs: a.legs } as Record<string, unknown>;
+    if (a.tp && a.sl) {
+      const r: Record<string, unknown> = h.h1 as Record<string, unknown>;
+      r.cancelTp = await cancelAndWatch(a.tp);
+      r.workingAfterCancelTp = await working();
+      const from = s.orders.length;
+      const t = performance.now();
+      r.exit = await s.client.exitPosition(account, contract, EXCHANGE).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+      await sleep(1_500);
+      r.exitNotifications = since(from).map(brief);
+      r.exitMs = Math.round(performance.now() - t);
+      r.netAfterExit = await net();
+      r.workingAfterExit = await working();
+      r.cancelSl = await cancelAndWatch(a.sl);
+      r.workingEnd = await working();
+    }
+
+    // H2: zrušit jen SL — zůstane TP? Úklid: zrušit TP, zavřít.
+    const b = await openBracket('h2', 1, 40, 80);
+    const r2: Record<string, unknown> = { legs: b.legs };
+    h.h2 = r2;
+    if (b.tp && b.sl) {
+      r2.cancelSl = await cancelAndWatch(b.sl);
+      r2.workingAfterCancelSl = await working();
+      r2.cancelTp = await cancelAndWatch(b.tp);
+      r2.workingAfterBoth = await working();
+      await s.client.exitPosition(account, contract, EXCHANGE).catch(() => undefined);
+      await sleep(1_200);
+      r2.netEnd = await net();
+    }
+
+    // H3: zavření na flat účtu — co odpoví a co pošle?
+    {
+      const from = s.orders.length;
+      const before = await net();
+      const response = await s.client.exitPosition(account, contract, EXCHANGE).then((x) => ({ ok: true, rows: x.rows.length, terminal: x.terminal?.fields ?? null })).catch((e) => `chyba: ${(e as Error).message}`);
+      await sleep(1_500);
+      h.h3 = { netBefore: before, response, notifications: since(from).map(brief), netAfter: await net() };
+    }
+
+    // H4: 2 kontrakty — množství noh; obě nohy zrušit souběžně, pak zavřít.
+    const c = await openBracket('h4', 2, 40, 80);
+    const r4: Record<string, unknown> = { legs: c.legs };
+    h.h4 = r4;
+    if (c.tp && c.sl) {
+      const from = s.orders.length;
+      const t = performance.now();
+      const responses = await Promise.all([c.tp, c.sl].map((id) => s.client.cancelOrder(account, id).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`)));
+      const both = await waitFor(() => (stage(from, c.tp!, 'exchange', 'CANCEL') && stage(from, c.sl!, 'exchange', 'CANCEL') ? true : undefined), 5_000);
+      r4.parallelCancel = { responses, bothCanceledMs: both ? Math.round(performance.now() - t) : null };
+      r4.workingAfterCancel = await working();
+      const t2 = performance.now();
+      const from2 = s.orders.length;
+      await s.client.exitPosition(account, contract, EXCHANGE).catch(() => undefined);
+      const flat = await waitFor(() => since(from2).find((u) => u.source === 'exchange' && u.notifyType === 'FILL'), 5_000);
+      r4.exitFillMs = flat ? Math.round(performance.now() - t2) : null;
+      await sleep(800);
+      r4.exitNotifications = since(from2).map(brief);
+      r4.netEnd = await net();
+    }
+
+    // H5: TP 1 tick od vyplnění — když se vyplní, zruší server SL sám? (trh se nemusí pohnout)
+    const d = await openBracket('h5', 1, 40, 1);
+    const r5: Record<string, unknown> = { legs: d.legs };
+    h.h5 = r5;
+    if (d.tp && d.sl) {
+      const tpFill = await waitFor(() => stage(d.from, d.tp!, 'exchange', 'FILL'), 25_000);
+      r5.tpFilled = Boolean(tpFill);
+      await sleep(1_500);
+      r5.afterTp = since(d.from).filter((u) => u.basketId === d.sl || u.basketId === d.tp).map(brief);
+      r5.working = await working();
+      r5.net = await net();
+    }
+    report.H = h;
+    console.log('H hotovo');
+  }
+
   } catch (error) {
     report.scenarioError = error instanceof Error ? error.message : String(error);
     console.error('Scénář selhal, pokračuji úklidem:', report.scenarioError);

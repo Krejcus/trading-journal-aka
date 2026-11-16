@@ -106,6 +106,23 @@ příkaz neodešel.
 - Dotaz na hledání symbolů (109) jednou do 10 s neodpověděl; front month
   test nevrací. Kontrakt se zadává přímo.
 
+### 8. Nohy bracketu podrobně (scénář H, doměřeno odpoledne)
+
+- **Zrušení jedné nohy zruší obě** (TP → padne i SL a naopak), ~135 ms.
+  Pozice pak zůstane bez ochrany. Zrušení už zrušené sestry: odpověď „ok",
+  pak 351 `CANCELLATION_FAILED`.
+- Dvě zrušení souběžně: obě nohy pryč za 146 ms.
+- `RequestExitPosition` **na flat účtu** odpoví `rp_code 0` a žádný příkaz
+  nevznikne. S pozicí vznikne samostatný `MARKET` **bez `user_tag`** a bez
+  vazby na bracket; vyplnění ~142 ms. Požadavek pole pro značku nemá.
+- Nohy `user_tag` nenesou. První 351 nohy má jen `bracket_type`; od druhé
+  zprávy `original_basket_id` (rodič) a `linked_basket_ids` (obě nohy).
+  Snímek 320 vazby nese.
+- Množství noh = množství vstupu (1 i 2 ks). Stop noha je `STOP_MARKET`;
+  burza u ní hlásí i `price` 20 ticků za spouští.
+- TP 1 tick od vyplnění se do 25 s nevyplnil → nezměřeno, zda vyplnění jedné
+  nohy ruší druhou.
+
 ## Dopad na návrh adaptéru
 
 | Otázka z review | Odpověď měření |
