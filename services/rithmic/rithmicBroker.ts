@@ -1297,14 +1297,16 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       // se nesahá. Doba je PEVNĚ omezená (timeout požadavku + doba na vyplnění) — pak brzda vždy
       // pokračuje běžnou cestou: zruší vše pracující (i visící zavírací příkaz) a zavře znovu.
       const hardCapMs = settleMs + (config.requestTimeoutMs ?? 10_000);
-      const inTheAir = !prior?.requestDone || age < settleMs || exitOrderWorking() || !proof.ordersOk || proof.net === null;
+      // „Doběhl" znamená PŘIJATOU odpověď; vypršení času bez odpovědi je pořád neznámý výsledek.
+      const inTheAir = !prior?.requestDone || !prior.accepted || age < settleMs || exitOrderWorking() || !proof.ordersOk || proof.net === null;
       if (prior && age < hardCapMs && inTheAir) {
         if (proof.net === null) incident('flatten-orders-remain', `${symbol}: předchozí zavření právě probíhá a pozici teď nejde přečíst — další neposílám`);
         return abandon({ status: 'indeterminate', reason: 'předchozí zavření pozice právě probíhá — další neposílám' });
       }
-      // Předchozí zavření doběhlo a pozici nezavřelo (nebo ji nejde přečíst): zavírá se znovu.
+      // Předchozí zavření doběhlo a pozici nezavřelo (nebo uplynul pevný strop): zavírá se znovu.
+      // Záznam o předchozím zavření se NEmaže tady — nahradí ho až skutečně odeslané nové zavření,
+      // nebo ho vyřeší prokázaná nula. Když se nové zavření nakonec nepošle, blokace trvá.
       if (proof.net === null) incident('attention', `${symbol}: pozici po dřívějším zavření nejde přečíst — zavírám znovu`);
-      resolveClosing(accountId, symbol);
     } else if (!inflightHere() && trustedLivePosition(accountId, symbol) !== undefined && trustedLivePosition(accountId, symbol) !== 0) {
       // Živá pozice novější než poslední vyplnění, nenulová a nic není na cestě: čtení by jen
       // zdržovalo. (Zavření je stavové — kdyby pozice mezitím zmizela, nic nevznikne.)
@@ -1357,7 +1359,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     // Druhé zavření by se po uvolnění vyplnilo také a pozici otočilo.
     if (exitOrderWorking()) {
       incident('flatten-orders-remain', `${symbol}: dřívější zavírací příkaz stále pracuje a nejde zrušit — další zavření neposílám`);
-      return finish({ status: 'indeterminate', reason: 'dřívější zavírací příkaz stále pracuje' });
+      // Tahle operace zavření neodeslala: její záznam se zahodí, blokace po dřívějším zavření zůstává.
+      return abandon({ status: 'indeterminate', reason: 'dřívější zavírací příkaz stále pracuje' });
     }
 
     // 4) Zavření. Fáze na disk PŘED odesláním; záznam „zavírání probíhá" trvá, dokud výsledek

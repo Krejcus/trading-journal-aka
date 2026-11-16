@@ -564,8 +564,9 @@ describe('nálezy z review diffu', () => {
     expect(t.sent(3504)).toBe(1);
     const order = { tag: 'blocked', accountId: t.account(), symbol: 'ESZ6', side: 'Buy' as const, quantity: 1, orderType: 'Limit' as const, limitPrice: 6900 };
     expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
-    // požadavek doběhne bez odpovědi: příkazy stojí dál, ale nové zavírání (čte stav) už smí
-    await sleep(350);
+    // požadavek vyprší bez odpovědi: příkazy stojí dál; nové zavírání smí až po pevném stropu
+    // (lhůta na vyplnění 100 ms + timeout požadavku 500 ms)
+    await sleep(480);
     expect(t.incidents.some((i) => i.kind === 'flatten-orders-remain' && /bez odpovědi/.test(i.message))).toBe(true);
     // nohy zrušené, pozice trvá → skutečně nechráněná pozice se ohlásí
     expect(t.kinds()).toContain('bracket-legs-missing');
@@ -770,6 +771,24 @@ describe('nálezy z review diffu', () => {
     t.server.controls.cancelStuck = true; // zrušení visícího Marketu se nepotvrdí
     expect((await flatten(t, 'fh2')).status).toBe('indeterminate');
     expect(t.sent(3504)).toBe(1);
+    // blokace po prvním zavření trvá: nový vstup proti pracujícímu zavíracímu příkazu neprojde
+    expect(await thrown(t.broker.placeOrder({ tag: 'after-hang', accountId: t.account(), symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 6900 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    t.broker.stop();
+  });
+
+  it('vypršení bez odpovědi není konec: mezi lhůtou na vyplnění a pevným stropem druhé zavření neodejde', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 150, exitSettleMs: 300, flattenStepMs: 40, flattenPostCheckMs: 30 } }); // strop 450 ms
+    await openProtected(t, 'tw');
+    t.server.controls.exitPosition = 'ignore';
+    const started = Date.now();
+    expect((await flatten(t, 'ftw1')).status).toBe('indeterminate');
+    await sleep(Math.max(0, 340 - (Date.now() - started))); // požadavek vypršel, lhůta na vyplnění uplynula, strop ne
+    t.server.controls.exitPosition = 'ok';
+    expect((await flatten(t, 'ftw2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    await sleep(Math.max(0, 480 - (Date.now() - started))); // po pevném stropu brzda pokračuje
+    expect((await flatten(t, 'ftw3')).status).toBe('submitted');
+    expect(t.sent(3504)).toBe(2);
     t.broker.stop();
   });
 
