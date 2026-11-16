@@ -806,6 +806,33 @@ describe('nálezy z review diffu', () => {
     t.broker.stop();
   });
 
+  it('neplatný dopočet + pozice nejdou číst: kontrola se nezacyklí a ohlásí, že ochranu nejde ověřit', async () => {
+    const t = await setup();
+    t.server.controls.legsNeverAppear = true;
+    const ack = await t.broker.placeBracket(bracket(t, 'cyc'));
+    await flush();
+    // vstup se vyplní za výpadku, nohy nevzniknou, snímek pozic je pozadu (0) → dopočet neplatí
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    t.server.controls.muteLivePositions = true;
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    t.server.positions.set('ACC1|ESZ6', 0);
+    // jakmile je adaptér připojený, čtení pozic začne selhávat (výchozí stav ještě projde)
+    for (let i = 0; i < 100 && t.broker.isConnected(); i += 1) await sleep(1); // počkat na odpojení
+    for (let i = 0; i < 800 && !t.broker.isConnected(); i += 1) await sleep(1);
+    expect(t.broker.isConnected()).toBe(true);
+    t.server.controls.pnlSnapshotFails = true;
+    const readsBefore = t.sent(320);
+    await sleep(1_500);
+    expect(t.incidents.some((i) => i.kind === 'bracket-legs-missing' && /nejde ověřit/.test(i.message))).toBe(true);
+    // omezený počet pokusů (3 rychlé + nejvýš 40 pomalých), žádná nekonečná smyčka
+    await sleep(600);
+    const readsAfterCap = t.sent(320);
+    await sleep(300);
+    expect(t.sent(320)).toBe(readsAfterCap);
+    expect(readsAfterCap - readsBefore).toBeLessThan(60);
+    t.broker.stop();
+  });
+
   it('stabilní čtení dopočet pozice znovu ukotví: po obnově spojení zase funguje rychlá cesta', async () => {
     const t = await setup();
     const entry = await openProtected(t, 'anc');

@@ -196,3 +196,65 @@ Otevřené z kola 2 (podmínky zapojení): veřejný `bracketState` vrací
 `unknown`, když po vyplnění nepřijde další zpráva o pozici (jádro to nesmí
 brát jako OK ani jako incident); minimální odstup 400 ms nemá vlastní test;
 zda snímek PnL opravdu zaostává za vyplněním, není změřeno.
+
+## Plné review celku a zjednodušení (16.–17. 11. 2026)
+
+Plné review (critic + Codex) a čtyři potvrzovací kola. Po druhém kole, kdy
+záplaty jen přesouvaly díry, se model určování pozice **zjednodušil**:
+
+- **Živé pozici se věří jen když sedí s dopočtem z exekucí** (výchozí stav +
+  doručené filly; neplatí, dokud některému příkazu chybí exekuce nebo byl
+  zneplatněn). Žádná důvěra podle pořadí doručení zpráv.
+- **Stabilní důkaz čtením** (`contractProof`): příkazy + pozice, bez vyplnění
+  mezi tím a bez příkazu s chybějící exekucí; když čtení dopočtu odporuje
+  nebo dopočet neplatí, čte se po 300 ms znovu. Stabilní důkaz dopočet ukotví.
+- **Silná nula** (`strongZero`) je jediná cesta k trvalému uzavření skončeného
+  vstupu z nulové pozice a k vyřešení probíhajícího zavírání.
+- **Zavírání:** stav „zavírání probíhá" drží do potvrzení stavem. Druhé
+  zavření se neposílá, dokud je první „ve vzduchu" (bez přijaté odpovědi,
+  mladší než `exitSettleMs`, pracuje neoznačený Market, stav nejde přečíst),
+  nejdéle `exitSettleMs + requestTimeoutMs`. Rozhodnutí padne dřív, než se
+  sáhne na ochranu. Po stropu: zrušit vše pracující → důkaz → zavřít;
+  pracuje-li dál dřívější zavírací příkaz, druhé zavření neodejde.
+- **Místní služba:** přísná validace, stropy (množství, pozice vč. rezervací,
+  vzdálenost SL/TP), cena Marketu ze služby, idempotence přes restart, token.
+
+Poslední verdikty: **critic — OK s výhradami pro stavbu UI nad testovacím
+účtem** (jeho nález A o samoplánování kontroly je opravený a pokrytý
+testem). **Codex — dva nálezy o druhém zavření; oba opravené s regresními
+testy, Codex je už znovu nepotvrzoval.** 236 testů, pojistky ověřené
+záměrným rozbitím, zkoušky proti Rithmic Test bez poplachu.
+
+### Podmínky před ostrým účtem
+
+- Změřit největší zpoždění snímku PnL za exekucí a podle něj nastavit odstup
+  druhého čtení (dnes 300 ms), nebo pro uzavření vstupu chtít živou zprávu.
+- Změřit dvě zavření s odstupem 10–200 ms, pořadí odpovědi na zavření a první
+  zprávy o zavíracím příkazu, částečná plnění vstupu i nohy.
+- Ověřit, zda order spojení doručuje příkazy a exekuce zadané jinou relací
+  nebo risk deskem propky (jinak se dopočet rozejde častěji).
+- Ověřit pravidlo „snímek ≥ 2 s po odeslání příkaz neobsahuje → nevznikl".
+- Ověřit, že snímek PnL po připojení uvádí i pozici z dřívější relace.
+- Čtení stavu po druhém spojení: snímek příkazů při stovkách dnešních příkazů
+  trvá přes 1 s a zdržuje potvrzení nových příkazů na stejném spojení
+  (naměřeno: Market vstup 632 ms místo ~250 ms).
+- Trvalé úložiště ochrany s fsync, trvalý registr účtů, jediná instance.
+- Autentizace klienta vázaná na zařízení; nikdy `tailscale funnel`.
+- Zapojení do workeru a jádra je samostatný návrh proti
+  `docs/COPIER_INVARIANTS.md` (kritické incidenty blokují nové riziko,
+  `halted` viditelný, opakování značek zavírání, nekopírování noh ani
+  zavíracího příkazu).
+
+### Vědomě přijatá rizika (testovací účet)
+
+- Po pevném stropu odejde druhé zavření, i když první nemělo odpověď: brzda
+  má přednost před rizikem otočení pozice.
+- Dvě shodná čtení 300 ms od sebe mohou být obě zastaralá.
+- Cizí neoznačený pracující Market se bere jako zavírací příkaz a zavření
+  po dobu jeho práce vetuje (`indeterminate` + incident).
+- Zavření bez potvrzeného přijetí drží blokaci kontraktu do dalšího zavření
+  po stropu, silné nuly nebo obnovy spojení.
+- Nula jen ze čtení skončený vstup neuzavře; další cizí pozice pak může
+  vyvolat falešný poplach.
+- Rezerva stropu pozice se uvolní první nenulovou zprávou nebo po 5 s.
+- Adaptér ochranu jen hlásí, nic nedostavuje ani nezavírá.

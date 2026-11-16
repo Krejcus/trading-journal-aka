@@ -663,10 +663,16 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       }
       // Vazby noh na rodiče nese snímek celé — po restartu je odjinud nezjistíme.
       const seenTags = new Set<string>();
+      const changedIds = new Set(result.changed.map((order) => order.brokerOrderId));
       for (const row of rows) {
         if (numberByText.get(row.accountId) !== account) continue;
         if (row.userTag) seenTags.add(row.userTag);
-        observeProtection(source, account, row);
+        // Vazby se učí z každého řádku, ale kontrola ochrany se plánuje jen když snímek příkaz
+        // opravdu ZMĚNIL. Jinak by si kontrola, která sama čte snímek, plánovala další kontrolu
+        // dokola a nikdy nedošla k výsledku.
+        const seen = protection.observe(account, row);
+        if (seen.bound) void saveProtection();
+        if (seen.entryId && changedIds.has(row.basketId)) scheduleBracketCheck(source, account, seen.entryId);
       }
       // Snímek zápis „na cestě" vyřeší: buď ho obsahuje, nebo — když začal aspoň 2 s po odeslání —
       // dokládá, že příkaz nevznikl.
