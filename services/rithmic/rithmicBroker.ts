@@ -1394,8 +1394,26 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const text = accountText(accountId, true);
       const known = book.get(accountId, brokerOrderId);
       if (!known) throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} neznám, změnu neodesílám`);
-      if (known.orderType === 'Unsupported') {
+      // Noha VLASTNÍHO vstupu s ochranou: smí se měnit jen cena (změřeno: změna vazbu na sestru
+      // zachová). Množství řídí server podle vstupu — jiné by nohu rozešlo se sestrou.
+      const leg = protection.legOf(accountId, brokerOrderId);
+      const ownLeg = leg && protection.bracketByEntry(accountId, leg.parentId) ? leg : undefined;
+      if (known.orderType === 'Unsupported' && !ownLeg) {
         throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} je typu, který adaptér nemění (${known.brokerOrderType ?? 'neznámý'})`);
+      }
+      if (TERMINAL.has(known.status)) throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} už skončil, změnu neodesílám`);
+      let priceType = rithmicPriceType(changes.orderType);
+      let price = changes.limitPrice;
+      let triggerPrice = changes.stopPrice;
+      if (ownLeg) {
+        const isStop = known.stopPrice !== undefined || ownLeg.role === 'stop';
+        if (changes.quantity !== known.quantity) throw new BrokerRequestNotSentError(`Rithmic: množství nohy ochrany se nemění (má ${known.quantity}, požadováno ${changes.quantity})`);
+        if (changes.orderType !== (isStop ? 'Stop' : 'Limit')) throw new BrokerRequestNotSentError(`Rithmic: noha ochrany ${brokerOrderId} je ${isStop ? 'Stop' : 'Limit'}, typ se nemění`);
+        const next = isStop ? changes.stopPrice : changes.limitPrice;
+        if (typeof next !== 'number' || !Number.isFinite(next)) throw new BrokerRequestNotSentError('Rithmic: změna nohy ochrany bez nové ceny');
+        priceType = isStop ? 'STOP_MARKET' : 'LIMIT';
+        price = isStop ? undefined : next;
+        triggerPrice = isStop ? next : undefined;
       }
       const exchange = rithmicExchangeForSymbol(known.symbol);
       if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${known.symbol}`);
@@ -1407,10 +1425,12 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           symbol: known.symbol,
           exchange,
           quantity: changes.quantity,
-          priceType: rithmicPriceType(changes.orderType),
-          price: changes.limitPrice,
-          triggerPrice: changes.stopPrice,
+          priceType,
+          price,
+          triggerPrice,
         });
+        // Po změně nohy se ochrana vyhodnotí znovu (vazba, množství, stav).
+        if (ownLeg) scheduleBracketCheck(active, accountId, ownLeg.parentId);
       } catch (error) {
         return rethrowWrite(error, 'změna příkazu');
       }

@@ -161,6 +161,32 @@ describe('vstup se serverovou ochranou', () => {
     t.broker.stop();
   });
 
+  it('posun SL a TP: mění se jen cena, vazba i ochrana zůstávají; množství, typ a cizí bracket se nemění', async () => {
+    const t = await setup();
+    const entry = await openProtected(t, 'mv');
+    const stop = t.legsOf(entry).find((o) => o.priceType === 4)!;
+    const target = t.legsOf(entry).find((o) => o.priceType === 1)!;
+    await t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 1, orderType: 'Stop', stopPrice: 6995 });
+    await t.broker.modifyOrder(t.account(), target.basketId, { quantity: 1, orderType: 'Limit', limitPrice: 7030 });
+    await sleep(120);
+    expect(stop.triggerPrice).toBe(6995);
+    expect(stop.priceType).toBe(4);
+    expect(target.price).toBe(7030);
+    expect(stop.parent).toBe(entry);
+    expect(t.broker.bracketState(t.account(), entry).state).toBe('protected');
+    expect(t.kinds()).toEqual([]);
+    const frames = t.sent(314);
+    expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 2, orderType: 'Stop', stopPrice: 6990 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 1, orderType: 'Limit', limitPrice: 6990 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 1, orderType: 'Stop' }))).toBeInstanceOf(BrokerRequestNotSentError);
+    // vstup bracketu (Unsupported, ne noha) se přes adaptér nemění
+    const resting = await t.broker.placeBracket(bracket(t, 'mv2', { limitPrice: 6900 }));
+    await flush();
+    expect(await thrown(t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 1, orderType: 'Limit', limitPrice: 6890 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.sent(314)).toBe(frames);
+    t.broker.stop();
+  });
+
   it('stejná značka podruhé se neodešle; neplatné ticky a chybějící SL i TP také ne', async () => {
     const t = await setup();
     await t.broker.placeBracket(bracket(t, 'dup'));

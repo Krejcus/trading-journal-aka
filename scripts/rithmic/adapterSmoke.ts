@@ -82,6 +82,26 @@ async function main(): Promise<void> {
     out.bracketState = broker.bracketState(account, ack.entryBrokerOrderId);
     out.afterEntry = await state();
 
+    // 1b) posun SL o 8 ticků dál a TP o 8 ticků dál
+    const legsNow = (await broker.listOrders(account)).filter((o) => o.symbol === CONTRACT && o.brokerOrderId !== ack.entryBrokerOrderId && o.status === 'working');
+    const sl = legsNow.find((o) => o.stopPrice !== undefined);
+    const tp = legsNow.find((o) => o.stopPrice === undefined && o.limitPrice !== undefined);
+    if (sl && tp) {
+      t = performance.now();
+      await broker.modifyOrder(account, sl.brokerOrderId, { quantity: 1, orderType: 'Stop', stopPrice: sl.stopPrice! - 2 });
+      await broker.modifyOrder(account, tp.brokerOrderId, { quantity: 1, orderType: 'Limit', limitPrice: tp.limitPrice! + 2 });
+      let movedMs: number | null = null;
+      for (let i = 0; i < 100; i += 1) {
+        const now = await broker.listOrders(account);
+        if (now.find((o) => o.brokerOrderId === sl.brokerOrderId)?.stopPrice === sl.stopPrice! - 2 && now.find((o) => o.brokerOrderId === tp.brokerOrderId)?.limitPrice === tp.limitPrice! + 2) {
+          movedMs = Math.round(performance.now() - t);
+          break;
+        }
+        await sleep(30);
+      }
+      out.move = { from: [sl.stopPrice, tp.limitPrice], movedMs, stateAfter: broker.bracketState(account, ack.entryBrokerOrderId) };
+    } else out.move = 'nohy nenalezeny';
+
     // 2) zrušení nohy při otevřené pozici se nesmí odeslat
     const leg = (await broker.listOrders(account)).find((o) => o.symbol === CONTRACT && o.brokerOrderId !== ack.entryBrokerOrderId && o.status === 'working');
     out.cancelLeg = leg ? await broker.cancelOrder(account, leg.brokerOrderId).then(() => 'ODESLÁNO (chyba!)', (e: Error) => `${e.name}: ${e.message.slice(0, 80)}`) : 'noha nenalezena';
