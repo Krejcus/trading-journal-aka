@@ -120,6 +120,18 @@ describe('místní služba: validace vstupu', () => {
     blind.broker.stop();
   });
 
+  it('vyplněný vstup se do stropu počítá i dřív, než přijde zpráva o pozici', async () => {
+    const t = await setup({ config: { maxPosition: 2 } });
+    const placed = await t.run(entry({ quantity: 2, stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    t.server.controls.muteLivePositions = true; // pozice z PnL spojení se opozdí
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await flush();
+    expect(await t.run(entry({ quantity: 2 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(1);
+    t.broker.stop();
+  });
+
   it('stejné clientId podruhé neodejde — ani po restartu služby (kniha zná dnešní značky)', async () => {
     const t = await setup();
     const command = entry({ clientId: 'same-1', stopPrice: undefined, targetPrice: undefined }); // obyčejný příkaz bez ochrany

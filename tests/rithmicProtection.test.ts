@@ -654,6 +654,75 @@ describe('nálezy z review diffu', () => {
     second.broker.stop();
   });
 
+  it('visící zavírací příkaz brzdu nezastaví natrvalo: po pevné době ho další zavření zruší a zavře znovu', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 200, exitSettleMs: 100 } }); // strop = 300 ms
+    await openProtected(t, 'st');
+    t.server.controls.delayExitFill = true; // zavírací Market vznikne, ale nevyplní se
+    expect((await flatten(t, 'fs1')).status).toBe('submitted');
+    expect((await flatten(t, 'fs2')).status).toBe('indeterminate'); // první je ještě „ve vzduchu"
+    expect(t.sent(3504)).toBe(1);
+    await sleep(350); // pevná doba uplynula
+    t.server.controls.delayExitFill = false;
+    const cancels = t.sent(316);
+    expect((await flatten(t, 'fs3')).status).toBe('submitted');
+    expect(t.sent(316)).toBeGreaterThan(cancels); // visící Market se nejdřív zrušil
+    expect(t.sent(3504)).toBe(2);
+    await sleep(80);
+    expect(t.net()).toBe(0);
+    t.broker.stop();
+  });
+
+  it('vstup zavřený za výpadku spojení: po obnově se uzavře druhým čtením a cizí pozice pak nevyvolá poplach', async () => {
+    const t = await setup();
+    const entry = await openProtected(t, 'out');
+    // výpadek; mezitím pozici zavře něco jiného a nohy skončí
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    for (const leg of t.legsOf(entry)) leg.status = 'cancelled';
+    t.server.positions.set('ACC1|ESZ6', 0);
+    for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+    expect(t.broker.isConnected()).toBe(true);
+    await sleep(200); // odložené druhé čtení po výchozím stavu
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 'out')?.closedAt).toBeDefined();
+    // cizí pozice na kontraktu
+    t.server.positions.set('ACC1|ESZ6', 1);
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+    await sleep(200);
+    expect(t.kinds()).not.toContain('bracket-legs-missing');
+    t.broker.stop();
+  });
+
+  it('živé pozici se nevěří, dokud některému příkazu chybí exekuce („vyplněno" bez fillu) — zavírání čte', async () => {
+    const t = await setup({ config: { fillWaitMs: 2_000 } });
+    await openProtected(t, 'gap');
+    const other = await t.broker.placeOrder({ tag: 'gap-plain', accountId: t.account(), symbol: 'ESZ6', side: 'Sell', quantity: 1, orderType: 'Limit', limitPrice: 7050 });
+    await flush();
+    // Rithmic ohlásí „vyplněno", exekuce z burzy ještě nedorazila: pozice už může být jiná
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].push(351, {
+      account_id: 'ACC1', basket_id: other.brokerOrderId, user_tag: 'gap-plain', symbol: 'ESZ6', exchange: 'CME', quantity: 1, transaction_type: 2, price_type: 1,
+      notify_type: 15, status: 'complete', completion_reason: 'F', ssboe: 1_800_000_000, usecs: 0,
+    });
+    await flush();
+    const reads = t.sent(320);
+    await flatten(t, 'fgap');
+    expect(t.sent(320)).toBeGreaterThan(reads); // žádná rychlá cesta z nedůvěryhodné pozice
+    t.broker.stop();
+  });
+
+  it('stabilní čtení dopočet pozice znovu ukotví: po obnově spojení zase funguje rychlá cesta', async () => {
+    const t = await setup();
+    const entry = await openProtected(t, 'anc');
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    for (const leg of t.legsOf(entry)) leg.status = 'cancelled';
+    t.server.positions.set('ACC1|ESZ6', 0);
+    for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+    await sleep(200); // rozpor ve výchozím stavu → dopočet neplatí → druhé čtení ho ukotví na 0
+    await openProtected(t, 'anc2');
+    const reads = t.sent(320);
+    expect((await flatten(t, 'fanc')).status).toBe('submitted');
+    expect(t.sent(320)).toBe(reads);
+    t.broker.stop();
+  });
+
   it('přijaté zavření neuvolní kontrakt, dokud ho nepotvrdí stav: druhé volání hned po prvním nic neodešle', async () => {
     const t = await setup({ config: { exitSettleMs: 400 } });
     await openProtected(t, 'd1');
