@@ -13,8 +13,8 @@ const server = await createServer({
   plugins: [{ name: 'isolated-qa-service-boundary', enforce: 'pre', resolveId(source) {
     if (/(?:^|\/)supabase(?:\.ts)?$/.test(source)) return path.join(dir, 'supabase.ts');
   } }, react({ exclude: [/node_modules/] }), tailwindcss()],
-  server: { host: '127.0.0.1', port: 4185, strictPort: true, hmr: false, allowedHosts: ['.ts.net'], headers: {
-    'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:4185 ws://127.0.0.1:3311 wss://*.ts.net:8443; img-src 'self' data: blob:; font-src 'self' data:;",
+  server: { host: '127.0.0.1', port: 4185, strictPort: true, hmr: false, allowedHosts: ['.ts.net', 'macbook-air'], headers: {
+    'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:4185 ws://127.0.0.1:3311 ws://*.ts.net:8080 ws://macbook-air:8080; img-src 'self' data: blob:; font-src 'self' data:;",
   } },
 });
 await server.listen();
