@@ -7,15 +7,17 @@ import {
 } from '../services/rithmic/rithmicAccountRegistry';
 
 function memoryStore(initial: RithmicAccountRegistryEntry[] = []) {
-  const state = { saved: initial.map((e) => ({ ...e })), saves: 0, failNext: false };
+  const state = { saved: initial.map((e) => ({ ...e })), saves: 0, failNext: false, revision: initial.length ? 1 : 0 };
   const store: RithmicAccountRegistryStore = {
-    load: async () => state.saved.map((e) => ({ ...e })),
-    save: async (entries) => {
+    load: async () => ({ entries: state.saved.map((e) => ({ ...e })), revision: state.revision }),
+    save: async (entries, expectedRevision) => {
       if (state.failNext) {
         state.failNext = false;
         throw new Error('disk full');
       }
+      if (expectedRevision !== state.revision) throw new Error('revision conflict');
       state.saves += 1;
+      state.revision += 1;
       state.saved = entries.map((e) => ({ ...e }));
     },
   };
@@ -58,6 +60,9 @@ describe('RithmicAccountRegistry', () => {
     await registry.load();
     state.failNext = true;
     await expect(registry.ensure(acc('1'))).rejects.toThrow('disk full');
+    // po selhání se tabulka musí načíst znovu, než se z ní čte nebo přiděluje
+    expect(() => registry.lookup(acc('1'))).toThrow(/není načtená/);
+    await registry.load();
     expect(registry.lookup(acc('1'))).toBeNull();
     expect(await registry.ensure(acc('1'))).toBe(RITHMIC_ACCOUNT_ID_BASE + 1);
   });
@@ -70,6 +75,19 @@ describe('RithmicAccountRegistry', () => {
     expect(ids[0]).toBe(ids[1]);
     expect(ids[2]).not.toBe(ids[0]);
     expect(state.saves).toBe(2);
+  });
+
+  it('dva procesy nad jednou tabulkou nepřidělí stejné číslo různým účtům', async () => {
+    const { store } = memoryStore();
+    const a = new RithmicAccountRegistry(store);
+    const b = new RithmicAccountRegistry(store);
+    await a.load();
+    await b.load();
+    const first = await a.ensure(acc('A'));
+    await expect(b.ensure(acc('B'))).rejects.toThrow('revision conflict');
+    await b.load();
+    expect(b.lookup(acc('A'))).toBe(first);
+    expect(await b.ensure(acc('B'))).toBe(first + 1);
   });
 
   it('poškozenou tabulku odmítne načíst', async () => {

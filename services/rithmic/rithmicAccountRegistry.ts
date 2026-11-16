@@ -19,9 +19,14 @@ export interface RithmicAccountRegistryEntry extends RithmicAccountIdentity {
 }
 
 export interface RithmicAccountRegistryStore {
-  load(): Promise<RithmicAccountRegistryEntry[]>;
-  /** Musí být atomické a trvalé; chyba = přidělení se nepoužije. */
-  save(entries: RithmicAccountRegistryEntry[]): Promise<void>;
+  /** `revision` se zvýší každým uložením (prázdná tabulka má 0). */
+  load(): Promise<{ entries: RithmicAccountRegistryEntry[]; revision: number }>;
+  /**
+   * Atomické a trvalé uložení JEN když je uložená revize rovna `expectedRevision`
+   * (jinak musí vyhodit chybu). Brání tomu, aby dva procesy přidělily stejné číslo
+   * různým účtům a poslední zápis vyhrál.
+   */
+  save(entries: RithmicAccountRegistryEntry[], expectedRevision: number): Promise<void>;
 }
 
 /** Rozsah mimo čísla Tradovate účtů (ta jsou v desítkách milionů). */
@@ -45,6 +50,7 @@ export class RithmicAccountRegistry {
   private byKey = new Map<string, RithmicAccountRegistryEntry>();
   private byId = new Map<number, RithmicAccountRegistryEntry>();
   private loaded = false;
+  private revision = 0;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(store: RithmicAccountRegistryStore) {
@@ -53,12 +59,14 @@ export class RithmicAccountRegistry {
 
   /** Načte tabulku; poškozená tabulka (duplicitní číslo/klíč, číslo mimo rozsah) = chyba, ne oprava. */
   async load(): Promise<void> {
-    const entries = await this.store.load();
+    const { entries, revision } = await this.store.load();
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Tabulka Rithmic účtů je poškozená: neplatná revize');
     const byKey = new Map<string, RithmicAccountRegistryEntry>();
     const byId = new Map<number, RithmicAccountRegistryEntry>();
     for (const entry of entries) {
       const key = keyOf(entry);
       if (!Number.isSafeInteger(entry.id) || entry.id <= RITHMIC_ACCOUNT_ID_BASE) {
+        // Čísla začínají na RITHMIC_ACCOUNT_ID_BASE + 1.
         throw new Error(`Tabulka Rithmic účtů je poškozená: neplatné číslo ${String(entry.id)}`);
       }
       if (byKey.has(key) || byId.has(entry.id)) {
@@ -70,6 +78,7 @@ export class RithmicAccountRegistry {
     }
     this.byKey = byKey;
     this.byId = byId;
+    this.revision = revision;
     this.loaded = true;
   }
 
@@ -92,7 +101,8 @@ export class RithmicAccountRegistry {
 
   /**
    * Vrátí číslo účtu; neznámému přidělí další v řadě a NEJDŘÍV ho uloží.
-   * Selže-li uložení, číslo se nepoužije a tabulka v paměti zůstane beze změny.
+   * Selže-li uložení, číslo se nepoužije a tabulka se musí znovu načíst (`load`),
+   * než se z ní dá číst — mezitím mohl zapsat jiný proces.
    */
   ensure(identity: RithmicAccountIdentity): Promise<number> {
     const run = this.queue.then(async () => {
@@ -107,7 +117,14 @@ export class RithmicAccountRegistry {
       const entry: RithmicAccountRegistryEntry = {
         system: identity.system, fcmId: identity.fcmId, ibId: identity.ibId, accountId: identity.accountId, id,
       };
-      await this.store.save([...this.byId.values(), entry].sort((a, b) => a.id - b.id));
+      try {
+        await this.store.save([...this.byId.values(), entry].sort((a, b) => a.id - b.id), this.revision);
+      } catch (error) {
+        // Někdo jiný mohl mezitím zapsat: tabulku v paměti už nelze brát za platnou.
+        this.loaded = false;
+        throw error;
+      }
+      this.revision += 1;
       this.byKey.set(key, entry);
       this.byId.set(id, entry);
       return id;

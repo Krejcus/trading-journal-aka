@@ -117,7 +117,8 @@ export interface RithmicInstrumentPosition {
   symbol: string;
   exchange: string;
   isSnapshot: boolean;
-  netQuantity: number;
+  /** null = server hodnotu neposlal nebo je neplatná. NENÍ to nula. */
+  netQuantity: number | null;
   avgOpenFillPrice: number | null;
   openPnl: number | null;
   closedPnl: number | null;
@@ -143,6 +144,10 @@ export interface RithmicClientEvents {
   onAccountPnl?: (pnl: RithmicAccountPnl) => void;
   onPlantClosed?: (plant: RithmicPlantName, info: RithmicCloseInfo) => void;
   onUnknownTemplate?: (plant: RithmicPlantName, templateId: number) => void;
+  /** Zpráva, kterou klient zahodil, protože jí nejde věřit (cizí identita účtu apod.). */
+  onAttention?: (message: string) => void;
+  /** Důkaz živého spojení daného plantu. */
+  onAlive?: (plant: RithmicPlantName, receivedAt: number) => void;
 }
 
 export interface RithmicClientConfig {
@@ -235,6 +240,10 @@ export class RithmicClient {
   async connect(plants: RithmicPlantName[] = ['order', 'ticker', 'pnl']): Promise<void> {
     for (const name of plants) {
       if (this.plants.has(name)) continue;
+      if (name === 'pnl' && !this.plants.has('order')) {
+        // Identitu účtů dává order plant; bez ní by se každá pozice a P&L zahodily.
+        throw new RithmicRequestError('Rithmic: pnl plant jde připojit až po order plantu', 'not-sent', 0);
+      }
       const plant = new RithmicPlant({
         url: this.config.url,
         infraType: INFRA_BY_PLANT[name],
@@ -248,6 +257,11 @@ export class RithmicClient {
           this.config.events?.onPlantClosed?.(name, info);
         },
         onUnknownTemplate: (templateId) => this.config.events?.onUnknownTemplate?.(name, templateId),
+        onAlive: (receivedAt) => this.config.events?.onAlive?.(name, receivedAt),
+        onHandlerError: (message, error) =>
+          this.config.events?.onAttention?.(
+            `zpracování zprávy ${message.templateId} na plantu ${name} selhalo: ${error instanceof Error ? error.message : String(error)}`,
+          ),
       });
       this.plants.set(name, plant);
       try {
@@ -273,7 +287,7 @@ export class RithmicClient {
       this.userType = plant.identity.userType;
     }
     const accounts = await plant.request(302, { user_type: this.userType });
-    this.accounts = [...accounts.rows, ...(accounts.terminal ? [accounts.terminal] : [])]
+    const listed: RithmicAccount[] = [...accounts.rows, ...(accounts.terminal ? [accounts.terminal] : [])]
       .filter((m) => str(m.fields.account_id) !== '')
       .map((m) => ({
         fcmId: str(m.fields.fcm_id),
@@ -281,6 +295,15 @@ export class RithmicClient {
         accountId: str(m.fields.account_id),
         accountName: str(m.fields.account_name),
       }));
+    const seen = new Set<string>();
+    for (const account of listed) {
+      // Text účtu používáme jako klíč zápisů i událostí; dvě identity se stejným textem nejde bezpečně rozlišit.
+      if (seen.has(account.accountId)) throw new Error(`Rithmic: přihlášení má dva účty se stejným číslem ${account.accountId}`);
+      if (!account.fcmId || !account.ibId) throw new Error(`Rithmic: účet ${account.accountId} nemá FCM/IB`);
+      seen.add(account.accountId);
+    }
+    // Až po kontrole: neplatný seznam nesmí zůstat v paměti a propouštět události.
+    this.accounts = listed;
     const routes = await plant.request(310, { subscribe_for_updates: true });
     this.tradeRoutes = [...routes.rows, ...(routes.terminal ? [routes.terminal] : [])]
       .filter((m) => str(m.fields.trade_route) !== '')
@@ -290,14 +313,44 @@ export class RithmicClient {
         isDefault: m.fields.is_default === true,
       }));
     for (const account of this.accounts) {
-      await plant.request(308, { account_id: account.accountId });
-      await plant.request(336, { account_id: account.accountId });
+      await plant.request(308, this.accountFields(account.accountId));
+      await plant.request(336, this.accountFields(account.accountId));
     }
   }
 
   close(): void {
     for (const plant of [...this.plants.values()]) plant.close();
     this.plants.clear();
+  }
+
+  /** Má přihlášení trade route pro burzu? Bez ní nejde na burze obchodovat. */
+  hasTradeRoute(exchange: string): boolean {
+    return this.tradeRoutes.some((r) => r.exchange === exchange);
+  }
+
+  /** Úplná identita účtu pro zprávu; neznámý účet = požadavek se neodešle. */
+  private accountFields(accountId: string): RithmicFields {
+    const account = this.accounts.find((a) => a.accountId === accountId);
+    if (!account) throw new RithmicRequestError(`Rithmic: účet ${accountId} není v přihlášení`, 'not-sent', 0);
+    return { account_id: account.accountId, fcm_id: account.fcmId, ib_id: account.ibId };
+  }
+
+  /** Událost musí nést účet z přihlášení a, pokud nese FCM/IB, tak shodné. */
+  private trustedAccount(f: RithmicFields, what: string): boolean {
+    const account = this.accounts.find((a) => a.accountId === str(f.account_id));
+    const fcm = str(f.fcm_id);
+    const ib = str(f.ib_id);
+    if (account && (!fcm || fcm === account.fcmId) && (!ib || ib === account.ibId)) return true;
+    this.config.events?.onAttention?.(`${what} pro cizí nebo neznámou identitu účtu ${str(f.account_id) || '(prázdný)'}`);
+    return false;
+  }
+
+  /** Snímky příkazů sdílejí zachytávání zpráv 352, proto vždy jen jeden naráz. */
+  private snapshotQueue: Promise<unknown> = Promise.resolve();
+  private serialSnapshot<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.snapshotQueue.then(run, run);
+    this.snapshotQueue = next.catch(() => undefined);
+    return next;
   }
 
   private tradeRoute(exchange: string): string {
@@ -322,7 +375,7 @@ export class RithmicClient {
     }
     return {
       user_tag: request.userTag,
-      account_id: request.accountId,
+      ...this.accountFields(request.accountId),
       symbol: request.symbol,
       exchange: request.exchange,
       quantity: request.quantity,
@@ -384,7 +437,7 @@ export class RithmicClient {
     triggerPrice?: number;
   }): Promise<RithmicResponse> {
     return this.plant('order').request(314, {
-      account_id: order.accountId,
+      ...this.accountFields(order.accountId),
       basket_id: order.basketId,
       symbol: order.symbol,
       exchange: order.exchange,
@@ -398,7 +451,7 @@ export class RithmicClient {
 
   async cancelOrder(accountId: string, basketId: string): Promise<RithmicResponse> {
     return this.plant('order').request(316, {
-      account_id: accountId,
+      ...this.accountFields(accountId),
       basket_id: basketId,
       manual_or_auto: rithmicEnum('RequestCancelOrder', 'OrderPlacement', 'MANUAL'),
     });
@@ -406,7 +459,7 @@ export class RithmicClient {
 
   async cancelAllOrders(accountId: string): Promise<RithmicResponse> {
     return this.plant('order').request(346, {
-      account_id: accountId,
+      ...this.accountFields(accountId),
       manual_or_auto: rithmicEnum('RequestCancelAllOrders', 'OrderPlacement', 'MANUAL'),
     });
   }
@@ -414,7 +467,7 @@ export class RithmicClient {
   /** Zavře pozici v instrumentu tržním příkazem na straně serveru. */
   async exitPosition(accountId: string, symbol: string, exchange: string): Promise<RithmicResponse> {
     return this.plant('order').request(3504, {
-      account_id: accountId,
+      ...this.accountFields(accountId),
       symbol,
       exchange,
       manual_or_auto: rithmicEnum('RequestExitPosition', 'OrderPlacement', 'MANUAL'),
@@ -423,32 +476,33 @@ export class RithmicClient {
 
   /** Snímek příkazů účtu (pracující i dnešní dokončené — rozsah ověřit na serveru). */
   async showOrders(accountId: string): Promise<RithmicOrderUpdate[]> {
-    const response = await this.plant('order').request(
-      320,
-      { account_id: accountId },
-      {
-        collect: (m) =>
-          m.templateId === 352 && m.fields.is_snapshot === true && str(m.fields.account_id) === accountId,
-      },
-    );
-    return response.rows.filter((m) => m.templateId === 352).map((m) => orderUpdate('exchange', m, response.completedAt));
+    return this.orderSnapshot(320, accountId, {});
   }
 
   /** Souhrn historie příkazů za obchodní den (YYYYMMDD) — pro dohledání i dokončených příkazů. */
   async showOrderHistorySummary(accountId: string, date: string): Promise<RithmicOrderUpdate[]> {
-    const response = await this.plant('order').request(
-      324,
-      { account_id: accountId, date },
-      {
-        collect: (m) =>
-          m.templateId === 352 && m.fields.is_snapshot === true && str(m.fields.account_id) === accountId,
-      },
-    );
-    return response.rows.filter((m) => m.templateId === 352).map((m) => orderUpdate('exchange', m, response.completedAt));
+    return this.orderSnapshot(324, accountId, { date });
+  }
+
+  private orderSnapshot(templateId: 320 | 324, accountId: string, extra: RithmicFields): Promise<RithmicOrderUpdate[]> {
+    const identity = this.accountFields(accountId);
+    return this.serialSnapshot(async () => {
+      const response = await this.plant('order').request(
+        templateId,
+        { ...identity, ...extra },
+        {
+          collect: (m) =>
+            m.templateId === 352 && m.fields.is_snapshot === true && str(m.fields.account_id) === accountId,
+        },
+      );
+      return response.rows
+        .filter((m) => m.templateId === 352 && this.trustedAccount(m.fields, 'řádek snímku příkazů'))
+        .map((m) => orderUpdate('exchange', m, response.completedAt));
+    });
   }
 
   async showBrackets(accountId: string): Promise<Array<{ basketId: string; targetTicks: number | null; targetQuantity: number | null; targetQuantityReleased: number | null }>> {
-    const response = await this.plant('order').request(338, { account_id: accountId });
+    const response = await this.plant('order').request(338, this.accountFields(accountId));
     return [...response.rows, ...(response.terminal ? [response.terminal] : [])]
       .filter((m) => str(m.fields.basket_id) !== '')
       .map((m) => ({
@@ -460,7 +514,7 @@ export class RithmicClient {
   }
 
   async showBracketStops(accountId: string): Promise<Array<{ basketId: string; stopTicks: number | null; stopQuantity: number | null; stopQuantityReleased: number | null }>> {
-    const response = await this.plant('order').request(340, { account_id: accountId });
+    const response = await this.plant('order').request(340, this.accountFields(accountId));
     return [...response.rows, ...(response.terminal ? [response.terminal] : [])]
       .filter((m) => str(m.fields.basket_id) !== '')
       .map((m) => ({
@@ -473,11 +527,17 @@ export class RithmicClient {
 
   /** Posun SL bracketu před vznikem nohy: `level` je dosavadní vzdálenost, `stopTicks` nová. */
   async updateStopBracketLevel(accountId: string, basketId: string, level: number, stopTicks: number): Promise<RithmicResponse> {
-    return this.plant('order').request(334, { account_id: accountId, basket_id: basketId, level, stop_ticks: stopTicks });
+    return this.plant('order').request(334, { ...this.accountFields(accountId), basket_id: basketId, level, stop_ticks: stopTicks });
   }
 
   async updateTargetBracketLevel(accountId: string, basketId: string, level: number, targetTicks: number): Promise<RithmicResponse> {
-    return this.plant('order').request(332, { account_id: accountId, basket_id: basketId, level, target_ticks: targetTicks });
+    return this.plant('order').request(332, { ...this.accountFields(accountId), basket_id: basketId, level, target_ticks: targetTicks });
+  }
+
+  /** Surové RMS nastavení účtů (limity, stav, auto-likvidace) — zatím jen pro měření. */
+  async accountRmsInfo(): Promise<RithmicFields[]> {
+    const response = await this.plant('order').request(304, { user_type: this.userType });
+    return [...response.rows, ...(response.terminal ? [response.terminal] : [])].map((m) => m.fields);
   }
 
   async frontMonthContract(symbol: string, exchange: string): Promise<string | null> {
@@ -520,14 +580,14 @@ export class RithmicClient {
 
   async subscribePnl(accountId: string): Promise<void> {
     await this.plant('pnl').request(400, {
-      account_id: accountId,
+      ...this.accountFields(accountId),
       request: rithmicEnum('RequestPnLPositionUpdates', 'Request', 'SUBSCRIBE'),
     });
   }
 
   /** Vyžádá snímek pozic a P&L; výsledky přijdou událostmi s isSnapshot = true. */
   async requestPnlSnapshot(accountId: string): Promise<void> {
-    await this.plant('pnl').request(402, { account_id: accountId });
+    await this.plant('pnl').request(402, this.accountFields(accountId));
   }
 
   private handlePush(plant: RithmicPlantName, message: RithmicMessage, receivedAt: number): void {
@@ -536,12 +596,15 @@ export class RithmicClient {
     const f = message.fields;
     switch (message.templateId) {
       case 351:
+        if (!this.trustedAccount(f, 'notifikace příkazu')) return;
         events.onOrderUpdate?.(orderUpdate('rithmic', message, receivedAt));
         return;
       case 352:
+        if (!this.trustedAccount(f, 'notifikace příkazu')) return;
         events.onOrderUpdate?.(orderUpdate('exchange', message, receivedAt));
         return;
       case 353:
+        if (!this.trustedAccount(f, 'změna bracketu')) return;
         events.onBracketUpdate?.({
           accountId: str(f.account_id),
           basketId: str(f.basket_id),
@@ -571,12 +634,13 @@ export class RithmicClient {
         });
         return;
       case 450:
+        if (!this.trustedAccount(f, 'pozice')) return;
         events.onInstrumentPosition?.({
           accountId: str(f.account_id),
           symbol: str(f.symbol),
           exchange: str(f.exchange),
           isSnapshot: f.is_snapshot === true,
-          netQuantity: num(f.net_quantity) ?? 0,
+          netQuantity: num(f.net_quantity),
           avgOpenFillPrice: num(f.avg_open_fill_price),
           openPnl: num(f.open_position_pnl) ?? num(f.day_open_pnl),
           closedPnl: num(f.closed_position_pnl) ?? num(f.day_closed_pnl),
@@ -584,6 +648,7 @@ export class RithmicClient {
         });
         return;
       case 451:
+        if (!this.trustedAccount(f, 'P&L účtu')) return;
         events.onAccountPnl?.({
           accountId: str(f.account_id),
           isSnapshot: f.is_snapshot === true,

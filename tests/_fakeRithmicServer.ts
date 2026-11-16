@@ -35,6 +35,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   const password = options.password ?? 'secret';
   const tickSize = options.tickSize ?? 0.25;
   const orders = new Map<string, FakeOrder>();
+  /** `účet|symbol` → čistá pozice */
+  const positions = new Map<string, number>();
   const sockets: FakeSocket[] = [];
   const received: Array<{ templateId: number; fields: RithmicFields }> = [];
   let basketSeq = 100;
@@ -45,6 +47,12 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     ignoreNextOrder: false,
     rejectNextOrder: false as false | string,
     frontMonth: 'ESZ6' as string | null,
+    /** Server přestane odpovídat na heartbeat (tiché spojení bez zavření). */
+    silent: false,
+    /** Seznam účtů vrátí stejný účet dvakrát. */
+    duplicateAccount: false,
+    /** Snímek P&L bez řádků pozic i bez ukončení (pro test neúplného snímku). */
+    pnlSnapshotFails: false,
   };
 
   class FakeSocket implements RithmicSocketLike {
@@ -149,6 +157,12 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     order.filled = order.quantity;
     order.status = 'complete';
     notify(order, 5, 15, { fill_price: price, fill_size: order.quantity, fill_id: `F${basketId}` });
+    const posKey = `${order.accountId}|${order.symbol}`;
+    const net = (positions.get(posKey) ?? 0) + (order.side === 1 ? order.quantity : -order.quantity);
+    positions.set(posKey, net);
+    for (const s of sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
+      s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: price });
+    }
     const opposite = order.side === 1 ? 2 : 1;
     const direction = order.side === 1 ? 1 : -1;
     const legs: FakeOrder[] = [];
@@ -198,13 +212,14 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         return;
       case 12:
       case 18:
-        if (templateId === 18) socket.push(19, { rp_code: ['0'] });
+        if (templateId === 18 && !controls.silent) socket.push(19, { rp_code: ['0'] });
         return;
       case 300:
         ok({ fcm_id: 'FCM', ib_id: 'IB', user_type: 3 });
         return;
       case 302:
         for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, account_name: `Name ${account}` });
+        if (controls.duplicateAccount) row({ fcm_id: 'FCM2', ib_id: 'IB', account_id: accounts[0], account_name: 'dup' });
         ok();
         return;
       case 310:
@@ -218,10 +233,16 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         ok();
         return;
       case 402:
-        for (const s of sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
-          s.push(450, { is_snapshot: true, account_id: String(f.account_id), symbol: 'ESZ6', exchange: 'CME', net_quantity: 0 });
-          s.push(451, { is_snapshot: true, account_id: String(f.account_id), account_balance: '50000', day_pnl: '0' });
+        if (controls.pnlSnapshotFails) {
+          socket.push(403, { user_msg: userMsg, rp_code: ['6', 'snapshot unavailable'] });
+          return;
         }
+        for (const [key, net] of positions) {
+          const [accountId, symbol] = key.split('|');
+          if (accountId !== String(f.account_id)) continue;
+          socket.push(450, { is_snapshot: true, account_id: accountId, symbol, exchange: 'CME', net_quantity: net });
+        }
+        socket.push(451, { is_snapshot: true, account_id: String(f.account_id), account_balance: '50000', day_pnl: '0', closed_position_pnl: '125.5', open_position_pnl: '-12.5' });
         ok();
         return;
       case 113:
@@ -291,6 +312,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   return {
     socketFactory: () => new FakeSocket(),
     orders,
+    positions,
     received,
     sockets,
     controls,

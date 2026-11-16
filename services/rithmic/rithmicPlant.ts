@@ -6,7 +6,8 @@
  *  - požadavek, který už odešel a nedostal konečnou odpověď (timeout, pád
  *    spojení), končí chybou s `outcome: 'unknown'` — volající MUSÍ výsledek
  *    dohledat, ne předpokládat neúspěch;
- *  - požadavek, který neodešel, končí `outcome: 'not-sent'`;
+ *  - `outcome: 'not-sent'` jen když se o odeslání vůbec nepokusil (spojení není
+ *    připravené, požadavek nejde sestavit); výjimka ze `send()` je 'unknown';
  *  - výslovné odmítnutí serverem je `outcome: 'rejected'`;
  *  - spojení se samo neobnovuje; o novém připojení a dorovnání stavu rozhoduje
  *    vrstva nad tím.
@@ -92,9 +93,15 @@ export interface RithmicPlantConfig {
   onPush?: (message: RithmicMessage, receivedAt: number) => void;
   onClose?: (info: RithmicCloseInfo) => void;
   onUnknownTemplate?: (templateId: number) => void;
+  /** Zpracování zprávy vyhodilo výjimku (zpráva se NEuplatnila). */
+  onHandlerError?: (message: RithmicMessage, error: unknown) => void;
+  /** Jakákoli zpráva ze serveru (i odpověď na heartbeat) = důkaz živého spojení. */
+  onAlive?: (receivedAt: number) => void;
   now?: () => number;
   requestTimeoutMs?: number;
   connectTimeoutMs?: number;
+  /** Jak často posílat heartbeat, jako podíl intervalu ze serveru (výchozí 0,5). */
+  heartbeatFraction?: number;
 }
 
 interface Pending {
@@ -192,6 +199,7 @@ export class RithmicPlant {
       const interval = Number(login.fields.heartbeat_interval);
       if (Number.isFinite(interval) && interval > 0) this.heartbeatIntervalSec = interval;
       this.loggedIn = true;
+      this.lastMessageAt = this.now();
       this.startHeartbeat();
       return login;
     } catch (error) {
@@ -264,8 +272,9 @@ export class RithmicPlant {
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(id);
-        // send() selhal synchronně: data do socketu neodešla.
-        reject(new RithmicRequestError(`Rithmic: odeslání selhalo: ${(error as Error).message}`, 'not-sent', templateId));
+        // Výjimka ze send() nedokazuje, že neodešel ani bajt (rámec mohl být
+        // zčásti zapsán). Výsledek je proto neznámý a musí se dohledat.
+        reject(new RithmicRequestError(`Rithmic: výsledek požadavku ${templateId} neznámý, send() selhal: ${(error as Error).message}`, 'unknown', templateId));
       }
     });
   }
@@ -298,10 +307,16 @@ export class RithmicPlant {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
-    const periodMs = Math.max(1_000, Math.floor(this.heartbeatIntervalSec * 1000 * 0.5));
+    const periodMs = Math.max(1_000, Math.floor(this.heartbeatIntervalSec * 1000 * (this.config.heartbeatFraction ?? 0.5)));
+    const silenceMs = Math.max(this.heartbeatIntervalSec * 1000 * 2.5, periodMs * 3);
     this.heartbeatTimer = setInterval(() => {
       const socket = this.socket;
       if (!socket || socket.readyState !== SOCKET_OPEN) return;
+      // Tiché spojení: server neodpověděl ani na heartbeat. Bereme ho jako spadlé.
+      if (this.now() - this.lastMessageAt > silenceMs) {
+        this.closeSocket();
+        return;
+      }
       try {
         socket.send(encodeRithmicFrame(TEMPLATE_HEARTBEAT, {}));
       } catch {
@@ -363,7 +378,16 @@ export class RithmicPlant {
     }
     const receivedAt = this.now();
     this.lastMessageAt = receivedAt;
-    for (const message of messages) this.handleMessage(message, receivedAt);
+    this.config.onAlive?.(receivedAt);
+    for (const message of messages) {
+      try {
+        this.handleMessage(message, receivedAt);
+      } catch (error) {
+        // Výjimka odběratele nesmí zahodit zbytek zpráv z téhož rámce, ale nesmí ani zmizet:
+        // vrstva nad tím musí stav ověřit čtením.
+        this.config.onHandlerError?.(message, error);
+      }
+    }
   }
 
   private handleMessage(message: RithmicMessage, receivedAt: number): void {
@@ -379,17 +403,15 @@ export class RithmicPlant {
     }
     const userMsg = rithmicStrings(message.fields.user_msg);
     const rpCode = rithmicStrings(message.fields.rp_code);
-    let pending = userMsg.length ? this.pending.get(userMsg[0]) : undefined;
+    const pending = userMsg.length ? this.pending.get(userMsg[0]) : undefined;
 
     if (message.templateId === TEMPLATE_REJECT) {
       if (pending) this.finish(pending, null, rpCode, receivedAt);
       return;
     }
-    if (!pending) {
-      // Odpověď bez user_msg: patří jedinému čekajícímu požadavku téže šablony.
-      const candidates = [...this.pending.values()].filter((p) => p.responseTemplateId === message.templateId);
-      if (candidates.length === 1 && userMsg.length === 0) pending = candidates[0];
-    }
+    // Odpověď se přiřadí JEN podle shodného user_msg — konečná i datový řádek. Pozdní řádek
+    // starého požadavku bez user_msg by jinak skončil ve výsledku jiného čtení nebo potvrdil
+    // jiný zápis. Pokud server u některé šablony user_msg nevrací, čtení vyprší (bezpečně).
     if (pending && pending.responseTemplateId === message.templateId) {
       if (rpCode.length === 0) {
         pending.rows.push(message);

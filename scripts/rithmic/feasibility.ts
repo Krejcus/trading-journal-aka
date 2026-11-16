@@ -8,6 +8,8 @@
  *   D  ztráta spojení po odeslání příkazu — jde příkaz dohledat?
  *   E  úplné dorovnání stavu po novém připojení
  *   F  druhé přihlášení stejným účtem
+ *   G  slovník a pořadí zpráv, na kterých stojí návrh adaptéru (odmítnutí, stavy
+ *      ve snímku a historii, pořadí řádků snímku, zpoždění pozic za fillem)
  *
  * JEN systém „Rithmic Test" (jiný skript odmítne). Heslo jen z Klíčenky
  * (služba alphatrade-rithmic-test) nebo z proměnných prostředí. Na konci
@@ -41,7 +43,7 @@ function arg(name: string, fallback: string): string {
 }
 const SYMBOL = arg('symbol', 'ES');
 const EXCHANGE = arg('exchange', 'CME');
-const ONLY = new Set(arg('only', 'A,B,C,D,E,F').split(','));
+const ONLY = new Set(arg('only', 'A,B,C,D,E,F,G').split(','));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function credentials(): { user: string; password: string } {
@@ -85,11 +87,23 @@ function session(creds: { user: string; password: string }, appName = 'AlphaTrad
     },
     requestTimeoutMs: 10_000,
     events: {
-      onOrderUpdate: (u) => s.orders.push(u),
+      onOrderUpdate: (u) => {
+        s.orders.push(u);
+        vocabulary.add(`${u.source}|${u.notifyType}|status=${u.status}|reason=${u.completionReason}|snap=${u.isSnapshot}`);
+        if (u.isSnapshot) lateSnapshotRows.push(`${u.basketId}:${u.notifyType}`);
+        basketIds.add(u.basketId);
+      },
       onBracketUpdate: (u) => s.brackets.push(u),
       onTick: (t) => s.ticks.push(t),
-      onInstrumentPosition: (p) => s.positions.push(p),
-      onAccountPnl: (p) => s.pnl.push(p),
+      onInstrumentPosition: (p) => {
+        s.positions.push(p);
+        pnlTrace.push({ kind: '450', snap: p.isSnapshot, at: performance.now(), net: p.netQuantity });
+      },
+      onAccountPnl: (p) => {
+        s.pnl.push(p);
+        pnlTrace.push({ kind: '451', snap: p.isSnapshot, at: performance.now(), net: p.netQuantity });
+      },
+      onAttention: (m) => attention.push(m),
       onPlantClosed: (plant, info) => s.closed.push(`${plant}:${info.code ?? '?'}:${info.forcedLogout ? 'forced' : info.intentional ? 'intentional' : 'dropped'}`),
       onUnknownTemplate: (_p, id) => s.unknown.push(id),
     },
@@ -103,6 +117,15 @@ async function connectPlant(s: Session, plant: 'order' | 'ticker' | 'pnl'): Prom
   await s.client.connect([plant]);
   s.byPlant[plant] = s.sockets[index];
 }
+
+/** Sběr pro scénář G (napříč celým během). */
+const vocabulary = new Set<string>();
+/** Řádky snímku příkazů doručené MIMO svůj požadavek (tedy až po jeho ukončení). */
+const lateSnapshotRows: string[] = [];
+const basketIds = new Set<string>();
+const pnlTrace: Array<{ kind: string; snap: boolean; at: number; net: number | null }> = [];
+const attention: string[] = [];
+const rejections: unknown[] = [];
 
 async function waitFor<T>(read: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
   const end = Date.now() + timeoutMs;
@@ -175,6 +198,8 @@ async function main(): Promise<void> {
   const stage = (from: number, basket: string, source: string, type: string) =>
     since(from).find((u) => u.basketId === basket && u.source === source && u.notifyType === type);
 
+  // Cokoli se v scénářích pokazí, úklid níže musí proběhnout.
+  try {
   // ---- B: Limit → posun → zrušení -----------------------------------------
   if (ONLY.has('B')) {
     const place: number[] = [];
@@ -248,6 +273,9 @@ async function main(): Promise<void> {
     const open = await s.client.showOrders(account);
     c.marketShowOrders = open.map(brief);
     c.positionAfterFill = [...s.positions].reverse().find((p) => p.symbol === contract) ?? null;
+    const firstNonFlat = pnlTrace.find((t) => t.kind === '450' && !t.snap && t.at >= tSend && t.net !== 0 && t.net !== null);
+    c.positionUpdateAfterSendMs = firstNonFlat ? Math.round(firstNonFlat.at - tSend) : null;
+    c.positionLagBehindFillMs = firstNonFlat && fillMs !== null ? Math.round(firstNonFlat.at - tSend) - fillMs : null;
     // posun SL nohy jako běžného příkazu
     const stopLeg = open.find((o) => o.priceType === 'STOP_MARKET' || o.priceType === 'STOP_LIMIT');
     if (stopLeg && stopLeg.triggerPrice !== null) {
@@ -355,24 +383,104 @@ async function main(): Promise<void> {
     console.log('F', JSON.stringify(report.F));
   }
 
+  // ---- G: slovník a pořadí --------------------------------------------------
+  if (ONLY.has('G')) {
+    for (const p of ['order', 'ticker', 'pnl'] as const) if (!s.client.isConnected(p)) await connectPlant(s, p);
+    const g: Record<string, unknown> = {};
+    // G1: odmítnutí — nesmyslné množství a cena mimo tick; co přesně přijde?
+    // Cena na polovině trhu: i kdyby server příkaz přijal, vyplnit se nemůže.
+    const unreachable = Math.round((refPrice * 0.5) / tick) * tick;
+    for (const [label, patch] of [
+      ['overLimitQuantity', { quantity: 500, priceType: 'LIMIT', price: unreachable }],
+      ['offTickPrice', { quantity: 1, priceType: 'LIMIT', price: unreachable + tick / 3 }],
+    ] as const) {
+      const from = s.orders.length;
+      const userTag = tag(`g-${label}`);
+      let result: unknown;
+      try {
+        const ack = await s.client.placeOrder({ accountId: account, symbol: contract, exchange: EXCHANGE, side: 'BUY', userTag, ...patch });
+        result = { accepted: true, basketId: ack.basketId };
+      } catch (error) {
+        result = error instanceof RithmicRequestError ? { outcome: error.outcome, rpCode: error.rpCode } : { other: String(error) };
+      }
+      await sleep(1_500);
+      const notes = since(from).filter((u) => u.userTag === userTag).map(brief);
+      rejections.push({ label, result, notifications: notes });
+      // Jakýkoli jiný výsledek než výslovné odmítnutí: zrušit vše na účtu a ověřit.
+      const rejected = typeof result === 'object' && result !== null && (result as { outcome?: string }).outcome === 'rejected';
+      if (!rejected) {
+        const cancelAll = await s.client.cancelAllOrders(account).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+        await sleep(1_000);
+        const left = await s.client.showOrders(account).then((rows) => rows.length).catch((e) => `chyba: ${(e as Error).message}`);
+        rejections.push({ label, cleanup: { cancelAll, openOrdersLeft: left } });
+      }
+    }
+    g.rejections = rejections;
+    // G2: zrušení neexistujícího příkazu a změna už zrušeného
+    g.cancelUnknownBasket = await s.client.cancelOrder(account, '999999999').then(() => 'ok').catch((e) => (e instanceof RithmicRequestError ? { outcome: e.outcome, rpCode: e.rpCode } : String(e)));
+    // G3: pořadí snímku P&L proti ukončení požadavku
+    const mark = performance.now();
+    await s.client.requestPnlSnapshot(account);
+    const done = performance.now();
+    await sleep(1_000);
+    const rows = pnlTrace.filter((t) => t.snap && t.at >= mark);
+    g.pnlSnapshot = {
+      requestMs: Math.round(done - mark),
+      rowsBeforeTerminal: rows.filter((t) => t.at <= done).map((t) => t.kind),
+      rowsAfterTerminal: rows.filter((t) => t.at > done).map((t) => `${t.kind}+${Math.round(t.at - done)}ms`),
+    };
+    // G4: historie dne — jak vypadají dokončené, zrušené a odmítnuté příkazy
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const history = await s.client.showOrderHistorySummary(account, today).catch((e) => `chyba: ${(e as Error).message}`);
+    g.historyRows = Array.isArray(history) ? history.length : history;
+    g.historyVocabulary = Array.isArray(history)
+      ? [...new Set(history.map((o) => `status=${o.status}|reason=${o.completionReason}|type=${o.notifyType}|priceType=${o.priceType}|bracket=${o.bracketType}|qty=${o.quantity}|fill=${o.totalFillSize}`))]
+      : null;
+    g.historySample = Array.isArray(history) ? history.slice(-12).map(brief) : null;
+    g.workingRowsNow = (await s.client.showOrders(account)).map(brief);
+    g.accountRms = await s.client.accountRmsInfo().catch((e) => `chyba: ${(e as Error).message}`);
+    g.basketIdsNumeric = [...basketIds].filter(Boolean).every((id) => /^\d+$/.test(id));
+    g.basketIdsInOrderSeen = [...basketIds].filter(Boolean).slice(0, 40);
+    report.G = g;
+    console.log('G', JSON.stringify({ rejections: rejections.length, pnlSnapshot: g.pnlSnapshot, historyRows: g.historyRows, basketIdsNumeric: g.basketIdsNumeric }));
+  }
+
+  } catch (error) {
+    report.scenarioError = error instanceof Error ? error.message : String(error);
+    console.error('Scénář selhal, pokračuji úklidem:', report.scenarioError);
+  }
+
   // ---- úklid ---------------------------------------------------------------
   if (!s.client.isConnected('order')) await connectPlant(s, 'order').catch(() => undefined);
   const cleanup: Record<string, unknown> = {};
   if (s.client.isConnected('order')) {
-    const left = await s.client.showOrders(account).catch(() => []);
-    cleanup.openOrdersLeft = left.length;
-    if (left.length) cleanup.cancelAll = await s.client.cancelAllOrders(account).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
-    const position = [...s.positions].reverse().find((p) => p.symbol === contract);
-    cleanup.lastKnownNetQuantity = position?.netQuantity ?? null;
-    if (position && position.netQuantity !== 0) {
-      cleanup.exit = await s.client.exitPosition(account, contract, EXCHANGE).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
-    }
+    // Selhané čtení neznamená „nic nezbylo": zrušit vše se pošle vždy.
+    cleanup.openOrdersBefore = await s.client.showOrders(account).then((rows) => rows.length).catch((e) => `chyba: ${(e as Error).message}`);
+    cleanup.cancelAll = await s.client.cancelAllOrders(account).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+    if (!s.client.isConnected('pnl')) await connectPlant(s, 'pnl').catch(() => undefined);
+    const from = s.positions.length;
+    await s.client.subscribePnl(account).catch(() => undefined);
+    await s.client.requestPnlSnapshot(account).catch(() => undefined);
     await sleep(1_500);
-    cleanup.openOrdersAfter = (await s.client.showOrders(account).catch(() => [])).length;
+    const position = [...s.positions].reverse().find((p) => p.symbol === contract);
+    const fresh = s.positions.slice(from).some((p) => p.symbol === contract);
+    cleanup.netQuantity = position ? position.netQuantity : 'žádný řádek pozice';
+    cleanup.positionFromFreshSnapshot = fresh;
+    if (position && typeof position.netQuantity === 'number' && position.netQuantity !== 0) {
+      cleanup.exit = await s.client.exitPosition(account, contract, EXCHANGE).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+      await sleep(1_500);
+    } else if (position && position.netQuantity === null) {
+      // Neznámou pozici nezavíráme naslepo — jen hlásíme.
+      cleanup.warning = 'pozice je neznámá (server neposlal množství) — zkontroluj testovací účet ručně';
+    }
+    cleanup.openOrdersAfter = await s.client.showOrders(account).then((rows) => rows.length).catch((e) => `chyba: ${(e as Error).message}`);
   } else {
     cleanup.error = 'order plant se nepodařilo znovu připojit — zkontroluj testovací účet';
   }
   report.cleanup = cleanup;
+  report.vocabulary = [...vocabulary].sort();
+  report.lateSnapshotRows = lateSnapshotRows;
+  report.attention = attention;
   report.unknownTemplates = [...new Set(s.unknown)];
   report.closeEvents = s.closed;
   s.client.close();

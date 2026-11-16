@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { decodeRithmicFrames, encodeRithmicFrame } from '../services/rithmic/rithmicCodec';
 import { RithmicClient, type RithmicOrderUpdate } from '../services/rithmic/rithmicClient';
 import { RithmicRequestError, type RithmicCloseInfo } from '../services/rithmic/rithmicPlant';
@@ -182,7 +182,7 @@ describe('RithmicClient', () => {
     await flush();
     expect(snapshot.map((o) => o.userTag)).toEqual(['tag-s']);
     expect(updates.length).toBe(before);
-    expect(await client.showOrders('JINY')).toEqual([]);
+    expect(await outcomeOf(client.showOrders('JINY'))).toBe('not-sent');
   });
 
   it('historie obsahuje i dokončené příkazy, které snímek pracujících už nevrací', async () => {
@@ -203,6 +203,130 @@ describe('RithmicClient', () => {
     await flush();
     expect(closed.map((c) => c.info.forcedLogout)).toEqual([true]);
     expect(client.isConnected('order')).toBe(false);
+  });
+
+  it('výjimka ze send() je "unknown", ne "not-sent"', async () => {
+    const { server, client } = setup();
+    await client.connect(['order']);
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    const original = socket.send.bind(socket);
+    socket.send = () => {
+      throw new Error('EPIPE');
+    };
+    const error = await client.placeOrder(limit('tag-e')).catch((e) => e as RithmicRequestError);
+    socket.send = original;
+    expect((error as RithmicRequestError).outcome).toBe('unknown');
+    expect((error as Error).message).not.toMatch(/rejected|odm[ií]t/i);
+  });
+
+  it('konečná odpověď bez shodného user_msg se nepřiřadí cizímu požadavku', async () => {
+    const { server, client } = setup({}, 40);
+    await client.connect(['order']);
+    server.controls.ignoreNextOrder = true;
+    const pending = outcomeOf(client.placeOrder(limit('tag-late')));
+    await flush();
+    // pozdní potvrzení jiného (starého) požadavku: bez user_msg i s cizím user_msg
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    socket.push(313, { rp_code: ['0'], basket_id: '999' });
+    socket.push(313, { user_msg: ['stary-pozadavek'], rp_code: ['0'], basket_id: '998' });
+    expect(await pending).toBe('unknown');
+  });
+
+  it('snímky téhož účtu běží po jednom a nepomíchají se', async () => {
+    const { server, client } = setup();
+    await client.connect(['order']);
+    const open = await client.placeOrder(limit('tag-open'));
+    const done = await client.placeOrder({ ...limit('tag-done'), priceType: 'MARKET', price: undefined });
+    server.fill(done.basketId, 7001);
+    await flush();
+    const [working, history] = await Promise.all([client.showOrders('ACC1'), client.showOrderHistorySummary('ACC1', '20261116')]);
+    expect(working.map((o) => o.basketId)).toEqual([open.basketId]);
+    expect(history.map((o) => o.basketId).sort()).toEqual([open.basketId, done.basketId].sort());
+  });
+
+  it('událost s cizí identitou účtu se zahodí a ohlásí', async () => {
+    const server = createFakeRithmicServer();
+    const attention: string[] = [];
+    const seen: RithmicOrderUpdate[] = [];
+    const client = new RithmicClient({
+      url: 'wss://fake', credentials, socketFactory: server.socketFactory,
+      events: { onOrderUpdate: (u) => seen.push(u), onAttention: (m) => attention.push(m) },
+    });
+    await client.connect(['order']);
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    socket.push(352, { account_id: 'ACC1', fcm_id: 'JINE_FCM', ib_id: 'IB', basket_id: '5', notify_type: 1 });
+    socket.push(352, { account_id: 'CIZI', basket_id: '6', notify_type: 1 });
+    socket.push(352, { account_id: 'ACC1', fcm_id: 'FCM', ib_id: 'IB', basket_id: '7', notify_type: 1 });
+    await flush();
+    expect(seen.map((u) => u.basketId)).toEqual(['7']);
+    expect(attention).toHaveLength(2);
+  });
+
+  it('tiché spojení se po 2,5 intervalu zavře; zdravé přežije a hlásí živost', async () => {
+    vi.useFakeTimers();
+    try {
+      const { server, client, closed } = setup();
+      const alive: string[] = [];
+      const second = new RithmicClient({
+        url: 'wss://fake', credentials, socketFactory: server.socketFactory,
+        events: { onAlive: (plant) => alive.push(plant), onPlantClosed: (plant, info) => closed.push({ plant, info }) },
+      });
+      await second.connect(['order']);
+      await client.connect(['order']);
+      const before = alive.length;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(second.isConnected('order')).toBe(true);
+      expect(alive.length).toBeGreaterThan(before);
+      server.controls.silent = true;
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(second.isConnected('order')).toBe(false);
+      expect(client.isConnected('order')).toBe(false);
+      expect(closed.every((c) => c.info.intentional === false)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dva účty se stejným číslem přihlášení odmítne a seznam účtů nenechá v paměti', async () => {
+    const { server, client } = setup();
+    server.controls.duplicateAccount = true;
+    await expect(client.connect(['order'])).rejects.toThrow(/dva účty se stejným číslem/);
+    expect(client.accounts).toEqual([]);
+    expect(client.isConnected('order')).toBe(false);
+  });
+
+  it('pnl plant bez order plantu se nepřipojí; neznámá pozice je null, ne nula', async () => {
+    const server = createFakeRithmicServer();
+    const positions: Array<number | null> = [];
+    const client = new RithmicClient({
+      url: 'wss://fake', credentials, socketFactory: server.socketFactory,
+      events: { onInstrumentPosition: (p) => positions.push(p.netQuantity) },
+    });
+    expect(await outcomeOf(client.connect(['pnl']))).toBe('not-sent');
+    await client.connect(['order', 'pnl']);
+    const socket = server.sockets.filter((x) => x.readyState === 1 && x.infra === 4)[0];
+    socket.push(450, { account_id: 'ACC1', symbol: 'ESZ6' });
+    socket.push(450, { account_id: 'ACC1', symbol: 'ESZ6', net_quantity: 0 });
+    await flush();
+    expect(positions).toEqual([null, 0]);
+  });
+
+  it('datový řádek bez user_msg se nepřiřadí cizímu čtení', async () => {
+    const { server, client } = setup();
+    await client.connect(['order']);
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    // pozdní řádek starého čtení (účet A) dorazí těsně před dalším čtením
+    socket.push(339, { rq_handler_rp_code: ['0'], basket_id: 'CIZI', target_ticks: '10' });
+    socket.push(339, { user_msg: ['stare-cteni'], rq_handler_rp_code: ['0'], basket_id: 'CIZI2', target_ticks: '10' });
+    const result = await client.showBrackets('ACC1').catch((e) => e as RithmicRequestError);
+    expect(result instanceof RithmicRequestError ? result.outcome : result).not.toEqual(expect.arrayContaining([expect.objectContaining({ basketId: 'CIZI' })]));
+  });
+
+  it('zápis nese úplnou identitu účtu, ne jen jeho číslo', async () => {
+    const { server, client } = setup();
+    await client.connect(['order']);
+    await client.placeOrder(limit('tag-id'));
+    expect(server.received.find((r) => r.templateId === 312)!.fields).toMatchObject({ account_id: 'ACC1', fcm_id: 'FCM', ib_id: 'IB' });
   });
 
   it('"žádná data" (rp_code 7) je prázdná odpověď, ne chyba', async () => {
