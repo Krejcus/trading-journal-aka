@@ -70,6 +70,8 @@ export interface RithmicOrderUpdate {
   bracketType: string;
   status: string;
   completionReason: string;
+  /** Druh posledního hlášení u řádku snímku: změřeno „cancel" u zrušeného příkazu. */
+  reportType: string;
   quantity: number | null;
   price: number | null;
   triggerPrice: number | null;
@@ -197,6 +199,7 @@ function orderUpdate(source: 'exchange' | 'rithmic', message: RithmicMessage, re
     bracketType: f.bracket_type === undefined ? '' : rithmicEnumName(type, 'BracketType', f.bracket_type),
     status: str(f.status),
     completionReason: str(f.completion_reason),
+    reportType: str(f.report_type),
     quantity: num(f.quantity),
     price: num(f.price),
     triggerPrice: num(f.trigger_price),
@@ -390,7 +393,11 @@ export class RithmicClient {
   }
 
   private ack(response: RithmicResponse, userTag: string, templateId: number): RithmicOrderAck {
-    const basketId = str(response.terminal?.fields.basket_id);
+    // Rithmic posílá basket_id v datovém řádku odpovědi a konečná odpověď ho nést nemusí
+    // (změřeno 16. 11. 2026 na Rithmic Test). Řádky jsou spárované podle user_msg.
+    const basketId =
+      str(response.terminal?.fields.basket_id) ||
+      str(response.rows.find((m) => m.templateId === templateId + 1 && str(m.fields.basket_id) !== '')?.fields.basket_id);
     if (!basketId) {
       // Server přijal, ale nevrátil ID: stav příkazu neznáme, musí se dohledat.
       throw new RithmicRequestError('Rithmic: potvrzení bez basket_id', 'unknown', templateId);
@@ -474,7 +481,10 @@ export class RithmicClient {
     });
   }
 
-  /** Snímek příkazů účtu (pracující i dnešní dokončené — rozsah ověřit na serveru). */
+  /**
+   * Snímek příkazů účtu. Změřeno 16. 11. 2026 na Rithmic Test: vrací pracující I dnešní
+   * dokončené příkazy (zrušené, vyplněné, odmítnuté). Historie 324 pro dnešní den vrací prázdno.
+   */
   async showOrders(accountId: string): Promise<RithmicOrderUpdate[]> {
     return this.orderSnapshot(320, accountId, {});
   }
@@ -491,13 +501,21 @@ export class RithmicClient {
         templateId,
         { ...identity, ...extra },
         {
+          // Změřeno 16. 11. 2026: příkaz, který nedošel na burzu (odmítnutí RMS), je ve snímku
+          // jen jako 351; ostatní jako 352. Sbíráme oba, jinak by odmítnutý příkaz chyběl.
           collect: (m) =>
-            m.templateId === 352 && m.fields.is_snapshot === true && str(m.fields.account_id) === accountId,
+            (m.templateId === 352 || m.templateId === 351) &&
+            m.fields.is_snapshot === true &&
+            str(m.fields.account_id) === accountId,
         },
       );
-      return response.rows
-        .filter((m) => m.templateId === 352 && this.trustedAccount(m.fields, 'řádek snímku příkazů'))
-        .map((m) => orderUpdate('exchange', m, response.completedAt));
+      const rows = response.rows.filter(
+        (m) => (m.templateId === 352 || m.templateId === 351) && this.trustedAccount(m.fields, 'řádek snímku příkazů'),
+      );
+      const onExchange = new Set(rows.filter((m) => m.templateId === 352).map((m) => str(m.fields.basket_id)));
+      return rows
+        .filter((m) => m.templateId === 352 || !onExchange.has(str(m.fields.basket_id)))
+        .map((m) => orderUpdate(m.templateId === 352 ? 'exchange' : 'rithmic', m, response.completedAt));
     });
   }
 

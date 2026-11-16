@@ -19,7 +19,7 @@ function update(patch: Partial<RithmicOrderUpdate>): RithmicOrderUpdate {
   return {
     source: 'exchange', notifyType: 'STATUS', isSnapshot: false, accountId: '1875', basketId: 'B1', originalBasketId: '',
     linkedBasketIds: '', userTag: 'tag-1', symbol: 'MNQZ6', exchange: 'CME', side: 'BUY', priceType: 'LIMIT', bracketType: '',
-    status: 'open', completionReason: '', quantity: 2, price: 25000, triggerPrice: null, fillPrice: null, fillSize: null,
+    status: 'open', completionReason: '', reportType: '', quantity: 2, price: 25000, triggerPrice: null, fillPrice: null, fillSize: null,
     fillId: '', avgFillPrice: null, totalFillSize: null, totalUnfilledSize: null, text: '', gatewayAt: 5_000 + seq,
     receivedAt: 6_000 + seq, raw: { sequence_number: String(seq) }, ...patch,
   };
@@ -225,9 +225,17 @@ describe('RithmicOrderBook', () => {
     const row = (patch: Partial<RithmicOrderUpdate>) => b.composeSnapshotRow(ACCOUNT, update({ isSnapshot: true, basketId: `S${seq}`, ...patch }));
     expect(row({ status: 'open' })?.status).toBe('working');
     expect(row({ status: 'Cancel pending' })?.status).toBe('pending');
+    // stop čekající na spuštění je pracující (potvrzená) ochrana
+    expect(row({ status: 'trigger pending', priceType: 'STOP_MARKET', price: null, triggerPrice: 24990 })?.status).toBe('working');
+    expect(row({ status: 'modified, trigger pending', priceType: 'STOP_MARKET', price: null, triggerPrice: 24990 })?.status).toBe('working');
+    expect(row({ status: 'complete', notifyType: 'REJECT', text: 'Illegal Price' })).toMatchObject({ status: 'rejected', rejectReason: 'Illegal Price' });
+    expect(row({ source: 'rithmic', notifyType: 'COMPLETE', status: 'complete', completionReason: 'FA', text: 'Rejected at RMS' })).toMatchObject({ status: 'rejected' });
+    expect(() => row({ status: 'neco pending' })).toThrow(/nejde určit/);
     expect(row({ status: 'cancelled' })?.status).toBe('canceled');
     expect(row({ status: 'complete', totalFillSize: 2 })?.status).toBe('filled');
     expect(row({ status: 'complete', completionReason: 'C', totalFillSize: 1 })).toMatchObject({ status: 'canceled', filledQuantity: 1 });
+    // tvar změřený na Rithmic Test: complete + report_type cancel
+    expect(row({ status: 'complete', reportType: 'cancel', notifyType: 'CANCEL', totalFillSize: 0 })?.status).toBe('canceled');
     expect(row({ status: 'complete', completionReason: 'FA', text: 'risk' })).toMatchObject({ status: 'rejected', rejectReason: 'risk' });
   });
 

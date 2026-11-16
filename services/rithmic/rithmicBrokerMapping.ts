@@ -98,16 +98,24 @@ function bracketKind(update: RithmicOrderUpdate): string | null {
  * neznámý text vrací null a volající snímek odmítne (raději nic než hádaný stav).
  */
 export function rithmicSnapshotStatus(row: RithmicOrderUpdate, quantity: number, filledQuantity: number): OrderStatus | null {
+  // Slovník změřený 16. 11. 2026 na Rithmic Test (scripts/rithmic/results):
+  //   pracující: "open", "modified", "trigger pending", "modified, trigger pending"
+  //   (stop čekající na spuštění je potvrzený burzou — je to pracující příkaz, ne nepotvrzený);
+  //   dokončené: status "complete" + typ posledního hlášení FILL / CANCEL / REJECT,
+  //   u příkazu odmítnutého Rithmicem (RMS) completion_reason "FA", burzou "R", zrušený "C", vyplněný "F".
   const status = row.status.trim().toLowerCase();
   const reason = row.completionReason.trim().toLowerCase();
-  if (status === 'open' || status === 'partial') return 'working';
-  if (status.includes('pending')) return 'pending';
+  const report = row.reportType.trim().toLowerCase();
+  if (status === 'open' || status === 'partial' || status === 'modified' || status === 'trigger pending' || status === 'modified, trigger pending') {
+    return 'working';
+  }
+  if (status === 'open pending' || status === 'modify pending' || status === 'cancel pending') return 'pending';
   if (status === 'cancelled' || status === 'canceled') return 'canceled';
   if (status === 'rejected' || status === 'failed' || status === 'failure') return 'rejected';
   if (status === 'complete' || status === 'completed') {
     if (quantity > 0 && filledQuantity >= quantity) return 'filled';
-    if (reason === 'c' || reason === 'cancelled' || reason === 'canceled') return 'canceled';
-    if (reason === 'r' || reason === 'rejected' || reason === 'fa' || reason === 'failure') return 'rejected';
+    if (row.notifyType === 'CANCEL' || report === 'cancel' || reason === 'c') return 'canceled';
+    if (row.notifyType === 'REJECT' || report === 'reject' || reason === 'r' || reason === 'fa') return 'rejected';
     return null;
   }
   return null;

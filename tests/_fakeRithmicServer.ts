@@ -300,7 +300,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         for (const order of orders.values()) {
           if (order.accountId !== String(f.account_id)) continue;
           if (templateId === 320 && order.status !== 'open') continue;
-          notify(order, 1, null, {}, socket);
+          // podle měření: snímek nese typ posledního hlášení (STATUS / FILL / CANCEL)
+          notify(order, order.status === 'cancelled' ? 3 : order.filled >= order.quantity && order.quantity > 0 ? 5 : 1, null, {}, socket);
         }
         ok();
         return;

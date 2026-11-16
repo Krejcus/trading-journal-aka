@@ -54,7 +54,9 @@ function credentials(): { user: string; password: string } {
     const meta = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const user = /"acct"<blob>="([^"]*)"/.exec(meta)?.[1];
     const password = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
-    if (user && password) return { user, password };
+    // Login jde přebít proměnnou (když je v Klíčence uložený pod jiným názvem účtu); heslo jen z Klíčenky.
+    const login = process.env.RITHMIC_USER || user;
+    if (login && password) return { user: login, password };
   } catch {
     // spadne do chyby níže
   }
@@ -164,7 +166,7 @@ async function main(): Promise<void> {
   if (!account) throw new Error('Login nemá žádný účet');
 
   // ---- A: identita, kontrakt, cena ----------------------------------------
-  let contract = await s.client.frontMonthContract(SYMBOL, EXCHANGE).catch(() => null);
+  let contract: string | null = arg('contract', '') || (await s.client.frontMonthContract(SYMBOL, EXCHANGE).catch(() => null));
   if (!contract) {
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const found = (await s.client.searchSymbols(SYMBOL, EXCHANGE))
