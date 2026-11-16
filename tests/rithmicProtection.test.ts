@@ -432,6 +432,35 @@ describe('nálezy z review diffu', () => {
     t.broker.stop();
   });
 
+  it('pozice, která předběhla zprávu o vyplnění, je důvěryhodná, když sedí se součtem exekucí; jinak ne', async () => {
+    const t = await setup();
+    const ack = await t.broker.placeBracket(bracket(t, 'xc'));
+    await flush();
+    // zpráva o pozici dorazí DŘÍV než vyplnění (dvě různá spojení)
+    t.server.controls.muteLivePositions = true;
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+    await flush();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await sleep(120);
+    expect(t.broker.bracketState(t.account(), ack.entryBrokerOrderId).state).toBe('protected');
+    // rychlá cesta zavírání se proto obejde bez čtení příkazů
+    const reads = t.sent(320);
+    t.server.controls.muteLivePositions = false;
+    expect((await flatten(t, 'fxc')).status).toBe('submitted');
+    expect(t.sent(320)).toBe(reads);
+    await sleep(100);
+    // nesouhlasná hodnota (pozice říká 2, exekuce dávají 1) důvěru nedostane
+    const second = await t.broker.placeBracket(bracket(t, 'xc2'));
+    await flush();
+    t.server.controls.muteLivePositions = true;
+    t.server.pushLivePosition('ACC1', 'ESZ6', 2);
+    await flush();
+    t.server.fill(second.entryBrokerOrderId, 7000);
+    await flush();
+    expect(t.broker.bracketState(t.account(), second.entryBrokerOrderId).state).toBe('unknown');
+    t.broker.stop();
+  });
+
   it('první zpráva nohy (ještě bez vazby): zrušení z posluchače události neprojde', async () => {
     const t = await setup();
     const ack = await t.broker.placeBracket(bracket(t, 'first'));
