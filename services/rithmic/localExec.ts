@@ -16,8 +16,19 @@ export interface LocalExecConfig {
   /** Povolené kontrakty a jejich krok ceny. */
   symbols: Record<string, { tickSize: number }>;
   maxQuantity: number;
-  /** Bez výslovného povolení služba odmítne všechno mimo demo prostředí. */
-  allowLive?: boolean;
+  /** Strop velikosti pozice včetně čekajících vstupů (výchozí = `maxQuantity`). */
+  maxPosition?: number;
+  /** Nejvyšší vzdálenost SL/TP od vstupu v tickách (výchozí 400). */
+  maxProtectionTicks?: number;
+  /** Poslední cena ze strany služby; reference od klienta se smí lišit nejvýš o `maxReferenceDriftTicks`. */
+  serverPrice?: (symbol: string) => number | null;
+  maxReferenceDriftTicks?: number;
+  /**
+   * Název systému Rithmicu, ke kterému je adaptér přihlášený, a výslovný seznam povolených.
+   * `environment === 'demo'` nestačí — na „Rithmic Paper Trading" běží i prop účty.
+   */
+  systemName: string;
+  allowedSystems: readonly string[];
   now?: () => number;
 }
 
@@ -50,17 +61,27 @@ export interface LocalExecState {
   incidents: Array<{ kind: string; message: string; at: number }>;
   /** Poslední odmítnuté příkazy (důvod od Rithmicu) — jen pro zobrazení. */
   rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }>;
+  /** Kritický incident zastavil nové vstupy; uvolní ho jen výslovné potvrzení obsluhou (`ack`). */
+  blocked: string | null;
 }
 
 export type LocalExecCommand =
   | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit'; limitPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number }
   | { op: 'move'; orderId: string; price: number }
   | { op: 'cancel'; orderId: string }
-  | { op: 'flatten'; clientId: string; symbol: string };
+  | { op: 'flatten'; clientId: string; symbol: string }
+  | { op: 'ack' };
 
 export type LocalExecResult = { ok: true; result: unknown } | { ok: false; sent: boolean | 'unknown'; error: string };
 
 const TERMINAL: ReadonlySet<string> = new Set(['filled', 'canceled', 'rejected']);
+/** Incidenty, po kterých služba nepřijme nový vstup, dokud je obsluha nepotvrdí (INV-DEFAULT-02). */
+const BLOCKING: ReadonlySet<string> = new Set([
+  'bracket-legs-missing', 'bracket-orphan-legs', 'flatten-cancel-unconfirmed', 'flatten-orders-remain', 'flatten-interrupted',
+  'fill-missing', 'state-undetermined', 'unknown-order-in-snapshot', 'forced-logout',
+]);
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,30}$/;
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 export class LocalExec {
   private readonly broker: RithmicBrokerPort;
@@ -72,6 +93,7 @@ export class LocalExec {
   private readonly seenClientIds = new Set<string>();
   private readonly rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }> = [];
   private connected = false;
+  private blocked: string | null = null;
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -96,6 +118,7 @@ export class LocalExec {
   onIncident = (incident: RithmicIncident): void => {
     this.incidents.push({ kind: incident.kind, message: incident.message, at: incident.at });
     if (this.incidents.length > 30) this.incidents.shift();
+    if (BLOCKING.has(incident.kind)) this.blocked = `${incident.kind}: ${incident.message}`.slice(0, 240);
     this.changed();
   };
 
@@ -155,7 +178,8 @@ export class LocalExec {
     const roleOf = new Map<string, { role: 'entry' | 'stop' | 'target'; entryId: string }>();
     for (const bracket of brackets) {
       roleOf.set(bracket.entryId, { role: 'entry', entryId: bracket.entryId });
-      for (const leg of bracket.legs) roleOf.set(leg.orderId, { role: leg.role, entryId: bracket.entryId });
+      // Noha bez známého typu se ukáže jako „other" — čára bez role, posun ji odmítne.
+      for (const leg of bracket.legs) if (leg.role !== 'unknown') roleOf.set(leg.orderId, { role: leg.role, entryId: bracket.entryId });
     }
     const orders: LocalExecOrderView[] = [];
     for (const order of this.orders.values()) {
@@ -181,40 +205,100 @@ export class LocalExec {
       brackets: accountId === null ? [] : brackets.filter((b) => !b.closed).map((b) => ({ entryId: b.entryId, symbol: b.symbol, ...this.broker.bracketState(accountId, b.entryId) })),
       incidents: [...this.incidents],
       rejections: [...this.rejections],
+      blocked: this.blocked,
     };
   }
 
+  /** Cena musí ležet na mřížce kroku kontraktu — nic se tiše nezaokrouhluje. */
+  private onGrid(price: number, tickSize: number): boolean {
+    const steps = price / tickSize;
+    return Math.abs(steps - Math.round(steps)) < 1e-6;
+  }
+
   /** Vykoná příkaz z appky. Nikdy nic neopakuje; `sent` říká, zda zápis mohl odejít. */
-  async execute(command: LocalExecCommand): Promise<LocalExecResult> {
+  async execute(raw: LocalExecCommand): Promise<LocalExecResult> {
+    const refuse = (message: string): never => {
+      throw new BrokerRequestNotSentError(message);
+    };
     try {
-      if (this.broker.environment !== 'demo' && !this.config.allowLive) throw new BrokerRequestNotSentError('místní služba je povolená jen pro testovací prostředí');
+      const command = raw as unknown as Record<string, unknown>;
+      if (!command || typeof command !== 'object') refuse('příkaz není objekt');
+      if (!this.config.allowedSystems.includes(this.config.systemName)) refuse(`systém ${this.config.systemName} není pro místní službu povolený`);
+      if (this.broker.environment !== 'demo') refuse('místní služba je povolená jen pro testovací prostředí');
       const accountId = this.broker.accountIds()[0];
-      if (accountId === undefined) throw new BrokerRequestNotSentError('adaptér nemá účet (není připojený)');
+      if (accountId === undefined) return refuse('adaptér nemá účet (není připojený)');
       switch (command.op) {
+        case 'ack':
+          this.blocked = null;
+          this.changed();
+          return { ok: true, result: { acknowledged: true } };
         case 'entry': {
-          const spec = this.config.symbols[command.symbol];
-          if (!spec) throw new BrokerRequestNotSentError(`kontrakt ${command.symbol} není povolený`);
-          if (!Number.isInteger(command.quantity) || command.quantity < 1 || command.quantity > this.config.maxQuantity) {
-            throw new BrokerRequestNotSentError(`množství ${command.quantity} je mimo povolený rozsah 1–${this.config.maxQuantity}`);
+          if (this.blocked) refuse(`nové vstupy jsou zastavené, dokud nepotvrdíš incident (${this.blocked})`);
+          const symbol = typeof command.symbol === 'string' ? command.symbol : '';
+          const spec = this.config.symbols[symbol];
+          if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
+          if (command.side !== 'Buy' && command.side !== 'Sell') refuse('strana musí být Buy nebo Sell');
+          if (command.orderType !== 'Market' && command.orderType !== 'Limit') refuse('typ musí být Market nebo Limit');
+          const side = command.side as OrderSide;
+          const orderType = command.orderType as 'Market' | 'Limit';
+          const quantity = command.quantity;
+          if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > this.config.maxQuantity) {
+            return refuse(`množství ${String(quantity)} je mimo povolený rozsah 1–${this.config.maxQuantity}`);
           }
-          if (!command.clientId || this.seenClientIds.has(command.clientId)) throw new BrokerRequestNotSentError('příkaz s tímto clientId už byl přijat');
-          const reference = command.orderType === 'Limit' ? command.limitPrice : command.referencePrice;
-          const ticks = (price: number | undefined, sign: 1 | -1): number | undefined => {
+          const clientId = typeof command.clientId === 'string' ? command.clientId : '';
+          if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          const tag = `ui-${clientId}`;
+          // Idempotence i přes restart služby: značku nesmí nést žádný dnešní příkaz (kniha po
+          // výchozím stavu zná i dokončené).
+          if (this.seenClientIds.has(clientId) || [...this.orders.values()].some((order) => order.tag === tag)) refuse('příkaz s tímto clientId už byl přijat');
+          for (const field of ['limitPrice', 'stopPrice', 'targetPrice', 'referencePrice'] as const) {
+            const value = command[field];
+            if (value === undefined) continue;
+            if (!finite(value) || value <= 0) refuse(`${field} musí být kladné číslo (nebo chybět)`);
+            if (!this.onGrid(value as number, spec.tickSize)) refuse(`${field} ${String(value)} neleží na kroku ceny ${spec.tickSize}`);
+          }
+          const limitPrice = command.limitPrice as number | undefined;
+          const stopPrice = command.stopPrice as number | undefined;
+          const targetPrice = command.targetPrice as number | undefined;
+          const server = this.config.serverPrice?.(symbol) ?? null;
+          const maxDrift = this.config.maxReferenceDriftTicks ?? 20;
+          let reference: number;
+          if (orderType === 'Limit') {
+            if (limitPrice === undefined) return refuse('Limit bez ceny');
+            reference = limitPrice;
+            // Limit přes trh by se vyplnil jinde, než odkud se počítá SL/TP.
+            if (server !== null && (stopPrice !== undefined || targetPrice !== undefined) && (side === 'Buy' ? limitPrice > server : limitPrice < server)) {
+              refuse('Limit se SL/TP je přes trh — vyplnil by se za jinou cenu, než od které se počítá ochrana; použij Market');
+            }
+          } else {
+            const fromClient = command.referencePrice as number | undefined;
+            if (stopPrice !== undefined || targetPrice !== undefined) {
+              if (server === null && fromClient === undefined) refuse('chybí cena, od které se počítá vzdálenost SL/TP');
+              if (server !== null && fromClient !== undefined && Math.abs(fromClient - server) / spec.tickSize > maxDrift) {
+                refuse(`cena v appce (${fromClient}) se liší od ceny služby (${server}) o víc než ${maxDrift} ticků — vstup neodesílám`);
+              }
+            }
+            reference = server ?? fromClient ?? 0;
+          }
+          const maxTicks = this.config.maxProtectionTicks ?? 400;
+          const ticks = (price: number | undefined, sign: 1 | -1, name: string): number | undefined => {
             if (price === undefined) return undefined;
-            if (typeof reference !== 'number' || !Number.isFinite(reference)) throw new BrokerRequestNotSentError('chybí cena, od které se počítá vzdálenost SL/TP');
             const distance = Math.round(((price - reference) * sign) / spec.tickSize);
-            if (distance < 1) throw new BrokerRequestNotSentError('SL/TP je na špatné straně vstupu nebo příliš blízko');
+            if (distance < 1) refuse(`${name} je na špatné straně vstupu nebo příliš blízko`);
+            if (distance > maxTicks) refuse(`${name} je ${distance} ticků od vstupu — víc než povolených ${maxTicks}`);
             return distance;
           };
-          const up: 1 | -1 = command.side === 'Buy' ? 1 : -1;
-          const stopTicks = ticks(command.stopPrice, up === 1 ? -1 : 1);
-          const targetTicks = ticks(command.targetPrice, up);
-          if (command.orderType === 'Limit' && (typeof command.limitPrice !== 'number' || !Number.isFinite(command.limitPrice))) throw new BrokerRequestNotSentError('Limit bez ceny');
-          this.seenClientIds.add(command.clientId);
-          const request = {
-            tag: `ui-${command.clientId}`.slice(0, 40), accountId, symbol: command.symbol, side: command.side, quantity: command.quantity,
-            orderType: command.orderType, ...(command.orderType === 'Limit' ? { limitPrice: command.limitPrice } : {}),
-          };
+          const up: 1 | -1 = side === 'Buy' ? 1 : -1;
+          const stopTicks = ticks(stopPrice, up === 1 ? -1 : 1, 'SL');
+          const targetTicks = ticks(targetPrice, up, 'TP');
+          // Strop pozice: otevřená pozice + čekající vstupy + tento.
+          const open = Math.abs(this.positions.get(symbol)?.netQuantity ?? 0);
+          const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId))
+            .reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+          const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
+          if (open + waiting + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open}, čeká ${waiting})`);
+          this.seenClientIds.add(clientId);
+          const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}) };
           if (stopTicks === undefined && targetTicks === undefined) {
             const ack = await this.broker.placeOrder(request);
             return { ok: true, result: { orderId: ack.brokerOrderId } };
@@ -223,31 +307,53 @@ export class LocalExec {
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
         case 'move': {
-          const order = this.orders.get(command.orderId);
-          if (!order || TERMINAL.has(order.status)) throw new BrokerRequestNotSentError(`příkaz ${command.orderId} nepracuje`);
-          if (!Number.isFinite(command.price)) throw new BrokerRequestNotSentError('posun bez ceny');
-          const isStop = order.stopPrice !== undefined && order.orderType !== 'Limit';
-          await this.broker.modifyOrder(accountId, command.orderId, {
-            quantity: order.quantity, orderType: isStop ? 'Stop' : 'Limit', ...(isStop ? { stopPrice: command.price } : { limitPrice: command.price }),
-          });
-          return { ok: true, result: { orderId: command.orderId } };
+          const orderId = typeof command.orderId === 'string' ? command.orderId : '';
+          const order = this.orders.get(orderId);
+          if (!order || TERMINAL.has(order.status)) return refuse(`příkaz ${orderId || '?'} nepracuje`);
+          const spec = this.config.symbols[order.symbol];
+          if (!spec) return refuse(`kontrakt ${order.symbol} není povolený`);
+          const price = command.price;
+          if (!finite(price) || price <= 0) return refuse('posun bez platné ceny');
+          if (!this.onGrid(price, spec.tickSize)) refuse(`cena ${price} neleží na kroku ceny ${spec.tickSize}`);
+          // Posouvat jde jen to, co služba sama zná: nohu vlastního vstupu (podle její role)
+          // a vlastní obyčejný Limit. Nic jiného — typ cizího příkazu by se změnou přepsal.
+          const leg = this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs).find((item) => item.orderId === orderId);
+          if (leg) {
+            if (leg.role !== 'stop' && leg.role !== 'target') return refuse('u nohy ještě není znám typ — posun neodesílám');
+            await this.broker.modifyOrder(accountId, orderId, {
+              quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
+            });
+          } else if (order.orderType === 'Limit' && order.tag?.startsWith('ui-')) {
+            await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
+          } else {
+            return refuse('posouvat jde jen SL/TP vlastního vstupu a vlastní Limit');
+          }
+          return { ok: true, result: { orderId } };
         }
         case 'cancel': {
-          await this.broker.cancelOrder(accountId, command.orderId);
-          return { ok: true, result: { orderId: command.orderId } };
+          const orderId = typeof command.orderId === 'string' ? command.orderId : '';
+          if (!this.orders.has(orderId)) return refuse(`příkaz ${orderId || '?'} neznám`);
+          await this.broker.cancelOrder(accountId, orderId);
+          return { ok: true, result: { orderId } };
         }
         case 'flatten': {
-          if (!this.config.symbols[command.symbol]) throw new BrokerRequestNotSentError(`kontrakt ${command.symbol} není povolený`);
-          if (!command.clientId) throw new BrokerRequestNotSentError('zavření bez clientId');
-          const result = await this.broker.liquidatePosition({ tag: `ui-flat-${command.clientId}`.slice(0, 40), accountId, symbol: command.symbol });
+          const symbol = typeof command.symbol === 'string' ? command.symbol : '';
+          if (!this.config.symbols[symbol]) return refuse(`kontrakt ${symbol || '?'} není povolený`);
+          const clientId = typeof command.clientId === 'string' ? command.clientId : '';
+          if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          const result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol });
           return { ok: true, result };
         }
         default:
-          throw new BrokerRequestNotSentError('neznámý příkaz');
+          return refuse('neznámý příkaz');
       }
     } catch (error) {
       const sent = error instanceof BrokerRequestNotSentError ? false : 'unknown';
       return { ok: false, sent, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private isLeg(accountId: number, orderId: string): boolean {
+    return this.broker.listBrackets(accountId).some((bracket) => bracket.legs.some((leg) => leg.orderId === orderId));
   }
 }

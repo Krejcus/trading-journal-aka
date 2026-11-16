@@ -75,7 +75,8 @@ export type BracketState = 'entry-working' | 'protected' | 'unprotected' | 'orph
 
 interface LegLink {
   parentId: string;
-  role: 'stop' | 'target';
+  /** `unknown` = typ příkazu ještě nebyl znám (zpráva bez `price_type`) — nic se z toho neodvozuje. */
+  role: 'stop' | 'target' | 'unknown';
 }
 
 const TERMINAL: ReadonlySet<string> = new Set(['filled', 'canceled', 'rejected']);
@@ -144,8 +145,8 @@ export class RithmicProtection {
     return this.legs.get(`${accountId}:${orderId}`);
   }
 
-  legsOf(accountId: number, entryId: string): Array<{ orderId: string; role: 'stop' | 'target' }> {
-    const out: Array<{ orderId: string; role: 'stop' | 'target' }> = [];
+  legsOf(accountId: number, entryId: string): Array<{ orderId: string; role: 'stop' | 'target' | 'unknown' }> {
+    const out: Array<{ orderId: string; role: 'stop' | 'target' | 'unknown' }> = [];
     const prefix = `${accountId}:`;
     for (const [key, link] of this.legs) {
       if (key.startsWith(prefix) && link.parentId === entryId) out.push({ orderId: key.slice(prefix.length), role: link.role });
@@ -174,7 +175,7 @@ export class RithmicProtection {
     if (update.originalBasketId && update.originalBasketId !== update.basketId) {
       const known = this.legs.get(key);
       const stop = /STOP/i.test(update.priceType);
-      if (!known) this.legs.set(key, { parentId: update.originalBasketId, role: stop ? 'stop' : 'target' });
+      if (!known) this.legs.set(key, { parentId: update.originalBasketId, role: update.priceType ? (stop ? 'stop' : 'target') : 'unknown' });
       // Typ příkazu v první zprávě s vazbou chybět může — roli opravíme, jakmile je znát.
       else if (update.priceType) known.role = stop ? 'stop' : 'target';
     }
@@ -186,8 +187,12 @@ export class RithmicProtection {
 
   /**
    * Stav ochrany vlastního vstupu. Expozice bracketu se počítá z JEHO příkazů (vyplněný vstup
-   * minus vyplněné nohy) — čistá pozice účtu může patřit jinému obchodu. `net` je čistá
-   * pozice kontraktu (`null` = neznámá); říká jen, zda expozici nezavřelo něco jiného.
+   * minus vyplněné nohy) — čistá pozice účtu může patřit jinému obchodu.
+   *  - `net`: čistá pozice kontraktu (`null` = neznámá).
+   *  - `closedByZero`: od posledního vyplnění tohoto vstupu byla na kontraktu DŮVĚRYHODNĚ
+   *    vidět nulová pozice (živá zpráva novější než vyplnění, stabilní důkaz stavu, výchozí
+   *    stav po připojení). Jen to — nebo vyplněné nohy — smí bracket uzavřít natrvalo;
+   *    opakovaná nula z obyčejného čtení ne (snímek může být pozadu za vyplněním).
    * `latch` = bracket skončil; volající má stav uložit. Nic jiného se nemění.
    */
   bracketState(
@@ -195,41 +200,43 @@ export class RithmicProtection {
     entryId: string,
     orderOf: (orderId: string) => BrokerOrder | undefined,
     net: number | null,
-    /** `net` je živá hodnota novější než poslední vyplnění (ne jednorázové čtení snímku). */
-    netTrusted = false,
-  ): { state: BracketState; detail: string; latch?: boolean; closeIfConfirmed?: boolean } {
+    closedByZero = false,
+  ): { state: BracketState; detail: string; latch?: boolean } {
     const intent = this.bracketByEntry(accountId, entryId);
     const entry = orderOf(entryId);
     if (!intent || !entry) return { state: 'unknown', detail: 'vstup není v knize nebo k němu není záznam' };
     const legs = this.legsOf(accountId, entryId).map((leg) => {
       const order = orderOf(leg.orderId);
-      // Role podle knihy, když ji zná (stop má spoušť); jinak podle první zprávy s vazbou.
-      const role: 'stop' | 'target' = order?.stopPrice !== undefined ? 'stop' : order?.limitPrice !== undefined ? 'target' : leg.role;
+      // Role podle knihy, když ji zná (stop má spoušť); jinak podle zprávy s vazbou.
+      const role: 'stop' | 'target' | 'unknown' = order?.stopPrice !== undefined ? 'stop' : order?.limitPrice !== undefined ? 'target' : leg.role;
       return { orderId: leg.orderId, role, order };
     });
     const active = legs.filter((leg) => leg.order && !TERMINAL.has(leg.order.status));
     const orphan = (why: string): { state: BracketState; detail: string } => ({ state: 'orphan-legs', detail: `${why}, ale pracuje ${active.map((l) => `${l.role} ${l.orderId}`).join(', ')}` });
-    // Západka platí jen dokud nic z bracketu nepracuje; objeví-li se noha, hodnotí se znovu.
-    if (intent.closedAt !== undefined && !active.length) return { state: 'done', detail: '' };
     if (entry.filledQuantity === 0) {
       if (!TERMINAL.has(entry.status)) return { state: 'entry-working', detail: '' };
-      return active.length ? orphan('vstup skončil bez vyplnění') : { state: 'done', detail: '', latch: true };
+      return active.length ? orphan('vstup skončil bez vyplnění') : { state: 'done', detail: '', latch: intent.closedAt === undefined };
     }
     const exposure = entry.filledQuantity - legs.reduce((sum, leg) => sum + (leg.order?.filledQuantity ?? 0), 0);
+    // Přeplnění se kontroluje PŘED západkou: nohy vyplněné víc než vstup nejsou nikdy „hotovo".
     if (exposure < 0) {
-      // Nohy vyplnily víc než vstup: pozice může být obrácená. Nikdy to není „hotovo".
       return { state: 'unprotected', detail: `nohy vyplnily o ${-exposure} ks víc než vstup — pozice může být obrácená` };
     }
+    // Západka platí jen dokud nic z bracketu nepracuje; objeví-li se noha, hodnotí se znovu.
+    if (intent.closedAt !== undefined && !active.length) return { state: 'done', detail: '' };
     if (exposure === 0) {
       if (active.length) return orphan('nohy expozici zavřely');
       return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
     }
+    if (closedByZero) {
+      // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz) a víme to jistě.
+      if (active.length) return orphan('pozice byla zavřena');
+      return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
+    }
     if (net === null) return { state: 'unknown', detail: 'pozice není známá' };
     if (net === 0) {
-      // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz).
-      if (active.length) return orphan('pozice je 0');
-      // Nula z jednoho čtení snímku může být starší než vyplnění → bracket se jí nezavírá natrvalo.
-      return { state: 'done', detail: '', latch: netTrusted && TERMINAL.has(entry.status), closeIfConfirmed: !netTrusted && TERMINAL.has(entry.status) };
+      // Nula z obyčejného čtení: stav je „hotovo", ale bracket se jí NEzavírá natrvalo.
+      return active.length ? orphan('pozice je 0') : { state: 'done', detail: '' };
     }
     const problems: string[] = [];
     for (const role of ['stop', 'target'] as const) {
@@ -264,7 +271,7 @@ export class RithmicProtection {
   }
 
   /** Dřívější zavření na kontraktu, které odešlo a jehož výsledek nikdo neprokázal. */
-  hasUnresolvedExit(accountId: number, symbol: string, exceptTag: string): boolean {
+  hasUnresolvedExit(accountId: number, symbol: string, exceptTag = ''): boolean {
     return this.flattenRecords.some((r) => r.accountId === accountId && r.symbol === symbol && r.tag !== exceptTag
       && (r.phase === 'exit-sent' || r.phase === 'interrupted'));
   }
@@ -277,6 +284,19 @@ export class RithmicProtection {
         r.result = r.result ?? 'resolved-by-state';
       }
     }
+  }
+
+  /** Úplná obnova stavu (výchozí snímek příkazů i pozic) vyřeší všechna dřívější zavření účtu. */
+  resolveAllExits(accountId: number): boolean {
+    let changed = false;
+    for (const r of this.flattenRecords) {
+      if (r.accountId === accountId && (r.phase === 'exit-sent' || r.phase === 'interrupted')) {
+        r.phase = 'done';
+        r.result = r.result ?? 'resolved-by-state';
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   addFlatten(record: FlattenRecord): void {

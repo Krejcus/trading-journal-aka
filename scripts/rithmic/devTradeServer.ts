@@ -7,6 +7,7 @@
  * Spuštění: RITHMIC_USER=... npx tsx scripts/rithmic/devTradeServer.ts [--contract ESZ6] [--port 3311]
  */
 import { execFileSync } from 'node:child_process';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,11 +47,17 @@ function credentials(): { user: string; password: string } {
 function fileProtectionStore(path: string): ProtectionStore {
   return {
     load: async () => {
+      let text: string;
       try {
-        return JSON.parse(readFileSync(path, 'utf8')) as ProtectionState;
-      } catch {
-        return null;
+        text = readFileSync(path, 'utf8');
+      } catch (error) {
+        // Jen „soubor neexistuje" je první spuštění. Cokoli jiného NENÍ prázdný stav.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw new Error(`záznam ochrany nejde přečíst (${(error as Error).message})`);
       }
+      const parsed = JSON.parse(text) as ProtectionState; // poškozený soubor = chyba, ne „žádné záznamy"
+      if (!parsed || !Array.isArray(parsed.brackets) || !Array.isArray(parsed.flattens)) throw new Error('záznam ochrany má neplatný tvar');
+      return parsed;
     },
     save: async (state) => {
       mkdirSync(dirname(path), { recursive: true });
@@ -125,18 +132,45 @@ async function main(): Promise<void> {
   const tickSize = ref?.tickSize ?? 0.25;
   await ticker.subscribeMarketData(CONTRACT, 'CME');
 
-  exec = new LocalExec({ broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: 2 });
+  exec = new LocalExec({
+    broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: 2, maxPosition: 2,
+    systemName: SYSTEM, allowedSystems: ['Rithmic Test'],
+    serverPrice: (symbol) => (symbol === CONTRACT ? displayPrice(Date.now()) : null),
+  });
   exec.attach();
   await broker.start();
   if (broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   exec.subscribe((state) => broadcast({ type: 'state', state }));
 
+  // Přístup: Origin (proti cizí webové stránce) A token (proti komukoli jinému v síti — Origin si
+  // neprohlížečový klient nastaví sám). Token je v souboru jen pro tohoto uživatele a v odkazu.
+  const tokenPath = join(results, 'dev-token');
+  let token = '';
+  try {
+    token = readFileSync(tokenPath, 'utf8').trim();
+  } catch {
+    // první spuštění
+  }
+  if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) {
+    token = randomBytes(24).toString('base64url');
+    mkdirSync(results, { recursive: true });
+    writeFileSync(tokenPath, token, { mode: 0o600 });
+  }
+  const tokenOk = (given: string | null): boolean => {
+    if (!given) return false;
+    const a = Buffer.from(given);
+    const b = Buffer.from(token);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
   const server = new WebSocketServer({
-    host: '127.0.0.1', port: PORT,
-    verifyClient: ({ origin }: { origin?: string }) => Boolean(origin && ALLOWED_ORIGINS.has(origin)),
+    host: '127.0.0.1', port: PORT, maxPayload: 16 * 1024,
+    verifyClient: ({ origin, req }: { origin?: string; req: { url?: string } }) =>
+      Boolean(origin && ALLOWED_ORIGINS.has(origin)) && tokenOk(new globalThis.URL(req.url ?? '/', 'http://x').searchParams.get('token')),
   });
   server.on('connection', (socket) => {
     clients.add(socket);
+    /** Nejvýš 20 příkazů za 10 s na spojení. */
+    let recent: number[] = [];
     const now = Date.now();
     send(socket, { type: 'hello', system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
     send(socket, { type: 'state', state: exec!.state() });
@@ -149,6 +183,10 @@ async function main(): Promise<void> {
           const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand };
           id = message.id ?? null;
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
+          const at = Date.now();
+          recent = recent.filter((time) => at - time < 10_000);
+          if (recent.length >= 20) throw new Error('příliš mnoho příkazů za krátkou dobu');
+          recent.push(at);
           const result = await exec!.execute(message.command);
           send(socket, { type: 'reply', id, ...result, serverMs: Math.round(performance.now() - receivedAt) });
         } catch (error) {
@@ -159,6 +197,7 @@ async function main(): Promise<void> {
   });
   setInterval(() => console.log(`[ceny] ticků ${tickCount}, poslední cena ${displayPrice(Date.now())}`), 15_000).unref();
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
+  console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
   const stop = (): void => {
     console.log('Končím (příkazy u Rithmicu zůstávají, jak jsou).');
     server.close();

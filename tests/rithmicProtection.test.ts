@@ -44,7 +44,7 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
     url: 'wss://fake', credentials, socketFactory: server.socketFactory, registry, protectionStore: store,
     onIncident: (incident) => incidents.push(incident),
     requestTimeoutMs: 150, confirmWaitMs: 60, fillWaitMs: 60, reconnectMinMs: 20, reconnectMaxMs: 40,
-    legsWaitMs: 25, flattenStepMs: 120, flattenCancelWaitMs: 80, flattenPostCheckMs: 40,
+    legsWaitMs: 25, exitSettleMs: 100, flattenStepMs: 120, flattenCancelWaitMs: 80, flattenPostCheckMs: 40,
     ...options.config,
   });
   broker.subscribe((event) => events.push(event));
@@ -283,7 +283,8 @@ describe('stav ochrany (výpočet)', () => {
       protection.observe(ACC, { basketId: leg.id, originalBasketId: 'E', priceType: leg.type, bracketType: 'TARGET_AND_STOP_STATIC', userTag: '' } as never);
       orders.set(leg.id, order(leg.id, leg.quantity, leg.filled, leg.status, leg.type === 'STOP_MARKET' ? { stopPrice: 6990 } : { limitPrice: 7020 }));
     }
-    return { protection, state: (net: number | null) => protection.bracketState(ACC, 'E', (id) => orders.get(id), net) };
+    const orderOf = (id: string) => orders.get(id);
+    return { protection, orderOf, state: (net: number | null) => protection.bracketState(ACC, 'E', orderOf, net) };
   }
 
   it('každá role proti expozici bracketu: po dílčím TP je SL na původní množství chyba', () => {
@@ -321,6 +322,26 @@ describe('stav ochrany (výpočet)', () => {
     expect(t.protection.hasPendingLegs(ACC, 'E', () => ({ status: 'pending' } as BrokerOrder))).toBe(true);
   });
 
+  it('nula z obyčejného čtení bracket natrvalo nezavře; důvěryhodná nula ano; přeplnění má přednost před západkou', () => {
+    const legsGone: Leg[] = [
+      { id: 'TP', type: 'LIMIT', quantity: 2, filled: 0, status: 'canceled' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 2, filled: 0, status: 'canceled' },
+    ];
+    const t = build({ filled: 2, status: 'filled' }, legsGone);
+    const stale = t.state(0); // dvě zastaralá čtení dají dvakrát tohle — a nic se nezavře
+    expect(stale.state).toBe('done');
+    expect(stale.latch).toBeUndefined();
+    expect(t.state(2).state).toBe('unprotected'); // jakmile přijde skutečná pozice, hlásí se
+    expect(t.protection.bracketState(ACC, 'E', t.orderOf, 2, true)).toMatchObject({ state: 'done', latch: true });
+    // po západce: nohy vyplněné víc než vstup se pořád hlásí
+    const over = build({ filled: 1, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 1, filled: 1, status: 'filled' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 1, filled: 1, status: 'filled' },
+    ]);
+    over.protection.closeBracket(ACC, 'E');
+    expect(over.state(-1).state).toBe('unprotected');
+  });
+
   it('nohy vyplnily víc než vstup: nikdy „hotovo", vždy hlášení', () => {
     const t = build({ filled: 1, status: 'filled' }, [
       { id: 'TP', type: 'LIMIT', quantity: 1, filled: 1, status: 'filled' },
@@ -347,6 +368,19 @@ describe('stav ochrany (výpočet)', () => {
 });
 
 describe('nálezy z review diffu', () => {
+  it('ochranu nejde ověřit (pozici nejde přečíst): podezření se nezahodí — po omezeném opakování poplach', async () => {
+    const t = await setup();
+    t.server.controls.legsNeverAppear = true;
+    t.server.controls.muteLivePositions = true; // živá pozice nepřijde → musí se číst
+    t.server.controls.pnlSnapshotFails = true;  // a čtení selhává
+    const ack = await t.broker.placeBracket(bracket(t, 'unv'));
+    await flush();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await sleep(1_200);
+    expect(t.incidents.some((i) => i.kind === 'bracket-legs-missing' && /nejde ověřit/.test(i.message))).toBe(true);
+    t.broker.stop();
+  });
+
   it('druhý obchod na stejném kontraktu: dokončený bracket nedostane falešný poplach', async () => {
     const t = await setup();
     await openProtected(t, 'a1');
@@ -445,7 +479,9 @@ describe('nálezy z review diffu', () => {
     expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
     // požadavek doběhne bez odpovědi: příkazy stojí dál, ale nové zavírání (čte stav) už smí
     await sleep(350);
-    expect(t.kinds()).toContain('flatten-orders-remain');
+    expect(t.incidents.some((i) => i.kind === 'flatten-orders-remain' && /bez odpovědi/.test(i.message))).toBe(true);
+    // nohy zrušené, pozice trvá → skutečně nechráněná pozice se ohlásí
+    expect(t.kinds()).toContain('bracket-legs-missing');
     expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
     t.server.controls.exitPosition = 'ok';
     expect((await flatten(t, 'fu3')).status).toBe('submitted');
@@ -491,28 +527,61 @@ describe('nálezy z review diffu', () => {
     t.broker.stop();
   });
 
-  it('dřívější zavření s neznámým výsledkem: další se nepošle, dokud pozici nejde přečíst — ani po restartu', async () => {
-    const t = await setup({ config: { requestTimeoutMs: 300 } });
+  it('dřívější zavření s neznámým výsledkem: bez přečtené pozice se další nepošle a ochrana zůstane; veto je časově omezené', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 300 } }); // veto = 2× timeout = 600 ms
     await openProtected(t, 'q1');
     t.server.controls.exitPosition = 'ignore';
     expect((await flatten(t, 'fq1')).status).toBe('indeterminate');
-    await sleep(200); // původní požadavek vypršel i v klientovi
+    // nový vstup s ochranou vznikne až po vyřešení → nasimulujeme přímo: pozice trvá, nohy fq1 zrušil
     t.server.controls.pnlSnapshotFails = true; // pozici teď nejde přečíst
     t.server.controls.exitPosition = 'ok';
+    const cancelsBefore = t.sent(316);
     expect((await flatten(t, 'fq2')).status).toBe('indeterminate');
     expect(t.sent(3504)).toBe(1);
+    expect(t.sent(316)).toBe(cancelsBefore); // rozhodnutí padlo dřív, než se sáhlo na příkazy
+    // po vypršení veta brzda nestojí: zavře i bez přečtené pozice a ohlásí to
+    await sleep(650);
+    expect((await flatten(t, 'fq3')).status).toBe('submitted');
+    expect(t.sent(3504)).toBe(2);
+    expect(t.incidents.some((i) => i.kind === 'attention' && /zavírám znovu/.test(i.message))).toBe(true);
     t.broker.stop();
-    // nový proces se stejným záznamem: totéž (připojit se musí umět, pak čtení pozic zase selže)
-    t.server.controls.pnlSnapshotFails = false;
-    const again = await setup({ server: t.server, registryStore: t.registryStore, store: memoryProtectionStore(t.store.saved()), config: { requestTimeoutMs: 300 } });
-    again.server.controls.pnlSnapshotFails = true;
-    expect((await flatten(again, 'fq3')).status).toBe('indeterminate');
-    expect(again.sent(3504)).toBe(1);
-    // jakmile pozici přečíst jde, zavření projde a nejistota je vyřešená
-    again.server.controls.pnlSnapshotFails = false;
-    expect((await flatten(again, 'fq4')).status).toBe('submitted');
-    expect(again.sent(3504)).toBe(2);
-    again.broker.stop();
+  });
+
+  it('nevyřešené zavření po restartu: výchozí stav ho vyřeší; do té doby by nové vstupy neprošly', async () => {
+    const first = await setup({ config: { requestTimeoutMs: 300 } });
+    await openProtected(first, 'r1');
+    first.server.controls.exitPosition = 'ignore';
+    await flatten(first, 'fr1');
+    expect(first.store.saved()?.flattens.find((f) => f.tag === 'fr1')?.phase).toBe('exit-sent');
+    first.broker.stop();
+    first.server.controls.exitPosition = 'ok';
+    const second = await setup({ server: first.server, registryStore: first.registryStore, store: memoryProtectionStore(first.store.saved()), config: { requestTimeoutMs: 300 } });
+    expect(second.kinds()).toContain('flatten-interrupted');
+    // úplná obnova stavu záznam vyřešila → nové příkazy smějí, zavření proběhne normálně
+    expect(second.store.saved()?.flattens.find((f) => f.tag === 'fr1')?.phase).toBe('done');
+    expect((await flatten(second, 'fr2')).status).toBe('submitted');
+    expect(second.net()).toBe(0);
+    second.broker.stop();
+  });
+
+  it('přijaté zavření neuvolní kontrakt, dokud ho nepotvrdí stav: druhé volání hned po prvním nic neodešle', async () => {
+    const t = await setup({ config: { exitSettleMs: 400 } });
+    await openProtected(t, 'd1');
+    // server zavření přijme, ale vyplní ho až za chvíli (odpověď ≠ zavřeno)
+    t.server.controls.delayExitFill = true;
+    expect((await flatten(t, 'fd1')).status).toBe('submitted');
+    expect((await flatten(t, 'fd2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    const order = { tag: 'blk', accountId: t.account(), symbol: 'ESZ6', side: 'Buy' as const, quantity: 1, orderType: 'Limit' as const, limitPrice: 6900 };
+    expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.store.saved()?.flattens.find((f) => f.tag === 'fd1')?.phase).toBe('exit-sent');
+    // zavírací příkaz se vyplní → pozice 0 → kontrakt se uvolní
+    t.server.releaseExit();
+    await sleep(60);
+    expect(t.net()).toBe(0);
+    await t.broker.placeOrder(order);
+    expect(t.store.saved()?.flattens.find((f) => f.tag === 'fd1')?.phase).toBe('done');
+    t.broker.stop();
   });
 
   it('kontrola po zavření proběhne i při nejistém výsledku', async () => {

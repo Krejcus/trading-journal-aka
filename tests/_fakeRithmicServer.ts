@@ -45,6 +45,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   const received: Array<{ templateId: number; fields: RithmicFields }> = [];
   let basketSeq = 100;
   /** Háček pro testy závodů: zavolá se při každém přijatém požadavku, před jeho zpracováním. */
+  const heldExits: string[] = [];
   const hooks: { onRequest?: (templateId: number, fields: RithmicFields, socket: FakeSocket) => void } = {};
   const controls = {
     /** Přijme další nový příkaz, ale spojení shodí dřív, než pošle potvrzení. */
@@ -82,6 +83,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     legsWithoutLink: false,
     /** Živé zprávy o pozici (450) po vyplnění nepřijdou — PnL spojení je pozadu za order spojením. */
     muteLivePositions: false,
+    /** Zavření (3504) server přijme a příkaz vytvoří, ale vyplní ho až `releaseExit()`. */
+    delayExitFill: false,
     /** Zrušení odpoví „ok", ale příkaz pracuje dál. */
     cancelStuck: false,
     /** Zavření pozice (3504): 'ignore' = bez odpovědi, text = odmítnutí. */
@@ -402,7 +405,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         if (net === 0) return;
         const exit = createOrder({ account_id: f.account_id, symbol: f.symbol, exchange: f.exchange, transaction_type: net > 0 ? 2 : 1, price_type: 2, quantity: Math.abs(net) });
         notify(exit, 1, 13);
-        fill(exit.basketId, 7000);
+        if (controls.delayExitFill) heldExits.push(exit.basketId);
+        else fill(exit.basketId, 7000);
         return;
       }
       case 320:
@@ -437,6 +441,10 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       }
     },
     /** Živá burzovní notifikace o příkazu (pro testy závodů). */
+    /** Vyplní zavírací příkazy zadržené přes `delayExitFill`. */
+    releaseExit(): void {
+      for (const id of heldExits.splice(0)) fill(id, 7000);
+    },
     notifyLive(basketId: string, exchangeType: number, extra: RithmicFields = {}): void {
       const order = orders.get(basketId);
       if (!order) throw new Error(`fake: příkaz ${basketId} neexistuje`);

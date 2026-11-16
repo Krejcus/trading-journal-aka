@@ -14,7 +14,16 @@ import '../../index.css';
 
 // Na počítači přímo; z telefonu přes Tailscale Serve (port 8080 → místní proces 3311; provoz v Tailscale je šifrovaný).
 const LOCAL = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
-const SERVER = LOCAL ? 'ws://127.0.0.1:3311' : `ws://${window.location.hostname}:8080`;
+// Token z odkazu (#token=…) si stránka zapamatuje; bez něj místní proces spojení odmítne.
+const TOKEN_KEY = 'rithmic-qa-token';
+const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token');
+if (fromHash) {
+  try { window.localStorage.setItem(TOKEN_KEY, fromHash); } catch { /* soukromé okno */ }
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+}
+let TOKEN = fromHash ?? '';
+if (!TOKEN) { try { TOKEN = window.localStorage.getItem(TOKEN_KEY) ?? ''; } catch { /* soukromé okno */ } }
+const SERVER = `${LOCAL ? 'ws://127.0.0.1:3311' : `ws://${window.location.hostname}:8080`}/?token=${encodeURIComponent(TOKEN)}`;
 interface Bar { time: number; open: number; high: number; low: number; close: number }
 interface Hello { system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown; serverMs?: number }
@@ -63,7 +72,7 @@ function App() {
     const socket = new WebSocket(SERVER);
     socketRef.current = socket;
     socket.onopen = () => { setLink('open'); say('Připojeno. Příkazy jdou na Rithmic Test (simulované peníze). První vysoká svíčka je jen pomocná kvůli měřítku.'); };
-    socket.onclose = () => { setLink('closed'); say('Místní proces není dostupný. Spusť scripts/rithmic/devTradeServer.ts a obnov stránku.', 'bad'); };
+    socket.onclose = () => { setLink('closed'); say(TOKEN ? 'Místní proces není dostupný (nebo neplatný token). Spusť scripts/rithmic/devTradeServer.ts a obnov stránku.' : 'Chybí přístupový token — otevři stránku odkazem s #token=…', 'bad'); };
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data));
       if (message.type === 'hello') {
