@@ -4,14 +4,14 @@
  * značku, zrušení jedné nohy zruší i sestru, zavření pozice je samostatný Market bez značky.
  */
 import { describe, expect, it } from 'vitest';
-import { BrokerRequestNotSentError, type BrokerEvent } from '../services/brokerPort';
+import { BrokerRequestNotSentError, type BrokerEvent, type BrokerOrder } from '../services/brokerPort';
 import {
   RithmicAccountRegistry,
   type RithmicAccountRegistryEntry,
   type RithmicAccountRegistryStore,
 } from '../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker, type RithmicBrokerConfig, type RithmicIncident } from '../services/rithmic/rithmicBroker';
-import { memoryProtectionStore, type ProtectionState, type ProtectionStore } from '../services/rithmic/rithmicProtection';
+import { RithmicProtection, memoryProtectionStore, type ProtectionState, type ProtectionStore } from '../services/rithmic/rithmicProtection';
 import { createFakeRithmicServer, flush } from './_fakeRithmicServer';
 
 const credentials = { user: 'u', password: 'secret', systemName: 'Rithmic Test', appName: 'AlphaTrade', appVersion: '0.1' };
@@ -238,6 +238,238 @@ describe('vstup se serverovou ochranou', () => {
     expect(seen.length).toBeGreaterThan(0);
     for (const order of seen) expect(order.limitPrice).toBeUndefined();
     expect(seen.at(-1)?.stopPrice).toBe(6990);
+    t.broker.stop();
+  });
+});
+
+describe('stav ochrany (výpočet)', () => {
+  const ACC = 1;
+  type Leg = { id: string; type: 'STOP_MARKET' | 'LIMIT'; quantity: number; filled: number; status: BrokerOrder['status'] };
+  function build(entry: { filled: number; status: BrokerOrder['status'] }, legs: Leg[], intent: { stopTicks?: number; targetTicks?: number } = { stopTicks: 40, targetTicks: 80 }) {
+    const protection = new RithmicProtection(memoryProtectionStore(), () => 1_000);
+    protection.addBracket({ tag: 't', accountId: ACC, symbol: 'ESZ6', side: 'Buy', quantity: 2, ...intent, entryId: 'E', createdAt: 1 });
+    const orders = new Map<string, BrokerOrder>();
+    const order = (id: string, quantity: number, filled: number, status: BrokerOrder['status'], extra: Partial<BrokerOrder> = {}): BrokerOrder => ({
+      brokerOrderId: id, accountId: ACC, symbol: 'ESZ6', side: 'Sell', orderType: 'Unsupported', quantity, filledQuantity: filled, status, sourceVersion: '', ...extra,
+    } as BrokerOrder);
+    orders.set('E', order('E', 2, entry.filled, entry.status));
+    for (const leg of legs) {
+      protection.observe(ACC, { basketId: leg.id, originalBasketId: 'E', priceType: leg.type, bracketType: 'TARGET_AND_STOP_STATIC', userTag: '' } as never);
+      orders.set(leg.id, order(leg.id, leg.quantity, leg.filled, leg.status, leg.type === 'STOP_MARKET' ? { stopPrice: 6990 } : { limitPrice: 7020 }));
+    }
+    return { protection, state: (net: number | null) => protection.bracketState(ACC, 'E', (id) => orders.get(id), net) };
+  }
+
+  it('každá role proti expozici bracketu: po dílčím TP je SL na původní množství chyba', () => {
+    const t = build({ filled: 2, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 2, filled: 1, status: 'working' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 2, filled: 0, status: 'working' },
+    ]);
+    const result = t.state(1);
+    expect(result.state).toBe('unprotected');
+    expect(result.detail).toMatch(/SL: 2 ks proti expozici 1/);
+  });
+
+  it('nohy expozici zavřely: cizí pozice na kontraktu není „bez ochrany"; po západce už vůbec', () => {
+    const t = build({ filled: 2, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 2, filled: 2, status: 'filled' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 2, filled: 0, status: 'canceled' },
+    ]);
+    expect(t.state(3)).toMatchObject({ state: 'done', latch: true });
+    const closed = build({ filled: 2, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 2, filled: 0, status: 'canceled' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 2, filled: 0, status: 'canceled' },
+    ]);
+    expect(closed.state(1).state).toBe('unprotected'); // nohy zrušené, expozice trvá
+    closed.protection.closeBracket(ACC, 'E');
+    expect(closed.state(1).state).toBe('done');
+  });
+
+  it('noha potvrzená jen Rithmicem (pending) ochrana není; pozice neznámá = unknown', () => {
+    const t = build({ filled: 2, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 2, filled: 0, status: 'working' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 2, filled: 0, status: 'pending' },
+    ]);
+    expect(t.state(2).state).toBe('unprotected');
+    expect(t.state(null).state).toBe('unknown');
+    expect(t.protection.hasPendingLegs(ACC, 'E', () => ({ status: 'pending' } as BrokerOrder))).toBe(true);
+  });
+
+  it('souběžné zápisy záznamu neskončí starším stavem', async () => {
+    const written: number[] = [];
+    let delay = 40;
+    const store = { load: async () => null, save: async (state: ProtectionState) => { const mine = delay; delay = 0; const count = state.brackets.length; await sleep(mine); written.push(count); } };
+    const protection = new RithmicProtection(store, () => 1);
+    protection.addBracket({ tag: 'a', accountId: ACC, symbol: 'ESZ6', side: 'Buy', quantity: 1, stopTicks: 1, createdAt: 1 });
+    const first = protection.save();
+    protection.addBracket({ tag: 'b', accountId: ACC, symbol: 'ESZ6', side: 'Buy', quantity: 1, stopTicks: 1, createdAt: 1 });
+    await Promise.all([first, protection.save()]);
+    expect(written.at(-1)).toBe(2);
+    expect(written).toHaveLength(2);
+  });
+});
+
+describe('nálezy z review diffu', () => {
+  it('druhý obchod na stejném kontraktu: dokončený bracket nedostane falešný poplach', async () => {
+    const t = await setup();
+    await openProtected(t, 'a1');
+    await flatten(t, 'fa');
+    await sleep(120);
+    await openProtected(t, 'a2');
+    await sleep(120);
+    await flatten(t, 'fb');
+    await sleep(120);
+    // a ještě holý příkaz, který otevře pozici bez bracketu
+    const bare = await t.broker.placeOrder({ tag: 'bare', accountId: t.account(), symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 7000 });
+    await flush();
+    t.server.fill(bare.brokerOrderId, 7000);
+    await sleep(150);
+    expect(t.kinds()).toEqual([]);
+    expect(t.store.saved()?.brackets.every((b) => b.closedAt !== undefined)).toBe(true);
+    t.broker.stop();
+  });
+
+  it('lhůta ochrany běží od POSLEDNÍ změny: vyplnění těsně před koncem první lhůty nevyvolá okamžitý poplach', async () => {
+    const t = await setup({ config: { legsWaitMs: 90 } });
+    t.server.controls.legsNeverAppear = true;
+    const ack = await t.broker.placeBracket(bracket(t, 'late'));
+    await sleep(70);
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await sleep(45); // první lhůta (od přijetí vstupu) už uplynula
+    expect(t.kinds()).toEqual([]);
+    await sleep(120);
+    expect(t.kinds()).toContain('bracket-legs-missing');
+    t.broker.stop();
+  });
+
+  it('živá pozice starší než vyplnění se nebere jako důkaz: zrušení nohy neprojde a stav není „orphan"', async () => {
+    const t = await setup();
+    await openProtected(t, 'z1');
+    await flatten(t, 'fz');
+    await sleep(120); // živá pozice je teď 0
+    t.server.controls.muteLivePositions = true; // PnL spojení se opozdí za vyplněním
+    const ack = await t.broker.placeBracket(bracket(t, 'z2'));
+    await flush();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await flush();
+    expect(t.broker.bracketState(t.account(), ack.entryBrokerOrderId).state).toBe('unknown');
+    const leg = t.legsOf(ack.entryBrokerOrderId)[0];
+    const before = t.sent(316);
+    expect(await thrown(t.broker.cancelOrder(t.account(), leg.basketId))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.sent(316)).toBe(before);
+    expect(t.legsOf(ack.entryBrokerOrderId).every((o) => o.status === 'open')).toBe(true);
+    t.broker.stop();
+  });
+
+  it('první zpráva nohy (ještě bez vazby): zrušení z posluchače události neprojde', async () => {
+    const t = await setup();
+    const ack = await t.broker.placeBracket(bracket(t, 'first'));
+    await flush();
+    const attempts: Array<Promise<Error>> = [];
+    t.broker.subscribe((event) => {
+      if (event.type !== 'order' || event.order.brokerOrderId === ack.entryBrokerOrderId || attempts.length) return;
+      attempts.push(thrown(t.broker.cancelOrder(t.account(), event.order.brokerOrderId)));
+    });
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await sleep(250);
+    expect(attempts).toHaveLength(1);
+    expect(await attempts[0]).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.sent(316)).toBe(0);
+    t.broker.stop();
+  });
+
+  it('vstup čekající na uložení neodejde, když mezitím začalo zavírání', async () => {
+    const inner = memoryProtectionStore();
+    let slow = false;
+    const store = { load: () => inner.load(), saved: () => inner.saved(), save: async (state: ProtectionState) => { if (slow) await sleep(60); await inner.save(state); } };
+    const t = await setup({ store });
+    await openProtected(t, 'w1');
+    const frames = t.server.newOrderFrames();
+    slow = true;
+    const placing = thrown(t.broker.placeBracket(bracket(t, 'w2')));
+    await sleep(5);
+    slow = false;
+    const closing = flatten(t, 'fw');
+    expect(await placing).toBeInstanceOf(BrokerRequestNotSentError);
+    await closing;
+    expect(t.server.newOrderFrames()).toBe(frames);
+    expect(t.store.saved()?.brackets.some((b) => b.tag === 'w2')).toBe(false);
+    t.broker.stop();
+  });
+
+  it('zavření bez odpovědi: dokud požadavek běží, jiná značka nic neodešle a nové příkazy neprojdou', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 500 } });
+    await openProtected(t, 'u1');
+    t.server.controls.exitPosition = 'ignore';
+    expect((await flatten(t, 'fu1')).status).toBe('indeterminate');
+    expect((await flatten(t, 'fu2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    const order = { tag: 'blocked', accountId: t.account(), symbol: 'ESZ6', side: 'Buy' as const, quantity: 1, orderType: 'Limit' as const, limitPrice: 6900 };
+    expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
+    // požadavek doběhne bez odpovědi: příkazy stojí dál, ale nové zavírání (čte stav) už smí
+    await sleep(350);
+    expect(t.kinds()).toContain('flatten-orders-remain');
+    expect(await thrown(t.broker.placeOrder(order))).toBeInstanceOf(BrokerRequestNotSentError);
+    t.server.controls.exitPosition = 'ok';
+    expect((await flatten(t, 'fu3')).status).toBe('submitted');
+    expect(t.sent(3504)).toBe(2);
+    await sleep(50);
+    await t.broker.placeOrder(order);
+    t.broker.stop();
+  });
+
+  it('připojená značka má vlastní záznam: její opakování po nejistém výsledku nic neodešle', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 400 } });
+    await openProtected(t, 'j1');
+    t.server.controls.exitPosition = 'ignore';
+    const [a, b] = await Promise.all([flatten(t, 'ja'), flatten(t, 'jb')]);
+    expect([a.status, b.status]).toEqual(['indeterminate', 'indeterminate']);
+    await sleep(350); // původní požadavek doběhl
+    t.server.controls.exitPosition = 'ok';
+    expect((await flatten(t, 'jb')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    expect(t.store.saved()?.flattens.find((f) => f.tag === 'jb')?.phase).toBe('exit-sent');
+    t.broker.stop();
+  });
+
+  it('vyplnění během důkazu „flat" důkaz ruší: žádné nepravdivé already-flat', async () => {
+    const t = await setup();
+    const ack = await t.broker.placeOrder({ tag: 'plain', accountId: t.account(), symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 7000 });
+    await flush();
+    t.server.controls.cancelStuck = true; // zrušení „ok", příkaz pracuje dál
+    let reads = 0;
+    t.server.hooks.onRequest = (templateId) => {
+      if (templateId !== 320) return;
+      reads += 1;
+      if (reads === 2) t.server.fill(ack.brokerOrderId, 7000); // vyplní se až po přečtení pozice
+    };
+    const result = await flatten(t, 'fp');
+    expect(result.status).toBe('indeterminate');
+    expect(t.kinds()).toContain('flatten-orders-remain');
+    t.broker.stop();
+  });
+
+  it('kontrola po zavření proběhne i při nejistém výsledku', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 2_000 } });
+    await openProtected(t, 'pc');
+    t.server.controls.cancelStuck = true;
+    t.server.controls.exitPosition = 'ignore';
+    expect((await flatten(t, 'fpc')).status).toBe('indeterminate');
+    await sleep(120);
+    expect(t.incidents.some((i) => i.kind === 'flatten-orders-remain' && /dál pracují/.test(i.message))).toBe(true);
+    t.broker.stop();
+  });
+
+  it('záznam fáze nejde uložit: brzda pokračuje, ale hlásí, že operace není chráněná proti opakování', async () => {
+    const inner = memoryProtectionStore();
+    let broken = false;
+    const store = { load: () => inner.load(), saved: () => inner.saved(), save: async (state: ProtectionState) => { if (broken) throw new Error('disk'); await inner.save(state); } };
+    const t = await setup({ store });
+    await openProtected(t, 'ns');
+    broken = true;
+    expect((await flatten(t, 'fns')).status).toBe('submitted');
+    expect(t.incidents.some((i) => i.kind === 'attention' && /není uložená/.test(i.message))).toBe(true);
+    expect(t.net()).toBe(0);
     t.broker.stop();
   });
 });

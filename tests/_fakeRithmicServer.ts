@@ -80,6 +80,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     onlyTargetLeg: false,
     /** Nohy vzniknou, ale žádná zpráva nenese vazbu na rodiče. */
     legsWithoutLink: false,
+    /** Živé zprávy o pozici (450) po vyplnění nepřijdou — PnL spojení je pozadu za order spojením. */
+    muteLivePositions: false,
     /** Zrušení odpoví „ok", ale příkaz pracuje dál. */
     cancelStuck: false,
     /** Zavření pozice (3504): 'ignore' = bez odpovědi, text = odmítnutí. */
@@ -208,7 +210,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     const posKey = `${order.accountId}|${order.symbol}`;
     const net = (positions.get(posKey) ?? 0) + (order.side === 1 ? order.quantity : -order.quantity);
     positions.set(posKey, net);
-    for (const s of sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
+    for (const s of controls.muteLivePositions ? [] : sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
       s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: price });
     }
     const opposite = order.side === 1 ? 2 : 1;
