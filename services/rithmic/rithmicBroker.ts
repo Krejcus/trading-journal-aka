@@ -246,8 +246,19 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       // hlášení incidentu nesmí shodit adaptér
     }
   };
-  const serialRead = <T>(run: () => Promise<T>): Promise<T> => {
-    const next = readChain.then(run, run);
+  const serialRead = <T>(run: () => Promise<T>, label = 'čtení'): Promise<T> => {
+    const queuedAt = now();
+    const timed = async (): Promise<T> => {
+      const startedAt = now();
+      try {
+        return await run();
+      } finally {
+        // Diagnostika: čtení jdou za sebou, takže jedno pomalé zdrží všechna další (i brzdu).
+        const took = now() - startedAt;
+        if (took > 1_000 || startedAt - queuedAt > 1_000) incident('attention', `pomalé čtení (${label}): ${took} ms, ve frontě ${startedAt - queuedAt} ms`);
+      }
+    };
+    const next = readChain.then(timed, timed);
     readChain = next.catch(() => undefined);
     return next;
   };
@@ -603,7 +614,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         }
       }
       return { orders, missingActive: result.missingActive, seenIds: result.seenIds };
-    });
+    }, 'příkazy');
   }
 
   function readPositions(source: RithmicClient, account: number): Promise<BrokerPosition[]> {
@@ -632,7 +643,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         return out;
       }
       throw new Error('Rithmic: pozice se během čtení opakovaně měnily — zkus znovu');
-    });
+    }, 'pozice');
   }
 
   async function connectOnce(): Promise<void> {
