@@ -44,7 +44,7 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
     url: 'wss://fake', credentials, socketFactory: server.socketFactory, registry, protectionStore: store,
     onIncident: (incident) => incidents.push(incident),
     requestTimeoutMs: 150, confirmWaitMs: 60, fillWaitMs: 60, reconnectMinMs: 20, reconnectMaxMs: 40,
-    legsWaitMs: 50, flattenStepMs: 120, flattenCancelWaitMs: 80, flattenPostCheckMs: 40,
+    legsWaitMs: 25, flattenStepMs: 120, flattenCancelWaitMs: 80, flattenPostCheckMs: 40,
     ...options.config,
   });
   broker.subscribe((event) => events.push(event));
@@ -374,7 +374,7 @@ describe('nálezy z review diffu', () => {
     t.server.fill(ack.entryBrokerOrderId, 7000);
     await sleep(45); // první lhůta (od přijetí vstupu) už uplynula
     expect(t.kinds()).toEqual([]);
-    await sleep(120);
+    await sleep(220); // poplach až po druhé, potvrzující kontrole
     expect(t.kinds()).toContain('bracket-legs-missing');
     t.broker.stop();
   });
