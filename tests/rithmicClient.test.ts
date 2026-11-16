@@ -160,7 +160,7 @@ describe('RithmicClient', () => {
     expect(updates.some((u) => u.notifyType === 'FILL' && u.fillPrice === 7000 && u.basketId === ack.basketId)).toBe(true);
   });
 
-  it('posun a zrušení projdou; druhé zrušení server odmítne', async () => {
+  it('posun a zrušení projdou; odpověď na druhé zrušení nic nedokazuje', async () => {
     const { server, client, updates } = setup();
     await client.connect(['order']);
     const ack = await client.placeOrder(limit('tag-m'));
@@ -169,6 +169,9 @@ describe('RithmicClient', () => {
     await flush();
     expect(server.orders.get(ack.basketId)).toMatchObject({ price: 6999.75, status: 'cancelled' });
     expect(updates.filter((u) => u.source === 'exchange').map((u) => u.notifyType)).toEqual(['STATUS', 'MODIFY', 'CANCEL']);
+    // změřené chování: zrušení už zrušeného nebo neexistujícího příkazu vrátí „ok" — nic nedokazuje
+    expect(await outcomeOf(client.cancelOrder('ACC1', ack.basketId))).toBe('resolved');
+    server.controls.cancelUnknownOk = false;
     expect(await outcomeOf(client.cancelOrder('ACC1', ack.basketId))).toBe('rejected');
   });
 
@@ -185,15 +188,29 @@ describe('RithmicClient', () => {
     expect(await outcomeOf(client.showOrders('JINY'))).toBe('not-sent');
   });
 
-  it('historie obsahuje i dokončené příkazy, které snímek pracujících už nevrací', async () => {
-    const { server, client } = setup();
+  it('snímek vrací pracující i dnešní dokončené příkazy; odmítnutý na RMS jen jako záznam Rithmicu', async () => {
+    const { server, client, updates } = setup();
     await client.connect(['order']);
-    const ack = await client.placeOrder({ ...limit('tag-f'), priceType: 'MARKET', price: undefined });
-    server.fill(ack.basketId, 7001);
+    const filled = await client.placeOrder({ ...limit('tag-f'), priceType: 'MARKET', price: undefined });
+    server.fill(filled.basketId, 7001);
+    const cancelled = await client.placeOrder(limit('tag-c'));
+    await client.cancelOrder('ACC1', cancelled.basketId);
+    server.controls.rmsRejectNextOrder = 'Rejected at RMS - limit';
+    const rejected = await client.placeOrder({ ...limit('tag-rms'), quantity: 500 });
+    await client.placeOrder(limit('tag-open'));
     await flush();
-    expect(await client.showOrders('ACC1')).toEqual([]);
-    const history = await client.showOrderHistorySummary('ACC1', '20261116');
-    expect(history.map((o) => o.userTag)).toEqual(['tag-f']);
+    // odmítnutí RMS: odpověď je „přijato" a živě přijde jen záznam Rithmicu s důvodem FA
+    const rms = updates.filter((u) => u.basketId === rejected.basketId);
+    expect(rms.map((u) => `${u.source}:${u.notifyType}:${u.completionReason}`)).toEqual(['rithmic:ORDER_RCVD_FROM_CLNT:', 'rithmic:COMPLETE:FA']);
+    const snapshot = await client.showOrders('ACC1');
+    const byTag = Object.fromEntries(snapshot.map((o) => [o.userTag, `${o.source}:${o.status}:${o.notifyType}:${o.completionReason}`]));
+    expect(byTag).toEqual({
+      'tag-f': 'exchange:complete:FILL:',
+      'tag-c': 'exchange:complete:CANCEL:',
+      'tag-rms': 'rithmic:complete:COMPLETE:FA',
+      'tag-open': 'exchange:open:STATUS:',
+    });
+    expect(await client.showOrderHistorySummary('ACC1', '20261116')).toEqual([]);
   });
 
   it('vynucené odhlášení zavře plant s příznakem forcedLogout', async () => {
@@ -239,9 +256,9 @@ describe('RithmicClient', () => {
     const done = await client.placeOrder({ ...limit('tag-done'), priceType: 'MARKET', price: undefined });
     server.fill(done.basketId, 7001);
     await flush();
-    const [working, history] = await Promise.all([client.showOrders('ACC1'), client.showOrderHistorySummary('ACC1', '20261116')]);
-    expect(working.map((o) => o.basketId)).toEqual([open.basketId]);
-    expect(history.map((o) => o.basketId).sort()).toEqual([open.basketId, done.basketId].sort());
+    const [first, second] = await Promise.all([client.showOrders('ACC1'), client.showOrders('ACC1')]);
+    expect(first.map((o) => o.basketId).sort()).toEqual([open.basketId, done.basketId].sort());
+    expect(second.map((o) => o.basketId).sort()).toEqual([open.basketId, done.basketId].sort());
   });
 
   it('událost s cizí identitou účtu se zahodí a ohlásí', async () => {

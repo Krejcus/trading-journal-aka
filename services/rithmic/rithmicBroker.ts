@@ -1,0 +1,832 @@
+/**
+ * Adaptér Rithmicu pro `BrokerPort` — verze 1 (jednotlivé příkazy, bez bracketu).
+ * Návrh, měření a oponentura: docs/reviews/rithmic-broker-v1-design-20261116.md,
+ * docs/reviews/rithmic-feasibility-results-20261116.md.
+ *
+ * NENÍ zapojený do workeru. Podmínky zapojení (z oponentury): ne za `brokerRouter`
+ * (maskuje chybějící metody a má reconnect lhůtu), automatické pokračování po
+ * výpadku vypnuté, jediná instance vynucená vstupním bodem, ověřené typy sloupců
+ * pro čísla účtů, testy s jádrem.
+ *
+ * Zásady:
+ *  - zápis se nikdy neopakuje; cokoli jiného než potvrzení s číslem příkazu nebo
+ *    prokazatelné neodeslání je neznámý výsledek (výjimka) a jádro ho dohledává;
+ *  - událost `error` se NEvysílá pro obchodní selhání (jádro ji čte jako ztrátu
+ *    transportu a zakládá automatické pokračování) — ta jdou přes `onIncident`;
+ *  - výchozí stav jádru se předá jako události `order` PŘED `connected: true`;
+ *    filly ze snímku se nevysílají nikdy;
+ *  - obnovuje se jen přihlášení; stav, který nejde určit, a vynucené odhlášení
+ *    adaptér zastaví bez automatické obnovy.
+ */
+import {
+  BrokerRequestNotSentError,
+  type BrokerAccountCapability,
+  type BrokerAccountRiskSnapshot,
+  type BrokerCancelConfirmation,
+  type BrokerEnvironment,
+  type BrokerEvent,
+  type BrokerModifyConfirmation,
+  type BrokerOrder,
+  type BrokerOrderAck,
+  type BrokerOrderLookup,
+  type BrokerOrderRequest,
+  type BrokerOrderStateLookup,
+  type BrokerPort,
+  type BrokerPosition,
+  type BrokerResyncSnapshot,
+  type OrderType,
+} from '../brokerPort';
+import type { RithmicAccountRegistry } from './rithmicAccountRegistry';
+import { RithmicOrderBook, rithmicExchangeForSymbol, rithmicPriceType, rithmicSide } from './rithmicBrokerMapping';
+import {
+  RithmicClient,
+  RithmicRequestError,
+  type RithmicAccountPnl,
+  type RithmicInstrumentPosition,
+  type RithmicOrderUpdate,
+  type RithmicPlantName,
+} from './rithmicClient';
+import type { RithmicCloseInfo, RithmicCredentials, RithmicSocketFactory } from './rithmicPlant';
+
+/** Systémy bez skutečných peněz. Cokoli jiného je `live`. (Na Paper běží i prop účty.) */
+export const RITHMIC_DEMO_SYSTEMS: readonly string[] = ['Rithmic Test', 'Rithmic Paper Trading'];
+
+export type RithmicIncidentKind =
+  | 'attention'
+  | 'cancel-failed'
+  | 'modify-failed'
+  | 'late-snapshot-row'
+  | 'fill-missing'
+  | 'state-undetermined'
+  | 'forced-logout'
+  | 'accounts-changed'
+  | 'reconnect-failed';
+
+export interface RithmicIncident {
+  kind: RithmicIncidentKind;
+  message: string;
+  at: number;
+}
+
+export interface RithmicBrokerConfig {
+  url: string;
+  credentials: RithmicCredentials;
+  socketFactory: RithmicSocketFactory;
+  registry: RithmicAccountRegistry;
+  /** Obchodní selhání a stavy, které nejdou jádru říct přes `BrokerEvent`. */
+  onIncident?: (incident: RithmicIncident) => void;
+  now?: () => number;
+  requestTimeoutMs?: number;
+  /** Jak dlouho čekat na konečný stav rušeného příkazu, než se vrátí „ověř čtením". */
+  confirmWaitMs?: number;
+  /** Jak dlouho čekat na exekuci z burzy poté, co Rithmic ohlásil vyplnění. */
+  fillWaitMs?: number;
+  riskSnapshotMaxAgeMs?: number;
+  /** Oba planty musí mít zprávu ze serveru v tomto okně, aby se vyslal `heartbeat`. */
+  heartbeatWindowMs?: number;
+  reconnectMinMs?: number;
+  reconnectMaxMs?: number;
+  /** Po tolika neúspěšných obnovách v řadě se adaptér zastaví (žádné nekonečné přihlašování). */
+  maxReconnectFailures?: number;
+}
+
+export interface RithmicBrokerPort extends BrokerPort {
+  /** První připojení; vyhodí chybu, když se nepodaří (další pokusy běží samy). */
+  start(): Promise<void>;
+  stop(): void;
+  isConnected(): boolean;
+  /** Zastaveno bez automatické obnovy (vynucené odhlášení, neurčitelný stav). */
+  isHalted(): boolean;
+  accountIds(): number[];
+}
+
+type State = 'idle' | 'connecting' | 'connected' | 'down' | 'halted';
+const TERMINAL: ReadonlySet<string> = new Set(['filled', 'canceled', 'rejected']);
+const BASELINE_ATTEMPTS = 3;
+const POSITION_READ_ATTEMPTS = 3;
+
+export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerPort {
+  const now = config.now ?? (() => Date.now());
+  const system = config.credentials.systemName;
+  const environment: BrokerEnvironment = RITHMIC_DEMO_SYSTEMS.includes(system) ? 'demo' : 'live';
+  const listeners = new Set<(event: BrokerEvent) => void>();
+  const numberByText = new Map<string, number>();
+  const textByNumber = new Map<number, string>();
+  /** Úplná identita účtů přihlášení (účet|FCM|IB) — pro kontrolu, že se nezměnila. */
+  let sessionIdentity = '';
+  const book = new RithmicOrderBook({ accountNumber: (id) => numberByText.get(id) ?? null, now });
+  const accountPnl = new Map<number, RithmicAccountPnl>();
+  const orderWaiters = new Set<(update: RithmicOrderUpdate) => void>();
+  const fillTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const aliveAt: Partial<Record<RithmicPlantName, number>> = {};
+
+  let state: State = 'idle';
+  let client: RithmicClient | null = null;
+  let epoch = 0;
+  let everConnected = false;
+  let reconnectDelay = config.reconnectMinMs ?? 2_000;
+  let reconnectFailures = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastHeartbeatAt = 0;
+  /** Roste s každou živou notifikací příkazu; baseline podle něj pozná změnu pod rukama. */
+  let liveSeq = 0;
+  /** Roste s každou živou změnou pozice; čtení pozic podle něj pozná zastaralý snímek. */
+  let positionSeq = 0;
+  /**
+   * Příkazy, jejichž stav v knize od začátku posledního čtení změnila živá notifikace.
+   * Řádek snímku (i opožděný) je nikdy nepřepíše — živá zpráva je novější.
+   */
+  let liveTouched = new Set<string>();
+  let snapshotDirty = false;
+  /** Známé příkazy před výpadkem (jen diagnostika `resync.complete`). */
+  let beforeOutage: Map<string, string> | null = null;
+  let positionCollector: { account: number; rows: Map<string, number | null>; accountRow: boolean } | null = null;
+  let readChain: Promise<unknown> = Promise.resolve();
+
+  const currentState = (): State => state;
+
+  const emit = (event: BrokerEvent): void => {
+    for (const listener of [...listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // posluchač nesmí shodit adaptér
+      }
+    }
+  };
+  const incident = (kind: RithmicIncidentKind, message: string): void => {
+    try {
+      config.onIncident?.({ kind, message, at: now() });
+    } catch {
+      // hlášení incidentu nesmí shodit adaptér
+    }
+  };
+  const serialRead = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = readChain.then(run, run);
+    readChain = next.catch(() => undefined);
+    return next;
+  };
+  const knownOrders = (): Map<string, string> => {
+    const map = new Map<string, string>();
+    for (const account of textByNumber.keys()) {
+      for (const order of book.list(account)) map.set(`${account}:${order.brokerOrderId}`, `${order.status}:${order.filledQuantity}`);
+    }
+    return map;
+  };
+
+  // ---- chybějící exekuce ---------------------------------------------------
+  /**
+   * Hlídá, že ke každému vyplněnému kusu dorazila exekuce z burzy. Volá se po každé
+   * změně příkazu (živé i ze snímku). Časovač se ruší až když nechybí nic — dílčí
+   * fill ho nezastaví.
+   */
+  function watchFillGap(source: RithmicClient, account: number, basketId: string): void {
+    const key = `${account}:${basketId}`;
+    const gap = book.fillGap(account, basketId);
+    const running = fillTimers.get(key);
+    if (gap === 0) {
+      if (running) {
+        clearTimeout(running);
+        fillTimers.delete(key);
+      }
+      return;
+    }
+    if (running || state !== 'connected') return;
+    const timer = setTimeout(() => {
+      fillTimers.delete(key);
+      if (client !== source) return;
+      const missing = book.fillGap(account, basketId);
+      if (missing === 0) return;
+      // Jádro o těchto kusech neví → odpojit a nechat ho projít plnou obnovou.
+      incident('fill-missing', `příkaz ${basketId} je vyplněný o ${missing} ks víc, než kolik exekucí dorazilo z burzy`);
+      dropAndReconnect();
+    }, config.fillWaitMs ?? 5_000);
+    (timer as { unref?: () => void }).unref?.();
+    fillTimers.set(key, timer);
+  }
+
+  function clearFillTimers(): void {
+    for (const timer of fillTimers.values()) clearTimeout(timer);
+    fillTimers.clear();
+  }
+
+  // ---- příjem ze serveru ---------------------------------------------------
+  function handleOrderUpdate(source: RithmicClient, update: RithmicOrderUpdate): void {
+    if (client !== source) return;
+    const account = numberByText.get(update.accountId);
+    if (update.isSnapshot) {
+      // Řádek snímku mimo svůj požadavek (změřeno: nenastává). Nikdy ho tiše nezahodit,
+      // ale také jím nepřepsat novější živý stav: jen ohlásit a příští čtení vzít znovu.
+      snapshotDirty = true;
+      incident('late-snapshot-row', `řádek snímku příkazu ${update.basketId} dorazil mimo svůj požadavek`);
+      if (account !== undefined && update.basketId && !liveTouched.has(update.basketId)) {
+        try {
+          publishSnapshotChanges(source, account, book.replaceFromSnapshot(account, [update], liveTouched).changed);
+        } catch (error) {
+          incident('late-snapshot-row', `opožděný řádek snímku nejde vyložit: ${(error as Error).message}`);
+        }
+      }
+      return;
+    }
+    liveSeq += 1;
+    for (const waiter of [...orderWaiters]) waiter(update);
+    if (update.source === 'rithmic' && (update.notifyType === 'CANCELLATION_FAILED' || update.notifyType === 'MODIFICATION_FAILED')) {
+      incident(update.notifyType === 'CANCELLATION_FAILED' ? 'cancel-failed' : 'modify-failed', `${update.notifyType} u příkazu ${update.basketId}: ${update.text || 'bez důvodu'}`);
+      return;
+    }
+    const delta = book.apply(update);
+    // „Živá je novější" platí jen když kniha zprávu opravdu uplatnila.
+    if ((delta.order || delta.fill) && update.basketId) liveTouched.add(update.basketId);
+    if (delta.order) emit({ type: 'order', order: delta.order, receivedAt: update.receivedAt });
+    if (delta.fill) emit({ type: 'fill', fill: delta.fill, receivedAt: update.receivedAt });
+    if (client !== source) return; // posluchač mohl adaptér zastavit
+    if (account !== undefined && update.basketId) watchFillGap(source, account, update.basketId);
+    if (delta.needsRead && account !== undefined) void resolveByRead(source, account, update.basketId, delta.needsRead, delta.attention ?? '');
+    else if (delta.attention) incident('attention', delta.attention);
+  }
+
+  /**
+   * Co snímek změnil proti knize, se za běhu musí dostat k jádru: jinak by pozdější živá
+   * notifikace téhož přechodu (už konečný stav) nevyslala nic a jádro by změnu nevidělo.
+   * Vysílá se jen `order`; vyšší vyplněné množství hlídá `watchFillGap`.
+   */
+  function publishSnapshotChanges(source: RithmicClient, account: number, changed: readonly BrokerOrder[]): void {
+    if (state !== 'connected') return; // při skládání výchozího stavu se vše vyšle najednou na konci
+    for (const order of changed) {
+      if (client !== source) return;
+      emit({ type: 'order', order, receivedAt: now() });
+      watchFillGap(source, account, order.brokerOrderId);
+    }
+  }
+
+  /** Stav nejde určit z notifikací: přečíst snímek (s jedním opakováním), jinak zastavit. */
+  async function resolveByRead(
+    source: RithmicClient,
+    account: number,
+    basketId: string,
+    why: 'incomplete' | 'unknown-complete',
+    detail: string,
+  ): Promise<void> {
+    let lastError = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        // Čtení samo vyšle, co snímek změnil (konečný stav, nově poznaný příkaz).
+        await readOrders(source, account);
+        if (client !== source) return;
+        const order = book.get(account, basketId);
+        if (!order) throw new Error('příkaz ve snímku není');
+        if (why === 'unknown-complete' && !TERMINAL.has(order.status)) throw new Error(detail || 'stav po čtení není konečný');
+        return;
+      } catch (error) {
+        if (client !== source) return;
+        lastError = (error as Error).message;
+      }
+    }
+    incident('state-undetermined', `stav příkazu ${basketId} nejde určit: ${lastError} — adaptér je zastavený, je nutné ruční spuštění`);
+    halt();
+  }
+
+  function handlePosition(source: RithmicClient, position: RithmicInstrumentPosition): void {
+    if (client !== source) return;
+    const account = numberByText.get(position.accountId);
+    if (account === undefined || !position.symbol) return;
+    if (position.isSnapshot) {
+      if (positionCollector && positionCollector.account === account) positionCollector.rows.set(position.symbol, position.netQuantity);
+      return;
+    }
+    positionSeq += 1;
+    if (position.netQuantity === null) {
+      incident('attention', `pozice ${position.symbol} bez množství — neznámá, ne nulová`);
+      return;
+    }
+    emit({
+      type: 'position',
+      position: { accountId: account, symbol: position.symbol, netQuantity: position.netQuantity },
+      ...(position.avgOpenFillPrice !== null && position.netQuantity !== 0 ? { displayAveragePrice: position.avgOpenFillPrice } : {}),
+    });
+  }
+
+  function handleAccountPnl(source: RithmicClient, pnl: RithmicAccountPnl): void {
+    if (client !== source) return;
+    const account = numberByText.get(pnl.accountId);
+    if (account === undefined) return;
+    accountPnl.set(account, pnl);
+    if (pnl.isSnapshot && positionCollector && positionCollector.account === account) positionCollector.accountRow = true;
+  }
+
+  function handleAlive(source: RithmicClient, plant: RithmicPlantName, at: number): void {
+    if (client !== source) return;
+    aliveAt[plant] = at;
+    if (state !== 'connected') return;
+    const window = config.heartbeatWindowMs ?? 90_000;
+    const order = aliveAt.order ?? 0;
+    const pnl = aliveAt.pnl ?? 0;
+    // Jen ze zprávy serveru a jen když žijí oba planty; nejvýš jednou za sekundu.
+    if (at - order <= window && at - pnl <= window && at - lastHeartbeatAt >= 1_000) {
+      lastHeartbeatAt = at;
+      emit({ type: 'heartbeat', at });
+    }
+  }
+
+  // ---- spojení -------------------------------------------------------------
+  function teardown(source: RithmicClient): boolean {
+    if (client !== source) return false;
+    const wasConnected = state === 'connected';
+    if (wasConnected) beforeOutage = knownOrders();
+    client = null;
+    epoch += 1;
+    clearFillTimers();
+    accountPnl.clear();
+    aliveAt.order = undefined;
+    aliveAt.pnl = undefined;
+    try {
+      source.close();
+    } catch {
+      // zbylé planty už mohou být zavřené
+    }
+    if (wasConnected) emit({ type: 'connection', connected: false, at: now() });
+    return true;
+  }
+
+  function handleClosed(source: RithmicClient, info: RithmicCloseInfo): void {
+    if (!teardown(source)) return;
+    if (info.forcedLogout) {
+      state = 'halted';
+      incident('forced-logout', 'vynucené odhlášení (pravděpodobně druhé přihlášení stejným účtem) — spojení se samo neobnoví');
+      return;
+    }
+    state = 'down';
+    scheduleReconnect();
+  }
+
+  function dropAndReconnect(): void {
+    const active = client;
+    if (!active || !teardown(active)) return;
+    state = 'down';
+    scheduleReconnect();
+  }
+
+  function halt(): void {
+    const active = client;
+    if (active) teardown(active);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    clearFillTimers();
+    state = 'halted';
+  }
+
+  function scheduleReconnect(): void {
+    if (state !== 'down' || reconnectTimer) return;
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, config.reconnectMaxMs ?? 30_000);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (state !== 'down') return;
+      connectOnce().catch((error) => {
+        if (currentState() !== 'down') return; // zastaveno nebo už připojeno jinou cestou
+        reconnectFailures += 1;
+        incident('reconnect-failed', `obnovení spojení selhalo (${reconnectFailures}×): ${(error as Error).message}`);
+        if (reconnectFailures >= (config.maxReconnectFailures ?? 20)) {
+          incident('state-undetermined', 'obnovení spojení se opakovaně nedaří — adaptér je zastavený, je nutné ruční spuštění');
+          halt();
+          return;
+        }
+        scheduleReconnect();
+      });
+    }, delay);
+    (reconnectTimer as { unref?: () => void }).unref?.();
+  }
+
+  interface OrdersRead {
+    /** Příkazy, které snímek skutečně obsahoval (ne zbytky v paměti). */
+    orders: BrokerOrder[];
+    missingActive: BrokerOrder[];
+    seenIds: Set<string>;
+  }
+
+  /**
+   * Snímek příkazů účtu do knihy. Příkaz, který během čtení změnila živá notifikace, snímek
+   * nepřepíše. `baseline` = skládání výchozího stavu (nic se nevysílá, chybějící pracující
+   * příkaz neřeší výjimkou, ale volající).
+   */
+  function readOrders(source: RithmicClient, account: number, options: { baseline?: boolean } = {}): Promise<OrdersRead> {
+    return serialRead(async () => {
+      const text = textByNumber.get(account);
+      if (text === undefined) throw new Error(`Rithmic: účet ${account} není v aktuálním přihlášení`);
+      if (!options.baseline) {
+        liveTouched = new Set();
+        snapshotDirty = false;
+      }
+      const rows = await source.showOrders(text);
+      if (client !== source) throw new Error('Rithmic: spojení spadlo během čtení příkazů');
+      const result = book.replaceFromSnapshot(account, rows, liveTouched, { baseline: options.baseline });
+      // Živě změněný příkaz se do výsledku čtení počítá se svým novějším stavem z knihy.
+      const orders = book.list(account).filter((order) => result.seenIds.has(order.brokerOrderId) || liveTouched.has(order.brokerOrderId));
+      if (!options.baseline) {
+        publishSnapshotChanges(source, account, result.changed);
+        if (result.missingActive.length) {
+          throw new Error(`Rithmic: snímek neobsahuje pracující příkaz ${result.missingActive.map((o) => o.brokerOrderId).join(', ')}`);
+        }
+      }
+      return { orders, missingActive: result.missingActive, seenIds: result.seenIds };
+    });
+  }
+
+  function readPositions(source: RithmicClient, account: number): Promise<BrokerPosition[]> {
+    return serialRead(async () => {
+      const text = textByNumber.get(account);
+      if (text === undefined) throw new Error(`Rithmic: účet ${account} není v aktuálním přihlášení`);
+      for (let attempt = 0; attempt < POSITION_READ_ATTEMPTS; attempt += 1) {
+        const seqBefore = positionSeq;
+        const collector = { account, rows: new Map<string, number | null>(), accountRow: false };
+        positionCollector = collector;
+        try {
+          await source.requestPnlSnapshot(text);
+        } finally {
+          positionCollector = null;
+        }
+        if (client !== source) throw new Error('Rithmic: spojení spadlo během čtení pozic');
+        // Živá změna pozice během čtení: snímek může být starší než právě vyslaná událost.
+        if (positionSeq !== seqBefore) continue;
+        // Změřeno: řádky dorazí před ukončením požadavku. Bez řádku účtu není snímek důkaz.
+        if (!collector.accountRow) throw new Error('Rithmic: snímek pozic je neúplný (chybí řádek účtu)');
+        const out: BrokerPosition[] = [];
+        for (const [symbol, netQuantity] of collector.rows) {
+          if (netQuantity === null) throw new Error(`Rithmic: pozice ${symbol} bez množství — neznámá, ne nulová`);
+          out.push({ accountId: account, symbol, netQuantity });
+        }
+        return out;
+      }
+      throw new Error('Rithmic: pozice se během čtení opakovaně měnily — zkus znovu');
+    });
+  }
+
+  async function connectOnce(): Promise<void> {
+    if (state === 'halted') throw new Error('Rithmic: adaptér je zastavený');
+    if (client) throw new Error('Rithmic: připojování už běží');
+    const created: RithmicClient = new RithmicClient({
+      url: config.url,
+      credentials: config.credentials,
+      socketFactory: config.socketFactory,
+      now,
+      requestTimeoutMs: config.requestTimeoutMs,
+      events: {
+        onOrderUpdate: (update) => handleOrderUpdate(created, update),
+        onInstrumentPosition: (position) => handlePosition(created, position),
+        onAccountPnl: (pnl) => handleAccountPnl(created, pnl),
+        onAlive: (plant, at) => handleAlive(created, plant, at),
+        onAttention: (message) => incident('attention', message),
+        onPlantClosed: (_plant, info) => handleClosed(created, info),
+      },
+    });
+    /** Po každém čekání: patří tahle relace ještě nám? (stop/start nebo pád mezitím) */
+    const mine = (): void => {
+      if (client !== created) throw new Error('připojování bylo mezitím zrušeno');
+    };
+    client = created;
+    state = 'connecting';
+    try {
+      await created.connect(['order', 'pnl']);
+      mine();
+      if (created.accounts.length === 0) throw new Error('přihlášení nemá žádný účet');
+      const numbers = new Map<string, number>();
+      for (const account of created.accounts) {
+        const id = await config.registry.ensure({ system, fcmId: account.fcmId, ibId: account.ibId, accountId: account.accountId });
+        mine();
+        numbers.set(account.accountId, id);
+      }
+      numberByText.clear();
+      textByNumber.clear();
+      for (const [text, id] of numbers) {
+        numberByText.set(text, id);
+        textByNumber.set(id, text);
+      }
+      sessionIdentity = created.accounts.map((a) => `${a.accountId}|${a.fcmId}|${a.ibId}`).sort().join(',');
+      const accountIds = [...textByNumber.keys()];
+      for (const text of textByNumber.values()) {
+        await created.subscribePnl(text);
+        mine();
+      }
+
+      let positions: BrokerPosition[] = [];
+      let seen = new Set<string>();
+      let missing: BrokerOrder[] = [];
+      let settled = false;
+      for (let attempt = 0; attempt < BASELINE_ATTEMPTS && !settled; attempt += 1) {
+        const seqBefore = liveSeq;
+        liveTouched = new Set();
+        snapshotDirty = false;
+        positions = [];
+        seen = new Set();
+        missing = [];
+        for (const id of accountIds) {
+          const read = await readOrders(created, id, { baseline: true });
+          mine();
+          for (const basketId of read.seenIds) seen.add(`${id}:${basketId}`);
+          missing.push(...read.missingActive);
+          positions.push(...(await readPositions(created, id)));
+          mine();
+        }
+        // Živá notifikace nebo opožděný řádek během skládání: stav se pod snímkem hnul, znovu.
+        settled = liveSeq === seqBefore && !snapshotDirty;
+      }
+      if (!settled) throw new Error('výchozí stav se nepodařilo složit bez souběžné změny');
+      if (missing.length) {
+        // Příkaz, který jsme znali jako pracující, po obnově ve snímku není a jeho osud neznáme
+        // (typicky přelom obchodního dne). Opakované přihlašování to nezmění → zastavit.
+        incident('state-undetermined', `po připojení chybí dříve pracující příkaz ${missing.map((o) => o.brokerOrderId).join(', ')} — adaptér je zastavený, je nutné ruční spuštění`);
+        halt();
+        throw new Error('Rithmic: chybí dříve pracující příkaz, stav nejde určit');
+      }
+
+      // Výchozí stav PŘED `connected: true`: jádro si z něj uloží signatury a nic nekopíruje.
+      const orders = accountIds.flatMap((id) => book.list(id).filter((order) => seen.has(`${id}:${order.brokerOrderId}`) || liveTouched.has(order.brokerOrderId)));
+      for (const order of orders) {
+        emit({ type: 'order', order, receivedAt: now() });
+        mine(); // posluchač mohl adaptér zastavit
+      }
+
+      const reconnected = everConnected;
+      let complete = true;
+      let failureReason: string | undefined;
+      if (reconnected && beforeOutage) {
+        const after = knownOrders();
+        const changed = [...after].filter(([key, value]) => seen.has(key) && beforeOutage!.get(key) !== value).map(([key]) => key);
+        const gone = [...beforeOutage.keys()].filter((key) => !seen.has(key));
+        if (changed.length || gone.length) {
+          // Filly z mezery Rithmic nedává; rozdíl je jediná stopa, že se v ní něco stalo.
+          complete = false;
+          failureReason = `gap-fills-unverified: změněno nebo nové ${changed.length}, chybí ${gone.length}`;
+        }
+      }
+      const resync: BrokerResyncSnapshot = {
+        accountIds, positions, orders, gapFills: [], complete, ...(failureReason ? { failureReason } : {}),
+      };
+      state = 'connected';
+      everConnected = true;
+      beforeOutage = null;
+      reconnectFailures = 0;
+      reconnectDelay = config.reconnectMinMs ?? 2_000;
+      emit({
+        type: 'connection', connected: true, at: now(),
+        ...(reconnected ? { reconnected: true, resynced: true } : {}),
+        resync,
+      });
+    } catch (error) {
+      // Uklízí jen ten, komu relace ještě patří; cizí (novější) relaci se nesahá na stav.
+      if (client === created) {
+        client = null;
+        epoch += 1;
+        clearFillTimers();
+        created.close();
+        if (state === 'connecting') state = 'down';
+      } else {
+        try {
+          created.close();
+        } catch {
+          // už zavřeno
+        }
+      }
+      throw error;
+    }
+  }
+
+  // ---- pomocné pro port ----------------------------------------------------
+  function activeClient(): RithmicClient {
+    if (!client || state !== 'connected') throw new BrokerRequestNotSentError('Rithmic: spojení není připravené');
+    return client;
+  }
+
+  function accountText(accountId: number, forWrite: boolean): string {
+    const text = textByNumber.get(accountId);
+    if (text !== undefined) return text;
+    const message = `Rithmic: účet ${accountId} není v aktuálním přihlášení`;
+    throw forWrite ? new BrokerRequestNotSentError(message) : new Error(message);
+  }
+
+  /** Chyba zápisu → kontrakt portu. Žádný chybový kód není změřený jako „příkaz nevznikl". */
+  function rethrowWrite(error: unknown, what: string): never {
+    if (error instanceof RithmicRequestError && error.outcome === 'not-sent') throw new BrokerRequestNotSentError(error.message);
+    // Jen číselný kód: text serveru (např. „rejected at RMS") se do výjimky nesmí dostat,
+    // jádro podle slov „rejected/odmít" v textu rozlišuje definitivní odmítnutí.
+    const code = error instanceof RithmicRequestError && /^\d+$/.test(error.rpCode[0] ?? '') ? ` (kód ${error.rpCode[0]})` : '';
+    throw new Error(`Rithmic: výsledek operace „${what}" je neznámý${code} — ověř stav čtením`);
+  }
+
+  function waitForTerminal(accountId: number, brokerOrderId: string): { promise: Promise<boolean>; cancel: () => void } {
+    const text = textByNumber.get(accountId);
+    let done: (value: boolean) => void = () => undefined;
+    const promise = new Promise<boolean>((resolve) => {
+      done = resolve;
+    });
+    const finish = (value: boolean): void => {
+      clearTimeout(timer);
+      orderWaiters.delete(waiter);
+      done(value);
+    };
+    const waiter = (update: RithmicOrderUpdate): void => {
+      if (update.accountId !== text || update.basketId !== brokerOrderId) return;
+      // Kniha zprávu uplatní hned po čekatelích; podívat se až po ní.
+      queueMicrotask(() => {
+        const order = book.get(accountId, brokerOrderId);
+        if (order && (order.status === 'canceled' || order.status === 'filled')) finish(true);
+      });
+    };
+    const timer = setTimeout(() => finish(false), config.confirmWaitMs ?? 1_500);
+    orderWaiters.add(waiter);
+    return { promise, cancel: () => finish(false) };
+  }
+
+  const port: RithmicBrokerPort = {
+    environment,
+
+    async start(): Promise<void> {
+      if (state !== 'idle' && state !== 'halted') throw new Error('Rithmic: adaptér už běží');
+      state = 'idle';
+      reconnectFailures = 0;
+      try {
+        await connectOnce();
+      } catch (error) {
+        // `connectOnce` stav mění; čteme ho přes funkci, aby ho překladač nepovažoval za 'idle'.
+        if (currentState() === 'down') scheduleReconnect();
+        throw error;
+      }
+    },
+
+    stop(): void {
+      halt();
+      state = 'idle';
+    },
+
+    isConnected: () => state === 'connected',
+    isHalted: () => state === 'halted',
+    accountIds: () => [...textByNumber.keys()],
+    routeEpoch: () => epoch,
+
+    async placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck> {
+      const active = activeClient();
+      const text = accountText(request.accountId, true);
+      const exchange = rithmicExchangeForSymbol(request.symbol);
+      if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${request.symbol}`);
+      if (!active.hasTradeRoute(exchange)) throw new BrokerRequestNotSentError(`Rithmic: účet nemá trade route pro ${exchange}`);
+      if (!request.tag) throw new BrokerRequestNotSentError('Rithmic: příkaz bez značky');
+      try {
+        const ack = await active.placeOrder({
+          accountId: text,
+          userTag: request.tag,
+          symbol: request.symbol,
+          exchange,
+          side: rithmicSide(request.side),
+          quantity: request.quantity,
+          priceType: rithmicPriceType(request.orderType),
+          price: request.limitPrice,
+          triggerPrice: request.stopPrice,
+        });
+        // „Přijato" = Rithmic příkaz eviduje. Odmítnutí RMS nebo burzou přijde jako událost `order`.
+        return { brokerOrderId: ack.basketId, accepted: true, definitive: true };
+      } catch (error) {
+        return rethrowWrite(error, 'nový příkaz');
+      }
+    },
+
+    async cancelOrder(accountId: number, brokerOrderId: string): Promise<void | BrokerCancelConfirmation> {
+      const active = activeClient();
+      const text = accountText(accountId, true);
+      const waiter = waitForTerminal(accountId, brokerOrderId);
+      try {
+        // Změřeno: odpověď „ok" přijde i pro neexistující příkaz — sama nic nedokazuje.
+        await active.cancelOrder(text, brokerOrderId);
+      } catch (error) {
+        waiter.cancel();
+        return rethrowWrite(error, 'zrušení příkazu');
+      }
+      if (!(await waiter.promise)) return undefined;
+      const order = book.get(accountId, brokerOrderId);
+      if (!order || (order.status !== 'canceled' && order.status !== 'filled')) return undefined;
+      return { confirmedBy: 'stream-terminal', order };
+    },
+
+    async modifyOrder(
+      accountId: number,
+      brokerOrderId: string,
+      changes: { quantity: number; orderType: OrderType; limitPrice?: number; stopPrice?: number },
+    ): Promise<void | BrokerModifyConfirmation> {
+      const active = activeClient();
+      const text = accountText(accountId, true);
+      const known = book.get(accountId, brokerOrderId);
+      if (!known) throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} neznám, změnu neodesílám`);
+      if (known.orderType === 'Unsupported') {
+        throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} je typu, který adaptér nemění (${known.brokerOrderType ?? 'neznámý'})`);
+      }
+      const exchange = rithmicExchangeForSymbol(known.symbol);
+      if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${known.symbol}`);
+      try {
+        await active.modifyOrder({
+          accountId: text,
+          basketId: brokerOrderId,
+          symbol: known.symbol,
+          exchange,
+          quantity: changes.quantity,
+          priceType: rithmicPriceType(changes.orderType),
+          price: changes.limitPrice,
+          triggerPrice: changes.stopPrice,
+        });
+      } catch (error) {
+        return rethrowWrite(error, 'změna příkazu');
+      }
+      // Burzovní potvrzení nejde přiřadit konkrétnímu požadavku → jádro ověří čtením.
+      return undefined;
+    },
+
+    async listAccountCapabilities(accountIds: readonly number[]): Promise<BrokerAccountCapability[]> {
+      const active = activeClient();
+      const fresh = await active.fetchAccounts();
+      // Identitu tvoří účet + FCM + IB; prázdná nebo jiná odpověď = nevíme, čí účty obsluhujeme.
+      if (fresh.map((a) => `${a.accountId}|${a.fcmId}|${a.ibId}`).sort().join(',') !== sessionIdentity) {
+        incident('accounts-changed', 'seznam účtů se od přihlášení změnil — odpojuji a přihlásím se znovu');
+        dropAndReconnect();
+        throw new Error('Rithmic: seznam účtů se změnil, způsobilost nejde potvrdit');
+      }
+      const rms = await active.accountRmsInfo();
+      const statusByAccount = new Map<string, string>();
+      for (const row of rms) {
+        if (typeof row.account_id === 'string' && row.account_id) statusByAccount.set(row.account_id, typeof row.status === 'string' ? row.status.trim().toLowerCase() : '');
+      }
+      return accountIds.map((accountId) => {
+        const text = textByNumber.get(accountId);
+        return {
+          accountId,
+          active: text !== undefined,
+          // Trade route se čte při přihlášení (ne při každém dotazu) a v1 obchoduje jen burzy z pevné tabulky.
+          canTrade: text !== undefined && statusByAccount.get(text) === 'active' && active.hasTradeRoute('CME'),
+        };
+      });
+    },
+
+    async listAccountRiskSnapshots(accountIds: readonly number[]): Promise<BrokerAccountRiskSnapshot[]> {
+      const active = activeClient();
+      const maxAge = config.riskSnapshotMaxAgeMs ?? 15_000;
+      const out: BrokerAccountRiskSnapshot[] = [];
+      for (const accountId of accountIds) {
+        accountText(accountId, false);
+        let pnl = accountPnl.get(accountId);
+        if (!pnl || now() - pnl.receivedAt > maxAge) {
+          await readPositions(active, accountId);
+          pnl = accountPnl.get(accountId);
+        }
+        // Bez čerstvého snímku P&L není co vracet: samé `null` s čerstvým časem by vypadalo jako odpověď.
+        if (!pnl || now() - pnl.receivedAt > maxAge) throw new Error(`Rithmic: čerstvý snímek P&L účtu ${accountId} není k dispozici`);
+        out.push({
+          accountId,
+          at: pnl.receivedAt,
+          realizedPnlUsd: pnl.closedPnl,
+          realizedTradeDate: null,
+          openPnlUsd: pnl.openPnl,
+          // Rithmic tyto hodnoty v použitelném tvaru neposílá — nikdy je nenahrazovat nulou.
+          netLiq: null,
+          minNetLiq: null,
+          dailyLossAutoLiq: null,
+          trailingMaxDrawdown: null,
+          cashBalanceUsd: pnl.accountBalance,
+        });
+      }
+      return out;
+    },
+
+    async listPositions(accountId: number): Promise<BrokerPosition[]> {
+      const active = activeClient();
+      accountText(accountId, false);
+      return readPositions(active, accountId);
+    },
+
+    async listOrders(accountId: number): Promise<BrokerOrder[]> {
+      const active = activeClient();
+      accountText(accountId, false);
+      return (await readOrders(active, accountId)).orders;
+    },
+
+    async findOrdersByTag(accountId: number, tag: string): Promise<BrokerOrderLookup> {
+      const active = activeClient();
+      accountText(accountId, false);
+      // Jen příkazy, které snímek skutečně obsahoval — zbytek v paměti není důkaz.
+      const orders = (await readOrders(active, accountId)).orders.filter((order) => order.tag === tag);
+      // Nalezený příkaz z úplného snímku je kladný důkaz; „nenalezeno" autoritu nemá.
+      return { orders, completeness: orders.length ? 'authoritative' : 'eventual', observedAt: now() };
+    },
+
+    async findOrderById(accountId: number, brokerOrderId: string): Promise<BrokerOrderStateLookup> {
+      const active = activeClient();
+      accountText(accountId, false);
+      const order = (await readOrders(active, accountId)).orders.find((o) => o.brokerOrderId === brokerOrderId) ?? null;
+      return { order, completeness: order ? 'authoritative' : 'eventual', observedAt: now() };
+    },
+
+    subscribe(listener: (event: BrokerEvent) => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return port;
+}

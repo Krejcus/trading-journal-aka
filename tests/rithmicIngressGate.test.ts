@@ -43,7 +43,7 @@ const gate = createIngressGate(policy);
 const evaluateIngress = (_policy: IngressPolicy, request: IngressRequest, s: IngressProcessState) => gate.evaluate(request, s);
 const recheckBeforeWrite = (decision: Parameters<typeof gate.recheckBeforeWrite>[0], request: IngressRequest, s: IngressProcessState, _policy: IngressPolicy) =>
   gate.recheckBeforeWrite(decision, request, s);
-const code = (d: IngressDecision) => (d.ok ? 'ok' : d.code);
+const code = (d: IngressDecision): string => ('code' in d ? d.code : 'ok');
 
 describe('ingressGate', () => {
   it('politika z testu je platná; vstup projde a vyžádá si kontrolu před zápisem', () => {

@@ -65,6 +65,14 @@ export interface RithmicOrderDelta {
   fill?: BrokerFill;
   /** Notifikace, kterou nejde bezpečně vyložit — volající má stav ověřit čtením. */
   attention?: string;
+  /** Rithmic hlásí vyplnění, burzovní exekuce ještě nepřišla: hlídat lhůtu. */
+  awaitingFill?: boolean;
+  /**
+   * Stav nejde určit z notifikací, musí se přečíst snímek:
+   * `incomplete` = první notifikace příkazu nenesla stranu/množství/symbol;
+   * `unknown-complete` = Rithmic ohlásil dokončení s důvodem, který neznáme.
+   */
+  needsRead?: 'incomplete' | 'unknown-complete';
 }
 
 export interface RithmicOrderBookOptions {
@@ -127,7 +135,10 @@ export function rithmicSnapshotStatus(row: RithmicOrderUpdate, quantity: number,
  * a konečný stav ji už nemění.
  */
 function stateVersion(order: Omit<BrokerOrder, 'sourceVersion'>): string {
-  return [order.status, order.orderType, order.quantity, order.limitPrice ?? '', order.stopPrice ?? '', order.filledQuantity].join(':');
+  // U konečného stavu se vyplněné množství do verze nepočítá: pozdní dílčí fill po zrušení
+  // by jinak změnil signaturu a jádro by vydalo druhé `canceled`. Fill sám se vydá zvlášť.
+  const filled = TERMINAL.has(order.status) && order.status !== 'filled' ? '' : order.filledQuantity;
+  return [order.status, order.orderType, order.quantity, order.limitPrice ?? '', order.stopPrice ?? '', filled].join(':');
 }
 
 /**
@@ -142,6 +153,14 @@ export class RithmicOrderBook {
   private readonly options: RithmicOrderBookOptions;
   private readonly orders = new Map<string, BrokerOrder>();
   private readonly fillIds = new Set<string>();
+  /**
+   * Kolik kusů příkazu už jádro „ví": součet vyslaných fillů, u příkazu z výchozího stavu
+   * jeho množství ve snímku (filly ze snímku se nevysílají). Rozdíl proti vyplněnému množství
+   * = exekuce, která jádru chybí.
+   */
+  private readonly accounted = new Map<string, number>();
+  /** Kolik kusů Rithmic ohlásil jako vyplněné, aniž by zpráva nesla množství (COMPLETE s důvodem F). */
+  private readonly owed = new Map<string, number>();
 
   constructor(options: RithmicOrderBookOptions) {
     this.options = options;
@@ -158,6 +177,17 @@ export class RithmicOrderBook {
 
   list(accountId: number): BrokerOrder[] {
     return [...this.orders.values()].filter((o) => o.accountId === accountId).map((o) => ({ ...o }));
+  }
+
+  /**
+   * Kolik vyplněných kusů příkazu jádro ještě nedostalo jako fill (0 = nic nechybí).
+   * Kladné číslo znamená čekat na exekuci z burzy; když nepřijde, je ztracená.
+   */
+  fillGap(accountId: number, brokerOrderId: string): number {
+    const key = this.key(accountId, brokerOrderId);
+    const order = this.orders.get(key);
+    if (!order) return 0;
+    return Math.max(0, Math.max(order.filledQuantity, this.owed.get(key) ?? 0) - (this.accounted.get(key) ?? 0));
   }
 
   /** Složí příkaz z jedné notifikace nebo řádku snímku; null, když chybí účet nebo ID. */
@@ -222,7 +252,7 @@ export class RithmicOrderBook {
     if (!next) return { attention: `notifikaci ${update.source}:${update.notifyType} nejde složit` };
     if (!previous && (update.side === null || !(next.quantity > 0) || !next.symbol)) {
       // Stranu, množství ani symbol si nedomýšlíme: neúplný příkaz se nevyšle, stav se musí dočíst.
-      return { attention: `první notifikace příkazu ${update.basketId} je neúplná (strana/množství/symbol)` };
+      return { attention: `první notifikace příkazu ${update.basketId} je neúplná (strana/množství/symbol)`, needsRead: 'incomplete' };
     }
     const delta: RithmicOrderDelta = {};
     const wasTerminal = previous ? TERMINAL.has(previous.status) : false;
@@ -235,6 +265,7 @@ export class RithmicOrderBook {
           const fillKey = `${accountId}:${update.fillId}`;
           if (!this.fillIds.has(fillKey)) {
             this.fillIds.add(fillKey);
+            this.accounted.set(key, (this.accounted.get(key) ?? 0) + size);
             next.filledQuantity = Math.max(next.filledQuantity, (previous?.filledQuantity ?? 0) + (update.totalFillSize === null ? size : 0));
             delta.fill = {
               // Jádro deduplikuje filly jen podle fillId napříč účty — proto s účtem.
@@ -269,9 +300,25 @@ export class RithmicOrderBook {
       if (RITHMIC_PENDING.has(update.notifyType)) {
         if (status !== 'working') status = 'pending';
       } else if (update.notifyType === 'COMPLETE') {
-        // Rithmic říká „hotovo", ale ne proč. Důvod doloží burzovní notifikace nebo čtení.
-        if (next.quantity > 0 && next.filledQuantity >= next.quantity) status = 'filled';
-        else delta.attention = `COMPLETE u příkazu ${update.basketId} bez burzovního důvodu (${update.completionReason || update.status || 'neuvedeno'})`;
+        // Důvody změřené na Rithmic Test: FA = odmítl Rithmic (RMS; burza příkaz neviděla),
+        // R = odmítla burza, C = zrušeno, F = vyplněno.
+        const reason = update.completionReason.trim().toUpperCase();
+        if (reason === 'FA' || reason === 'R') {
+          status = 'rejected';
+          next.rejectReason = (update.text || (reason === 'FA' ? 'Rithmic: odmítnuto (RMS)' : 'Rithmic: odmítnuto burzou')).slice(0, 300);
+        } else if (reason === 'C') {
+          status = 'canceled';
+        } else if (next.quantity > 0 && next.filledQuantity >= next.quantity) {
+          status = 'filled';
+        } else if (reason === 'F') {
+          // Vyplněno podle Rithmicu, ale exekuce z burzy ještě nedorazila: stav neposouváme,
+          // jen si zapíšeme, že jádru dlužíme exekuce na celé množství (viz `fillGap`).
+          this.owed.set(key, next.quantity);
+          delta.awaitingFill = true;
+        } else {
+          delta.attention = `COMPLETE u příkazu ${update.basketId} s neznámým důvodem (${update.completionReason || update.status || 'neuvedeno'})`;
+          delta.needsRead = 'unknown-complete';
+        }
       }
     }
     next.status = status;
@@ -343,24 +390,47 @@ export class RithmicOrderBook {
     accountId: number,
     rows: readonly RithmicOrderUpdate[],
     skip: ReadonlySet<string> = new Set(),
-  ): { orders: BrokerOrder[]; missingActive: BrokerOrder[] } {
+    options: { baseline?: boolean } = {},
+  ): { orders: BrokerOrder[]; missingActive: BrokerOrder[]; changed: BrokerOrder[]; seenIds: Set<string> } {
     const composed: BrokerOrder[] = [];
+    const seenIds = new Set<string>();
     for (const row of rows) {
+      if (this.options.accountNumber(row.accountId) !== accountId || !row.basketId) continue;
+      seenIds.add(row.basketId);
       if (skip.has(row.basketId)) continue;
       const next = this.composeSnapshotRow(accountId, row);
       if (next) composed.push(next);
     }
     // Zapisuje se až po úspěšném složení všech řádků: chyba nenechá knihu napůl přepsanou.
-    const seen = new Set<string>(skip);
+    const changed: BrokerOrder[] = [];
     for (const next of composed) {
-      this.orders.set(this.key(accountId, next.brokerOrderId), next);
-      seen.add(next.brokerOrderId);
+      const key = this.key(accountId, next.brokerOrderId);
+      const previous = this.orders.get(key);
+      if (!previous) {
+        // Výchozí stav: vyplněné množství jádro přebírá ze snímku (filly se nevysílají).
+        // Příkaz poprvé viděný až za běhu takovou výjimku nemá — jeho exekuce jádru chybí.
+        this.accounted.set(key, options.baseline ? next.filledQuantity : 0);
+      }
+      if (
+        !previous ||
+        previous.status !== next.status ||
+        previous.filledQuantity !== next.filledQuantity ||
+        previous.quantity !== next.quantity ||
+        previous.limitPrice !== next.limitPrice ||
+        previous.stopPrice !== next.stopPrice ||
+        previous.orderType !== next.orderType
+      ) {
+        changed.push({ ...next });
+      }
+      this.orders.set(key, next);
     }
     const missingActive: BrokerOrder[] = [];
     for (const order of this.orders.values()) {
-      if (order.accountId !== accountId || seen.has(order.brokerOrderId) || TERMINAL.has(order.status)) continue;
+      if (order.accountId !== accountId || seenIds.has(order.brokerOrderId) || TERMINAL.has(order.status)) continue;
       missingActive.push({ ...order });
     }
-    return { orders: this.list(accountId), missingActive };
+    // `orders` jsou jen příkazy, které snímek skutečně obsahoval (ne zbytky v paměti).
+    const orders = this.list(accountId).filter((order) => seenIds.has(order.brokerOrderId));
+    return { orders, missingActive, changed, seenIds };
   }
 }

@@ -17,7 +17,7 @@ export interface FakeOrder {
   quantity: number;
   price?: number;
   triggerPrice?: number;
-  status: 'open' | 'complete' | 'cancelled';
+  status: 'open' | 'complete' | 'cancelled' | 'rms-rejected';
   filled: number;
   stopTicks?: number;
   targetTicks?: number;
@@ -46,9 +46,19 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     /** Na další nový příkaz neodpoví vůbec (timeout). */
     ignoreNextOrder: false,
     rejectNextOrder: false as false | string,
+    /** Další příkaz Rithmic přijme (vrátí basket_id) a hned odmítne na RMS — jen 351, žádná burza. */
+    rmsRejectNextOrder: false as false | string,
     frontMonth: 'ESZ6' as string | null,
     /** Server přestane odpovídat na heartbeat (tiché spojení bez zavření). */
     silent: false,
+    /** Stav účtu v RMS (dotaz 304). */
+    rmsStatus: 'active',
+    /** Zrušení neexistujícího příkazu vrátí „ok" (změřené chování). */
+    cancelUnknownOk: true,
+    /** Snímek pozic neobsahuje řádek účtu (451) — není to důkaz stavu. */
+    pnlWithoutAccountRow: false,
+    /** Snímek pozic pošle řádek bez množství. */
+    positionWithoutQuantity: false,
     /** Seznam účtů vrátí stejný účet dvakrát. */
     duplicateAccount: false,
     /** Snímek P&L bez řádků pozic i bez ukončení (pro test neúplného snímku). */
@@ -113,7 +123,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       trigger_price: order.triggerPrice,
       transaction_type: order.side,
       price_type: order.priceType,
-      status: order.status,
+      status: order.status === 'open' ? 'open' : 'complete',
       linked_basket_ids: order.linked,
       total_fill_size: order.filled,
       total_unfilled_size: order.quantity - order.filled,
@@ -125,9 +135,20 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       return;
     }
     for (const socket of orderSockets()) {
-      if (rithmicType !== null) socket.push(351, { ...common, notify_type: rithmicType });
+      if (rithmicType !== null) {
+        // Změřeno: COMPLETE nese důvod F (vyplněno) nebo C (zrušeno).
+        const reason = rithmicType === 15 ? (exchangeType === 5 ? 'F' : exchangeType === 3 ? 'C' : undefined) : undefined;
+        socket.push(351, { ...common, notify_type: rithmicType, ...(reason ? { completion_reason: reason } : {}) });
+      }
       socket.push(352, { ...common, notify_type: exchangeType, ...extra });
     }
+  }
+
+  function rithmicFields(order: FakeOrder): RithmicFields {
+    return {
+      account_id: order.accountId, basket_id: order.basketId, user_tag: order.userTag, symbol: order.symbol, exchange: order.exchange,
+      quantity: order.quantity, price: order.price, transaction_type: order.side, price_type: order.priceType, ssboe: 1_800_000_000, usecs: 0,
+    };
   }
 
   function createOrder(fields: RithmicFields): FakeOrder {
@@ -222,6 +243,10 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         if (controls.duplicateAccount) row({ fcm_id: 'FCM2', ib_id: 'IB', account_id: accounts[0], account_name: 'dup' });
         ok();
         return;
+      case 304:
+        for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, status: controls.rmsStatus, max_order_quantity: 40 });
+        ok();
+        return;
       case 310:
         row({ fcm_id: 'FCM', ib_id: 'IB', exchange: 'CME', trade_route: 'globex', is_default: true });
         ok();
@@ -240,9 +265,11 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         for (const [key, net] of positions) {
           const [accountId, symbol] = key.split('|');
           if (accountId !== String(f.account_id)) continue;
-          socket.push(450, { is_snapshot: true, account_id: accountId, symbol, exchange: 'CME', net_quantity: net });
+          socket.push(450, { is_snapshot: true, account_id: accountId, symbol, exchange: 'CME', ...(controls.positionWithoutQuantity ? {} : { net_quantity: net }) });
         }
-        socket.push(451, { is_snapshot: true, account_id: String(f.account_id), account_balance: '50000', day_pnl: '0', closed_position_pnl: '125.5', open_position_pnl: '-12.5' });
+        if (!controls.pnlWithoutAccountRow) {
+          socket.push(451, { is_snapshot: true, account_id: String(f.account_id), account_balance: '50000', day_pnl: '0', closed_position_pnl: '125.5', open_position_pnl: '-12.5' });
+        }
         ok();
         return;
       case 113:
@@ -267,7 +294,19 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
           socket.drop();
           return;
         }
-        ok({ basket_id: order.basketId, user_tag: order.userTag });
+        // Změřeno: basket_id je v datovém řádku odpovědi, konečná odpověď ho nenese.
+        row({ basket_id: order.basketId, user_tag: order.userTag });
+        ok();
+        if (controls.rmsRejectNextOrder) {
+          const reason = controls.rmsRejectNextOrder;
+          controls.rmsRejectNextOrder = false;
+          order.status = 'rms-rejected';
+          for (const s of orderSockets()) {
+            s.push(351, { ...rithmicFields(order), notify_type: 1, status: 'Order received from client' });
+            s.push(351, { ...rithmicFields(order), notify_type: 15, status: 'complete', completion_reason: 'FA', text: reason });
+          }
+          return;
+        }
         notify(order, 1, 13);
         return;
       }
@@ -287,7 +326,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       case 316: {
         const order = orders.get(String(f.basket_id));
         if (!order || order.status !== 'open') {
-          socket.push(317, { user_msg: userMsg, rp_code: ['6', 'order not found'] });
+          if (controls.cancelUnknownOk) ok();
+          else socket.push(317, { user_msg: userMsg, rp_code: ['6', 'order not found'] });
           return;
         }
         order.status = 'cancelled';
@@ -296,14 +336,20 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         return;
       }
       case 320:
-      case 324:
+        // Změřeno: 320 vrací pracující i dnešní dokončené; odmítnuté na RMS jen jako 351.
         for (const order of orders.values()) {
           if (order.accountId !== String(f.account_id)) continue;
-          if (templateId === 320 && order.status !== 'open') continue;
-          // podle měření: snímek nese typ posledního hlášení (STATUS / FILL / CANCEL)
+          if (order.status === 'rms-rejected') {
+            socket.push(351, { ...rithmicFields(order), is_snapshot: true, notify_type: 15, status: 'complete', completion_reason: 'FA', text: 'Rejected at RMS' });
+            continue;
+          }
           notify(order, order.status === 'cancelled' ? 3 : order.filled >= order.quantity && order.quantity > 0 ? 5 : 1, null, {}, socket);
         }
         ok();
+        return;
+      case 324:
+        // Změřeno: historie pro dnešní den vrací prázdno.
+        socket.push(325, { user_msg: userMsg, rp_code: ['7', 'no data'] });
         return;
       default:
         socket.push(75, { user_msg: userMsg, rp_code: ['1', 'unsupported in fake'] });

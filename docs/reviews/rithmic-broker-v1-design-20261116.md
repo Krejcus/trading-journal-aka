@@ -140,3 +140,42 @@ vynucené odhlášení; `listOrders` s chybějícím pracujícím příkazem →
 pozdější pozice → chyba; zrušení neexistujícího → `void`; bracket příkaz →
 `Unsupported`, nejde měnit; způsobilost při neaktivním RMS; heartbeat jen
 z obou plantů; dvě souběžná čtení.
+
+## Výsledek oponentury v1 (copier-design-critic: OPRAVIT) — závazné změny
+
+Většinu nálezů v0 měření zavřelo. Před napsáním adaptéru platí tyto opravy:
+
+1. **Žádná událost `error` pro obchodní selhání.** Jádro každou `error`
+   bere jako ztrátu transportu (vypnutí „transport" + automatické pokračování).
+   `CANCELLATION_FAILED`, `MODIFICATION_FAILED`, nevyřešené `COMPLETE`
+   ani vynucené odhlášení se proto jako `error` NEvysílají. Zrušení a změna
+   vrací `void` / výjimku volajícímu; adaptér má vlastní zpětné volání
+   `onIncident` (mimo `BrokerEvent`) a při stavu, který nejde určit, nebo při
+   vynuceném odhlášení zůstane odpojený bez automatické obnovy. Netransportní
+   incident v portu je otevřené rozšíření.
+2. **`resync.complete` je jen diagnostika** — v této topologii ho jádro
+   nečte. O obchodu v mezeře rozhoduje `listOrders`. **Automatické pokračování
+   (INV-RECON-04) musí být pro Rithmic vypnuté**, dokud se pokrytí snímku 320
+   nezměří na cílovém systému a přes přelom obchodního dne (podmínka zapojení).
+   `complete=false` navíc, když po obnově chybí dříve známý dnešní dokončený příkaz.
+3. **Pozdní řádek snímku** (doměřeno: nenastává) se nikdy tiše nezahodí ani
+   nevyvolá smyčku: sloučí se do knihy jako oprava baseline, ohlásí přes
+   `onIncident` a další `listOrders` čte znovu.
+4. **Dohledání:** příkaz nalezený v úplném snímku je kladný důkaz jeho stavu
+   → `authoritative`; „nenalezeno" zůstává `eventual`. (Bez toho by jádro
+   neodeslalo žádný modify a nedořešilo žádné zrušení.)
+5. **`COMPLETE` v knize:** důvod `FA`/`R` → `rejected`, `C` → `canceled`,
+   `F` → `filled` jen když zpráva nese plné vyplněné množství; jinak se čeká
+   na burzovní `FILL` a když do lhůty nepřijde, adaptér se odpojí a jde plná
+   obnova (nikdy tiché `filled`, nikdy fill ze snímku). Neznámý důvod → čtení
+   snímku → konečný stav, nebo odpojení. Verze konečného stavu neobsahuje
+   vyplněné množství, aby pozdní dílčí fill nevydal druhé `canceled`.
+6. **`listPositions`:** čerstvý snímek vyžádaný po fillu se počítá jako
+   pozdější pozice; mlčení PnL plantu = odpojení (hlídač ticha), ne věčná chyba.
+7. **Čtení má strop** (časový limit požadavku); jeden visící snímek nesmí
+   zdržet ostatní účty déle.
+8. **Čerstvý seznam účtů** (302) nesmí za běhu přepsat identitu účtů; liší-li
+   se od přihlášení, adaptér se odpojí.
+9. Podmínky zapojení navíc: typy DB sloupců pro `accountId` (~9e12);
+   testy s jádrem (odmítnutí RMS před odpovědí na příkaz, kopie followera
+   v letu, restart uprostřed `sending`, obchod v mezeře × preflight).

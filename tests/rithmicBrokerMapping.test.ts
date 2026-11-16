@@ -111,7 +111,7 @@ describe('RithmicOrderBook', () => {
   it('neúplná první notifikace se nevyšle; stranu ani množství si nedomýšlíme', () => {
     const b = book();
     expect(b.apply(update({ side: null })).order).toBeUndefined();
-    expect(b.apply(update({ basketId: 'B2', quantity: null })).attention).toMatch(/neúplná/);
+    expect(b.apply(update({ basketId: 'B2', quantity: null }))).toMatchObject({ attention: expect.stringMatching(/neúplná/), needsRead: 'incomplete' });
     expect(b.apply(update({ basketId: 'B3', symbol: '' })).order).toBeUndefined();
     expect(b.list(ACCOUNT)).toEqual([]);
   });
@@ -121,8 +121,42 @@ describe('RithmicOrderBook', () => {
     b.apply(update({ notifyType: 'STATUS' }));
     const canceled = b.apply(update({ notifyType: 'CANCEL' })).order!;
     expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'C' }))).toEqual({});
+    expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'FA' }))).toEqual({});
     expect(b.apply(update({ notifyType: 'CANCEL', text: 'znovu' })).order).toBeUndefined();
     expect(b.get(ACCOUNT, 'B1')?.sourceVersion).toBe(canceled.sourceVersion);
+  });
+
+  it('COMPLETE od Rithmicu: FA a R = odmítnuto, C = zrušeno, F čeká na exekuci z burzy', () => {
+    const b = book();
+    // odmítnutí RMS: burza příkaz nikdy neviděla (změřená sekvence)
+    b.apply(update({ source: 'rithmic', notifyType: 'ORDER_RCVD_FROM_CLNT', basketId: 'R1', quantity: 500 }));
+    expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', basketId: 'R1', completionReason: 'FA', text: 'Rejected at RMS' })).order)
+      .toMatchObject({ status: 'rejected', rejectReason: 'Rejected at RMS' });
+    b.apply(update({ basketId: 'R2', notifyType: 'STATUS' }));
+    expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', basketId: 'R2', completionReason: 'R' })).order?.status).toBe('rejected');
+    b.apply(update({ basketId: 'R3', notifyType: 'STATUS' }));
+    expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', basketId: 'R3', completionReason: 'C' })).order?.status).toBe('canceled');
+    // F bez množství před burzovním FILL: stav se neposune, jen se hlídá lhůta
+    b.apply(update({ basketId: 'R4', notifyType: 'STATUS' }));
+    const early = b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', basketId: 'R4', completionReason: 'F' }));
+    expect(early).toEqual({ awaitingFill: true });
+    expect(b.get(ACCOUNT, 'R4')?.status).toBe('working');
+    expect(b.fillGap(ACCOUNT, 'R4')).toBe(2);
+    expect(b.apply(update({ basketId: 'R4', notifyType: 'FILL', fillId: 'F4', fillSize: 2, fillPrice: 25000, totalFillSize: 2 })).fill?.quantity).toBe(2);
+    expect(b.fillGap(ACCOUNT, 'R4')).toBe(0);
+    // F s plným množstvím před FILL: příkaz je vyplněný, fill dorazí zvlášť
+    b.apply(update({ basketId: 'R5', notifyType: 'STATUS' }));
+    expect(b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', basketId: 'R5', completionReason: 'F', totalFillSize: 2 })).order?.status).toBe('filled');
+    expect(b.apply(update({ basketId: 'R5', notifyType: 'FILL', fillId: 'F5', fillSize: 2, fillPrice: 25000, totalFillSize: 2 })).fill?.quantity).toBe(2);
+  });
+
+  it('pozdní dílčí fill po zrušení vydá fill, ale verzi konečného stavu nezmění', () => {
+    const b = book();
+    b.apply(update({ notifyType: 'STATUS' }));
+    const canceled = b.apply(update({ notifyType: 'CANCEL' })).order!;
+    const late = b.apply(update({ notifyType: 'FILL', fillId: 'F1', fillSize: 1, fillPrice: 25000, totalFillSize: 1 }));
+    expect(late.fill?.quantity).toBe(1);
+    expect(late.order).toMatchObject({ status: 'canceled', filledQuantity: 1, sourceVersion: canceled.sourceVersion });
   });
 
   it('fill a zrušení se nezahodí kvůli staršímu času brány', () => {
@@ -189,8 +223,9 @@ describe('RithmicOrderBook', () => {
     b.apply(update({ notifyType: 'STATUS' }));
     expect(b.apply(update({ notifyType: 'NOT_CANCELLED', text: 'too late' }))).toEqual({ attention: 'NOT_CANCELLED u příkazu B1: too late' });
     expect(b.apply(update({ source: 'rithmic', notifyType: 'MODIFICATION_FAILED' })).attention).toMatch(/MODIFICATION_FAILED/);
-    const complete = b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'C' }));
-    expect(complete.attention).toMatch(/COMPLETE/);
+    const complete = b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'XX' }));
+    expect(complete.attention).toMatch(/neznámým důvodem/);
+    expect(complete.needsRead).toBe('unknown-complete');
     expect(b.get(ACCOUNT, 'B1')?.status).toBe('working');
   });
 
@@ -237,6 +272,31 @@ describe('RithmicOrderBook', () => {
     // tvar změřený na Rithmic Test: complete + report_type cancel
     expect(row({ status: 'complete', reportType: 'cancel', notifyType: 'CANCEL', totalFillSize: 0 })?.status).toBe('canceled');
     expect(row({ status: 'complete', completionReason: 'FA', text: 'risk' })).toMatchObject({ status: 'rejected', rejectReason: 'risk' });
+  });
+
+  it('chybějící exekuce: rozdíl vyplněného množství proti vyslaným fillům', () => {
+    const b = book();
+    b.apply(update({ notifyType: 'STATUS', quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'B1')).toBe(0);
+    // Rithmic hlásí vyplnění celé, z burzy přišel jen jeden kus
+    b.apply(update({ source: 'rithmic', notifyType: 'COMPLETE', completionReason: 'F', totalFillSize: 3, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'B1')).toBe(3);
+    b.apply(update({ notifyType: 'FILL', fillId: 'F1', fillSize: 1, fillPrice: 25000, totalFillSize: 1, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'B1')).toBe(2);
+    b.apply(update({ notifyType: 'FILL', fillId: 'F2', fillSize: 2, fillPrice: 25000, totalFillSize: 3, quantity: 3 }));
+    expect(b.fillGap(ACCOUNT, 'B1')).toBe(0);
+    // výchozí stav: vyplněný příkaz ze snímku nic nedluží
+    b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'S1', isSnapshot: true, status: 'complete', notifyType: 'FILL', totalFillSize: 2 })], new Set(), { baseline: true });
+    expect(b.fillGap(ACCOUNT, 'S1')).toBe(0);
+    // příkaz poprvé viděný ve snímku až za běhu: jeho exekuce jádru chybí
+    b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'S2', isSnapshot: true, status: 'complete', notifyType: 'FILL', totalFillSize: 2 })]);
+    expect(b.fillGap(ACCOUNT, 'S2')).toBe(2);
+    // snímek zvýší vyplnění známého pracujícího příkazu: taky chybí
+    b.apply(update({ basketId: 'W1', notifyType: 'STATUS' }));
+    const result = b.replaceFromSnapshot(ACCOUNT, [update({ basketId: 'W1', isSnapshot: true, status: 'complete', notifyType: 'FILL', totalFillSize: 2 })]);
+    expect(b.fillGap(ACCOUNT, 'W1')).toBe(2);
+    expect(result.changed.map((o) => `${o.brokerOrderId}:${o.status}`)).toEqual(['W1:filled']);
+    expect(result.orders.map((o) => o.brokerOrderId)).toEqual(['W1']);
   });
 
   it('neznámý stav ve snímku snímek odmítne a knihu nezmění', () => {

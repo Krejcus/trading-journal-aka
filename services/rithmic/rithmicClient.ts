@@ -552,7 +552,23 @@ export class RithmicClient {
     return this.plant('order').request(332, { ...this.accountFields(accountId), basket_id: basketId, level, target_ticks: targetTicks });
   }
 
-  /** Surové RMS nastavení účtů (limity, stav, auto-likvidace) — zatím jen pro měření. */
+  /**
+   * Čerstvý seznam účtů ze serveru. Uloženou identitu účtů NEPŘEPISUJE (běžící čtení
+   * a kontrola událostí na ní stojí); volající porovná a při rozdílu se odpojí.
+   */
+  async fetchAccounts(): Promise<RithmicAccount[]> {
+    const response = await this.plant('order').request(302, { user_type: this.userType });
+    return [...response.rows, ...(response.terminal ? [response.terminal] : [])]
+      .filter((m) => str(m.fields.account_id) !== '')
+      .map((m) => ({
+        fcmId: str(m.fields.fcm_id),
+        ibId: str(m.fields.ib_id),
+        accountId: str(m.fields.account_id),
+        accountName: str(m.fields.account_name),
+      }));
+  }
+
+  /** Surové RMS nastavení účtů (limity, stav, auto-likvidace). */
   async accountRmsInfo(): Promise<RithmicFields[]> {
     const response = await this.plant('order').request(304, { user_type: this.userType });
     return [...response.rows, ...(response.terminal ? [response.terminal] : [])].map((m) => m.fields);
