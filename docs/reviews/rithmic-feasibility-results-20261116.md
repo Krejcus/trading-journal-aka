@@ -120,8 +120,19 @@ příkaz neodešel.
   Snímek 320 vazby nese.
 - Množství noh = množství vstupu (1 i 2 ks). Stop noha je `STOP_MARKET`;
   burza u ní hlásí i `price` 20 ticků za spouští.
-- TP 1 tick od vyplnění se do 25 s nevyplnil → nezměřeno, zda vyplnění jedné
-  nohy ruší druhou.
+- TP 1 tick od vyplnění se do 25 s nevyplnil (doměřeno ve scénáři I: vyplnění
+  nohy sestru ruší).
+
+### 9. Změna nohy, vyplnění nohy, dvojí zavření (scénář I, 1 běh)
+
+- **Změna nohy (314) vazbu zachová.** Posun SL o 4 ticky potvrdila burza za
+  146 ms; `original_basket_id` i `linked_basket_ids` zůstaly a zrušení TP
+  potom zrušilo i SL. Ve snímku má změněná noha stav `modified, trigger pending`.
+- **Vyplnění jedné nohy zruší druhou samo:** TP posunutý pod trh se vyplnil
+  a SL hned skončil (`CANCEL`, `COMPLETE` důvod `C`). Pozice 0, nic nepracuje.
+- **Dvě `RequestExitPosition` současně:** obě odpovědi „ok", ale vznikl
+  **jediný** tržní příkaz; pozice 0, žádný obrat. (Jedno měření se současným
+  odesláním — odstup desítek ms nezměřen.)
 
 ## Dopad na návrh adaptéru
 

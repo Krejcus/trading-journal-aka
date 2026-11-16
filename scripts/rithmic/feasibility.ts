@@ -558,6 +558,85 @@ async function main(): Promise<void> {
     console.log('H hotovo');
   }
 
+  // ---- I: změna nohy × vazba, vyplnění nohy × sestra, dvě zavření po sobě ------
+  if (ONLY.has('I')) {
+    const r: Record<string, unknown> = {};
+    const working = async () => (await s.client.showOrders(account)).filter((u) => !/complete/i.test(u.status)).map(brief);
+    const net = async () => {
+      const from = s.positions.length;
+      await s.client.requestPnlSnapshot(account);
+      await sleep(400);
+      return s.positions.slice(from).find((p) => p.symbol === contract)?.netQuantity ?? 'bez řádku';
+    };
+    const open = async (label: string) => {
+      const from = s.orders.length;
+      const entry = await s.client.placeBracketOrder({ ...base, userTag: tag(label), side: 'BUY', priceType: 'MARKET', stopTicks: 40, targetTicks: 80 });
+      const fill = await waitFor(() => stage(from, entry.basketId, 'exchange', 'FILL'), 8_000);
+      const legs = () => since(from).filter((u) => u.source === 'exchange' && u.basketId !== entry.basketId && u.notifyType === 'STATUS');
+      await waitFor(() => (legs().length >= 2 ? true : undefined), 5_000);
+      await sleep(400);
+      const tp = legs().find((u) => /LIMIT/i.test(u.priceType) && !/STOP/i.test(u.priceType));
+      const sl = legs().find((u) => /STOP/i.test(u.priceType));
+      return { from, entry: entry.basketId, fillPrice: fill?.fillPrice ?? null, tp, sl };
+    };
+
+    // I1: posun SL o 4 ticky dál → drží vazba? (zrušení TP pak musí zrušit i SL)
+    const a = await open('i1');
+    if (a.tp && a.sl && a.sl.triggerPrice !== null) {
+      let from = s.orders.length;
+      const t = performance.now();
+      const moved = a.sl.triggerPrice - 4 * tick;
+      r.i1modify = await s.client.modifyOrder({ ...base, basketId: a.sl.basketId, priceType: 'STOP_MARKET', triggerPrice: moved }).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+      const done = await waitFor(() => stage(from, a.sl!.basketId, 'exchange', 'MODIFY'), 5_000);
+      r.i1modifyMs = done ? Math.round(performance.now() - t) : null;
+      await sleep(500);
+      r.i1modifyNotifications = since(from).map(brief);
+      r.i1workingAfterModify = await working();
+      from = s.orders.length;
+      await s.client.cancelOrder(account, a.tp.basketId);
+      await sleep(1_200);
+      r.i1cancelTpNotifications = since(from).map(brief);
+      r.i1workingAfterCancelTp = await working();
+      await s.client.exitPosition(account, contract, EXCHANGE).catch(() => undefined);
+      await sleep(1_200);
+      r.i1net = await net();
+    }
+
+    // I2: TP posunout pod trh (hned se vyplní) → zruší server SL sám?
+    const b = await open('i2');
+    if (b.tp && b.sl && b.fillPrice !== null) {
+      const from = s.orders.length;
+      r.i2modify = await s.client.modifyOrder({ ...base, basketId: b.tp.basketId, priceType: 'LIMIT', price: b.fillPrice - 8 * tick }).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`);
+      const filled = await waitFor(() => stage(from, b.tp!.basketId, 'exchange', 'FILL'), 6_000);
+      r.i2tpFilled = Boolean(filled);
+      await sleep(1_500);
+      r.i2notifications = since(from).map(brief);
+      r.i2working = await working();
+      r.i2net = await net();
+      await s.client.cancelAllOrders(account).catch(() => undefined);
+      const n = await net();
+      if (typeof n === 'number' && n !== 0) await s.client.exitPosition(account, contract, EXCHANGE).catch(() => undefined);
+      await sleep(1_000);
+    }
+
+    // I3: dvě zavření těsně po sobě (nohy předem zrušené) → otočí se pozice?
+    const c = await open('i3');
+    if (c.tp) {
+      await s.client.cancelOrder(account, c.tp.basketId);
+      await sleep(600);
+      const from = s.orders.length;
+      const both = await Promise.all([0, 1].map(() => s.client.exitPosition(account, contract, EXCHANGE).then(() => 'ok').catch((e) => `chyba: ${(e as Error).message}`)));
+      await sleep(2_000);
+      r.i3responses = both;
+      r.i3notifications = since(from).map(brief);
+      r.i3net = await net();
+      r.i3working = await working();
+    }
+    report.I = r;
+    console.log('I hotovo');
+  }
+
+
   } catch (error) {
     report.scenarioError = error instanceof Error ? error.message : String(error);
     console.error('Scénář selhal, pokračuji úklidem:', report.scenarioError);
