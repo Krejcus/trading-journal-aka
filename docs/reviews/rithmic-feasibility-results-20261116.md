@@ -74,7 +74,9 @@ příkaz neodešel.
   (`COMPLETE`, důvod `FA`), ne jako 352 — klient teď sbírá oba.
 - 324 pro dnešní datum vrátilo 0 řádků (formát data nebo jen minulé dny —
   nezjištěno). Dohledání proto stojí na 320.
-- Řádky snímku dorazily před ukončením požadavku (kromě 351, viz výše).
+- Řádky snímku dorazily před ukončením požadavku. Doměřeno zvlášť (3 čtení,
+  `scripts/rithmic/dumpOrders.ts`): i řádek 351 odmítnutého příkazu přišel
+  před ukončením, žádný řádek nedorazil do 2 s po něm (43 řádků: 42× 352, 1× 351).
 - `basket_id` je číselné a rostoucí; při změně příkazu se nemění.
 
 ### 6. Odmítnutí

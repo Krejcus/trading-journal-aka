@@ -69,9 +69,9 @@ neumí propustit, ani za jeho reconnect lhůtou (viz bod 9).
    - `listOrders` vrací celý snímek (včetně dokončených, s časem brány
      v `updatedAt`) a **vyhodí chybu**, když kniha zná pracující příkaz, který
      ve snímku chybí.
-   - ⚠ Nezměřeno: zda 351 řádky dorazí před ukončením požadavku. Dokud to
-     test nepotvrdí, adaptér po ukončení 320 počká krátkou pevnou dobu a řádek
-     351 doručený mimo požadavek bere jako důvod snímek zopakovat.
+   - M (doměřeno, 3 čtení): i řádky 351 dorazí před ukončením požadavku.
+     Pojistka zůstává: snímkový řádek doručený mimo požadavek je důvod
+     snímek zopakovat (nikdy se tiše nezahodí).
 6. **Dohledání** (`findOrdersByTag`, `findOrderById`): jeden snímek 320 +
    filtr. `completeness: 'eventual'` vždy — autorita podle prokázaného
    časového pokrytí konkrétního pokusu je věc pozdějšího návrhu. Důsledek
