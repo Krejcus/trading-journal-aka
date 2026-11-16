@@ -144,7 +144,10 @@ describe('OperationLedger', () => {
     expect(await l.beginSending('s', T + 61_000)).toBeNull();
     // původní odesílatel se starým dokladem po restartu záznam neuzavře
     await expect(l.settleSent('s', 5, 'done', T + 62_000)).rejects.toThrow(/ověř stav čtením/);
-    const next = await l.accept(entry('n', T + 70_000, { target: 'acc2:MNQ' }), T + 70_000);
+    // dokud je výsledek neznámý, další vstup neprojde ani na jiný cíl
+    expect(await l.accept(entry('n', T + 70_000, { target: 'acc2:MNQ' }), T + 70_000)).toMatchObject({ status: 'refused', reason: 'unresolved' });
+    await l.resolveUnknown('s', 'rejected', T + 71_000, { evidence: 'broker-read', reason: 'order not found in history' });
+    const next = await l.accept(entry('n', T + 80_000, { target: 'acc2:MNQ' }), T + 80_000);
     expect(next.status === 'accepted' && next.record.sequence).toBe(4);
   });
 
@@ -153,12 +156,15 @@ describe('OperationLedger', () => {
     await run(l, entry('e1', T), T, 'unknown');
     expect(await l.accept(entry('e2', T + 10_000), T + 10_000)).toMatchObject({ status: 'refused', reason: 'unresolved' });
     expect(await l.accept(entry('m1', T + 10_000, { kind: 'manage', operationClass: 'manage' }), T + 10_000)).toMatchObject({ status: 'refused', reason: 'unresolved' });
-    expect((await l.accept(entry('e3', T + 10_000, { target: 'acc2:MNQ' }), T + 10_000)).status).toBe('accepted');
+    // i jiný cíl: hlídaný druh s neznámým výsledkem blokuje všechny hlídané druhy
+    expect(await l.accept(entry('e3', T + 10_000, { target: 'acc1:trade6' }), T + 10_000)).toMatchObject({ status: 'refused', reason: 'unresolved' });
     expect((await l.accept(close('c1'), T + 10_001)).status).toBe('accepted');
     expect((await l.accept(brake('b1'), T + 10_002)).status).toBe('accepted');
     expect(l.unresolved().map((r) => r.operationId)).toEqual(['e1']);
-    await expect(l.resolveUnknown('e3', 'done', T + 11_000, { reason: 'x' })).rejects.toThrow(/není ve stavu unknown/);
-    expect((await l.resolveUnknown('e1', 'done', T + 20_000, { reason: 'found-by-lookup' })).state).toBe('done');
+    await expect(l.resolveUnknown('c1', 'done', T + 11_000, { evidence: 'manual', reason: 'zkouska' })).rejects.toThrow(/není ve stavu unknown/);
+    await expect(l.resolveUnknown('e1', 'done', T + 11_000, { evidence: 'manual', reason: '' })).rejects.toThrow(/s druhem dokladu/);
+    await expect(l.resolveUnknown('e1', 'done', T + 11_000, { evidence: 'timer' as never, reason: 'vyprselo to' })).rejects.toThrow(/s druhem dokladu/);
+    expect((await l.resolveUnknown('e1', 'done', T + 20_000, { evidence: 'broker-read', reason: 'found-by-lookup' })).state).toBe('done');
     expect(l.unresolved()).toEqual([]);
   });
 
@@ -200,6 +206,15 @@ describe('OperationLedger', () => {
     await l.accept(entry('e1', T), T);
     await l.cancelBeforeSend('e1', T + 1, 'gate');
     expect((await l.accept(entry('e2', T + 100), T + 100)).status).toBe('accepted');
+  });
+
+  it('zavření nečeká na visící vstup; vstup čeká na zavření', async () => {
+    const { l } = await ledger();
+    await l.accept(entry('e1', T), T);
+    await l.beginSending('e1', T + 1);
+    // vstup visí v odesílání, zavření téhož cíle musí projít
+    expect((await l.accept(close('c1'), T + 2_000)).status).toBe('accepted');
+    expect(await l.accept(close('c2'), T + 2_001)).toMatchObject({ status: 'refused', reason: 'busy' });
   });
 
   it('stejný cíl nikdy souběžně, ani u snížení rizika; jiný cíl ano; brzda vždy', async () => {
@@ -285,7 +300,7 @@ describe('OperationLedger', () => {
     await l.load(T + 5);
     expect(l.get('e1')?.state).toBe('unknown');
     await expect(l.settleSent('e1', token!, 'done', T + 150)).rejects.toThrow(/ověř stav čtením/);
-    expect((await l.resolveUnknown('e1', 'done', T + 200, { reason: 'late-result' })).state).toBe('done');
+    expect((await l.resolveUnknown('e1', 'done', T + 200, { evidence: 'late-result', reason: 'late-result' })).state).toBe('done');
   });
 
   it('dvě instance nad jednou knihou: druhá zápis neprovede', async () => {
@@ -315,7 +330,7 @@ describe('OperationLedger', () => {
     expect(await l.accept(entry('done-old', T), T + 3 * DAY)).toMatchObject({ status: 'refused', reason: 'expired' });
     const restarted = new OperationLedger(store, limits);
     await restarted.load(T + 3 * DAY);
-    await restarted.resolveUnknown('unk-old', 'rejected', T + 3 * DAY, { reason: 'manual' });
+    await restarted.resolveUnknown('unk-old', 'rejected', T + 3 * DAY, { evidence: 'manual', reason: 'manual check' });
     const next = await restarted.accept(entry('new', T + 3 * DAY + 10_000), T + 3 * DAY + 10_000);
     expect(next.status === 'accepted' && next.record.sequence).toBe(6);
   });

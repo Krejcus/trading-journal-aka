@@ -14,12 +14,14 @@
  *    takže rušení naslepo nikdy neoznačí letící zápis za „neodešlo";
  *  - restart u zápisů k brokerovi: `accepted` → `rejected` (nic neodešlo),
  *    `sending` → `unknown` (mohlo odejít: jen dohledání, nikdy nové provedení);
- *  - `unknown` blokuje další zvýšení rizika a správu na stejném cíli, dokud ho
- *    někdo výslovně nevyřeší (`resolveUnknown`); snížení rizika a brzdy projdou;
+ *  - `unknown` blokuje další zvýšení rizika a správu — na stejném cíli vždy, a u
+ *    hlídaných druhů (vstup, správa, zapnutí) kdekoli — dokud ho někdo výslovně
+ *    nevyřeší (`resolveUnknown`); snížení rizika a brzdy projdou;
  *  - kapacita (jeden nevyřízený, rozestup, strop za 24 h) se počítá ze záznamů
  *    a rezervuje při přijetí; do rozestupu a stropu se počítá VŠE, co začalo
  *    odesílat — i příkaz, který broker odmítl;
- *  - operace se stejným cílem neběží souběžně, ani snížení rizika;
+ *  - dvě snížení rizika téhož cíle neběží souběžně; zvýšení rizika a správa čekají
+ *    na cokoli otevřeného na cíli; snížení rizika na visící vstup nečeká;
  *  - otevřené, neznámé, brzdy a snížení rizika se neořezávají nikdy.
  *
  * Smlouvy pro volajícího (kniha je sama nevynutí):
@@ -35,6 +37,12 @@
  *  - Pozdní výsledek pro už uzavřený záznam (`settleSent` vyhodí chybu) je incident:
  *    volající ho musí ohlásit a stav ověřit čtením, ne ignorovat.
  *  - Kniha není zámek procesu: jedinou instanci musí zaručit lease/zámek souboru.
+ *  - Odesílatel má vlastní časový limit a po něm operaci vždy uzavře jako `unknown`;
+ *    kniha dobu odesílání nehlídá. Zavření a brzda na visící vstup nečekají.
+ *  - Načtení za běhu (po selhání uložení) shodí všechny operace v letu do `unknown` /
+ *    `rejected`. Odesílatel, kterému pak `settleSent` selže, předá skutečný výsledek
+ *    přes `resolveUnknown` s dokladem `late-result`.
+ *  - Brzda vrácená v `reapply`, kterou volající neuplatní ani neuzavře, zůstane otevřená.
  *
  * Záměrně nerozhodnuto (parametry nebo věc volajícího): všechna čísla, složení
  * otisku, formát a místo úložiště, kdo vlastní blokaci ARM při `unknown`,
@@ -243,8 +251,13 @@ export class OperationLedger {
     if (request.operationClass === 'brake') return null;
     const all = [...this.records.values()];
     if (target) {
-      // Stejný cíl nikdy souběžně, ani u snížení rizika (dvě zavření téže pozice).
-      const sameTarget = all.find((r) => OPEN.has(r.state) && r.operationClass !== 'brake' && r.target === target);
+      // Dvě snížení rizika téhož cíle nikdy souběžně (dvě zavření téže pozice, dva stopy).
+      // Snížení rizika ale NEČEKÁ na visící vstup nebo správu: zavřít musí jít vždy.
+      // Zvýšení rizika a správa čekají na cokoli otevřeného na cíli.
+      const exemptRequest = EXEMPT.has(request.operationClass);
+      const sameTarget = all.find(
+        (r) => OPEN.has(r.state) && r.operationClass !== 'brake' && r.target === target && (!exemptRequest || r.operationClass === 'risk-reducing'),
+      );
       if (sameTarget) return { status: 'refused', reason: 'busy', detail: `na cíli ${target} běží operace ${sameTarget.operationId}` };
     }
     if (EXEMPT.has(request.operationClass)) return null;
@@ -255,6 +268,12 @@ export class OperationLedger {
     if (this.limits.singlePendingKinds.includes(request.kind)) {
       const busy = all.find((r) => OPEN.has(r.state) && this.limits.singlePendingKinds.includes(r.kind));
       if (busy) return { status: 'refused', reason: 'busy', detail: `běží operace ${busy.operationId}` };
+      // Neznámý výsledek hlídaného druhu blokuje všechny hlídané druhy i na jiném cíli téhož
+      // účtu (cíl může být „účet + obchod"): možná vyplněný vstup + nový vstup = dvojnásobek.
+      const pendingUnknown = all.find((r) => r.state === 'unknown' && this.limits.singlePendingKinds.includes(r.kind));
+      if (pendingUnknown) {
+        return { status: 'refused', reason: 'unresolved', detail: `operace ${pendingUnknown.operationId} má neznámý výsledek` };
+      }
     }
     const cap = this.limits.dailyCap[request.kind];
     if (cap === undefined) return { status: 'refused', reason: 'invalid', detail: `druh ${request.kind} nemá nastavený strop` };
@@ -395,15 +414,21 @@ export class OperationLedger {
     });
   }
 
-  /** Výslovné vyřešení neznámého výsledku (dohledáním nebo ručně). Jen z `unknown`. */
+  /**
+   * Výslovné vyřešení neznámého výsledku. Jen z `unknown`, jen s dokladem: čtením od
+   * brokera, pozdním výsledkem odesílatele, nebo ručním rozhodnutím obsluhy. NIKDY časovačem.
+   */
   resolveUnknown(
     operationId: string,
     state: 'done' | 'rejected',
     now: number,
-    detail: { reason: string; result?: unknown },
+    detail: { evidence: 'broker-read' | 'late-result' | 'manual'; reason: string; result?: unknown },
   ): Promise<OperationRecord> {
     return this.enqueue(async () => {
       this.assertLoaded();
+      if (!['broker-read', 'late-result', 'manual'].includes(detail.evidence) || !detail.reason || detail.reason.trim().length < 5) {
+        throw new Error('Neznámý výsledek lze vyřešit jen s druhem dokladu a důvodem (aspoň 5 znaků)');
+      }
       const record = this.records.get(operationId);
       if (!record) throw new Error(`Operace ${operationId} neexistuje`);
       if (record.state !== 'unknown') throw new Error(`Operace ${operationId} není ve stavu unknown`);
@@ -411,7 +436,7 @@ export class OperationLedger {
         const r = draft.get(operationId)!;
         r.state = state;
         r.settledAt = now;
-        r.reason = detail.reason;
+        r.reason = `${detail.evidence}: ${detail.reason}`;
         if (detail.result !== undefined) r.result = detail.result;
       });
       return { ...this.records.get(operationId)! };

@@ -275,3 +275,26 @@ nečeká na knihu (uplatní se i při výjimce), třída `brake` je jen
 idempotentní zpřísnění (Flatten patří do snížení rizika), platnost a cíl
 musí být v podepsaném otisku, pozdní výsledek uzavřeného záznamu je incident,
 kniha není zámek procesu. **Tyto opravy už critic znovu neviděl.**
+
+### Vstupní brána (nezapojený prototyp) a druhé kolo knihy
+
+`services/rithmic/ingressGate.ts` + `tests/rithmicIngressGate.test.ts`:
+čistá rozhodovací funkce, politika je vždy vstup (žádné výchozí nastavení;
+politika v testech je „jedna z variant, neschválená"). Brána se vyrábí jen přes
+`createIngressGate`, která politiku ověří a zmrazí.
+
+Critic k bráně: „OPRAVIT PŘED COMMITEM" — opraveno s testy: politika, ve které
+nejde zabrzdit, neprojde (brzda a snížení rizika musí mít každou cestu, kterou
+má vstup, a žádný důkaz navíc); nekonečná nebo přehnaná platnost neprojde;
+čtení stavu se rozhoduje jen podle důkazů (jinak by klient plot nikdy
+nezískal); neznámá cesta je odmítnutí, ne pád; druhá kontrola před zápisem
+hlídá i načtený stav a přijme jen rozhodnutí vydané touto bránou.
+Zapsáno jako smlouvy volajícího: zařazení příkazu do třídy musí hlídat
+vykonavatel (nejvolnější přípustná třída), shodu cíle se skutečnou pozicí
+a platnost tokenu mezi přijetím a zápisem také.
+
+Critic ke knize po opravách: nálezy 1–9 vyřešené; tři nové mezery opraveny
+s testy — neznámý výsledek hlídaného druhu blokuje vstupy i na jiném cíli;
+zavření nečeká na visící vstup; `resolveUnknown` chce druh dokladu a důvod
+a nikdy nesmí jít časovačem. **Tyto poslední opravy brány i knihy už critic
+znovu neviděl; Codex neviděl žádný z obou modulů.**
