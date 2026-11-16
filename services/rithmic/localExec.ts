@@ -48,6 +48,8 @@ export interface LocalExecState {
   orders: LocalExecOrderView[];
   brackets: Array<{ entryId: string; symbol: string; state: BracketState; detail: string }>;
   incidents: Array<{ kind: string; message: string; at: number }>;
+  /** Poslední odmítnuté příkazy (důvod od Rithmicu) — jen pro zobrazení. */
+  rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }>;
 }
 
 export type LocalExecCommand =
@@ -68,6 +70,7 @@ export class LocalExec {
   private readonly positions = new Map<string, { netQuantity: number; averagePrice?: number }>();
   private readonly incidents: Array<{ kind: string; message: string; at: number }> = [];
   private readonly seenClientIds = new Set<string>();
+  private readonly rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }> = [];
   private connected = false;
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -104,7 +107,14 @@ export class LocalExec {
   }
 
   private onEvent(event: BrokerEvent): void {
-    if (event.type === 'order') this.orders.set(event.order.brokerOrderId, event.order);
+    if (event.type === 'order') {
+      const before = this.orders.get(event.order.brokerOrderId);
+      this.orders.set(event.order.brokerOrderId, event.order);
+      if (event.order.status === 'rejected' && before?.status !== 'rejected') {
+        this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
+        if (this.rejections.length > 10) this.rejections.shift();
+      }
+    }
     else if (event.type === 'position') {
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,
@@ -170,6 +180,7 @@ export class LocalExec {
       orders,
       brackets: accountId === null ? [] : brackets.filter((b) => !b.closed).map((b) => ({ entryId: b.entryId, symbol: b.symbol, ...this.broker.bracketState(accountId, b.entryId) })),
       incidents: [...this.incidents],
+      rejections: [...this.rejections],
     };
   }
 

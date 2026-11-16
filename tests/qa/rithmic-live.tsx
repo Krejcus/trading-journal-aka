@@ -19,7 +19,7 @@ interface Bar { time: number; open: number; high: number; low: number; close: nu
 interface Hello { system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown; serverMs?: number }
 interface Measurement { label: string; lineMs: number; replyMs: number | null; lines: number }
-interface Pending { label: string; t0: number; done: (state: LocalExecState) => boolean; replyMs: number | null; resolve: (m: Measurement) => void }
+interface Pending { label: string; t0: number; done: (state: LocalExecState) => boolean; failed?: (state: LocalExecState) => string | null; replyMs: number | null; resolve: (m: Measurement | null) => void }
 
 const median = (values: number[]): number | null => {
   if (!values.length) return null;
@@ -100,6 +100,14 @@ function App() {
   // Měření: po každém novém stavu zkontroluj čekající kliky; čas se bere až PO vykreslení (2× rAF).
   useEffect(() => {
     if (!state || !pending.current.length) return;
+    // Rithmic příkaz odmítl (např. limit ztráty účtu): čára nevznikne — říct proč a nečekat.
+    for (const item of [...pending.current]) {
+      const why = item.failed?.(state);
+      if (!why) continue;
+      pending.current = pending.current.filter((other) => other !== item);
+      say(`${item.label}: Rithmic příkaz odmítl — ${why}`, 'bad');
+      item.resolve(null);
+    }
     const ready = pending.current.filter((item) => item.done(state));
     if (!ready.length) return;
     pending.current = pending.current.filter((item) => !ready.includes(item));
@@ -111,16 +119,16 @@ function App() {
         item.resolve(measurement);
       }
     }));
-  }, [state]);
+  }, [state, say]);
 
   /** Odešle příkaz a měří od TEĎ po vykreslení stavu, který splní `done`. */
-  const act = useCallback((label: string, command: LocalExecCommand, done: (state: LocalExecState) => boolean, timeoutMs = 8_000): Promise<Measurement | null> => {
+  const act = useCallback((label: string, command: LocalExecCommand, done: (state: LocalExecState) => boolean, timeoutMs = 8_000, failed?: (state: LocalExecState) => string | null): Promise<Measurement | null> => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) { say('Neodesláno: místní proces není připojený.', 'bad'); return Promise.resolve(null); }
     return new Promise((resolve) => {
       const id = newId();
       const t0 = performance.now();
-      const item: Pending = { label, t0, done, replyMs: null, resolve };
+      const item: Pending = { label, t0, done, failed, replyMs: null, resolve };
       pending.current.push(item);
       const timer = window.setTimeout(() => {
         if (!pending.current.includes(item)) return;
@@ -189,7 +197,8 @@ function App() {
     const tag = `ui-${clientId}`;
     return act(type === 'Limit' ? 'Limit vstup → čára' : 'Market vstup → pozice + SL + TP', command, (current) => (type === 'Limit'
       ? has(current, (order) => order.tag === tag && order.status === 'working')
-      : current.positions.some((item) => item.symbol === symbol) && has(current, (order) => order.role === 'stop' && order.status === 'working') && has(current, (order) => order.role === 'target' && order.status === 'working')));
+      : current.positions.some((item) => item.symbol === symbol) && has(current, (order) => order.role === 'stop' && order.status === 'working') && has(current, (order) => order.role === 'target' && order.status === 'working')),
+    8_000, (current) => current.rejections.find((item) => item.tag === tag)?.reason ?? null);
   }, [act, say, snap, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
   const move = useCallback((order: LocalExecOrderView, next: number) => act(`Posun ${order.role === 'stop' ? 'SL' : 'TP'} → čára`, { op: 'move', orderId: order.orderId, price: next },
     (current) => has(current, (item) => item.orderId === order.orderId && item.price === next)), [act]); // eslint-disable-line react-hooks/exhaustive-deps
