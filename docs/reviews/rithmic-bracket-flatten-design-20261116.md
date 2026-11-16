@@ -152,3 +152,14 @@ vstup, nepotvrzené zrušení, selhání čtení, ztracená odpověď + stejná 
 odmítnutí, souběh a blokace, vstup vyplněný během rušení, noha vyplněná
 během rušení, pád spojení, restart uprostřed. 14 pojistek ověřeno záměrným
 rozbitím kódu (kontrola ochrany po připojení je zdvojená čtením snímku).
+
+## Zkouška proti skutečnému serveru (Rithmic Test, 16. 11. 2026)
+
+`scripts/rithmic/adapterSmoke.ts` — celý adaptér, ne napodobený server, 2 běhy:
+vstup Market se SL 40 / TP 80 ticků přijat za ~123 ms, stav `protected` za
+191–200 ms od odeslání; zrušení nohy při otevřené pozici se neodeslalo;
+`liquidatePosition` vrátilo `submitted` za 717–741 ms (čtení, zrušení noh,
+čtení pozice, zavření), po něm pozice 0 a nic nepracuje, stav `done`; stejná
+značka podruhé i flat účet → `already-flat`; čekající Limit vstup se jen
+zrušil (`already-flat`, žádné zavření). Žádný incident. Celý bracket šel
+ven jako `Unsupported`, zavírací příkaz jako `Market` bez značky.
