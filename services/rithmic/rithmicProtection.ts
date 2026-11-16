@@ -195,6 +195,8 @@ export class RithmicProtection {
     entryId: string,
     orderOf: (orderId: string) => BrokerOrder | undefined,
     net: number | null,
+    /** `net` je živá hodnota novější než poslední vyplnění (ne jednorázové čtení snímku). */
+    netTrusted = false,
   ): { state: BracketState; detail: string; latch?: boolean } {
     const intent = this.bracketByEntry(accountId, entryId);
     const entry = orderOf(entryId);
@@ -207,13 +209,18 @@ export class RithmicProtection {
     });
     const active = legs.filter((leg) => leg.order && !TERMINAL.has(leg.order.status));
     const orphan = (why: string): { state: BracketState; detail: string } => ({ state: 'orphan-legs', detail: `${why}, ale pracuje ${active.map((l) => `${l.role} ${l.orderId}`).join(', ')}` });
-    if (intent.closedAt !== undefined) return active.length ? orphan('bracket skončil') : { state: 'done', detail: '' };
+    // Západka platí jen dokud nic z bracketu nepracuje; objeví-li se noha, hodnotí se znovu.
+    if (intent.closedAt !== undefined && !active.length) return { state: 'done', detail: '' };
     if (entry.filledQuantity === 0) {
       if (!TERMINAL.has(entry.status)) return { state: 'entry-working', detail: '' };
       return active.length ? orphan('vstup skončil bez vyplnění') : { state: 'done', detail: '', latch: true };
     }
     const exposure = entry.filledQuantity - legs.reduce((sum, leg) => sum + (leg.order?.filledQuantity ?? 0), 0);
-    if (exposure <= 0) {
+    if (exposure < 0) {
+      // Nohy vyplnily víc než vstup: pozice může být obrácená. Nikdy to není „hotovo".
+      return { state: 'unprotected', detail: `nohy vyplnily o ${-exposure} ks víc než vstup — pozice může být obrácená` };
+    }
+    if (exposure === 0) {
       if (active.length) return orphan('nohy expozici zavřely');
       return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
     }
@@ -221,7 +228,8 @@ export class RithmicProtection {
     if (net === 0) {
       // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz).
       if (active.length) return orphan('pozice je 0');
-      return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
+      // Nula z jednoho čtení snímku může být starší než vyplnění → bracket se jí nezavírá natrvalo.
+      return { state: 'done', detail: '', latch: netTrusted && TERMINAL.has(entry.status) };
     }
     const problems: string[] = [];
     for (const role of ['stop', 'target'] as const) {
@@ -253,6 +261,22 @@ export class RithmicProtection {
   // ---- zavírání pozice --------------------------------------------------------
   flattenByTag(tag: string): FlattenRecord | undefined {
     return this.flattenRecords.find((record) => record.tag === tag);
+  }
+
+  /** Dřívější zavření na kontraktu, které odešlo a jehož výsledek nikdo neprokázal. */
+  hasUnresolvedExit(accountId: number, symbol: string, exceptTag: string): boolean {
+    return this.flattenRecords.some((r) => r.accountId === accountId && r.symbol === symbol && r.tag !== exceptTag
+      && (r.phase === 'exit-sent' || r.phase === 'interrupted'));
+  }
+
+  /** Stav kontraktu je prokázaný čtením — dřívější nejistá zavření jsou tím vyřešená. */
+  resolveExits(accountId: number, symbol: string): void {
+    for (const r of this.flattenRecords) {
+      if (r.accountId === accountId && r.symbol === symbol && (r.phase === 'exit-sent' || r.phase === 'interrupted')) {
+        r.phase = 'done';
+        r.result = r.result ?? 'resolved-by-state';
+      }
+    }
   }
 
   addFlatten(record: FlattenRecord): void {

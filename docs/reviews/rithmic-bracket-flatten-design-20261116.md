@@ -163,3 +163,36 @@ vstup Market se SL 40 / TP 80 ticků přijat za ~123 ms, stav `protected` za
 značka podruhé i flat účet → `already-flat`; čekající Limit vstup se jen
 zrušil (`already-flat`, žádné zavření). Žádný incident. Celý bracket šel
 ven jako `Unsupported`, zavírací příkaz jako `Market` bez značky.
+
+## Review diffu (16. 11. 2026) — dvě kola, třetí odloženo
+
+Kolo 1 (critic + Codex) a kolo 2 (potvrzovací, oba): pokaždé „OPRAVIT PŘED
+COMMITEM". Všechny reprodukované nálezy jsou opravené a pokryté testy
+(`tests/rithmicProtection.test.ts`, 40; celkem 204), pojistky ověřené
+záměrným rozbitím. **Opravy z kola 2 už potvrzovacím kolem neprošly** —
+commit je proto označený jako rozpracovaný a plné kolo proběhne před
+zapojením do workeru.
+
+Co se proti návrhu v2 změnilo:
+
+- Expozice bracketu se počítá z jeho příkazů (vyplněný vstup − vyplněné
+  nohy); skončený bracket má západku `closedAt` (jen z důvěryhodné živé
+  pozice, ne z jednoho čtení) a dál se nehlídá, dokud se neobjeví jeho noha.
+  Nohy vyplněné víc než vstup = hlášení, nikdy „hotovo".
+- Lhůta kontroly běží od poslední změny (strop 3× `legsWaitMs`, nejméně
+  400 ms od změny); vyplnění během čtení pozice kontrolu zopakuje.
+- Živá pozice platí jen když je novější než poslední vyplnění na kontraktu.
+- Jednotný důkaz stavu kontraktu (`contractProof`): příkazy + pozice bez
+  vyplnění mezi tím; jinak se „flat" netvrdí.
+- Po zavření bez odpovědi: nové příkazy na kontraktu stojí; nové zavírání
+  smí číst a rušit, ale další zavření pošle jen proti přečtené nenulové
+  pozici a až původní požadavek doběhl. Platí i po restartu (ze záznamu).
+- Připojená značka má vlastní záznam uložený před vrácením výsledku.
+- `placeBracket` po uložení záměru znovu ověří, že mezitím nezačalo zavírání.
+- Zrušení příkazu bracketu bez známé vazby nejdřív přečte snímek (vazby
+  nese celé); noha se neruší při nenulové pozici, vstup běžně.
+
+Otevřené z kola 2 (podmínky zapojení): veřejný `bracketState` vrací
+`unknown`, když po vyplnění nepřijde další zpráva o pozici (jádro to nesmí
+brát jako OK ani jako incident); minimální odstup 400 ms nemá vlastní test;
+zda snímek PnL opravdu zaostává za vyplněním, není změřeno.

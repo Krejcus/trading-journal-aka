@@ -295,6 +295,17 @@ describe('stav ochrany (výpočet)', () => {
     expect(t.protection.hasPendingLegs(ACC, 'E', () => ({ status: 'pending' } as BrokerOrder))).toBe(true);
   });
 
+  it('nohy vyplnily víc než vstup: nikdy „hotovo", vždy hlášení', () => {
+    const t = build({ filled: 1, status: 'filled' }, [
+      { id: 'TP', type: 'LIMIT', quantity: 1, filled: 1, status: 'filled' },
+      { id: 'SL', type: 'STOP_MARKET', quantity: 1, filled: 1, status: 'filled' },
+    ]);
+    const result = t.state(-1);
+    expect(result.state).toBe('unprotected');
+    expect(result.latch).toBeUndefined();
+    expect(result.detail).toMatch(/obrácená/);
+  });
+
   it('souběžné zápisy záznamu neskončí starším stavem', async () => {
     const written: number[] = [];
     let delay = 40;
@@ -437,16 +448,45 @@ describe('nálezy z review diffu', () => {
     const ack = await t.broker.placeOrder({ tag: 'plain', accountId: t.account(), symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 7000 });
     await flush();
     t.server.controls.cancelStuck = true; // zrušení „ok", příkaz pracuje dál
+    t.server.controls.muteLivePositions = true;
     let reads = 0;
     t.server.hooks.onRequest = (templateId) => {
-      if (templateId !== 320) return;
+      if (templateId !== 402) return;
       reads += 1;
-      if (reads === 2) t.server.fill(ack.brokerOrderId, 7000); // vyplní se až po přečtení pozice
+      if (reads !== 2) return;
+      // vyplní se během čtení pozice; snímek PnL spojení je ještě pozadu a vrátí 0
+      t.server.fill(ack.brokerOrderId, 7000);
+      t.server.positions.set('ACC1|ESZ6', 0);
+      queueMicrotask(() => t.server.positions.set('ACC1|ESZ6', 1));
     };
     const result = await flatten(t, 'fp');
     expect(result.status).toBe('indeterminate');
-    expect(t.kinds()).toContain('flatten-orders-remain');
+    expect(t.incidents.some((i) => i.kind === 'flatten-orders-remain' && /přišlo vyplnění/.test(i.message))).toBe(true);
     t.broker.stop();
+  });
+
+  it('dřívější zavření s neznámým výsledkem: další se nepošle, dokud pozici nejde přečíst — ani po restartu', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 300 } });
+    await openProtected(t, 'q1');
+    t.server.controls.exitPosition = 'ignore';
+    expect((await flatten(t, 'fq1')).status).toBe('indeterminate');
+    await sleep(200); // původní požadavek vypršel i v klientovi
+    t.server.controls.pnlSnapshotFails = true; // pozici teď nejde přečíst
+    t.server.controls.exitPosition = 'ok';
+    expect((await flatten(t, 'fq2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    t.broker.stop();
+    // nový proces se stejným záznamem: totéž (připojit se musí umět, pak čtení pozic zase selže)
+    t.server.controls.pnlSnapshotFails = false;
+    const again = await setup({ server: t.server, registryStore: t.registryStore, store: memoryProtectionStore(t.store.saved()), config: { requestTimeoutMs: 300 } });
+    again.server.controls.pnlSnapshotFails = true;
+    expect((await flatten(again, 'fq3')).status).toBe('indeterminate');
+    expect(again.sent(3504)).toBe(1);
+    // jakmile pozici přečíst jde, zavření projde a nejistota je vyřešená
+    again.server.controls.pnlSnapshotFails = false;
+    expect((await flatten(again, 'fq4')).status).toBe('submitted');
+    expect(again.sent(3504)).toBe(2);
+    again.broker.stop();
   });
 
   it('kontrola po zavření proběhne i při nejistém výsledku', async () => {

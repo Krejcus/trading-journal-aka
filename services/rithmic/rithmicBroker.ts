@@ -749,6 +749,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       };
       state = 'connected';
       everConnected = true;
+      // Úplná obnova stavu (výchozí snímek příkazů i pozic) nejistotu po zavření ukončuje.
+      exitUncertain.clear();
       for (const record of interruptedFlattens.splice(0)) {
         incident('flatten-interrupted', `minulý běh skončil uprostřed zavírání ${record.symbol} (značka ${record.tag}) — nic se neopakuje, zkontroluj pozici a příkazy`);
       }
@@ -844,7 +846,9 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     const running = bracketTimers.get(key);
     const firstAt = running?.firstAt ?? now();
     if (running) clearTimeout(running.timer);
-    const delay = Math.max(1, Math.min(wait, firstAt + 3 * wait - now()));
+    // Strop omezuje jen celkové odkládání; kontrola nikdy neběží dřív než minimální odstup od
+    // poslední změny (nohy vznikají ~40 ms po vyplnění, snímek pozic může být o chvíli pozadu).
+    const delay = Math.max(Math.min(wait, 400), Math.min(wait, firstAt + 3 * wait - now()));
     const timer = setTimeout(() => {
       const mine = bracketTimers.get(key);
       bracketTimers.delete(key);
@@ -853,9 +857,18 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         const intent = protection.bracketByEntry(account, entryId);
         if (!intent) return;
         const orderOf = (id: string): BrokerOrder | undefined => book.get(account, id);
+        const fillKey = `${account}:${intent.symbol}`;
+        const fillsBefore = fillSeenAt.get(fillKey) ?? 0;
         const net = await netPosition(source, account, intent.symbol);
         if (client !== source) return;
-        const result = protection.bracketState(account, entryId, orderOf, net);
+        // Během čtení přišla další změna a čeká novější kontrola — tahle už nic nehlásí.
+        if (bracketTimers.has(key)) return;
+        // Vyplnění během čtení pozice: přečtená hodnota k novému stavu příkazů nepatří → znovu.
+        if ((fillSeenAt.get(fillKey) ?? 0) !== fillsBefore) {
+          scheduleBracketCheck(source, account, entryId, Boolean(mine?.retried));
+          return;
+        }
+        const result = protection.bracketState(account, entryId, orderOf, net, trustedLivePosition(account, intent.symbol) !== undefined);
         if (result.latch) {
           protection.closeBracket(account, entryId);
           bracketReported.delete(key);
@@ -863,7 +876,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           return;
         }
         // Noha ještě čeká na potvrzení burzy: jedna další kontrola místo předčasného poplachu.
-        if (result.state === 'unprotected' && !mine?.retried && !bracketTimers.has(key) && protection.hasPendingLegs(account, entryId, orderOf)) {
+        if (result.state === 'unprotected' && !mine?.retried && protection.hasPendingLegs(account, entryId, orderOf)) {
           scheduleBracketCheck(source, account, entryId, true);
           return;
         }
@@ -928,6 +941,23 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   }
 
   /**
+   * Jednotný důkaz stavu kontraktu: příkazy i pozice přečtené tak, že se mezi tím nic
+   * nevyplnilo. Pozice ze snímku PnL spojení může být starší než vyplnění z order spojení —
+   * po čerstvém vyplnění se před čtením krátce čeká. `stable: false` = během důkazu přišlo
+   * vyplnění, výsledek nic nedokazuje.
+   */
+  async function contractProof(active: RithmicClient, accountId: number, symbol: string, stepMs: number): Promise<{ net: number | null; ordersOk: boolean; stable: boolean; working: string[] }> {
+    const key = `${accountId}:${symbol}`;
+    const before = fillSeenAt.get(key) ?? 0;
+    const orders = await limited(readOrders(active, accountId), stepMs);
+    if (trustedLivePosition(accountId, symbol) === undefined && fillSeenAt.has(key)) await sleepMs(Math.min(150, stepMs));
+    const positions = await limited(readPositions(active, accountId), stepMs);
+    const net = positions.ok ? positions.value.find((row) => row.symbol === symbol)?.netQuantity ?? 0 : null;
+    const working = book.list(accountId).filter((o) => o.symbol === symbol && !TERMINAL.has(o.status)).map((o) => o.brokerOrderId);
+    return { net, ordersOk: orders.ok, stable: (fillSeenAt.get(key) ?? 0) === before, working };
+  }
+
+  /**
    * Zrušit pracující příkazy kontraktu → krátce ověřit → zavřít pozici stavovým požadavkem.
    * Brzda: čtení ani ověření zavření nevetují — neposílá se jen při PROKÁZANĚ nulové pozici.
    * Žádný zápis se neopakuje. Flat adaptér netvrdí; potvrzuje volající stavem (INV-MODE-02).
@@ -962,30 +992,19 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     const netFrom = (read: Awaited<ReturnType<typeof limited<BrokerPosition[]>>>): number | null =>
       read.ok ? read.value.find((row) => row.symbol === symbol)?.netQuantity ?? 0 : null;
 
-    const fillsAtStart = fillSeenAt.get(key) ?? 0;
     // Vlastní vstup vyplněný bez viditelných noh: nohy vznikají ~40 ms po vyplnění.
     const awaitingLegs = (): boolean => protection.bracketsFor(accountId, symbol).some((intent) => {
       if (!intent.entryId || intent.closedAt !== undefined) return false;
       const entry = book.get(accountId, intent.entryId);
       return Boolean(entry && entry.filledQuantity > 0 && protection.legsOf(accountId, intent.entryId).length === 0);
     });
-    /**
-     * Pozice ze snímku PnL spojení může být starší než vyplnění, které už známe z order
-     * spojení. Když se během běhu na kontraktu něco vyplnilo, čte se po krátké prodlevě znovu.
-     */
-    const readNet = async (): Promise<number | null> => {
-      const seen = fillSeenAt.get(key) ?? 0;
-      let read = await limited(readPositions(active, accountId), stepMs);
-      if (seen !== fillsAtStart || (fillSeenAt.get(key) ?? 0) !== seen) {
-        await sleepMs(Math.min(150, stepMs));
-        read = await limited(readPositions(active, accountId), stepMs);
-      }
-      return netFrom(read);
-    };
-
-    const firstOrders = await limited(readOrders(active, accountId), stepMs);
-    const firstNet = await readNet();
-    if (firstOrders.ok && firstNet === 0 && working().length === 0 && !awaitingLegs()) return finish({ status: 'already-flat' });
+    const flat = (proof: Awaited<ReturnType<typeof contractProof>>): boolean =>
+      proof.ordersOk && proof.stable && proof.net === 0 && proof.working.length === 0 && !awaitingLegs();
+    if (flat(await contractProof(active, accountId, symbol, stepMs))) {
+      protection.resolveExits(accountId, symbol);
+      exitUncertain.delete(key);
+      return finish({ status: 'already-flat' });
+    }
 
     // Zrušení: nejvýš dvě kola. Druhé je jen pro příkazy, které vznikly až během prvního
     // (nohy vstupu vyplněného pod rukama) — tentýž příkaz se neruší dvakrát.
@@ -1012,18 +1031,30 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     }
     const unconfirmed = [...canceled].filter((id) => !isDone(id));
 
-    const fillsBeforeProof = fillSeenAt.get(key) ?? 0;
-    const net = await readNet();
+    const proof = await contractProof(active, accountId, symbol, stepMs);
+    const net = proof.net;
     if (net === 0) {
       // Pozici zavřelo něco jiného (např. vyplněná noha) — nic neposíláme a netvrdíme, že my.
-      const verify = await limited(readOrders(active, accountId), stepMs);
-      // Vyplnění během důkazu (pozice přečtena, pak se vyplnil nepotvrzeně rušený vstup) důkaz ruší.
-      const stable = (fillSeenAt.get(key) ?? 0) === fillsBeforeProof;
-      if (verify.ok && stable && working().length === 0 && !awaitingLegs()) return finish({ status: 'already-flat' });
-      incident('flatten-orders-remain', `${symbol}: pozice je 0, ale příkazy ${working().join(', ') || '(stav nejde přečíst)'} dál pracují nebo to nejde ověřit`);
-      return finish({ status: 'indeterminate', reason: 'pozice je 0, ale příkazy kontraktu nejsou prokazatelně pryč' });
+      if (flat(proof)) {
+        protection.resolveExits(accountId, symbol);
+        exitUncertain.delete(key);
+        return finish({ status: 'already-flat' });
+      }
+      incident('flatten-orders-remain', `${symbol}: pozice se čte jako 0, ale ${proof.stable ? `příkazy ${proof.working.join(', ') || '(stav nejde přečíst)'} dál pracují nebo to nejde ověřit` : 'během ověřování přišlo vyplnění — stav není prokázaný'}`);
+      return finish({ status: 'indeterminate', reason: 'pozice je 0, ale stav kontraktu není prokázaný' });
     }
-
+    // Dřívější zavření s neznámým výsledkem (i z minulého běhu): další se smí poslat jen proti
+    // PŘEČTENÉ nenulové pozici. Bez čtení by šlo o druhé zavření naslepo.
+    if (net === null && (exitUncertain.has(key) || protection.hasUnresolvedExit(accountId, symbol, request.tag))) {
+      incident('flatten-orders-remain', `${symbol}: dřívější zavření má neznámý výsledek a pozici teď nejde přečíst — další zavření neposílám`);
+      return finish({ status: 'indeterminate', reason: 'dřívější zavření má neznámý výsledek a pozici nejde přečíst' });
+    }
+    const earlierExit = exitUncertain.get(key);
+    if (earlierExit && !earlierExit.settled) {
+      // Brzda mezitím udělala, co šlo (čtení, zrušení příkazů); druhé zavření souběžně s prvním
+      // by mohlo pozici otočit.
+      return finish({ status: 'indeterminate', reason: 'předchozí zavření pozice je ještě na cestě — další neposílám, příkazy kontraktu jsou zrušené' });
+    }
     // Zápis fáze PŘED odesláním: po restartu se tatáž operace nesmí poslat znovu.
     await recordPhase('exit-sent');
     // Dokud tenhle požadavek nedoběhne (odpovědí, nebo vypršením v klientovi), nesmí na
@@ -1267,6 +1298,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           const alias: FlattenRecord = { tag: request.tag, accountId: request.accountId, symbol: request.symbol, phase: 'started', at: now() };
           protection.addFlatten(alias);
           joinedTags.set(key, [...(joinedTags.get(key) ?? []), alias]);
+          // Záznam připojené značky musí být na disku dřív, než volající dostane výsledek.
+          const result = await running;
+          await saveProtection();
+          return result;
         }
         return running;
       }
@@ -1275,22 +1310,22 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const exchange = rithmicExchangeForSymbol(request.symbol);
       if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${request.symbol}`);
       if (!request.tag) throw new BrokerRequestNotSentError('Rithmic: zavření bez značky');
-      const uncertain = exitUncertain.get(key);
-      if (uncertain && !uncertain.settled) {
-        return { status: 'indeterminate', reason: 'předchozí zavření pozice odešlo a jeho výsledek ještě není znám — nové neposílám' };
-      }
       const earlier = protection.flattenByTag(request.tag);
       if (earlier) {
         // Tatáž operace už proběhla (i v minulém běhu): jen dočíst stav, nikdy znovu neposílat.
-        const orders = await limited(readOrders(active, request.accountId), config.flattenStepMs ?? 1_000);
-        const positions = await limited(readPositions(active, request.accountId), config.flattenStepMs ?? 1_000);
-        const net = positions.ok ? positions.value.find((row) => row.symbol === request.symbol)?.netQuantity ?? 0 : null;
-        const stillWorking = book.list(request.accountId).some((o) => o.symbol === request.symbol && !TERMINAL.has(o.status));
-        if (orders.ok && net === 0 && !stillWorking) return { status: 'already-flat' };
+        const proof = await contractProof(active, request.accountId, request.symbol, config.flattenStepMs ?? 1_000);
+        if (proof.ordersOk && proof.stable && proof.net === 0 && proof.working.length === 0) {
+          // Stav je prokázaný — nejistota po dřívějším zavření končí.
+          protection.resolveExits(request.accountId, request.symbol);
+          exitUncertain.delete(key);
+          void saveProtection();
+          return { status: 'already-flat' };
+        }
         return { status: 'indeterminate', reason: `zavření se značkou ${request.tag} už proběhlo (fáze ${earlier.phase}) — neopakuji, ověř stav` };
       }
       // Předchozí požadavek doběhl bez odpovědi: nová operace začíná čtením stavu, nejistota končí.
-      exitUncertain.delete(key);
+      // Dokud je ještě na cestě, nové zavírání smí číst a rušit, ale další zavření NEPOŠLE (viz runFlatten).
+      if (exitUncertain.get(key)?.settled) exitUncertain.delete(key);
       flattenGeneration.set(key, (flattenGeneration.get(key) ?? 0) + 1);
       const run = runFlatten(active, request, text, exchange).finally(() => {
         flattening.delete(key);
@@ -1312,8 +1347,18 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const known = book.get(accountId, brokerOrderId);
       // Noha se známou vazbou, nebo příkaz bracketu, u kterého vazbu ještě neznáme (první zpráva
       // nohy ji nenese) — konzervativně stejně. Vlastní vstup je běžné zrušení.
-      const maybeLeg = Boolean(protection.legOf(accountId, brokerOrderId))
-        || (Boolean(known?.brokerOrderType?.startsWith('BRACKET:')) && !protection.bracketByEntry(accountId, brokerOrderId));
+      let maybeLeg = Boolean(protection.legOf(accountId, brokerOrderId));
+      if (!maybeLeg && known?.brokerOrderType?.startsWith('BRACKET:') && !protection.bracketByEntry(accountId, brokerOrderId)) {
+        // Bracket bez známé vazby: buď cizí/starý VSTUP (ruší se běžně), nebo noha, jejíž první
+        // zpráva vazbu ještě nenesla. Snímek vazby nese celé → rozhodne čtení; když selže, odmítnout.
+        try {
+          await readOrders(active, accountId);
+        } catch {
+          throw new BrokerRequestNotSentError(`Rithmic: u příkazu ${brokerOrderId} nejde ověřit, zda není nohou serverové ochrany — zrušení neodesílám`);
+        }
+        if (client !== active) throw new BrokerRequestNotSentError('Rithmic: spojení není připravené');
+        maybeLeg = Boolean(protection.legOf(accountId, brokerOrderId));
+      }
       if (maybeLeg) {
         // Změřeno: zrušení jedné nohy zruší i sestru → pozice by zůstala bez ochrany. Povoleno
         // jen při prokazatelně nulové pozici (úklid osiřelé nohy); jinak přes zavření pozice.
