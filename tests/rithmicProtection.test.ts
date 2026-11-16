@@ -332,7 +332,9 @@ describe('stav ochrany (výpočet)', () => {
     expect(stale.state).toBe('done');
     expect(stale.latch).toBeUndefined();
     expect(t.state(2).state).toBe('unprotected'); // jakmile přijde skutečná pozice, hlásí se
-    expect(t.protection.bracketState(ACC, 'E', t.orderOf, 2, true)).toMatchObject({ state: 'done', latch: true });
+    // důvěryhodná nula po vyplnění vstupu zavírá jen když je pozice nulová i TEĎ
+    expect(t.protection.bracketState(ACC, 'E', t.orderOf, 0, true)).toMatchObject({ state: 'done', latch: true });
+    expect(t.protection.bracketState(ACC, 'E', t.orderOf, 2, true).state).toBe('unprotected');
     // po západce: nohy vyplněné víc než vstup se pořád hlásí
     const over = build({ filled: 1, status: 'filled' }, [
       { id: 'TP', type: 'LIMIT', quantity: 1, filled: 1, status: 'filled' },
@@ -378,6 +380,62 @@ describe('nálezy z review diffu', () => {
     t.server.fill(ack.entryBrokerOrderId, 7000);
     await sleep(1_200);
     expect(t.incidents.some((i) => i.kind === 'bracket-legs-missing' && /nejde ověřit/.test(i.message))).toBe(true);
+    t.broker.stop();
+  });
+
+  it('stará nula nezavře vstup vyplněný za výpadku spojení (scénář z review)', async () => {
+    const t = await setup();
+    await openProtected(t, 'o1');
+    await flatten(t, 'fo1');
+    await sleep(120); // důvěryhodná nula je zapsaná
+    const ack = await t.broker.placeBracket(bracket(t, 'o2'));
+    await flush();
+    // spojení spadne, vstup se vyplní během výpadku a nohy nevzniknou
+    t.server.controls.legsNeverAppear = true;
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+    expect(t.broker.isConnected()).toBe(true);
+    await sleep(250);
+    expect(t.kinds()).toContain('bracket-legs-missing');
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 'o2')?.closedAt).toBeUndefined();
+    t.broker.stop();
+  });
+
+  it('zpožděná nula po vyplnění (odporuje součtu exekucí) nic nezavře ani neuvolní', async () => {
+    const t = await setup();
+    t.server.controls.legsNeverAppear = true;
+    t.server.controls.muteLivePositions = true;
+    const ack = await t.broker.placeBracket(bracket(t, 'sz'));
+    await flush();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await flush();
+    t.server.pushLivePosition('ACC1', 'ESZ6', 0); // stará zpráva z PnL spojení
+    await flush();
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+    await sleep(250);
+    expect(t.kinds()).toContain('bracket-legs-missing');
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 'sz')?.closedAt).toBeUndefined();
+    t.broker.stop();
+  });
+
+  it('vstup vyplněný až po uzavření (zrušení × vyplnění): západka padne a ochrana se hlídá znovu', async () => {
+    const t = await setup();
+    const ack = await t.broker.placeBracket(bracket(t, 're'));
+    await flush();
+    const entry = t.server.orders.get(ack.entryBrokerOrderId)!;
+    entry.status = 'cancelled';
+    t.server.notifyLive(ack.entryBrokerOrderId, 3);
+    await sleep(120);
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 're')?.closedAt).toBeDefined();
+    // burza ale příkaz těsně předtím vyplnila — exekuce dorazí pozdě
+    t.server.controls.legsNeverAppear = true;
+    t.server.positions.set('ACC1|ESZ6', 1);
+    t.server.notifyLive(ack.entryBrokerOrderId, 5, { fill_price: 7000, fill_size: 1, fill_id: 'late-1', total_fill_size: 1 });
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+    await sleep(250);
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 're')?.closedAt).toBeUndefined();
+    expect(t.kinds()).toContain('bracket-legs-missing');
     t.broker.stop();
   });
 

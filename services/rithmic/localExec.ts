@@ -94,6 +94,8 @@ export class LocalExec {
   private readonly rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }> = [];
   private connected = false;
   private blocked: string | null = null;
+  /** Množství vstupů, které odešly (nebo právě odcházejí) a kniha je ještě nezná: značka → kontrakt a kusy. */
+  private readonly reserved = new Map<string, { symbol: string; quantity: number }>();
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -133,6 +135,7 @@ export class LocalExec {
     if (event.type === 'order') {
       const before = this.orders.get(event.order.brokerOrderId);
       this.orders.set(event.order.brokerOrderId, event.order);
+      if (event.order.tag) this.reserved.delete(event.order.tag); // kniha příkaz zná → počítá se z ní
       if (event.order.status === 'rejected' && before?.status !== 'rejected') {
         this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
         if (this.rejections.length > 10) this.rejections.shift();
@@ -273,7 +276,8 @@ export class LocalExec {
           } else {
             const fromClient = command.referencePrice as number | undefined;
             if (stopPrice !== undefined || targetPrice !== undefined) {
-              if (server === null && fromClient === undefined) refuse('chybí cena, od které se počítá vzdálenost SL/TP');
+              // Vzdálenost SL/TP u Marketu se počítá JEN od ceny služby — cena z appky je jen kontrola.
+              if (server === null) refuse('služba nemá čerstvou cenu, od které by spočítala vzdálenost SL/TP — vstup neodesílám');
               if (server !== null && fromClient !== undefined && Math.abs(fromClient - server) / spec.tickSize > maxDrift) {
                 refuse(`cena v appce (${fromClient}) se liší od ceny služby (${server}) o víc než ${maxDrift} ticků — vstup neodesílám`);
               }
@@ -295,15 +299,24 @@ export class LocalExec {
           const open = Math.abs(this.positions.get(symbol)?.netQuantity ?? 0);
           const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId))
             .reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+          // + vstupy na cestě, které kniha ještě nezná (souběžná volání nesmí strop obejít).
+          const onTheWay = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && ![...this.orders.values()].some((order) => order.tag === reservedTag))
+            .reduce((sum, [, item]) => sum + item.quantity, 0);
           const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
-          if (open + waiting + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open}, čeká ${waiting})`);
+          if (open + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open}, čeká ${waiting + onTheWay})`);
           this.seenClientIds.add(clientId);
+          // Rezervace PŘED prvním čekáním; drží i při neznámém výsledku, padá jen když zápis prokazatelně neodešel.
+          this.reserved.set(tag, { symbol, quantity });
+          const release = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
+            if (error instanceof BrokerRequestNotSentError) this.reserved.delete(tag);
+            throw error;
+          });
           const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}) };
           if (stopTicks === undefined && targetTicks === undefined) {
-            const ack = await this.broker.placeOrder(request);
+            const ack = await release(this.broker.placeOrder(request));
             return { ok: true, result: { orderId: ack.brokerOrderId } };
           }
-          const ack = await this.broker.placeBracket({ ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}) });
+          const ack = await release(this.broker.placeBracket({ ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}) }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
         case 'move': {

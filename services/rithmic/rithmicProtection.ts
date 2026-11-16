@@ -228,12 +228,13 @@ export class RithmicProtection {
       if (active.length) return orphan('nohy expozici zavřely');
       return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
     }
-    if (closedByZero) {
-      // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz) a víme to jistě.
+    if (net === null) return { state: 'unknown', detail: 'pozice není známá' };
+    if (closedByZero && net === 0) {
+      // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz): důvěryhodná nula po vyplnění
+      // vstupu A ZÁROVEŇ teď žádná pozice. Jen to smí bracket uzavřít natrvalo.
       if (active.length) return orphan('pozice byla zavřena');
       return { state: 'done', detail: '', latch: TERMINAL.has(entry.status) };
     }
-    if (net === null) return { state: 'unknown', detail: 'pozice není známá' };
     if (net === 0) {
       // Nula z obyčejného čtení: stav je „hotovo", ale bracket se jí NEzavírá natrvalo.
       return active.length ? orphan('pozice je 0') : { state: 'done', detail: '' };
@@ -258,6 +259,14 @@ export class RithmicProtection {
   /** Nohy vlastního vstupu, které ještě nejsou potvrzené burzou ani konečné. */
   hasPendingLegs(accountId: number, entryId: string, orderOf: (orderId: string) => BrokerOrder | undefined): boolean {
     return this.legsOf(accountId, entryId).some((leg) => orderOf(leg.orderId)?.status === 'pending');
+  }
+
+  /** Vstup se po uzavření ještě vyplnil (závod zrušení × vyplnění): západka padá, hlídá se znovu. */
+  reopenBracket(accountId: number, entryId: string): boolean {
+    const intent = this.bracketByEntry(accountId, entryId);
+    if (!intent || intent.closedAt === undefined) return false;
+    delete intent.closedAt;
+    return true;
   }
 
   closeBracket(accountId: number, entryId: string): void {
@@ -297,6 +306,11 @@ export class RithmicProtection {
       }
     }
     return changed;
+  }
+
+  /** Operace, která nic neodeslala, po sobě nenechá záznam (značku smí volající použít znovu). */
+  dropFlatten(tag: string): void {
+    this.flattenRecords = this.flattenRecords.filter((record) => record.tag !== tag);
   }
 
   addFlatten(record: FlattenRecord): void {

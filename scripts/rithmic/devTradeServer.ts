@@ -8,7 +8,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -156,6 +156,7 @@ async function main(): Promise<void> {
     mkdirSync(results, { recursive: true });
     writeFileSync(tokenPath, token, { mode: 0o600 });
   }
+  chmodSync(tokenPath, 0o600); // i když soubor už existoval s volnějšími právy
   const tokenOk = (given: string | null): boolean => {
     if (!given) return false;
     const a = Buffer.from(given);
@@ -185,8 +186,11 @@ async function main(): Promise<void> {
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
           const at = Date.now();
           recent = recent.filter((time) => at - time < 10_000);
-          if (recent.length >= 20) throw new Error('příliš mnoho příkazů za krátkou dobu');
-          recent.push(at);
+          // Brzda (zavření) se neomezuje nikdy.
+          if (message.command.op !== 'flatten') {
+            if (recent.length >= 20) throw new Error('příliš mnoho příkazů za krátkou dobu');
+            recent.push(at);
+          }
           const result = await exec!.execute(message.command);
           send(socket, { type: 'reply', id, ...result, serverMs: Math.round(performance.now() - receivedAt) });
         } catch (error) {

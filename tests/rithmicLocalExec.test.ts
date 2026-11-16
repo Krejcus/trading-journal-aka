@@ -108,6 +108,18 @@ describe('místní služba: validace vstupu', () => {
     t.broker.stop();
   });
 
+  it('souběžné vstupy strop pozice neobejdou; chráněný Market bez ceny služby neodejde', async () => {
+    const t = await setup({ config: { maxPosition: 2 } });
+    const replies = await Promise.all([t.run(entry({ quantity: 2 })), t.run(entry({ quantity: 2 }))]);
+    expect(replies.filter((reply) => reply.ok)).toHaveLength(1);
+    expect(t.frames()).toBe(1);
+    t.broker.stop();
+    const blind = await setup({ price: null });
+    expect(await blind.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6990, targetPrice: 7020 }))).toMatchObject({ ok: false, sent: false });
+    expect(blind.frames()).toBe(0);
+    blind.broker.stop();
+  });
+
   it('stejné clientId podruhé neodejde — ani po restartu služby (kniha zná dnešní značky)', async () => {
     const t = await setup();
     const command = entry({ clientId: 'same-1', stopPrice: undefined, targetPrice: undefined }); // obyčejný příkaz bez ochrany
