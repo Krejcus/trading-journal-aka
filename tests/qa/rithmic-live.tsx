@@ -12,7 +12,9 @@ import type { BacktestChartOrderLine } from '../../services/backtestOrderLines';
 import type { LocalExecCommand, LocalExecOrderView, LocalExecState } from '../../services/rithmic/localExec';
 import '../../index.css';
 
-const SERVER = 'ws://127.0.0.1:3311';
+// Na počítači přímo; z telefonu přes Tailscale Serve (HTTPS port 8443 → místní proces 3311).
+const LOCAL = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+const SERVER = LOCAL ? 'ws://127.0.0.1:3311' : `wss://${window.location.hostname}:8443`;
 interface Bar { time: number; open: number; high: number; low: number; close: number }
 interface Hello { system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown; serverMs?: number }

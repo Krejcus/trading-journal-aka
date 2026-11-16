@@ -29,7 +29,12 @@ const arg = (name: string, fallback: string): string => {
 const CONTRACT = arg('contract', 'ESZ6');
 const PORT = Number(arg('port', '3311'));
 const QA_PORT = arg('qa-port', '4185');
-const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${QA_PORT}`, `http://localhost:${QA_PORT}`]);
+// Další povolené adresy stránky (např. https://<mac>.<tailnet>.ts.net přes Tailscale Serve):
+// RITHMIC_DEV_ORIGINS=https://a.ts.net,https://b.ts.net. Proces dál poslouchá jen na 127.0.0.1.
+const ALLOWED_ORIGINS = new Set([
+  `http://127.0.0.1:${QA_PORT}`, `http://localhost:${QA_PORT}`,
+  ...(process.env.RITHMIC_DEV_ORIGINS ?? '').split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean),
+]);
 
 function credentials(): { user: string; password: string } {
   const password = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
