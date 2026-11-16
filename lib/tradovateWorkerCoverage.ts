@@ -45,6 +45,16 @@ export function workerConnectionReadPlan(dataset: WorkerConnectionDataset | null
     uncoveredAccountIds: ids.filter(id => !covered.has(id)) };
 }
 
+/**
+ * 16. 11. 2026: worker ručí za stav účtů i s otevřenou pozicí, ale pohyb otevřeného P&L mezi jeho
+ * snímky dodává jen živá cena (IBKR). Když cena nepřichází a připojení má pozici, appka čte P&L
+ * od brokera sama jako dřív — jinak by P&L stál. Bez pozice nebo s živou cenou plán beze změny.
+ */
+export function livePnlReadPlan<P extends { suppressFullTick: boolean; covered: Map<number, TradovateWorkerAccountCoverage> }>(
+  plan: P, hasOpenPosition: boolean, livePriceFlowing: boolean): P {
+  return hasOpenPosition && !livePriceFlowing ? { ...plan, suppressFullTick: false, covered: new Map() } : plan;
+}
+
 /** Duplicated account ownership is ambiguous; one OAuth connection must not cover another. */
 export function workerCoverageOwners(datasets: Readonly<Record<string, WorkerConnectionDataset>>): Map<number, WorkerCoverageOwner> {
   const owners = new Map<number, WorkerCoverageOwner>();

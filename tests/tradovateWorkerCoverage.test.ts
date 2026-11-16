@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coveredWorkerAccounts, workerConnectionReadPlan, workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
+import { coveredWorkerAccounts, livePnlReadPlan, workerConnectionReadPlan, workerCoverageOwners } from '../lib/tradovateWorkerCoverage';
 import type { TradovateWorkerAccountCoverage } from '../lib/tradovateRequestControl';
 import type { WorkerConnectionDataset } from '../lib/tradovateWorkerCoverage';
 const NOW = 1_800_000;
@@ -44,5 +44,20 @@ describe('worker-first read coverage is explicit and fenced', () => {
   it('duplicate OAuth ownership is ambiguous rather than silently choosing the first route', () => {
     const owners = workerCoverageOwners({ 'login-a': dataset([100]), 'login-b': { ...dataset([100, 200]), connectionId: 'login-b' } });
     expect(owners.has(100)).toBe(false); expect(owners.get(200)?.connectionId).toBe('login-b');
+  });
+});
+
+describe('livePnlReadPlan (16. 11. 2026): bez živé ceny čte appka P&L pozice sama', () => {
+  const covered = new Map([[1, {} as never]]);
+  const plan = { suppressFullTick: true, covered, uncoveredAccountIds: [] as number[] };
+  it('pozice bez živé ceny: plné čtení zpět a žádný účet se nebere jako pokrytý', () => {
+    const next = livePnlReadPlan(plan, true, false);
+    expect(next.suppressFullTick).toBe(false);
+    expect(next.covered.size).toBe(0);
+    expect(plan.suppressFullTick).toBe(true);
+  });
+  it('živá cena nebo žádná pozice: plán beze změny (úsporný režim)', () => {
+    expect(livePnlReadPlan(plan, true, true)).toBe(plan);
+    expect(livePnlReadPlan(plan, false, false)).toBe(plan);
   });
 });
