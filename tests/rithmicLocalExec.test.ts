@@ -128,6 +128,11 @@ describe('místní služba: validace vstupu', () => {
     t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
     await flush();
     expect(await t.run(entry({ quantity: 2 }))).toMatchObject({ ok: false, sent: false });
+    // opožděná zpráva o nulové pozici (z doby před vyplněním) rezervu neuvolní
+    t.server.controls.muteLivePositions = false;
+    t.server.pushLivePosition('ACC1', 'ESZ6', 0);
+    await flush();
+    expect(await t.run(entry({ quantity: 2 }))).toMatchObject({ ok: false, sent: false });
     expect(t.frames()).toBe(1);
     t.broker.stop();
   });

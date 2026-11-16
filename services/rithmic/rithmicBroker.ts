@@ -179,7 +179,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
    * serveru nestačí — zavírací příkaz se vyplní až po ní. Dokud záznam trvá, nové příkazy na
    * kontraktu neprojdou a další zavření se řídí pravidly v `runFlatten`.
    */
-  const closing = new Map<string, { tag: string; sentAt: number; requestDone: boolean }>();
+  const closing = new Map<string, { tag: string; sentAt: number; requestDone: boolean; accepted: boolean }>();
   /**
    * Pozice dopočítaná z vyplnění: výchozí stav po připojení + součet doručených exekucí.
    * Dva nezávislé zdroje (order spojení a PnL spojení) — když se shodnou, živé pozici lze
@@ -981,7 +981,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
    */
   function validExpectedNet(account: number, symbol: string): number | null {
     const key = `${account}:${symbol}`;
-    const expected = expectedNet.has(key) ? expectedNet.get(key) : undefined;
+    // Kontrakt, který výchozí stav relace neuváděl, začíná na 0 (výchozí stav je autoritativní).
+    const expected = expectedNet.has(key) ? expectedNet.get(key) : state === 'connected' ? 0 : null;
     if (expected === null || expected === undefined) return null;
     for (const order of book.list(account)) {
       if (order.symbol === symbol && book.fillGap(account, order.brokerOrderId) > 0) return null;
@@ -1006,7 +1007,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     try {
       const rows = await readPositions(source, account);
       if (client !== source) return null;
-      return rows.find((row) => row.symbol === symbol)?.netQuantity ?? 0;
+      const read = rows.find((row) => row.symbol === symbol)?.netQuantity ?? 0;
+      // Jedno čtení, které platnému dopočtu z exekucí odporuje, není odpověď (snímek může být pozadu).
+      const expected = validExpectedNet(account, symbol);
+      return expected !== null && expected !== read ? null : read;
     } catch {
       return null;
     }
@@ -1043,8 +1047,20 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         const orderOf = (id: string): BrokerOrder | undefined => book.get(account, id);
         const fillKey = `${account}:${intent.symbol}`;
         const fillsBefore = fillSeenAt.get(fillKey) ?? 0;
-        const net = await netPosition(source, account, intent.symbol);
+        // Dopočet z exekucí neplatí → jediná cesta, jak ho znovu ukotvit (a případně bracket uzavřít),
+        // je stabilní důkaz čtením. Jinak stačí důvěryhodná živá hodnota nebo jedno čtení pozice.
+        let net: number | null;
+        if (validExpectedNet(account, intent.symbol) === null) {
+          const proof = await contractProof(source, account, intent.symbol, config.flattenStepMs ?? 1_000);
+          net = proof.stable ? proof.net : null;
+        } else {
+          net = await netPosition(source, account, intent.symbol);
+          // Silná nula platí podle STAVU, ne jen v okamžiku zprávy: bracket, jehož nohy skončily
+          // až po ní, se uzavře při kontrole.
+          if (net === 0 && trustedLivePosition(account, intent.symbol) === 0) strongZero(account, intent.symbol);
+        }
         if (client !== source) return;
+        if (protection.bracketByEntry(account, entryId)?.closedAt !== undefined && !protection.legsOf(account, entryId).some((leg) => { const o = book.get(account, leg.orderId); return o && !TERMINAL.has(o.status); })) return;
         // Během čtení přišla další změna a čeká novější kontrola — tahle už nic nehlásí.
         if (bracketTimers.has(key)) return;
         // Vyplnění během čtení pozice: přečtená hodnota k novému stavu příkazů nepatří → znovu.
@@ -1187,16 +1203,19 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     let net = await readNet();
     const expected = validExpectedNet(accountId, symbol);
     let confirmed = net !== null;
-    if (net !== null && expected !== null && expected !== net) {
-      // Čtení odporuje dopočtu z exekucí: snímek pozic může být pozadu. Rozhodne druhé čtení
-      // po odstupu — teprve dvě shodná čtení mají přednost před dopočtem.
+    if (net !== null && expected !== net) {
+      // Čtení dopočtu z exekucí odporuje, nebo dopočet neplatí (není s čím srovnat): snímek pozic
+      // může být pozadu. Rozhodne druhé čtení po odstupu — teprve dvě shodná čtení jsou důkaz.
       await sleepMs(Math.min(300, stepMs));
       const again = await readNet();
       confirmed = again !== null && again === net;
       net = again;
     }
     const working = book.list(accountId).filter((o) => o.symbol === symbol && !TERMINAL.has(o.status)).map((o) => o.brokerOrderId);
-    const stable = confirmed && (fillSeenAt.get(key) ?? 0) === before;
+    // Příkaz, kterému chybí exekuce (vyplněno víc, než kolik fillů dorazilo), znamená, že pozice
+    // se právě mění způsobem, který neznáme — žádné čtení pak není důkaz.
+    const missingExecution = book.list(accountId).some((o) => o.symbol === symbol && book.fillGap(accountId, o.brokerOrderId) > 0);
+    const stable = confirmed && !missingExecution && (fillSeenAt.get(key) ?? 0) === before;
     if (client === active && orders.ok && stable && net !== null) {
       // Stabilní důkaz dopočet ukotví (i opraví, když se rozešel).
       expectedNet.set(key, net);
@@ -1280,7 +1299,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const hardCapMs = settleMs + (config.requestTimeoutMs ?? 10_000);
       const inTheAir = !prior?.requestDone || age < settleMs || exitOrderWorking() || !proof.ordersOk || proof.net === null;
       if (prior && age < hardCapMs && inTheAir) {
-        if (proof.net === null) incident('flatten-orders-remain', `${symbol}: předchozí zavření právě probíhá a pozici teď nejde přečíst — další neposílám, ochrana zůstává`);
+        if (proof.net === null) incident('flatten-orders-remain', `${symbol}: předchozí zavření právě probíhá a pozici teď nejde přečíst — další neposílám`);
         return abandon({ status: 'indeterminate', reason: 'předchozí zavření pozice právě probíhá — další neposílám' });
       }
       // Předchozí zavření doběhlo a pozici nezavřelo (nebo ji nejde přečíst): zavírá se znovu.
@@ -1334,11 +1353,18 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       return finish({ status: 'indeterminate', reason: 'pozice je 0, ale stav kontraktu není prokázaný' });
     }
 
+    // Zavírací příkaz z dřívějška pořád pracuje (zrušení se nepotvrdilo): brzda už na burze leží.
+    // Druhé zavření by se po uvolnění vyplnilo také a pozici otočilo.
+    if (exitOrderWorking()) {
+      incident('flatten-orders-remain', `${symbol}: dřívější zavírací příkaz stále pracuje a nejde zrušit — další zavření neposílám`);
+      return finish({ status: 'indeterminate', reason: 'dřívější zavírací příkaz stále pracuje' });
+    }
+
     // 4) Zavření. Fáze na disk PŘED odesláním; záznam „zavírání probíhá" trvá, dokud výsledek
     // nepotvrdí STAV (nulová pozice), ne odpověď serveru.
     await recordPhase('exit-sent');
     postFlattenTags.set(key, new Set());
-    const mine = { tag: request.tag, sentAt: now(), requestDone: false };
+    const mine = { tag: request.tag, sentAt: now(), requestDone: false, accepted: false };
     closing.set(key, mine);
     /** Zbytek po zavření = cokoli pracujícího, co nebylo zadáno až po něm (podle značky vstupu). */
     const leftovers = (): string[] => working().filter((id) => {
@@ -1354,6 +1380,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       (error: unknown) => (error instanceof RithmicRequestError && error.outcome !== 'unknown' ? ('refused' as const) : ('unknown' as const)),
     ).then((how) => {
       mine.requestDone = true;
+      mine.accepted = how === 'accepted';
       // Výslovné odmítnutí nebo neodeslání: zavření neproběhlo, není co potvrzovat.
       if (how === 'refused' && closing.get(key) === mine) resolveClosing(accountId, symbol);
       else if (how === 'unknown' && closing.get(key) === mine) {
@@ -1380,7 +1407,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         }
         if (after.net === 0 && after.stable) {
           // (silnou nulu už zapsal sám důkaz)
-        } else if (after.net !== 0 && mine.requestDone && closing.get(key) === mine) {
+        } else if (after.net !== 0 && closing.get(key) === mine && (!mine.accepted || now() - mine.sentAt < settleMs)) {
+          // Zavření nemá potvrzené přijetí (odpověď nepřišla), nebo je příliš čerstvé: výsledek není
+          // znám. Blokace trvá; další zavření pustí až pevný strop v `runFlatten`.
+          incident('flatten-orders-remain', `${symbol}: zavření pozice nemá potvrzený výsledek a pozice ${after.net} trvá — nové příkazy na kontraktu stojí`);
+        } else if (after.net !== 0 && closing.get(key) === mine) {
           if (exitOrderWorking()) {
             // Zavírací příkaz ještě pracuje: výsledek není znám, blokace trvá (druhé zavření by pozici otočilo).
             incident('flatten-orders-remain', `${symbol}: zavírací příkaz se zatím nevyplnil, pozice ${after.net} trvá — nové příkazy na kontraktu stojí`);

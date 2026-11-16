@@ -97,9 +97,7 @@ export class LocalExec {
   /** Množství vstupů, které odešly (nebo právě odcházejí) a kniha je ještě nezná: značka → kontrakt a kusy. */
   private readonly reserved = new Map<string, { symbol: string; quantity: number }>();
   /** Vyplnění vlastních vstupů, která zpráva o pozici ještě nepotvrdila (pořadí událostí). */
-  private fillsAhead: Array<{ symbol: string; quantity: number; seq: number }> = [];
-  private eventSeq = 0;
-  private readonly positionSeq = new Map<string, number>();
+  private fillsAhead: Array<{ symbol: string; quantity: number; at: number }> = [];
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -143,15 +141,16 @@ export class LocalExec {
       // Vlastní vstup se vyplnil: dokud nepřijde zpráva o pozici, počítá se vyplněné množství zvlášť
       // (jinak by mezi vyplněním a pozicí „zmizelo" a další vstup by obešel strop).
       const grew = event.order.filledQuantity - (before?.filledQuantity ?? 0);
-      if (grew > 0 && event.order.tag?.startsWith('ui-')) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, seq: (this.eventSeq += 1) });
+      if (grew > 0 && event.order.tag?.startsWith('ui-')) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, at: this.now() });
       if (event.order.status === 'rejected' && before?.status !== 'rejected') {
         this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
         if (this.rejections.length > 10) this.rejections.shift();
       }
     }
     else if (event.type === 'position') {
-      this.positionSeq.set(event.position.symbol, (this.eventSeq += 1));
-      this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
+      // Rezervu za vyplnění uvolní jen zpráva s NENULOVOU pozicí (ta už vyplnění zahrnuje).
+      // Nula může být opožděná zpráva z doby před vyplněním — ta nic neuvolní; zbytek vyprší časem.
+      if (event.position.netQuantity !== 0) this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,
         ...(event.displayAveragePrice !== undefined ? { averagePrice: event.displayAveragePrice } : {}),
@@ -314,6 +313,7 @@ export class LocalExec {
           const onTheWay = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && ![...this.orders.values()].some((order) => order.tag === reservedTag))
             .reduce((sum, [, item]) => sum + item.quantity, 0);
           const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
+          this.fillsAhead = this.fillsAhead.filter((fill) => this.now() - fill.at < 5_000);
           const ahead = this.fillsAhead.filter((fill) => fill.symbol === symbol).reduce((sum, fill) => sum + fill.quantity, 0);
           if (open + ahead + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open + ahead}, čeká ${waiting + onTheWay})`);
           this.seenClientIds.add(clientId);

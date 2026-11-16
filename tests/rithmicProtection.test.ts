@@ -708,6 +708,85 @@ describe('nálezy z review diffu', () => {
     t.broker.stop();
   });
 
+  it('chybějící exekuce + jedno zastaralé čtení s nulou: žádné already-flat ani uzavření vstupu', async () => {
+    const t = await setup({ config: { fillWaitMs: 5_000 } });
+    t.server.controls.legsNeverAppear = true;
+    t.server.controls.muteLivePositions = true;
+    const ack = await t.broker.placeBracket(bracket(t, 'mx'));
+    await flush();
+    // „vyplněno" od Rithmicu bez exekuce z burzy; skutečná pozice je +1, snímek pozic ještě 0
+    t.server.orders.get(ack.entryBrokerOrderId)!.status = 'complete';
+    t.server.orders.get(ack.entryBrokerOrderId)!.filled = 1;
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].push(351, {
+      account_id: 'ACC1', basket_id: ack.entryBrokerOrderId, user_tag: 'mx', symbol: 'ESZ6', exchange: 'CME', quantity: 1, transaction_type: 1, price_type: 1,
+      bracket_type: 6, notify_type: 15, status: 'complete', completion_reason: 'F', ssboe: 1_800_000_000, usecs: 0,
+    });
+    await flush();
+    const result = await flatten(t, 'fmx');
+    expect(result.status).not.toBe('already-flat');
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 'mx')?.closedAt).toBeUndefined();
+    t.broker.stop();
+  });
+
+  it('zavření bez odpovědi: kontrola po zavření blokaci neuvolní, druhé zavření neodejde před pevným stropem', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 120, exitSettleMs: 500, flattenStepMs: 40, flattenPostCheckMs: 30 } }); // strop 620 ms
+    await openProtected(t, 'to');
+    t.server.controls.exitPosition = 'ignore'; // požadavek vyprší bez odpovědi
+    expect((await flatten(t, 'fto1')).status).toBe('indeterminate');
+    await sleep(160); // požadavek vypršel, kontrola po zavření proběhla, pozice trvá
+    t.server.controls.exitPosition = 'ok';
+    expect((await flatten(t, 'fto2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    t.broker.stop();
+  });
+
+  it('pozici zavře jiný příkaz, nohy skončí až potom: bracket se uzavře a další pozice nevyvolá poplach', async () => {
+    const t = await setup();
+    const entry = await openProtected(t, 'oth');
+    // ruční zavření holým příkazem (nohy ještě pracují)
+    const close = await t.broker.placeOrder({ tag: 'manual-close', accountId: t.account(), symbol: 'ESZ6', side: 'Sell', quantity: 1, orderType: 'Limit', limitPrice: 7000 });
+    await flush();
+    t.server.fill(close.brokerOrderId, 7000);
+    await sleep(150);
+    expect(t.kinds()).toContain('bracket-orphan-legs'); // správně: pozice 0, nohy pracují
+    for (const leg of t.legsOf(entry)) { leg.status = 'cancelled'; t.server.notifyLive(leg.basketId, 3); }
+    await sleep(200);
+    expect(t.store.saved()?.brackets.find((b) => b.tag === 'oth')?.closedAt).toBeDefined();
+    const before = t.kinds().filter((k) => k === 'bracket-legs-missing').length;
+    const next = await t.broker.placeOrder({ tag: 'next-pos', accountId: t.account(), symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 7000 });
+    await flush();
+    t.server.fill(next.brokerOrderId, 7000);
+    await sleep(250);
+    expect(t.kinds().filter((k) => k === 'bracket-legs-missing').length).toBe(before);
+    t.broker.stop();
+  });
+
+  it('visící zavírací příkaz, který nejde zrušit: ani po pevném stropu neodejde druhé zavření', async () => {
+    const t = await setup({ config: { requestTimeoutMs: 200, exitSettleMs: 100 } });
+    await openProtected(t, 'hang');
+    t.server.controls.delayExitFill = true;
+    expect((await flatten(t, 'fh1')).status).toBe('submitted');
+    await sleep(350); // pevný strop uplynul
+    t.server.controls.cancelStuck = true; // zrušení visícího Marketu se nepotvrdí
+    expect((await flatten(t, 'fh2')).status).toBe('indeterminate');
+    expect(t.sent(3504)).toBe(1);
+    t.broker.stop();
+  });
+
+  it('zrušení nohy: jedno čtení s nulou, které odporuje součtu exekucí, zrušení nepovolí', async () => {
+    const t = await setup();
+    t.server.controls.muteLivePositions = true; // živá pozice nepřijde → čte se
+    const ack = await t.broker.placeBracket(bracket(t, 'cl'));
+    await flush();
+    t.server.fill(ack.entryBrokerOrderId, 7000);
+    await flush();
+    t.server.positions.set('ACC1|ESZ6', 0); // snímek pozic je pozadu
+    const leg = t.legsOf(ack.entryBrokerOrderId)[0];
+    expect(await thrown(t.broker.cancelOrder(t.account(), leg.basketId))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.sent(316)).toBe(0);
+    t.broker.stop();
+  });
+
   it('stabilní čtení dopočet pozice znovu ukotví: po obnově spojení zase funguje rychlá cesta', async () => {
     const t = await setup();
     const entry = await openProtected(t, 'anc');
