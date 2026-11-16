@@ -319,6 +319,24 @@ export interface BrokerOsoAck {
   rejectReason?: string;
 }
 
+/**
+ * Vstup s ochranou, kterou drží server brokera a která vzniká AŽ PO vyplnění vstupu
+ * (Rithmic bracket): SL/TP jako vzdálenost v tickách od ceny vyplnění. Není to `placeOso` —
+ * ceny noh ani jejich ID v okamžiku přijetí neexistují.
+ */
+export interface BrokerBracketRequest extends BrokerOrderRequest {
+  /** Kladný celý počet ticků; aspoň jedno z dvojice. */
+  stopTicks?: number;
+  targetTicks?: number;
+}
+
+export interface BrokerBracketAck {
+  entryBrokerOrderId: string;
+  accepted: boolean;
+  definitive: boolean;
+  rejectReason?: string;
+}
+
 export interface BrokerOrderLookup {
   orders: BrokerOrder[];
   /** Jen autoritativní prázdný výsledek dovoluje nový pokus. */
@@ -407,6 +425,8 @@ export interface BrokerPort {
    * bezpečnější dostupný fallback cancel + přesný Market close.
    */
   liquidatePosition?(request: BrokerLiquidateRequest): Promise<BrokerLiquidateResult>;
+  /** Vstup se serverovou ochranou v tickách od vyplnění. Chybějící implementace znamená fail-closed. */
+  placeBracket?(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
   /** Nativní atomický OCO pár. Chybějící implementace znamená fail-closed. */
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */

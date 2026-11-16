@@ -1,4 +1,4 @@
-# Rithmic — vstup se SL/TP a bezpečné zavření pozice (návrh, 16. 11. 2026)
+# Rithmic — vstup se SL/TP a bezpečné zavření pozice (návrh v2, 16. 11. 2026)
 
 Navazuje na `rithmic-broker-v1-design-20261116.md`. Adaptér v1 umí jen
 jednotlivé příkazy; bracket mapuje jako `Unsupported` a `placeOso`,
@@ -36,137 +36,119 @@ Dál nezměřeno: částečné vyplnění vstupu (množství noh), zrušení rod
 částečném vyplnění, vyplnění nohy × souběžné zrušení, zda změna nohy (314)
 zachová vazbu.
 
-## Návrh
+## Oponentura v1 → co se změnilo
 
-### 1. Port: nová volitelná metoda `placeBracket`, `placeOso` zůstává nepodporované
+Critic i Codex: **OPRAVIT před implementací**. Zapracováno:
 
-`placeOso` slibuje absolutní ceny noh a jejich ID v odpovědi. Rithmic umí jen
-vzdálenost v tickách od ceny vyplnění a nohy vzniknou až po vyplnění.
-Napodobit to (dopočítat ticky a po vyplnění nohy posunout) by znamenalo
-dostavovat tvar — to zakazuje INV-OUTBOX-03. Proto:
+- Celý bracket (vstup i nohy) jde jádru dál jako `Unsupported`; stav ochrany
+  je jen v `bracketState` a v incidentech. Tvar „jako OSO" by jádru podsunul
+  předpoklady, které u Rithmicu neplatí (shoda obou). Odpadá tím odklad první
+  zprávy nohy.
+- Zrušení nohy se neodešle jen při nenulové (nebo neznámé) pozici; **při
+  prokazatelně nulové pozici projde**, jinak by nešla uklidit osiřelá noha.
+- Čtení ani ověření zrušení zavření **nevetují** — viz spor níže.
+- `submitted` jen po skutečně přijatém zavření; pozice 0 = `already-flat`
+  (nic nepracuje) nebo `indeterminate` + incident.
+- Trvalý záznam (`ProtectionStore`): záměr vstupu s ochranou a fáze zavírání
+  se ukládají **před** odesláním; po restartu se ochrana vyhodnotí z výchozího
+  stavu a rozdělané zavírání se ohlásí, nikdy neopakuje.
+- Kontrola ochrany po každé změně vstupu, nohy nebo pozice; každá role zvlášť.
+- Stop příkaz nenese `limitPrice` z ochranného limitu burzy.
 
-```ts
-interface BrokerBracketRequest extends BrokerOrderRequest {   // Market | Limit | Stop
-  stopTicks?: number;    // kladné celé; aspoň jedno z dvojice
-  targetTicks?: number;
-}
-interface BrokerBracketAck { entryBrokerOrderId: string; accepted: boolean; definitive: boolean; rejectReason?: string }
-placeBracket?(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
-```
+**Spor recenzentů (otázka A):** Codex — bez potvrzeného zrušení nezavírat.
+Critic — zavřít, brzda nesmí čekat (jádro to tak dělá dnes: „starý unknown
+cancel nikdy nestojí před risk-redukčním close"). **Zvoleno: zavřít.**
+Codexovu námitku (po zavření zůstane pracovat příkaz) kryje: druhé kolo
+rušení pro nohy vzniklé pod rukama, incident `flatten-cancel-unconfirmed`,
+kontrolní čtení po zavření s incidentem `flatten-orders-remain` a možnost
+uklidit osiřelou nohu zrušením při pozici 0.
 
-Výsledek se určuje stejně jako u `placeOrder` v1: odpověď „přijato" není
-důkaz (odmítnutí RMS přijde jen jako 351), ztracená odpověď = `unknown`
-a dohledání čtením podle značky, nikdy opakování. Chybějící metoda u jiného
-adaptéru = fail-closed. Tradovate adaptér se nemění.
+## Co je postaveno
 
-### 2. Jak adaptér bracket ukazuje jádru
+### Port
+`placeBracket?(BrokerBracketRequest): Promise<BrokerBracketAck>` v
+`services/brokerPort.ts` (volitelné; jiný adaptér = fail-closed). `placeOso`
+a `placeOco` Rithmic nemá. Výsledek jako `placeOrder`: „přijato" není důkaz,
+ztracená odpověď = neznámý výsledek a dohledání čtením podle značky, nikdy
+opakování. Stejná značka podruhé se neodešle.
 
-Tvar jako u Tradovate OSO, aby jádro nepotřebovalo nový model: vstup je
-běžný příkaz, nohy nesou `parentOrderId` (vstup) a `linkedOrderId` (sestra).
+### Záznam (`services/rithmic/rithmicProtection.ts`)
+Záměr `{značka, účet, kontrakt, strana, množství, stopTicks, targetTicks,
+entryId}` uložený před odesláním; když uložit nejde, vstup se neodešle.
+Vstup se páruje podle značky (odpověď, notifikace, snímek); nohy podle
+`original_basket_id` (živě od druhé zprávy, ve snímku vždy). Záznamy starší
+36 h se zahazují.
 
-- **Vlastní vstup** = příkaz odeslaný touto instancí přes `placeBracket`
-  (poznán podle značky rozpracovaného zápisu nebo `basket_id` z odpovědi).
-  Vysílá se se skutečným typem (Market/Limit/Stop).
-- **Noha** = příkaz s `original_basket_id`, jehož rodič je v knize jako
-  vlastní vstup. Vysílá se jako `Limit` (TP) / `Stop` (SL, `stopPrice` =
-  spoušť) s oběma vazbami.
-- **První zpráva nohy** (má `bracket_type`, nemá vazbu, není to náš vstup) se
-  **nevysílá** — drží se stranou, dokud další zpráva vazbu nedoplní. Bez
-  toho by jádro vidělo samostatný prodejní Limit a zkopírovalo ho jako vstup.
-  Nepřijde-li vazba do `legLinkWaitMs` (1 s), příkaz se vyšle jako
-  `Unsupported` + incident `attention`.
-- **Všechno ostatní s `bracket_type`** (cizí bracket z jiné platformy, noha
-  k neznámému rodiči) zůstává `Unsupported` jako ve v1 (INV-TRAD-07).
-- **Po restartu / ze snímku:** řádky snímku jsou úplné. Rodič = má
-  `bracket_type`, nemá `original_basket_id` a nese naši značku
-  (`ownTagPrefix`); noha = `original_basket_id` ukazuje na takového rodiče
-  v témže snímku nebo v knize. Jinak `Unsupported`.
+### Stav ochrany — `bracketState(účet, vstup)`
+`entry-working | protected | unprotected | orphan-legs | done | unknown`.
+`protected` = pozice trvá a každá požadovaná role má právě jednu nohu
+potvrzenou burzou, se zbývajícím množstvím rovným vyplněnému vstupu (nebo
+pozici, po dílčím vyplnění nohy). Do `legsWaitMs` (3 s) po každé změně se
+stav vyhodnotí; `unprotected` → incident `bracket-legs-missing`,
+`orphan-legs` → `bracket-orphan-legs`. Hlásí se jednou, dokud se stav
+nezmění. **Adaptér nic nedostavuje ani nezavírá.**
 
-### 3. Hlídání ochrany po vyplnění (INV-OUTBOX-03)
+### Zrušení a změna nohy
+Zrušení nohy (vlastního i cizího bracketu) při pozici ≠ 0 nebo neznámé →
+`BrokerRequestNotSentError`. Změnu nohy adaptér neumí (`Unsupported`) —
+**posun SL/TP přes adaptér zatím nejde**; patří do návrhu zapojení po
+doměření, zda změna zachová vazbu.
 
-Po prvním vyplnění vlastního vstupu běží lhůta `legsWaitMs` (3 s; změřeno
-38 ms). Do ní musí být každá požadovaná noha potvrzená burzou (TP `open`,
-SL `trigger pending`) a součet množství noh se musí rovnat vyplněnému
-množství vstupu. Jinak incident `bracket-legs-missing` (kritický)
-s ID vstupu. **Adaptér nic nedostavuje ani nezavírá** — rozhodnutí patří
-jádru/obsluze. Stejný incident vznikne, když pracující noha vlastního
-bracketu skončí zrušením nebo odmítnutím, zatímco pozice trvá (např. někdo
-zrušil nohu jinde → podle měření padnou obě).
+### `liquidatePosition`
+1. Druhé volání na týž účet + kontrakt během běhu se připojí k běžící
+   operaci. Značka, která už někdy proběhla (i v minulém běhu), nic neposílá:
+   jen dočte stav → `already-flat`, jinak `indeterminate`.
+2. Fáze `started` na disk. Po dobu běhu se na kontraktu odmítá `placeOrder`,
+   `placeBracket` a `modifyOrder` (`cancelOrder` nikdy).
+3. Čtení příkazů a pozice, každé se stropem `flattenStepMs` (1 s). Obojí
+   v pořádku, pozice 0 a nic nepracuje → `already-flat`. Selhání čtení
+   nic nezastaví — ruší se to, co kniha vede jako pracující.
+4. Zrušení všech pracujících příkazů kontraktu souběžně, čekání
+   `flattenCancelWaitMs` (1 s). Vyplnil-li se vlastní vstup a nohy ještě
+   nejsou vidět, počká se na ně nejvýš 500 ms a nové příkazy se zruší ve
+   druhém (posledním) kole. Tentýž příkaz se neruší dvakrát.
+5. Čerstvá pozice. Prokazatelně 0 → nezavírá se: nic nepracuje →
+   `already-flat`; jinak incident `flatten-orders-remain` a `indeterminate`.
+6. Jinak fáze `exit-sent` na disk a `RequestExitPosition` (množství určuje
+   server). Odmítnutí → `rejected` (bez textu serveru); bez odpovědi →
+   `indeterminate`; jinak `submitted`. Nepotvrzená zrušení → incident
+   `flatten-cancel-unconfirmed`.
+7. Za `flattenPostCheckMs` (1,5 s) jedno kontrolní čtení; cokoli pracujícího
+   → `flatten-orders-remain`.
+8. Flat adaptér netvrdí; potvrzuje volající stavem (INV-MODE-02).
 
-Stav jde přečíst: `bracketState(accountId, entryId)` →
-`entry-working | protected | unprotected | done | unknown`.
+Nejhorší případ doby: 2× čtení + rušení + čekání na nohy + 2. kolo + čtení
+pozice + zavření ≈ 7,5 s při výchozích stropech (pod 8 s lhůtou
+`executeClose`); běžně ~300–500 ms. Po zrušení noh je pozice do zavření
+**bez ochrany** — při pádu procesu v tom okně na neurčito; po restartu to
+ohlásí `bracket-legs-missing` a `flatten-interrupted`.
 
-### 4. Zrušení a změna nohy
+## Podmínky zapojení (neřešeno tady)
 
-- `cancelOrder` na nohu vlastního bracketu adaptér **odmítne** (číselný kód,
-  bez odeslání): zrušilo by to i sestru a pozice by zůstala bez ochrany.
-  Úmyslné odstranění ochrany jde jen přes Flatten (bod 5).
-- `cancelOrder` na nevyplněný vstup je běžné zrušení; nohy ještě neexistují.
-  Po částečném vyplnění vstupu se zrušení zbytku povolí, ale spustí kontrolu
-  z bodu 3 (množství noh × vyplněné množství) — chování serveru nezměřeno.
-- `modifyOrder` na nohu = běžná změna (314, změřeno). Po potvrzení se znovu
-  ověří, že vazba trvá (další zpráva / čtení); jinak `bracket-legs-missing`.
-- Posun SL/TP před vyplněním vstupu (334) do v1 nepatří.
+- Jádro musí vědět, že vstup má serverovou ochranu, která teprve vznikne
+  (follower by jinak dostal holý vstup a jádro by po vyplnění chtělo
+  `placeOco`, které Rithmic nemá). Test s jádrem: vyplnění `Unsupported`
+  příkazu (noha, zavírací Market bez značky) se nezkopíruje.
+- Zavírací Market nenese značku: jádro ho nesmí brát jako nový signál
+  leadera; přiřazení k operaci se nedělá odhadem.
+- `mayResendLiquidation` v jádru po `indeterminate` volá znovu — s **novou**
+  značkou by adaptér zavírání spustil znovu. Před zapojením změřit dvojí
+  `RequestExitPosition` těsně po sobě a rozhodnout, zda adaptér má blokovat
+  i jinou značku, dokud předchozí výsledek není potvrzen stavem.
+- Kritické incidenty adaptéru musí v jádru trvale blokovat nové riziko.
+- `ProtectionStore` jako soubor workeru (atomický zápis); jedna instance.
+- Posun SL/TP; `assertDispatchAllowed` pro bracket; příznak schopnosti
+  „zrušení nohy ruší sestru".
+- Doměřit: částečné vyplnění vstupu (množství a počet noh), vyplnění nohy ×
+  sestra, změna nohy × vazba, značka rodiče v první zprávě, limity čtení 320.
 
-### 5. `liquidatePosition` — zrušit → ověřit → zavřít
+## Testy
 
-Jedna operace na účet + kontrakt najednou; po dobu běhu adaptér na tomtéž
-účtu a kontraktu odmítá nové `placeOrder`/`placeBracket` (zavírání nesmí
-závodit s novým vstupem). Žádný krok se neopakuje.
-
-1. **Čtení** příkazů (320, s hranicí jako ve v1) a pozice. Nic nepracuje
-   a pozice 0 → `already-flat`. Čtení selže → `indeterminate`, nic se neposílá.
-2. **Zrušení** všech pracujících příkazů toho kontraktu (i cizích
-   a `Unsupported` — Flatten je stavový), souběžně. `CANCELLATION_FAILED`
-   u příkazu, který mezitím skončil (sestra), není chyba.
-3. **Ověření**: nové čtení 320 nesmí pro kontrakt vrátit nic pracujícího
-   (lhůta `cancelWaitMs` 3 s; živé notifikace čekání jen zkracují, důkazem je
-   čtení). **Když něco pracuje dál → `indeterminate`, zavření se neposílá**
-   a vznikne incident `flatten-cancel-unconfirmed`. Důvod: zavřít pozici
-   a nechat pracovat nohu nebo vstup znamená riziko nové pozice bez ochrany
-   na účtu, který má být flat; pozice, která zůstane, má aspoň to, co
-   z ochrany zbylo. (Otevřená otázka A.)
-4. **Čerstvá pozice.** 0 → `submitted` bez ID (stav jsme změnili zrušením;
-   potvrzení stavem dělá volající). Neznámá → `indeterminate`.
-5. **Zavření** `RequestExitPosition` — množství určuje server ze svého stavu,
-   ne naše čtení. Odmítnutí → `rejected`; ztracená odpověď → `indeterminate`;
-   jinak `submitted`. Zavírací příkaz nenese značku: adaptér si zapamatuje
-   okno operace a první cizí `MARKET` proti pozici na tom účtu/kontraktu
-   v něm označí `brokerOrderType`-nezávislým příznakem `liquidationOf: tag`
-   jen pro audit — **přiřazení je odhad a nic se podle něj nerozhoduje**.
-6. Adaptér sám flat neověřuje ani netvrdí; `position → orders → position`
-   dělá volající (INV-MODE-02).
-
-Mezi kroky 3 a 5 je pozice krátce bez ochrany (~150 ms podle měření).
-
-### 6. Co se nemění
-
-`placeOso`, `placeOco` zůstávají bez implementace. Účtování exekucí, obnova
-spojení, snímky a stropy z v1 platí beze změny i pro nohy (noha je příkaz
-jako každý jiný; její vyplnění jde přes `fillGap`).
-
-## Otevřené otázky pro oponenturu
-
-- **A.** Krok 5.3: když zrušení nejde ověřit, nezavírat (návrh), nebo zavřít
-  i tak, protože Flatten je brzda? Případně rozlišit: nepotvrzené zrušení
-  *vstupu* (zavřít nesmí nic rozbít) × *nohy*?
-- **B.** Vysílat nohy jádru jako `Limit`/`Stop` s vazbami (návrh), nebo je do
-  zapojení nechat `Unsupported` a jádru dát jen `bracketState`?
-- **C.** Zavírací příkaz bez značky jádro uvidí jako cizí `MARKET` na účtu.
-  Stačí auditní příznak, nebo má adaptér raději zavírat vlastním označeným
-  Marketem s množstvím z čerstvého čtení (porušuje „ne ze zastaralého
-  množství", ale je dohledatelný)?
-- **D.** Blokování nových příkazů během Flattenu na úrovni adaptéru — je to
-  správné místo, nebo patří jen jádru?
-
-## Testy (napodobený server rozšířený podle měření H)
-
-Server: nohy bez značky, vazba až od druhé zprávy, zrušení jedné nohy ruší
-obě, `CANCELLATION_FAILED` u sestry, zavření bez značky, zavření na flat
-účtu bez příkazu. Případy: přijetí/odmítnutí RMS/ztracená odpověď u
-`placeBracket`; první zpráva nohy se nevysílá; vazba nepřijde →
-`Unsupported`; nohy nevzniknou → `bracket-legs-missing`; noha zrušena jinde
-→ incident; `cancelOrder` na nohu odmítnut; Flatten: šťastná cesta, flat,
-zrušení nepotvrzeno → žádné zavření, pád spojení v každém kroku →
-`indeterminate` a žádné opakování, souběžný druhý Flatten, nový příkaz
-během Flattenu odmítnut; snímek po restartu složí bracket z řádků.
+`tests/rithmicProtection.test.ts` (24): ochrana po vyplnění, 2 ks, nohy
+nevzniknou, jen TP, noha zrušena jinde, zrušení nohy s pozicí / osiřelé
+nohy, duplicitní značka, záměr uložen před odesláním, odmítnutí RMS,
+ztracená odpověď, restart, cena stopu; zavírání: šťastná cesta, flat, jen
+vstup, nepotvrzené zrušení, selhání čtení, ztracená odpověď + stejná značka,
+odmítnutí, souběh a blokace, vstup vyplněný během rušení, noha vyplněná
+během rušení, pád spojení, restart uprostřed. 14 pojistek ověřeno záměrným
+rozbitím kódu (kontrola ochrany po připojení je zdvojená čtením snímku).

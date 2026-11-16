@@ -229,7 +229,11 @@ export class RithmicOrderBook {
       ...(type.brokerOrderType ? { brokerOrderType: type.brokerOrderType } : {}),
       quantity,
       filledQuantity,
-      ...(shape && update.price !== null ? { limitPrice: update.price } : previous?.limitPrice !== undefined ? { limitPrice: previous.limitPrice } : {}),
+      // U STOP_MARKET burza hlásí v `price` ochranný limit (změřeno: 20 ticků za spouští) — není to
+      // limitní cena příkazu a jádro by z jejích změn dělalo falešné úpravy.
+      ...(/^STOP_MARKET$/i.test(update.priceType) || (!update.priceType && previous?.orderType === 'Stop')
+        ? {}
+        : shape && update.price !== null ? { limitPrice: update.price } : previous?.limitPrice !== undefined ? { limitPrice: previous.limitPrice } : {}),
       ...(shape && update.triggerPrice !== null ? { stopPrice: update.triggerPrice } : previous?.stopPrice !== undefined ? { stopPrice: previous.stopPrice } : {}),
       // parentOrderId / linkedOrderId záměrně nevyplňujeme: jádro jimi rozlišuje vstup od SL/TP
       // a význam polí original_basket_id / linked_basket_ids u Rithmicu není změřený.
