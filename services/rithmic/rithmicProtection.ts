@@ -197,7 +197,7 @@ export class RithmicProtection {
     net: number | null,
     /** `net` je živá hodnota novější než poslední vyplnění (ne jednorázové čtení snímku). */
     netTrusted = false,
-  ): { state: BracketState; detail: string; latch?: boolean } {
+  ): { state: BracketState; detail: string; latch?: boolean; closeIfConfirmed?: boolean } {
     const intent = this.bracketByEntry(accountId, entryId);
     const entry = orderOf(entryId);
     if (!intent || !entry) return { state: 'unknown', detail: 'vstup není v knize nebo k němu není záznam' };
@@ -229,7 +229,7 @@ export class RithmicProtection {
       // Expozici zavřelo něco jiného (zavření pozice, ruční příkaz).
       if (active.length) return orphan('pozice je 0');
       // Nula z jednoho čtení snímku může být starší než vyplnění → bracket se jí nezavírá natrvalo.
-      return { state: 'done', detail: '', latch: netTrusted && TERMINAL.has(entry.status) };
+      return { state: 'done', detail: '', latch: netTrusted && TERMINAL.has(entry.status), closeIfConfirmed: !netTrusted && TERMINAL.has(entry.status) };
     }
     const problems: string[] = [];
     for (const role of ['stop', 'target'] as const) {

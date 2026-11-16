@@ -309,6 +309,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     livePositions.clear();
     positionSeq.clear();
     resolving.clear();
+    queuedPositionRead.clear();
     for (const entry of bracketTimers.values()) clearTimeout(entry.timer);
     bracketTimers.clear();
     positionSeenAt.clear();
@@ -617,8 +618,18 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     }, 'příkazy');
   }
 
+  /**
+   * Čtení pozic, které ještě čeká ve frontě (nezačalo) — další zájemci ho sdílejí. Čtení, které
+   * začne až po žádosti, je pro žadatele vždy dost čerstvé; bez sdílení by desítky kontrol
+   * ochrany po jedné změně pozice zaplnily frontu na sekundy a zdržely i zavírání pozice.
+   */
+  const queuedPositionRead = new Map<number, { source: RithmicClient; promise: Promise<BrokerPosition[]> }>();
+
   function readPositions(source: RithmicClient, account: number): Promise<BrokerPosition[]> {
-    return serialRead(async () => {
+    const queued = queuedPositionRead.get(account);
+    if (queued && queued.source === source) return queued.promise;
+    const promise = serialRead(async () => {
+      queuedPositionRead.delete(account);
       const text = textByNumber.get(account);
       if (text === undefined) throw new Error(`Rithmic: účet ${account} není v aktuálním přihlášení`);
       for (let attempt = 0; attempt < POSITION_READ_ATTEMPTS; attempt += 1) {
@@ -644,6 +655,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       }
       throw new Error('Rithmic: pozice se během čtení opakovaně měnily — zkus znovu');
     }, 'pozice');
+    queuedPositionRead.set(account, { source, promise });
+    return promise;
   }
 
   async function connectOnce(): Promise<void> {
@@ -889,10 +902,20 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           return;
         }
         const result = protection.bracketState(account, entryId, orderOf, net, trustedLivePosition(account, intent.symbol) !== undefined);
-        if (result.latch) {
+        // Skončený bracket: zavřít natrvalo hned při důvěryhodné živé pozici, jinak až když totéž
+        // potvrdí druhá kontrola (jedno čtení snímku může být pozadu). Bez zavření by se každý
+        // dnešní vstup kontroloval znovu při každé změně pozice.
+        const confirmedClose = result.closeIfConfirmed && bracketSuspect.get(key) === 'close';
+        if (result.latch || confirmedClose) {
           protection.closeBracket(account, entryId);
           bracketReported.delete(key);
+          bracketSuspect.delete(key);
           void saveProtection();
+          return;
+        }
+        if (result.closeIfConfirmed) {
+          bracketSuspect.set(key, 'close');
+          scheduleBracketCheck(source, account, entryId, true);
           return;
         }
         // Noha ještě čeká na potvrzení burzy: jedna další kontrola místo předčasného poplachu.
