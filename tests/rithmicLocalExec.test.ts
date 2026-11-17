@@ -457,6 +457,8 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
     await sleep(120);
     expect(t.exec.state().closes).toHaveLength(1);
     expect(t.exec.state().closes[0]).toMatchObject({ symbol: 'ESZ6', side: 'long', quantity: 1, entryAvg: 6990, exitAvg: 6980, pointsTotal: -10, reason: 'sl' });
+    // šipky pro graf: vstup a výstup posledního obchodu, obchod už není otevřený
+    expect(t.exec.state().marks).toEqual([{ symbol: 'ESZ6', open: false, fills: [expect.objectContaining({ role: 'entry', side: 'Buy', price: 6990, quantity: 1 }), expect.objectContaining({ role: 'exit', side: 'Sell', price: 6980, quantity: 1 })] }]);
     t.broker.stop();
   });
 });

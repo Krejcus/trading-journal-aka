@@ -17,7 +17,7 @@ import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
 import { RithmicPendingJournal, type PendingRithmicCommand } from '../lib/rithmicPendingJournal';
 import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
-import type { LiveChartWorkingOrders } from './useLiveChartData';
+import { liveChartFills, type LiveChartWorkingOrders } from './useLiveChartData';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
 export const RITHMIC_SOLO_ACCOUNT = 1;
@@ -712,7 +712,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   // × u SL/TP jen když ho služba opravdu provede: právě jedna samostatná ochrana (ne noha vstupu, ne svázaný pár).
   const standalone = orders.filter((order) => order.status === 'working' && order.tag?.startsWith('uiprot-') === true);
   const legsRemovable = standalone.length === 1 && orders.filter((order) => order.status === 'working' && (order.role === 'stop' || order.role === 'target')).length === 1;
+  // Šipky vstupu a výstupu v grafu z vyplnění brokera (poslední nebo právě otevřený obchod). Jen zobrazení.
+  const marks = state?.marks?.find((item) => item.symbol === symbol) ?? null;
+  const marksKey = marks ? `${marks.open}:${marks.fills.map((fill) => `${fill.id}@${fill.price}`).join('|')}` : 'none';
+  const liveFills = useMemo(() => liveChartFills(marks && marks.fills.length ? { fills: marks.fills, open: marks.open, symbol } : null), [marksKey, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
+    liveFills,
     legsRemovable,
     reducible, reduceOne,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,

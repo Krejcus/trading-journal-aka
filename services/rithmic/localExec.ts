@@ -107,7 +107,11 @@ export interface LocalExecState {
   blocked: string | null;
   /** Poslední zavřené obchody spočítané z vyplnění brokera — JEN zobrazení (karta zavření), nic neautorizuje. */
   closes: LocalExecClose[];
+  /** Vyplnění posledního (nebo právě otevřeného) obchodu pro šipky vstupu a výstupu v grafu — JEN zobrazení. */
+  marks: Array<{ symbol: string; open: boolean; fills: LocalExecFillMark[] }>;
 }
+
+export interface LocalExecFillMark { id: string; orderId: string; at: number; price: number; side: OrderSide; role: 'entry' | 'exit'; quantity: number }
 
 /** Zavřený obchod: průměry z vyplnění, výsledek v bodech × kusech (bez poplatků). `reason` jen když je jistý. */
 export interface LocalExecClose {
@@ -238,6 +242,13 @@ export class LocalExec {
     if (trip.seen.has(fill.fillId)) return;
     if (trip.net === 0) trip.sign = Math.sign(signed) as 1 | -1;
     trip.seen.add(fill.fillId);
+    // Šipky v grafu: nový obchod (z nuly) smaže šipky předchozího; vyplnění ve směru obchodu = vstup, proti = výstup.
+    if (trip.net === 0) this.marks.set(fill.symbol, { open: true, fills: [] });
+    const mark = this.marks.get(fill.symbol) ?? { open: true, fills: [] };
+    mark.fills.push({ id: fill.fillId, orderId: fill.brokerOrderId, at: fill.filledAt, price: fill.price, side: fill.side, role: Math.sign(signed) === trip.sign ? 'entry' : 'exit', quantity: fill.quantity });
+    if (mark.fills.length > 60) mark.fills.shift();
+    mark.open = trip.net + signed !== 0;
+    this.marks.set(fill.symbol, mark);
     const next = trip.net + signed;
     if (Math.sign(signed) === trip.sign) { trip.inQty += fill.quantity; trip.inValue += fill.quantity * fill.price; }
     else { trip.outQty += fill.quantity; trip.outValue += fill.quantity * fill.price; }
@@ -391,6 +402,7 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
+  private readonly marks = new Map<string, { open: boolean; fills: LocalExecFillMark[] }>();
   /** Kolikrát služba poslala zavření kontraktu — výměna vstupu si číslo pamatuje a po brzdě nepokračuje. */
   private readonly flattenCount = new Map<string, number>();
   private consentWatchAt = 0;
@@ -604,6 +616,7 @@ export class LocalExec {
       brackets: accountId === null ? [] : brackets.filter((b) => !b.closed).map((b) => ({ entryId: b.entryId, symbol: b.symbol, ...this.broker.bracketState(accountId, b.entryId) })),
       incidents: [...this.incidents],
       closes: [...this.closes],
+      marks: [...this.marks].map(([symbol, mark]) => ({ symbol, open: mark.open, fills: [...mark.fills] })),
       rejections: [...this.rejections],
       blocked: this.blocked,
     };
