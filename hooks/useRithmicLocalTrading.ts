@@ -541,7 +541,35 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     } finally { closingNow.current = false; }
   }, [send]);
 
+  /**
+   * Částečné zavření: jen pozice ze dvou a více vlastních vstupů se SL i TP (každý vstup = jedna část).
+   * Kolik kusů se zavře a jestli to opravdu jde, rozhoduje služba; tady je jen nabídka tlačítka.
+   */
+  const reducible = useMemo(() => {
+    if (!net || Math.abs(net.netQuantity) < 2) return null;
+    const own = (list: LocalExecOrderView[]) => list.length >= 2 && list.every((order) => order.status === 'working' && !order.tag?.startsWith('uiprot-') && order.entryId !== undefined);
+    if (!own(legView.stops) || !own(legView.targets) || legView.stops.length !== legView.targets.length) return null;
+    // Služba zavře část s méně ochranným SL; při shodě tu novější.
+    const long = net.netQuantity > 0;
+    const first = [...legView.stops].sort((a, b) => (long ? a.price! - b.price! : b.price! - a.price!) || (a.entryId! < b.entryId! ? 1 : -1))[0];
+    return { quantity: first.quantity - first.filledQuantity };
+  }, [net?.netQuantity, legView.stops, legView.targets]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reducing = useRef(false);
+  const reduceOne = useCallback(async (): Promise<{ status: 'sent' | 'blocked' | 'unknown'; text: string | null }> => {
+    if (reducing.current) return { status: 'blocked', text: 'Částečné zavření už běží — počkej na výsledek.' };
+    const sym = symbolRef.current;
+    if (!sym) return { status: 'blocked', text: 'Kontrakt není znám — nic se neodeslalo.' };
+    reducing.current = true;
+    try {
+      const before = stateRef.current?.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0;
+      measureRef.current?.('Částečné zavření → pozice menší', (s) => Math.abs(s.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0) < Math.abs(before));
+      const reply = await send({ op: 'reduce', clientId: newId(), symbol: sym });
+      if (reply.ok) return { status: 'sent', text: null };
+      return reply.sent === false ? { status: 'blocked', text: reply.error ?? 'Neodesláno.' } : { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
+    } finally { reducing.current = false; }
+  }, [send]);
   return {
+    reducible, reduceOne,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
     available, helloFresh, readOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */

@@ -70,6 +70,17 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     setCloseBusy(true);
     void closeNow().then(result => setCloseNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => { closeRunning.current = false; setCloseBusy(false); });
   }, [closeNow]);
+  const [reduceBusy, setReduceBusy] = useState(false);
+  const [reduceNote, setReduceNote] = useState<{ at: number; text: string } | null>(null);
+  const { reduceOne } = trading;
+  const reduceRunning = useRef(false);
+  const reducePart = useCallback(() => {
+    if (reduceRunning.current) return; // dvojklik před překreslením
+    reduceRunning.current = true;
+    setReduceBusy(true);
+    // Nejistý výsledek zapisuje spojení mezi nejisté příkazy; tady jen důvod, proč nic neodešlo.
+    void reduceOne().then(result => setReduceNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => { reduceRunning.current = false; setReduceBusy(false); });
+  }, [reduceOne]);
   const downSince = useRef(0);
   const wasOpen = useRef(false);
   if (link === 'open') wasOpen.current = true;
@@ -78,6 +89,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
     ...uncertainList.map(item => card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
     ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
+    ...(reduceNote ? [card(`rithmic-reduce:${reduceNote.at}`, 'amber', 'Pozor', 'Částečné zavření neodešlo', reduceNote.text)] : []),
     // Výpadek hlásí karta jen krátce (po obnově by lhala); trvalý stav nese štítek účtu v hlavičce.
     ...(link !== 'open' ? [{ ...card(`rithmic-link-down:${downSince.current}`, 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.'), sticky: false, ms: 8_000 }] : []),
     // Krátká karta (stav se mění s každým posunem; trvalá by ukazovala staré ceny).
@@ -89,12 +101,13 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
       : card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
-  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote, trading.readOnly, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [uncertainList, closeNote, reduceNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote, trading.readOnly, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
   const offerBrake = trading.mayHaveExposure || uncertainList.length > 0;
-  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy]);
+  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
+    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });

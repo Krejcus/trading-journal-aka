@@ -259,6 +259,8 @@ export interface LiveTradingSolo {
   singleLeg?: boolean;
   /** Brzda: zavře pozici hned, mimo zámek jednoho příkazu obrazovky (nečeká na visící příkaz). */
   emergencyClose?: { run: () => void; busy: boolean };
+  /** Částečné zavření: zavře jednu z více částí pozice (každá má vlastní SL/TP). Nabízí se, jen když to služba umí. */
+  reduce?: { run: () => void; busy: boolean; quantity: number };
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
@@ -1072,6 +1074,14 @@ const LiveTradingScreen: React.FC<Props> = ({
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
         {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
+        {solo?.reduce && <button
+          type="button"
+          data-solo-reduce
+          disabled={solo.reduce.busy}
+          onClick={solo.reduce.run}
+          title="Zavře jednu část pozice hned u trhu (její TP se posune za trh, její SL zruší burza). Zbytek pozice si nechá své SL/TP."
+          className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-500 hover:bg-amber-500/20 disabled:cursor-wait disabled:opacity-60"
+        >{solo.reduce.busy ? 'Zavírám část…' : `Zavřít ${solo.reduce.quantity} ks`}</button>}
         {solo?.emergencyClose && <button
           type="button"
           data-solo-emergency-close

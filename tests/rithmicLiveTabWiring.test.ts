@@ -201,6 +201,13 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
   });
 
+  it('částečné zavření: tlačítko jen když to služba umí; rozhoduje a posílá služba jedním příkazem', () => {
+    expect(screen).toMatch(/\{solo\?\.reduce && <button/);
+    expect(chart).toMatch(/\.\.\.\(usable && trading\.reducible \? \{ reduce: \{ run: reducePart, busy: reduceBusy, quantity: trading\.reducible\.quantity \} \} : \{\}\)/);
+    expect(hook).toMatch(/if \(!net \|\| Math\.abs\(net\.netQuantity\) < 2\) return null;/);
+    expect(hook.match(/op: 'reduce'/g)).toHaveLength(1);
+  });
+
   it('posun čekajícího Stop vstupu: jen přes Rithmic (jeden účet), jen 1 kontrakt, s ochranou i bez', () => {
     const stop = (patch = {}) => ({ kind: 'pending', side: 'long', quantity: 1, entry: 110, entryType: 'Stop', stop: 107, target: 116, ...patch }) as never;
     // cesta kopírky Stop dál neposouvá
