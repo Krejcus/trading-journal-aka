@@ -1,6 +1,6 @@
 # Rithmic — částečné zavření pozice (návrh, 17. 11. 2026)
 
-Stav: první verze postavená ve službě (op `reduce`), chování Rithmicu se měří na Rithmic Test; UI až po měření a oponentuře.
+Stav: POSTAVENO 17. 11. (služba op `reduce` + tlačítko „Zavřít N ks" v hlavičce LIVE), změřeno na Rithmic Test.
 
 ## Co víme o Rithmicu (změřeno)
 
@@ -43,3 +43,14 @@ Souhlas se skutečným účtem: `reduce` expozici jen snižuje → jde i po vypr
 
 Pozice 2 ks ze dvou vstupů → `reduce` → ověřit: vyplnění TP za trhem, zrušení sesterského SL burzou, druhá ochrana
 beze změny, pořadí zpráv, doba.
+
+## Výsledek měření (17. 11. 2026, Rithmic Test, MNQZ6)
+
+- Skript `scripts/rithmic/measureReduce.ts`: odpověď služby 149 ms a 173 ms; stav „1 ks + jedna ochrana" za 161–284 ms.
+  Sesterský SL zrušila burza sama, druhá ochrana beze změny, žádný incident. Vybrala se část s méně ochranným SL.
+- V appce (tlačítko): při ceně počítané od POSLEDNÍHO OBCHODU se na pomalém trhu výstup do 3 s nevyplnil → karta
+  „Částečné zavření: výsledek NEZNÁMÝ", nic se neopakovalo; vyplnil se o pár sekund později. Proto se cena počítá
+  od nabídky kupců / prodejců (`serverQuote`), poslední obchod je jen pojistka.
+- Karta zavření po dozavření brzdou: 2 ks, vstup 28068,25, výstup 28064,875, −6,75 b, důvod „ručně" — sedí.
+
+Neověřeno: nevyplněný výstup na skutečném trhu, souběh s vyplněním SL téže části, pozice se 3 a více částmi (strop je 2).
