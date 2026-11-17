@@ -1007,6 +1007,36 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     t.broker.stop();
   });
 
+  it('Zavřít během částečného zavření: dokud výstup 1 ks pracuje, druhé zavření neodejde (pozice se neobrátí)', async () => {
+    const { t } = await twoContracts();
+    const pending = t.run({ op: 'reduce', clientId: 'sp7', symbol: 'ESZ6' });
+    await sleep(120);
+    const exit = exitOrder(t)!;
+    const flat = t.run({ op: 'flatten', clientId: 'sp7f', symbol: 'ESZ6' });
+    await sleep(200);
+    // jediný tržní výstup je ten z dělení; zavírací příkaz bez značky nevznikl
+    const markets = [...t.server.orders.values()].filter((o) => o.priceType === 2);
+    expect(markets.filter((o) => !o.userTag.startsWith('ui-red-'))).toHaveLength(0);
+    t.server.fill(exit.basketId, 6999);
+    await pending.catch(() => undefined);
+    await flat.catch(() => undefined);
+    await sleep(300);
+    const net = t.exec.state().positions[0]?.netQuantity ?? 0;
+    expect(net).toBeGreaterThanOrEqual(0);
+    t.broker.stop();
+  });
+
+  it('vstup s clientId red-… se odmítne (značka výstupu dělení se nesmí dát zaměnit) a stejné dělení podruhé neprojde', async () => {
+    const { t } = await twoContracts();
+    expect(await t.run(entry({ clientId: 'red-x1', limitPrice: 6985, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/vyhrazený/) });
+    const pending = t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6' });
+    await sleep(120);
+    t.server.fill(exitOrder(t)!.basketId, 6999);
+    expect(await pending).toMatchObject({ ok: true });
+    expect(await t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
   it('jeden vstup s 1 kusem dál částečně zavřít nejde', async () => {
     const t = await setup({ config: { positionSettleMs: 20 } });
     const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));

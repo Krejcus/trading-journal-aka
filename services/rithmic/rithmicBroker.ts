@@ -1305,8 +1305,9 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       proof.ordersOk && proof.stable && proof.net === 0 && proof.working.length === 0 && !awaitingLegs()
       && !inflightHere();
     const settleMs = config.exitSettleMs ?? 1_500;
-    /** Pracující tržní příkaz BEZ značky = zavírací příkaz (jen ten Rithmic vytváří neoznačený) se ještě nevyplnil. */
-    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market' && !o.tag);
+    /** Pracující tržní příkaz BEZ značky = zavírací příkaz (jen ten Rithmic vytváří neoznačený) se ještě nevyplnil.
+     *  Stejně se počítá výstup dělení vstupu (`ui-red-`): dokud pracuje, druhé zavření by pozici mohlo obrátit. */
+    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market' && (!o.tag || o.tag.startsWith('ui-red-')));
     /** Návrat bez jediného zápisu: záznam operace se zahodí, ať stejná značka smí zavřít později. */
     const abandon = async (result: BrokerLiquidateResult): Promise<BrokerLiquidateResult> => {
       protection.dropFlatten(request.tag);
@@ -1612,9 +1613,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     },
     async endBracketResize(accountId, entryId, exitedQuantity) {
       protection.endResize(accountId, entryId, exitedQuantity);
-      await saveProtection();
+      const saved = await saveProtection();
       const active = client;
       if (active) scheduleBracketCheck(active, accountId, entryId);
+      // Neuložený záznam = po pádu by ochrana počítala s jinou expozicí; volající to musí ohlásit, ne vrátit úspěch.
+      if (!saved) throw new Error('Rithmic: záznam ochrany po dělení vstupu nejde uložit');
     },
     snapshotAveragePrice: (account, symbol) => snapshotAverage.get(`${account}:${symbol}`) ?? null,
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
