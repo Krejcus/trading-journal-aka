@@ -275,6 +275,32 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
       need(kinds.includes('pending-add-cancelled'), `chybí záznam o zrušení přikoupení: ${kinds.join(', ')}`);
       return 'po zavření pozice služba čekající přikoupení zrušila';
     }],
+    ['S15', 'JEDEN vstup 2 ks se SL/TP → zavřít 1 ks (ochrana se zmenší na 1 ks) → zbytek zavře brzda', async () => {
+      await marketBracket(2);
+      need(net() === 2 && working('stop')[0].quantity === 2, `2 ks: ${brief(cur())}`);
+      const result = ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 2'), 'zavření 1 ks ze 2');
+      need(result.split === true, `výsledek: ${JSON.stringify(result)}`);
+      need(await until(() => net() === 1 && working('stop').length === 1 && working('target').length === 1 && working('stop')[0].quantity === 1 && working('target')[0].quantity === 1), `po zavření 1 ks: ${brief(cur())}`);
+      await wait(1_300);
+      need(!cur().blocked, `blok: ${cur().blocked}`);
+      ok(await send({ op: 'flatten', clientId: cid(), symbol: sym }, 'zavření'), 'zavření');
+      need(await until(flat, 10_000), 'po zavření něco zbylo');
+      return '2 ks → 1 ks s ochranou 1 ks → 0';
+    }],
+    ['S16', 'JEDEN vstup 3 ks → dvakrát zavřít 1 ks → zbyde 1 ks s ochranou 1 ks', async () => {
+      await marketBracket(3);
+      need(net() === 3, `3 ks: ${brief(cur())}`);
+      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 3'), 'první zavření');
+      need(await until(() => net() === 2 && working('stop')[0]?.quantity === 2 && working('target')[0]?.quantity === 2), `po prvním: ${brief(cur())}`);
+      await wait(1_500);
+      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 2'), 'druhé zavření');
+      need(await until(() => net() === 1 && working('stop')[0]?.quantity === 1 && working('target')[0]?.quantity === 1), `po druhém: ${brief(cur())}`);
+      await wait(1_300);
+      need(!cur().blocked, `blok: ${cur().blocked}`);
+      ok(await send({ op: 'flatten', clientId: cid(), symbol: sym }, 'zavření'), 'zavření');
+      need(await until(flat, 10_000), 'po zavření něco zbylo');
+      return '3 → 2 → 1 → 0';
+    }],
   ];
 
   // Sada sama nic cizího neuklízí: nečistý účet na začátku = konec (pozice nebo příkaz mohou být ruční).

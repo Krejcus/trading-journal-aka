@@ -27,7 +27,21 @@ export interface BracketIntent {
   createdAt: number;
   /** Bracket skončil (vstup i nohy konečné, žádná vlastní expozice). Dál se nehlídá. */
   closedAt?: number;
+  /**
+   * Kusy tohoto vstupu zavřené MIMO jeho nohy (částečné zavření jednoho vstupu s víc kusy): o tolik je
+   * expozice vstupu menší, než kolik plyne z plnění vstupu a noh. Trvalé — po restartu se z příkazů nepozná.
+   */
+  exitedOutside?: number;
+  /**
+   * Právě běží zmenšení ochrany na `to` kusů (změna množství nohy mění na burze obě nohy — změřeno 17. 11. 2026).
+   * Dokud trvá, platí za správné množství nohy i `to`. Zapisuje se PŘED zápisem; ukončí ho potvrzený výstup
+   * (pak přibude `exitedOutside`), nebo neúspěch (pak je ochrana menší než expozice a hlásí se jako neúplná).
+   */
+  resizing?: { to: number; at: number };
 }
+
+/** Jak dlouho smí noha během zmenšování ochrany mít už nové množství, než se nesoulad začne hlásit. */
+const RESIZE_TOLERANCE_MS = 10_000;
 
 export type FlattenPhase = 'started' | 'canceling' | 'exit-sent' | 'done' | 'interrupted';
 
@@ -217,7 +231,7 @@ export class RithmicProtection {
       if (!TERMINAL.has(entry.status)) return { state: 'entry-working', detail: '' };
       return active.length ? orphan('vstup skončil bez vyplnění') : { state: 'done', detail: '', latch: intent.closedAt === undefined };
     }
-    const exposure = entry.filledQuantity - legs.reduce((sum, leg) => sum + (leg.order?.filledQuantity ?? 0), 0);
+    const exposure = entry.filledQuantity - legs.reduce((sum, leg) => sum + (leg.order?.filledQuantity ?? 0), 0) - (intent.exitedOutside ?? 0);
     // Přeplnění se kontroluje PŘED západkou: nohy vyplněné víc než vstup nejsou nikdy „hotovo".
     if (exposure < 0) {
       return { state: 'unprotected', detail: `nohy vyplnily o ${-exposure} ks víc než vstup — pozice může být obrácená` };
@@ -251,7 +265,9 @@ export class RithmicProtection {
       }
       // Každá role zvlášť proti expozici bracketu (ne součet noh, ne pozice účtu).
       const remaining = working[0].order!.quantity - working[0].order!.filledQuantity;
-      if (remaining !== exposure) problems.push(`${name}: ${remaining} ks proti expozici ${exposure}`);
+      // Během zmenšování ochrany smí noha mít už nové množství (druhá ho dostane vzápětí).
+      // Tolerance je krátká: nedoběhne-li zmenšení do 10 s, hlásí se skutečný stav (ochrana menší než expozice).
+      if (remaining !== exposure && !(intent.resizing && this.now() - intent.resizing.at < RESIZE_TOLERANCE_MS && remaining === intent.resizing.to)) problems.push(`${name}: ${remaining} ks proti expozici ${exposure}`);
     }
     return problems.length ? { state: 'unprotected', detail: problems.join('; ') } : { state: 'protected', detail: '' };
   }
@@ -267,6 +283,23 @@ export class RithmicProtection {
     if (!intent || intent.closedAt === undefined) return false;
     delete intent.closedAt;
     return true;
+  }
+
+  /** Začátek zmenšení ochrany vstupu na `to` kusů (zapsat a uložit PŘED zápisem k brokerovi). */
+  beginResize(accountId: number, entryId: string, to: number): boolean {
+    const intent = this.bracketByEntry(accountId, entryId);
+    if (!intent || intent.closedAt !== undefined || intent.resizing) return false;
+    intent.resizing = { to, at: this.now() };
+    return true;
+  }
+
+  /** Konec zmenšení: `exitedQuantity` > 0 = tolik kusů prokazatelně odešlo mimo nohy; 0 = výstup neproběhl. */
+  endResize(accountId: number, entryId: string, exitedQuantity: number): void {
+    const intent = this.bracketByEntry(accountId, entryId);
+    if (!intent) return;
+    delete intent.resizing;
+    // Prokázaný výstup se zapíše i dodatečně (výstup doběhl až po lhůtě).
+    if (exitedQuantity > 0) intent.exitedOutside = (intent.exitedOutside ?? 0) + exitedQuantity;
   }
 
   closeBracket(accountId: number, entryId: string): void {

@@ -912,6 +912,73 @@ describe('místní služba: částečné zavření přes vlastní TP jedné ochr
   });
 });
 
+describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (zmenšit ochranu, pak zavřít 1 ks)', () => {
+  async function twoContracts() {
+    const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 400, protectiveGraceMs: 40 } });
+    const placed = await t.run(entry({ quantity: 2, limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    t.server.fill(entryId, 6990);
+    await sleep(150);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    return { t, entryId };
+  }
+  const exitOrder = (t: Awaited<ReturnType<typeof twoContracts>>['t']) => [...t.server.orders.values()].find((o) => o.userTag.startsWith('ui-red-') && o.status === 'open');
+
+  it('2 ks → ochrana na 1 ks → Market 1 ks → pozice 1 ks s ochranou 1 ks, bez incidentu', async () => {
+    const { t, entryId } = await twoContracts();
+    const pending = t.run({ op: 'reduce', clientId: 'sp1', symbol: 'ESZ6' });
+    await sleep(120);
+    // ochrana už je na 1 ks (obě nohy) a čeká výstup 1 ks
+    const legs = [...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open');
+    expect(legs.map((o) => o.quantity)).toEqual([1, 1]);
+    const exit = exitOrder(t)!;
+    expect(exit).toMatchObject({ side: 2, quantity: 1, priceType: 2 });
+    t.server.fill(exit.basketId, 6999);
+    expect(await pending).toMatchObject({ ok: true, result: { quantity: 1, split: true } });
+    await sleep(150);
+    const state = t.exec.state();
+    expect(state.positions).toEqual([expect.objectContaining({ netQuantity: 1 })]);
+    expect(state.orders.filter((o) => o.role === 'stop' || o.role === 'target').map((o) => o.quantity)).toEqual([1, 1]);
+    expect(state.blocked).toBeNull();
+    expect(t.broker.bracketState(t.broker.accountIds()[0], entryId).state).toBe('protected');
+    // zbylý kus zavře TP → vše hotovo, žádný sirotek
+    const target = [...t.server.orders.values()].find((o) => o.parent === entryId && o.priceType === 1 && o.status === 'open')!;
+    t.server.fill(target.basketId, 7030);
+    await sleep(200);
+    expect(t.exec.state().positions).toEqual([]);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('burza zavření 1 ks odmítne → ochrana kryje 1 ks z 2: incident, vstupy stojí, nic se neopakuje', async () => {
+    const { t, entryId } = await twoContracts();
+    const frames = t.frames();
+    const pending = t.run({ op: 'reduce', clientId: 'sp2', symbol: 'ESZ6' });
+    await sleep(60);
+    t.server.controls.rejectNextOrder = 'outside bands';
+    const reply = await pending;
+    expect(reply).toMatchObject({ ok: false, sent: 'unknown' });
+    expect(t.frames()).toBeLessThanOrEqual(frames + 1);
+    expect(t.exec.state().blocked).toMatch(/^reduce-/);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    // ochrana je opravdu už jen na 1 ks; další posuny noh a přikoupení stojí do potvrzení
+    expect([...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open').map((o) => o.quantity)).toEqual([1, 1]);
+    expect(await t.run({ op: 'reduce', clientId: 'sp2b', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
+  it('jeden vstup s 1 kusem dál částečně zavřít nejde', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    expect(await t.run({ op: 'reduce', clientId: 'sp3', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: přikoupení a posun dvou ochran', () => {
   const add = (extra: Record<string, unknown> = {}) => entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030, ...extra });
   async function inPosition(config: Record<string, unknown> = {}) {

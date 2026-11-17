@@ -138,6 +138,13 @@ export interface RithmicBrokerPort extends BrokerPort {
   accountIds(): number[];
   accountName(accountId: number): string | null;
   readQuantityLimits(accountId: number, product: string): Promise<RithmicQuantityLimits | null>;
+  /**
+   * Zmenší ochranu vlastního vstupu na `quantity` kusů (jedna změna množství TP nohy; burza změní obě nohy —
+   * změřeno 17. 11. 2026). Záměr se uloží před zápisem. Vrátí se až po potvrzení obou noh stavem. Po návratu
+   * MUSÍ volající zavolat `endBracketResize` (s počtem kusů, které prokazatelně zavřel mimo nohy, nebo 0).
+   */
+  beginBracketResize(accountId: number, entryBrokerOrderId: string, quantity: number): Promise<void>;
+  endBracketResize(accountId: number, entryBrokerOrderId: string, exitedQuantity: number): Promise<void>;
   /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
   executionNet(accountId: number, symbol: string): number | null;
   /** Průměrná vstupní cena z posledního snímku pozic — JEN zobrazení (čára pozice po obnově spojení). */
@@ -892,7 +899,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           const entry = book.get(id, intent.entryId);
           if (!entry || entry.filledQuantity === 0) continue;
           const legFills = protection.legsOf(id, intent.entryId).reduce((sum, leg) => sum + (book.get(id, leg.orderId)?.filledQuantity ?? 0), 0);
-          if (entry.filledQuantity - legFills > 0) {
+          if (entry.filledQuantity - legFills - (intent.exitedOutside ?? 0) > 0) {
             recheck.add(intent.symbol);
             if ((expectedNet.get(`${id}:${intent.symbol}`) ?? 0) === 0) expectedNet.set(`${id}:${intent.symbol}`, null);
           }
@@ -1560,6 +1567,54 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       if (client !== active) return null;
       const identity = active.accounts.find(item => item.accountId === name);
       return identity ? quantityLimits(name, product, accountRows, productRows, identity) : null;
+    },
+    async beginBracketResize(accountId, entryId, quantity) {
+      const active = activeClient();
+      const text = accountText(accountId, true);
+      const intent = protection.bracketByEntry(accountId, entryId);
+      if (!intent || intent.closedAt !== undefined) throw new BrokerRequestNotSentError(`Rithmic: vstup ${entryId} nemá hlídanou ochranu`);
+      const exchange = rithmicExchangeForSymbol(intent.symbol);
+      if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${intent.symbol}`);
+      const legsNow = () => protection.legsOf(accountId, entryId).map((leg) => book.get(accountId, leg.orderId)).filter((order): order is BrokerOrder => order !== undefined && !TERMINAL.has(order.status));
+      const stopLeg = legsNow().find((order) => order.stopPrice !== undefined);
+      const targetLeg = legsNow().find((order) => order.stopPrice === undefined && order.limitPrice !== undefined);
+      if (legsNow().length !== 2 || !stopLeg || !targetLeg || stopLeg.status !== 'working' || targetLeg.status !== 'working') throw new BrokerRequestNotSentError('Rithmic: ochrana nemá právě jeden pracující SL a TP');
+      const current = targetLeg.quantity;
+      if (stopLeg.quantity !== current || stopLeg.filledQuantity !== 0 || targetLeg.filledQuantity !== 0) throw new BrokerRequestNotSentError('Rithmic: nohy ochrany nemají shodné nevyplněné množství');
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity >= current) throw new BrokerRequestNotSentError(`Rithmic: ochranu ${current} ks nejde zmenšit na ${quantity}`);
+      assertNotFlattening(accountId, intent.symbol, 'zmenšení ochrany');
+      if (!protection.beginResize(accountId, entryId, quantity)) throw new BrokerRequestNotSentError('Rithmic: zmenšení ochrany už běží');
+      if (!(await saveProtection())) {
+        protection.endResize(accountId, entryId, 0);
+        throw new BrokerRequestNotSentError('Rithmic: záznam o zmenšení ochrany nejde uložit — neodesílám');
+      }
+      const still = book.get(accountId, targetLeg.brokerOrderId);
+      if (client !== active || !still || still.status !== 'working' || still.quantity !== current || still.filledQuantity !== 0) {
+        protection.endResize(accountId, entryId, 0);
+        void saveProtection();
+        throw new BrokerRequestNotSentError('Rithmic: ochrana se během ukládání změnila — neodesílám');
+      }
+      try {
+        await active.modifyOrder({ accountId: text, basketId: targetLeg.brokerOrderId, symbol: intent.symbol, exchange, quantity, priceType: 'LIMIT', price: targetLeg.limitPrice });
+      } catch (error) {
+        // Prokazatelně odmítnuto = ochrana je beze změny; jinak zůstává záměr a rozhodne volající (incident).
+        if (error instanceof RithmicRequestError && error.outcome !== 'unknown') { protection.endResize(accountId, entryId, 0); void saveProtection(); }
+        return rethrowWrite(error, 'zmenšení ochrany');
+      }
+      const deadline = now() + (config.confirmWaitMs ?? 1_500);
+      for (;;) {
+        const stop = book.get(accountId, stopLeg.brokerOrderId);
+        const target = book.get(accountId, targetLeg.brokerOrderId);
+        if (stop?.status === 'working' && target?.status === 'working' && stop.quantity === quantity && target.quantity === quantity && stop.filledQuantity === 0 && target.filledQuantity === 0) return;
+        if (now() >= deadline || client !== active) throw new Error('Rithmic: zmenšení ochrany není potvrzené stavem obou noh');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    async endBracketResize(accountId, entryId, exitedQuantity) {
+      protection.endResize(accountId, entryId, exitedQuantity);
+      await saveProtection();
+      const active = client;
+      if (active) scheduleBracketCheck(active, accountId, entryId);
     },
     snapshotAveragePrice: (account, symbol) => snapshotAverage.get(`${account}:${symbol}`) ?? null,
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),

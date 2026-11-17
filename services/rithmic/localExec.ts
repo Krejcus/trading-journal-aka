@@ -482,6 +482,23 @@ export class LocalExec {
     if (this.incidents.length !== before) this.changed();
   }
 
+  /** Částečné zavření jednoho vstupu, jehož výstup nebyl do lhůty potvrzen: dokončí se podle stavu výstupního příkazu. */
+  private readonly pendingResize = new Map<string, { entryId: string; exitTag: string; expectNet: number }>();
+  private watchPendingResize(): void {
+    const accountId = this.broker.accountIds()[0];
+    if (accountId === undefined) return;
+    for (const [symbol, item] of this.pendingResize) {
+      const exit = [...this.orders.values()].find((order) => order.tag === item.exitTag);
+      if (!exit) continue;
+      if (exit.status === 'filled' && (this.positions.get(symbol)?.netQuantity ?? 0) === item.expectNet && this.broker.executionNet(accountId, symbol) === item.expectNet) {
+        this.pendingResize.delete(symbol);
+        void this.broker.endBracketResize(accountId, item.entryId, exit.filledQuantity).catch(() => undefined);
+      } else if (exit.status === 'rejected' || exit.status === 'canceled') {
+        this.pendingResize.delete(symbol);
+        void this.broker.endBracketResize(accountId, item.entryId, 0).catch(() => undefined);
+      }
+    }
+  }
   private readonly addCancelTried = new Set<string>();
   private readonly addFlatSince = new Map<string, number>();
   private addTimer: ReturnType<typeof setTimeout> | null = null;
@@ -552,6 +569,7 @@ export class LocalExec {
   private watchProtective(): void {
     this.watchConsent();
     this.watchPendingAdds();
+    this.watchPendingResize();
     const grace = this.config.protectiveGraceMs ?? 3_000;
     let recheckIn: number | null = null;
     for (const order of this.orders.values()) {
@@ -1537,6 +1555,80 @@ export class LocalExec {
               return refuse('ochrana pozice není v očekávaném tvaru — částečné zavření nejde');
             }
             parts.push({ entryId: bracket.entryId, stop, target, quantity: left });
+          }
+          // JEDEN vstup s víc kusy: nejdřív se zmenší jeho ochrana o 1 ks (jedna změna, burza změní obě nohy), pak se
+          // 1 ks zavře Marketem. Mezi oběma zápisy je ten kus krátce bez ochrany; opačné pořadí by nechalo ochranu na
+          // víc kusů, než pozice má (při zásahu SL obrat). Každé selhání po zmenšení = incident, nic se neopakuje.
+          if (parts.length === 1 && parts[0].quantity >= 2) {
+            const part = parts[0];
+            if (part.quantity !== Math.abs(net0) || legs.stops.length !== 1 || legs.targets.length !== 1) return refuse('SL/TP nekryjí přesně celou pozici — částečné zavření nejde');
+            if ((command.expectedEntryId !== undefined && command.expectedEntryId !== part.entryId)
+              || (command.expectedQuantity !== undefined && command.expectedQuantity !== 1)) return refuse('Část pozice se od zobrazení změnila — částečné zavření neodešlo.');
+            const market = this.config.serverPrice?.(symbol) ?? null;
+            if (market === null) return refuse('služba nemá čerstvou cenu — částečné zavření neodesílám');
+            if (net0 > 0 ? market <= part.stop.stopPrice! : market >= part.stop.stopPrice!) return refuse('trh je u SL — částečné zavření neodesílám');
+            if (!this.setReplaceMarker({ symbol, at: this.now() })) return refuse('značku změny ochrany nejde uložit — nic neměním');
+            const exitTag = `ui-red-${reduceId}`;
+            this.seenClientIds.add(`reduce:${reduceId}`);
+            this.legsMoving.add(symbol);
+            this.reserved.set(exitTag, { symbol, quantity: 0 });
+            const left = part.quantity - 1;
+            const fail = (kindOf: string, message: string): LocalExecResult => {
+              this.incidents.push({ kind: kindOf, message, at: this.now() });
+              if (this.incidents.length > 30) this.incidents.shift();
+              this.blocked = `${kindOf}: ${message}`.slice(0, 240);
+              this.legsUncertain.add(symbol);
+              this.changed();
+              return { ok: false, sent: 'unknown', error: message };
+            };
+            try {
+              try {
+                await this.broker.beginBracketResize(accountId, part.entryId, left);
+              } catch (error) {
+                if (error instanceof BrokerRequestNotSentError) { this.setReplaceMarker(null); throw error; }
+                return fail('reduce-resize-uncertain', `zmenšení ochrany na ${left} ks není potvrzené (${error instanceof Error ? error.message : String(error)}) — ověř u brokera množství SL a TP; pozici jsem nezavíral`);
+              }
+              // Stav se během zmenšování nesměl změnit; jinak se 1 ks nezavírá (ochrana je už menší → ohlásit).
+              if ((this.positions.get(symbol)?.netQuantity ?? 0) !== net0 || this.broker.executionNet(accountId, symbol) !== net0) {
+                await this.broker.endBracketResize(accountId, part.entryId, 0);
+                return fail('reduce-protection-reduced', `ochrana je zmenšená na ${left} ks, ale pozice se mezitím změnila — 1 ks jsem nezavřel; zkontroluj pozici a její ochranu`);
+              }
+              let ack;
+              try {
+                ack = await this.broker.placeOrder({ tag: exitTag, accountId, symbol, side: exitSide, quantity: 1, orderType: 'Market' });
+              } catch (error) {
+                const text = error instanceof Error ? error.message : String(error);
+                if (error instanceof BrokerRequestNotSentError) {
+                  await this.broker.endBracketResize(accountId, part.entryId, 0);
+                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks neodešlo (${text}) — 1 ks je BEZ ochrany: zavři pozici, nebo ten kus zavři ručně`);
+                }
+                this.pendingResize.set(symbol, { entryId: part.entryId, exitTag, expectNet: net0 - Math.sign(net0) });
+                return fail('reduce-exit-uncertain', `ochrana kryje ${left} ks a výsledek zavření 1 ks není znám (${text}) — ověř pozici u brokera`);
+              }
+              const deadline = this.now() + (this.config.reduceConfirmMs ?? 3_000);
+              for (;;) {
+                const exit = this.orders.get(ack.brokerOrderId);
+                const net = this.positions.get(symbol)?.netQuantity ?? 0;
+                if (exit?.status === 'filled' && exit.filledQuantity === 1 && net === net0 - Math.sign(net0) && this.broker.executionNet(accountId, symbol) === net) {
+                  await this.broker.endBracketResize(accountId, part.entryId, 1);
+                  this.setReplaceMarker(null);
+                  return { ok: true, result: { orderId: ack.brokerOrderId, quantity: 1, split: true } };
+                }
+                if (exit?.status === 'rejected' || exit?.status === 'canceled') {
+                  await this.broker.endBracketResize(accountId, part.entryId, 0);
+                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks burza nepřijala — 1 ks je BEZ ochrany: zavři pozici, nebo ten kus zavři ručně`);
+                }
+                if (this.now() >= deadline) {
+                  // Výstup může ještě doběhnout: dokončení (nebo neúspěch) dohlídá hlídač podle stavu příkazu.
+                  this.pendingResize.set(symbol, { entryId: part.entryId, exitTag, expectNet: net0 - Math.sign(net0) });
+                  return fail('reduce-exit-uncertain', `ochrana kryje ${left} ks, ale zavření 1 ks není potvrzené — ověř pozici u brokera`);
+                }
+                await new Promise((resolve) => setTimeout(resolve, 25));
+              }
+            } finally {
+              this.legsMoving.delete(symbol);
+              this.reserved.delete(exitTag);
+            }
           }
           if (parts.length < 2) return refuse('pozice má jen jednu ochranu — částečně zavřít nejde, jen celou');
           if (parts.reduce((sum, part) => sum + part.quantity, 0) !== Math.abs(net0) || legs.stops.length !== parts.length || legs.targets.length !== parts.length) {

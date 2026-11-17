@@ -687,8 +687,13 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
    */
   const reducible = useMemo(() => {
     if (!net || Math.abs(net.netQuantity) < 2) return null;
-    const own = (list: LocalExecOrderView[]) => list.length >= 2 && list.every((order) => order.status === 'working' && !order.tag?.startsWith('uiprot-') && order.entryId !== undefined);
+    const own = (list: LocalExecOrderView[]) => list.length >= 1 && list.every((order) => order.status === 'working' && !order.tag?.startsWith('uiprot-') && order.entryId !== undefined);
     if (!own(legView.stops) || !own(legView.targets) || legView.stops.length !== legView.targets.length) return null;
+    // JEDEN vstup s víc kusy: služba zmenší jeho ochranu o 1 ks a 1 ks zavře Marketem.
+    if (legView.stops.length === 1) {
+      const only = legView.stops[0];
+      return only.quantity - only.filledQuantity >= 2 ? { entryId: only.entryId!, quantity: 1 } : null;
+    }
     // Služba zavře část s méně ochranným SL; při shodě tu novější.
     const long = net.netQuantity > 0;
     const first = [...legView.stops].sort((a, b) => (long ? a.price! - b.price! : b.price! - a.price!) || (a.entryId! < b.entryId! ? 1 : -1))[0];
