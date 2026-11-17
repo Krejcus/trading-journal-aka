@@ -30,7 +30,7 @@ const SYSTEM = cli('system') ?? 'Rithmic Test';
  */
 const READ_ONLY = process.argv.includes('--read-only');
 /** Kolik hodin dokončených minutových svíček si stránka po připojení vezme z historie Rithmicu. */
-const HISTORY_HOURS = 72;
+const HISTORY_HOURS = 168;
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
 const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
@@ -257,11 +257,18 @@ async function main(): Promise<void> {
     let recent: number[] = [];
     const now = Date.now();
     void (async () => {
-      // Dokončené minuty z historie Rithmicu (poslední 3 dny), novější a rozpracovaná svíčka z živých cen.
+      // Dokončené minuty z historie Rithmicu (posledních 7 dní), novější a rozpracovaná svíčka z živých cen.
       let history: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> = [];
       if (historyOk) {
         try {
-          const rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: now / 1_000 - HISTORY_HOURS * 3_600, toSec: now / 1_000 });
+          // Začátek musí padnout DO obchodní seance: kdyby řada začínala otevřením po víkendu nebo přestávce,
+          // první svíčka by proti starší historii appky skočila (víkendový gap) a ta by se k ní nepřipojila.
+          let fromSec = now / 1_000 - HISTORY_HOURS * 3_600;
+          let rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec: now / 1_000 });
+          for (let attempt = 0; attempt < 3 && rows.length > 0 && rows[0].time - fromSec > 180; attempt += 1) {
+            fromSec -= 24 * 3_600;
+            rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec: now / 1_000 });
+          }
           history = rows.map((bar) => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })).sort((a, b) => a.time - b.time);
         } catch (error) {
           console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — posílám jen svíčky od startu`);
