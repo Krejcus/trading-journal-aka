@@ -243,7 +243,8 @@ export class LocalExec {
       const symbols = new Set(this.broker.listBrackets(accountId).filter((bracket) => !bracket.closed).map((bracket) => bracket.symbol));
       for (const symbol of symbols) {
         const key = `coverage:${symbol}`;
-        const legs = this.legsOf(accountId, symbol);
+        // Známé ochrany se počítají i když na kontraktu pracuje příkaz, který služba nezná — neznámo neznamená „žádný přebytek".
+        const legs = this.legsOf(accountId, symbol, false);
         const net = this.positions.get(symbol)?.netQuantity ?? 0;
         const open = (list: BrokerOrder[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
         const over = legs ? [legs.stops, legs.targets].some((list) => list.length > 0 && open(list) > Math.abs(net)) : false;
@@ -330,7 +331,7 @@ export class LocalExec {
   }
 
   /** Pracující nohy vlastních neuzavřených vstupů s ochranou na kontraktu, podle role. Null = role některého příkazu neznám. */
-  private legsOf(accountId: number, symbol: string): { stops: BrokerOrder[]; targets: BrokerOrder[]; brackets: Array<{ entryId: string; stopTicks?: number; targetTicks?: number }> } | null {
+  private legsOf(accountId: number, symbol: string, strict = true): { stops: BrokerOrder[]; targets: BrokerOrder[]; brackets: Array<{ entryId: string; stopTicks?: number; targetTicks?: number }> } | null {
     const brackets = this.broker.listBrackets(accountId).filter((bracket) => bracket.symbol === symbol && !bracket.closed);
     const stops: BrokerOrder[] = [];
     const targets: BrokerOrder[] = [];
@@ -340,14 +341,14 @@ export class LocalExec {
       for (const leg of bracket.legs) {
         const order = this.orders.get(leg.orderId);
         if (!order || TERMINAL.has(order.status)) continue;
-        if (leg.role === 'unknown') return null;
+        if (leg.role === 'unknown') { if (strict) return null; continue; }
         known.add(leg.orderId);
         (leg.role === 'stop' ? stops : targets).push(order);
       }
     }
     // Každý pracující příkaz kontraktu musí být známý (vstup nebo noha vlastní ochrany).
     for (const order of this.orders.values()) {
-      if (order.symbol === symbol && !TERMINAL.has(order.status) && !known.has(order.brokerOrderId)) return null;
+      if (strict && order.symbol === symbol && !TERMINAL.has(order.status) && !known.has(order.brokerOrderId)) return null;
     }
     return { stops, targets, brackets };
   }
@@ -731,6 +732,12 @@ export class LocalExec {
                 return stop(moved.length ? 'unknown' : false, 'pozice nebo ochrana se během posunu změnila');
               }
               if (moved.length > 0 && this.now() - startedAt > budget) return stop('unknown', 'první noha trvala příliš dlouho');
+              // Trh se mezi nohami hýbe: stranu a vzdálenost ověřit znovu z čerstvé ceny, jinak by zápis mohl ochranu hned spustit.
+              const fresh = this.config.serverPrice?.(symbol) ?? null;
+              const freshBelow = fresh !== null && price < fresh;
+              if (fresh === null || (role === 'stop' ? long !== freshBelow : long === freshBelow) || Math.round(Math.abs(price - fresh) / spec.tickSize) < 1) {
+                return stop(moved.length ? 'unknown' : false, 'cena trhu se mezitím dostala za novou cenu ochrany');
+              }
               try {
                 await this.broker.modifyOrder(accountId, legId, { quantity: current.quantity, orderType: role === 'stop' ? 'Stop' : 'Limit', ...(role === 'stop' ? { stopPrice: price } : { limitPrice: price }) });
               } catch (error) {
@@ -749,7 +756,8 @@ export class LocalExec {
             }
             // Závěrem znovu: všechny původní nohy pracují na nové ceně.
             const final = legsNow();
-            if (!final || final.length !== ids.length || !final.every((order) => ids.includes(order.brokerOrderId) && priceOf(order) === price)) {
+            if (!final || final.length !== ids.length || !final.every((order) => ids.includes(order.brokerOrderId) && priceOf(order) === price && order.status === 'working')
+              || (this.positions.get(symbol)?.netQuantity ?? 0) !== net0 || this.lastFillAt.get(symbol) !== fillMark) {
               return stop('unknown', 'po posunu nohy neodpovídají očekávání');
             }
             return { ok: true, result: { moved, unchanged: ids.length - moved.length } };
