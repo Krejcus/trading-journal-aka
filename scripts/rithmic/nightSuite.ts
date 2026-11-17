@@ -277,6 +277,8 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
     }],
   ];
 
+  // Sada sama nic cizího neuklízí: nečistý účet na začátku = konec (pozice nebo příkaz mohou být ruční).
+  if (!flat(cur()) || cur().blocked) { console.log(`ÚČET NENÍ PRÁZDNÝ nebo je zablokovaný — sadu nespouštím: ${brief(cur())}`); ws.close(); process.exit(2); }
   let failed = 0;
   for (const [id, title, run] of scenarios) {
     if (ONLY && !ONLY.includes(id)) continue;

@@ -376,13 +376,13 @@ describe('místní služba: změna čekajícího vstupu se zachováním SL/TP (z
   });
 });
 
-describe('místní služba: ochrana platí přes konec seance (GTC), vstup bez ochrany jen do konce dne', () => {
-  it('vstup se SL/TP, samostatná ochrana i svázaný pár odcházejí jako GTC; holý vstup jako denní', async () => {
+describe('místní služba: platnost příkazů je denní (ochrana platná do zrušení se záměrně nepoužívá)', () => {
+  it('vstup se SL/TP, holý vstup, samostatná ochrana i svázaný pár odcházejí jako denní', async () => {
     const t = await setup({ config: { positionSettleMs: 20, protectiveGraceMs: 40, moveConfirmMs: 200 } });
     const bracket = await t.run(entry());
     await flush();
     const bracketId = (bracket as { result: { orderId: string } }).result.orderId;
-    expect(t.server.orders.get(bracketId)!.duration).toBe(2);
+    expect(t.server.orders.get(bracketId)!.duration).toBe(1);
     await t.run({ op: 'cancel', orderId: bracketId });
     await sleep(80);
     const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
@@ -392,13 +392,13 @@ describe('místní služba: ochrana platí přes konec seance (GTC), vstup bez o
     t.server.fill(bareId, 6990);
     await sleep(100);
     const stop = await t.run({ op: 'protect', clientId: 'gtc1', symbol: 'ESZ6', kind: 'stop', price: 6980 });
-    expect(t.server.orders.get((stop as { result: { orderId: string } }).result.orderId)!.duration).toBe(2);
+    expect(t.server.orders.get((stop as { result: { orderId: string } }).result.orderId)!.duration).toBe(1);
     await sleep(60);
     expect((await t.run({ op: 'protect', clientId: 'gtc2', symbol: 'ESZ6', kind: 'target', price: 7010 })).ok).toBe(true);
     await sleep(60);
     const pair = [...t.server.orders.values()].filter((o) => o.status === 'open');
     expect(pair).toHaveLength(2);
-    expect(pair.every((o) => o.duration === 2)).toBe(true);
+    expect(pair.every((o) => o.duration === 1)).toBe(true);
     t.broker.stop();
   });
 });
@@ -700,8 +700,9 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
 
 describe('místní služba: čekající přikoupení Limitem se po zavření pozice samo zruší', () => {
   const addLimit = (extra: Record<string, unknown> = {}) => entry({ clientId: `add-${Math.random().toString(36).slice(2, 10)}`, orderType: 'Limit', limitPrice: 6985, stopPrice: 6980, targetPrice: 7030, ...extra });
-  async function inPosition() {
-    const t = await setup({ config: { positionSettleMs: 20, protectiveGraceMs: 40 } });
+  async function inPosition(pendingAdd = true) {
+    const t = await setup({ config: { positionSettleMs: 20, protectiveGraceMs: 40, pendingAdd } });
+    t.exec.enableAutomation();
     const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
     await flush();
     t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
@@ -724,8 +725,12 @@ describe('místní služba: čekající přikoupení Limitem se po zavření poz
     // při čekajícím přikoupení další vstup ne
     expect(await t.run(addLimit({ limitPrice: 6984 }))).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
+    // bez zapnutí (výchozí stav, skutečný účet) služba přikoupení Limitem odmítne
+    const off = await inPosition(false);
+    expect(await off.run(addLimit())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/jen na testovacím účtu/) });
+    off.broker.stop();
     // bez pozice označení přikoupení neprojde
-    const flat = await setup();
+    const flat = await setup({ config: { pendingAdd: true } });
     expect(await flat.run(addLimit())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/patří jen/) });
     flat.broker.stop();
   });

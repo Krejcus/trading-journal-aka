@@ -140,6 +140,8 @@ export interface RithmicBrokerPort extends BrokerPort {
   readQuantityLimits(accountId: number, product: string): Promise<RithmicQuantityLimits | null>;
   /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
   executionNet(accountId: number, symbol: string): number | null;
+  /** Průměrná vstupní cena z posledního snímku pozic — JEN zobrazení (čára pozice po obnově spojení). */
+  snapshotAveragePrice(accountId: number, symbol: string): number | null;
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
   /**
    * Dva výstupní příkazy svázané burzou (OCO): SL (Stop) a TP (Limit) na stejné množství. Vyplnění nebo
@@ -927,14 +929,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         ...(reconnected ? { reconnected: true, resynced: true } : {}),
         resync,
       });
-      // Zobrazení: výchozí stav nese jen množství. Průměrnou cenu ze snímku pošlu hned za ním jako běžnou zprávu
-      // o pozici, aby graf nakreslil čáru pozice i tehdy, když trh stojí a živá zpráva o pozici hned nepřijde.
-      for (const position of positions) {
-        const average = snapshotAverage.get(`${position.accountId}:${position.symbol}`);
-        if (client === created && position.netQuantity !== 0 && average !== undefined && livePositions.get(`${position.accountId}:${position.symbol}`) === position.netQuantity) {
-          emit({ type: 'position', position: { accountId: position.accountId, symbol: position.symbol, netQuantity: position.netQuantity }, displayAveragePrice: average });
-        }
-      }
+
       // Dluh exekucí vzniklý během připojování (hlídání se tehdy neozbrojuje) nesmí zůstat bez dozoru.
       // Jen příkazy z nového výchozího stavu: starý konečný příkaz, který snímek už nevrací,
       // by svou zastaralou mezerou vyvolával odpojení dokola.
@@ -1566,6 +1561,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const identity = active.accounts.find(item => item.accountId === name);
       return identity ? quantityLimits(name, product, accountRows, productRows, identity) : null;
     },
+    snapshotAveragePrice: (account, symbol) => snapshotAverage.get(`${account}:${symbol}`) ?? null,
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
     routeEpoch: () => epoch,
 
@@ -1621,8 +1617,6 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         const side = rithmicSide(request.side);
         const ack = await active.placeOcoOrder({
           accountId: text,
-          // Svázaný pár je vždy ochrana pozice → platí přes konec seance.
-          duration: 'GTC',
           legs: [
             { userTag: request.stop.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'STOP_MARKET', triggerPrice: request.stop.stopPrice },
             { userTag: request.target.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'LIMIT', price: request.target.limitPrice },

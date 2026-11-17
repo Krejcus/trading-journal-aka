@@ -62,9 +62,9 @@ export interface BrokerOrderRequest {
   quantity: number;
   orderType: OrderType;
   /**
-   * Příkaz platí i přes konec burzovní seance (GTC). Výchozí je platnost do konce dne. Pro ochranné příkazy:
-   * denní SL/TP burza na konci seance zruší a pozice zůstane bez ochrany (změřeno 17. 11. 2026 ve 23:00 SEČ).
-   * Adaptéry, které platnost neřídí, pole ignorují.
+   * Příkaz platí i přes konec burzovní seance (GTC). Výchozí je platnost do konce dne a místní služba Rithmicu
+   * GTC ZÁMĚRNĚ nepoužívá (osiřelá ochrana přes noc je horší než ohlášená pozice bez ochrany — viz localExec).
+   * Pole je připravené pro výslovnou volbu; adaptéry, které platnost neřídí, ho ignorují.
    */
   goodTillCancel?: boolean;
   limitPrice?: number;

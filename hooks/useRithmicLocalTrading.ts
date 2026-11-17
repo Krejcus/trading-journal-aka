@@ -440,6 +440,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   } as BareLeaderTrade : null), [symbol, net?.netQuantity, net?.averagePrice, stopOrder != null, targetOrder != null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Režim přikoupení v lístku: jen pozice se SL i TP ze vstupů (ne samostatná ochrana). Jestli opravdu jde, ověří služba.
+  // Čekající vstupy (i přikoupení) jako klíč: jejich příchod nebo zmizení musí pohled přikoupení přepočítat.
+  const waitingEntriesKey = orders.filter((order) => order.role === 'entry' && order.status === 'working').map((order) => `${order.orderId}@${order.price}`).join('|');
   const scaleIn = useMemo<LiveTicketScaleIn | null>(() => {
     if (!net) return null;
     const quantity = Math.abs(net.netQuantity);
@@ -455,7 +457,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason,
       pendingAdd: waitingAdd ? { price: waitingAdd.price ?? null, quantity: waitingAdd.quantity, orderType: 'Limit' } : null };
-  }, [limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [waitingEntriesKey, limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
   scaleInRef.current = scaleIn;
 
   const position = useMemo<LiveChartPosition | null>(() => {

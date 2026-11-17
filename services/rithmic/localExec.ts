@@ -17,6 +17,12 @@ export interface LocalExecConfig {
   symbols: Record<string, { tickSize: number }>;
   maxQuantity: number;
   quantityLimits?: () => import('./rithmicQuantityLimits').RithmicQuantityLimits | null;
+  /**
+   * Čekající přikoupení Limitem (se samočinným zrušením po zavření pozice). Výchozí VYPNUTO: funkce má otevřené
+   * nálezy z oponentury 17. 11. 2026 (výpadek během zavření, posun SL během čekání, částečné plnění přikoupení),
+   * proto ji spouštěč zapíná jen na Rithmic Test.
+   */
+  pendingAdd?: boolean;
   /** Strop velikosti pozice včetně čekajících vstupů (výchozí = `maxQuantity`). */
   maxPosition?: number;
   /** Nejvyšší vzdálenost SL/TP od vstupu v tickách (výchozí 400). */
@@ -379,7 +385,13 @@ export class LocalExec {
         }
         this.trips.clear(); // v mezeře mohla uniknout vyplnění → výsledek by nebyl pravdivý
         for (const order of event.resync.orders) this.orders.set(order.brokerOrderId, order);
-        for (const position of event.resync.positions) this.positions.set(position.symbol, { netQuantity: position.netQuantity });
+        for (const position of event.resync.positions) {
+          // Průměrná cena ze snímku jen pro zobrazení čáry pozice (živá zpráva o pozici může na klidném trhu chybět).
+          const average = position.netQuantity !== 0 ? this.broker.snapshotAveragePrice(position.accountId, position.symbol) : null;
+          this.positions.set(position.symbol, { netQuantity: position.netQuantity, ...(average !== null ? { averagePrice: average } : {}) });
+        }
+        // Šipky v grafu: v mezeře se obchod mohl zavřít — staré šipky by tvrdily, že je otevřený.
+        this.marks.clear();
       }
     } else if (event.type === 'fill') this.onFill(event.fill);
     else return;
@@ -424,6 +436,21 @@ export class LocalExec {
     try { return this.config.liveTrading.problem(); } catch (error) { return `souhlas nejde ověřit (${error instanceof Error ? error.message : String(error)})`; }
   }
 
+  /**
+   * Autoritativní čtení zrušeného příkazu: null = zrušen s nulovým plněním; jinak důvod, proč to doložit nejde.
+   * Čtení navíc (jen u víc kusů) — zpráva o zrušení sama pozdní dílčí vyplnění nevylučuje.
+   */
+  private async canceledUnfilled(accountId: number, orderId: string): Promise<string | null> {
+    try {
+      const lookup = await this.broker.findOrderById(accountId, orderId);
+      if (lookup.completeness !== 'authoritative' || !lookup.order) return 'jeho konečný stav nejde ověřit';
+      if (lookup.order.status !== 'canceled') return `jeho stav je ${lookup.order.status}`;
+      return lookup.order.filledQuantity === 0 ? null : `vyplnilo se z něj ${lookup.order.filledQuantity} ks`;
+    } catch (error) {
+      return `jeho konečný stav nejde ověřit (${error instanceof Error ? error.message : String(error)})`;
+    }
+  }
+
   private isLive(): boolean {
     return this.config.liveTrading !== undefined || this.config.systemName !== 'Rithmic Test' || this.broker.environment !== 'demo';
   }
@@ -456,6 +483,14 @@ export class LocalExec {
   }
 
   private readonly addCancelTried = new Set<string>();
+  private readonly addFlatSince = new Map<string, number>();
+  private addTimer: ReturnType<typeof setTimeout> | null = null;
+  private automation = false;
+  /** Povolí samočinné zápisy služby (dnes jen zrušení čekajícího přikoupení). Volá spouštěč po potvrzení účtu. */
+  enableAutomation(): void {
+    this.automation = true;
+    this.watchPendingAdds();
+  }
   /**
    * Pozice se zavřela a čekající přikoupení dál pracuje → zrušit (jeden zápis na příkaz, nic se neopakuje).
    * Zavření musí být potvrzené z obou stran: pozice podle brokera i podle potvrzených vyplnění je nula.
@@ -463,10 +498,29 @@ export class LocalExec {
    */
   private watchPendingAdds(): void {
     const accountId = this.broker.accountIds()[0];
-    if (accountId === undefined || !this.connected) return;
+    // Samočinný zápis jen když ho spouštěč výslovně povolil (až po potvrzení účtu obsluhou; v režimu jen pro čtení nikdy).
+    if (accountId === undefined || !this.connected || !this.automation || this.config.pendingAdd !== true) return;
     for (const order of this.orders.values()) {
       if (TERMINAL.has(order.status) || !order.tag?.startsWith(ADD_TAG) || this.addCancelTried.has(order.brokerOrderId)) continue;
-      if ((this.positions.get(order.symbol)?.netQuantity ?? 0) !== 0 || this.broker.executionNet(accountId, order.symbol) !== 0) continue;
+      if ((this.positions.get(order.symbol)?.netQuantity ?? 0) !== 0) { this.addFlatSince.delete(order.brokerOrderId); continue; }
+      if (this.broker.executionNet(accountId, order.symbol) !== 0) {
+        // Kniha říká nula, potvrzená vyplnění ještě ne: zkusit znovu vlastním časovačem (na klidném účtu jiná událost
+        // nepřijde). Když se to do 5 s nesrovná, je to incident — přikoupení pracuje a pozice nejspíš není.
+        const since = this.addFlatSince.get(order.brokerOrderId) ?? this.now();
+        this.addFlatSince.set(order.brokerOrderId, since);
+        if (this.now() - since >= 5_000) {
+          this.addCancelTried.add(order.brokerOrderId);
+          const message = `pozice na ${order.symbol} vypadá zavřená, ale potvrzená vyplnění to nedokládají — čekající přikoupení ${order.brokerOrderId} dál pracuje; ověř stav a zruš ho ručně`;
+          this.incidents.push({ kind: 'pending-add-unresolved', message, at: this.now() });
+          if (this.incidents.length > 30) this.incidents.shift();
+          this.blocked = `pending-add-unresolved: ${message}`.slice(0, 240);
+          this.changed();
+        } else if (!this.addTimer) {
+          this.addTimer = setTimeout(() => { this.addTimer = null; this.watchPendingAdds(); }, 500);
+          (this.addTimer as { unref?: () => void }).unref?.();
+        }
+        continue;
+      }
       this.addCancelTried.add(order.brokerOrderId);
       const report = (detail: string): void => {
         const message = `pozice na ${order.symbol} je zavřená, ale čekající přikoupení ${order.brokerOrderId} se nepodařilo zrušit (${detail}) — zruš ho ručně, jinak může otevřít novou pozici`;
@@ -677,8 +731,9 @@ export class LocalExec {
     const legs = this.legsOf(accountId, symbol);
     if (!legs) return 'na kontraktu pracuje příkaz, který služba nezná — přikoupení nejde';
     if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
-    // Dřívější obchody, které už skončily (jen ještě nejsou trvale uzavřené), se nepočítají.
-    legs.brackets = legs.brackets.filter((bracket) => this.broker.bracketState(accountId, bracket.entryId).state !== 'done');
+    // Dřívější obchody, které už skončily (jen ještě nejsou trvale uzavřené), se nepočítají. Při zkoušce výměny
+    // čekajícího přikoupení se nepočítá ani nahrazovaný vstup (do skutečného zápisu bude zrušený).
+    legs.brackets = legs.brackets.filter((bracket) => bracket.entryId !== this.replaceDryRun && this.broker.bracketState(accountId, bracket.entryId).state !== 'done');
     if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
     // Nejvýš dvě části (každá s vlastní ochranou): posun SL/TP pak znamená nejvýš dva zápisy.
     if (legs.brackets.length >= 2) return 'pozice už má dvě části — další přikoupení služba nepustí';
@@ -876,6 +931,7 @@ export class LocalExec {
           // Čekající přikoupení musí nést značku vazby na pozici (a nic jiného ji nést nesmí) — podle ní se po zavření
           // pozice samo ruší.
           const pendingAdd = adding && orderType === 'Limit';
+          if (pendingAdd && this.config.pendingAdd !== true) return refuse('přikoupení Limitem je zatím jen na testovacím účtu — v pozici přikup Marketem');
           if (clientId.startsWith(ADD_CLIENT_PREFIX) !== pendingAdd) {
             return refuse(pendingAdd ? 'čekající přikoupení musí být označené jako přikoupení (clientId add-…)' : 'označení přikoupení (add-…) patří jen Limitu do otevřené pozice');
           }
@@ -906,9 +962,11 @@ export class LocalExec {
             return null;
           };
           const ack = await release(this.broker.placeBracket({
-            // Vstup se SL/TP platí i přes konec seance: denní ochranu by burza na konci seance zrušila a pozice by
-            // zůstala bez SL (změřeno 17. 11. 2026). Vstup bez ochrany zůstává denní.
-            ...request, goodTillCancel: true, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
+            // Platnost zůstává DENNÍ (i pro SL/TP): na konci seance burza příkazy zruší a pozice zůstane bez ochrany
+            // (změřeno 17. 11. 2026 ve 23:00 SEČ) — to služba ohlásí incidentem a obrazovka na to předem upozorní.
+            // Ochrana platná do zrušení by byla horší: když propka pozici před koncem seance zavře sama, SL/TP by
+            // zůstaly pracovat bez pozice a v další seanci by mohly otevřít nový obchod (oponentura 17. 11.).
+            ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
             guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
               ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
@@ -962,6 +1020,12 @@ export class LocalExec {
             const old = this.orders.get(orderId);
             if (old && TERMINAL.has(old.status)) {
               if (old.status !== 'canceled' || old.filledQuantity > 0) return { ok: false, sent: 'unknown', error: 'vstup se mezitím vyplnil — neměním ho; zkontroluj pozici a její SL/TP' };
+              // Víc kusů: zpráva o zrušení může přijít dřív než pozdní dílčí vyplnění. Nový vstup na celé množství
+              // se zadá jen po autoritativním čtení, které potvrdí zrušení s nulovým plněním.
+              if (order.quantity > 1) {
+                const problem = await this.canceledUnfilled(accountId, orderId);
+                if (problem) return { ok: false, sent: 'unknown', error: `původní vstup je zrušený, ale ${problem} — nový nezadávám; zkontroluj pozici` };
+              }
               break;
             }
             if (this.now() >= deadline) return { ok: false, sent: 'unknown', error: 'zrušení původního vstupu není potvrzené — nový nezadávám; ověř, co u brokera čeká' };
@@ -995,6 +1059,9 @@ export class LocalExec {
           if (net === 0) return refuse('není otevřená pozice — ochranu není k čemu přidat');
           // Množství páru = celá pozice. Pozice musí sedět s potvrzenými vyplněními (jinak by pár mohl mít jiný počet kusů).
           const pairQuantity = Math.abs(net);
+          if (pairQuantity > (this.config.maxPosition ?? this.config.maxQuantity)) return refuse(`pozice ${pairQuantity} je nad stropem služby — ochranu nezadávám`);
+          const pairLimits = this.config.quantityLimits?.();
+          if (this.config.quantityLimits && (!pairLimits || pairQuantity > pairLimits.order)) return refuse(pairLimits ? `ochrana na ${pairQuantity} ks přesahuje limit RMS ${pairLimits.order} ks na příkaz` : 'limity účtu a produktu RMS nejsou ověřené');
           if (this.broker.executionNet(accountId, symbol) !== net) return refuse('pozice zatím nesouhlasí s vyplněními — ochranu zadej za okamžik');
           if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status))) return refuse('pozice už má pracující příkazy — pár SL+TP jde přidat jen k pozici bez příkazů');
           if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');
@@ -1146,6 +1213,11 @@ export class LocalExec {
                 const old = this.orders.get(pairWith.brokerOrderId);
                 if (old && TERMINAL.has(old.status)) {
                   if (old.status !== 'canceled' || old.filledQuantity > 0) return fail('protect-replace-interrupted', `původní ${kind === 'stop' ? 'TP' : 'SL'} se mezitím vyplnil — druhou ochranu nezadávám, zkontroluj pozici`);
+                  // Víc kusů: pozdní dílčí vyplnění staré nohy by dalo pár na víc kusů, než pozice má (obrat pozice).
+                  if (quantity > 1) {
+                    const problem = await this.canceledUnfilled(accountId, pairWith.brokerOrderId);
+                    if (problem) return fail('protect-replace-interrupted', `původní ${kind === 'stop' ? 'TP' : 'SL'} je zrušený, ale ${problem} — nový pár nezadávám, zkontroluj pozici a její ochranu`);
+                  }
                   break;
                 }
                 if (this.now() >= deadline) return fail('protect-replace-uncertain', `zrušení původního ${kind === 'stop' ? 'TP' : 'SL'} není potvrzené — nový pár nezadávám; ověř u brokera, jakou ochranu pozice má`);
@@ -1198,7 +1270,7 @@ export class LocalExec {
           let ack;
           try {
             ack = await this.broker.placeOrder({
-              tag, accountId, symbol, side: long ? 'Sell' : 'Buy', quantity, goodTillCancel: true,
+              tag, accountId, symbol, side: long ? 'Sell' : 'Buy', quantity,
               orderType: kind === 'stop' ? 'Stop' : 'Limit', ...(kind === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
           } catch (error) {

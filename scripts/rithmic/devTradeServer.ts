@@ -363,6 +363,8 @@ async function main(): Promise<void> {
   }
   exec = new LocalExec({
     broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: manualCap, quantityLimits: effectiveLimits,
+    // Čekající přikoupení Limitem: zatím jen na testovacím účtu (otevřené nálezy z oponentury).
+    pendingAdd: SYSTEM === 'Rithmic Test',
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,
@@ -430,6 +432,8 @@ async function main(): Promise<void> {
       ? `\n*** SKUTEČNÝ ÚČET ${SYSTEM} / ${account}: JEN ZAVÍRÁNÍ (vstupy vypnuté) ***\n`
       : `\n*** SKUTEČNÝ ÚČET: příkazy z appky půjdou na ${SYSTEM} / ${account} · strop ${startConsent!.maxQuantity === 'rms' ? 'podle RMS' : startConsent!.maxQuantity + ' ks'} · SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'} · souhlas do ${new Date(startConsent!.expiresAt).toLocaleString('cs-CZ')} ***\n`);
   }
+  // Samočinné zápisy služby až teď: účet je potvrzený (u skutečného účtu opsanou větou). V režimu jen pro čtení nikdy.
+  if (!READ_ONLY) exec.enableAutomation();
   exec.subscribe((state) => broadcast({ type: 'state', state }));
 
   // Přístup: Origin (proti cizí webové stránce) A token (proti komukoli jinému v síti — Origin si
