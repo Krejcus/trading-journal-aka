@@ -137,6 +137,17 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(!state\) return \{ key: 'rithmic-unknown'/);
   });
 
+  it('brzda jde mimo zámek obrazovky, nezávisí na ceně a nic neopakuje; nejisté příkazy se nepřepisují', () => {
+    const close = hook.slice(hook.indexOf('const closeNow = useCallback'), hook.indexOf('}, [send]);', hook.indexOf('const closeNow = useCallback')));
+    expect(close).toContain("send({ op: 'flatten', clientId: newId(), symbol: sym })");
+    expect(close).not.toMatch(/availableRef|entryReadyRef|silentRef|busyRef|runWithCommandLock/);
+    expect(close.match(/send\(/g)).toHaveLength(1);
+    expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
+    expect(hook).toMatch(/addUncertain = \(next: RithmicUncertainCommand\) => publishUncertain\(\[\.\.\.uncertainCommands\.filter\(item => item\.id !== next\.id\), next\]\.slice\(-5\)\)/);
+    expect(screen).toMatch(/\{solo\?\.emergencyClose && summary\?\.kind === 'position' && <button/);
+    expect(chart).toMatch(/link === 'open' \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
+  });
+
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
     expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: 2 })).toBeNull();
     expect(rithmicScreenInstrumentIssue({ symbol: 'ESZ6', tickSize: 0.25, pointValue: 50 })).toMatch(/jen MNQ/);

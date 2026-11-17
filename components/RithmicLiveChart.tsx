@@ -40,10 +40,11 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
   const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : null;
-  const solo = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable }), [trading.system, symbol, usable, linkNote]);
+  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable }), [trading.system, symbol, usable, linkNote]);
   const rejection = state?.rejections.at(-1) ?? null;
   const blocked = state?.blocked ?? null;
-  const uncertain = trading.uncertain;
+  const uncertainList = trading.uncertain;
+  const uncertain = uncertainList.at(-1) ?? null;
   // Výsledek „Potvrdit incident" se nezahazuje: neúspěch dostane vlastní kartu.
   const [ackNote, setAckNote] = useState<{ at: number; text: string } | null>(null);
   const [crashed, setCrashed] = useState(false);
@@ -53,14 +54,26 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     const reply = await ack();
     setAckNote(reply.ok ? null : { at: Date.now(), text: reply.error ?? 'Potvrzení se nepovedlo.' });
   }, [ack]);
+  // Brzda mimo zámek obrazovky: nejistý výsledek hlásí hook (seznam nejistých), neodeslání vlastní karta.
+  const [closeBusy, setCloseBusy] = useState(false);
+  const [closeNote, setCloseNote] = useState<{ at: number; text: string } | null>(null);
+  const { closeNow } = trading;
+  const emergencyClose = useCallback(() => {
+    setCloseBusy(true);
+    void closeNow().then(result => setCloseNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => setCloseBusy(false));
+  }, [closeNow]);
   const extraToasts = useMemo<TradeToast[]>(() => [
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
-    ...(uncertain ? [card(`rithmic-uncertain:${uncertain.id}`, 'amber', 'Pozor', `${uncertain.label}: výsledek NEZNÁMÝ`, `${uncertain.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)] : []),
+    ...uncertainList.map(item => card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
+    ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
     ...(link !== 'open' ? [card('rithmic-link-down', 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.')] : []),
     ...(blocked ? [card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
-  ], [uncertain, link, blocked, ackNote, rejection?.at, rejection?.reason]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí.
+  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, emergencyClose, closeBusy]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });
@@ -98,7 +111,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}
-      {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified onClick={dismissUncertain} title={`${uncertain.label}: výsledek neznámý — ${uncertain.reason}`}
+      {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified onClick={dismissUncertain} title={uncertainList.map(item => `${item.label}: výsledek neznámý — ${item.reason}`).join('; ')}
         className={`fixed left-[76px] z-[310] rounded-lg border border-amber-500/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-extrabold text-amber-500 hover:bg-amber-500/25 ${blocked ? 'bottom-14' : 'bottom-4'}`}>Stav u brokera ověřen</button>, document.body)}
       {/* Pod nouzovou lištou a jejími dialogy (z-350/600); po pádu grafu se nekreslí. */}
       {blocked && !crashed && createPortal(<button type="button" data-rithmic-ack onClick={() => void confirmIncident()}

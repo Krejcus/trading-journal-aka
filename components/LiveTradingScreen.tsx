@@ -250,7 +250,12 @@ interface Props {
  * Jeden účet mimo kopírku (Rithmic). `copier` zůstává SKUTEČNÝ stav kopírky Tradovate (incident,
  * OFF a čipy v hlavičce dál platí, INV-UI-02); dostupnost příkazů tohoto grafu říká `available`.
  */
-export interface LiveTradingSolo { label: string; available: boolean }
+export interface LiveTradingSolo {
+  label: string;
+  available: boolean;
+  /** Brzda: zavře pozici hned, mimo zámek jednoho příkazu obrazovky (nečeká na visící příkaz). */
+  emergencyClose?: { run: () => void; busy: boolean };
+}
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
 const REPLAY_TICKET_TEXT = 'Přehrávání v grafu — panel objednávky je vypnutý. Flatten All je na Live Dashboardu.';
@@ -1060,6 +1065,14 @@ const LiveTradingScreen: React.FC<Props> = ({
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
         {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
+        {solo?.emergencyClose && summary?.kind === 'position' && <button
+          type="button"
+          data-solo-emergency-close
+          disabled={solo.emergencyClose.busy}
+          onClick={solo.emergencyClose.run}
+          title="Zavře pozici tohoto účtu hned Marketem a zruší její SL/TP. Nečeká na jiný rozběhnutý příkaz."
+          className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/20 disabled:cursor-wait disabled:opacity-60"
+        ><X size={12} />{solo.emergencyClose.busy ? 'Zavírám…' : 'Zavřít pozici'}</button>}
         {copierChip && <button
           type="button"
           onClick={() => onNavigate('overview')}

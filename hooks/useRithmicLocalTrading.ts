@@ -67,11 +67,15 @@ function createFeed() {
  * komponentu, aby varování přežilo odchod ze záložky i obnovu spojení — dokud ho uživatel nezavře.
  */
 export interface RithmicUncertainCommand { id: string; at: number; label: string; reason: string }
-let uncertainCommand: RithmicUncertainCommand | null = null;
+const NO_UNCERTAIN: readonly RithmicUncertainCommand[] = [];
+let uncertainCommands: readonly RithmicUncertainCommand[] = NO_UNCERTAIN;
 const uncertainListeners = new Set<() => void>();
-const setUncertain = (next: RithmicUncertainCommand | null) => { uncertainCommand = next; for (const listener of [...uncertainListeners]) listener(); };
+const publishUncertain = (next: readonly RithmicUncertainCommand[]) => { uncertainCommands = next; for (const listener of [...uncertainListeners]) listener(); };
+/** Každý nejistý příkaz zvlášť (vstup i zavření mimo zámek se nesmí přepsat); nejvýš posledních 5. */
+const addUncertain = (next: RithmicUncertainCommand) => publishUncertain([...uncertainCommands.filter(item => item.id !== next.id), next].slice(-5));
+const clearUncertain = () => publishUncertain(NO_UNCERTAIN);
 const subscribeUncertain = (listener: () => void) => { uncertainListeners.add(listener); return () => { uncertainListeners.delete(listener); }; };
-const readUncertain = () => uncertainCommand;
+const readUncertain = () => uncertainCommands;
 const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', ack: 'Potvrzení incidentu' };
 
 interface Seen { net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null }
@@ -139,7 +143,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     // Příkazy bez odpovědi v okamžiku ztráty spojení: výsledek není znám, nic se neopakuje.
     const failPending = () => {
       for (const [id, pending] of replies.current) {
-        if (pending.op !== 'ack') setUncertain({ id, at: Date.now(), label: COMMAND_LABEL[pending.op], reason: 'spojení s místním procesem spadlo' });
+        if (pending.op !== 'ack') addUncertain({ id, at: Date.now(), label: COMMAND_LABEL[pending.op], reason: 'spojení s místním procesem spadlo' });
         pending.resolve({ ok: false, sent: 'unknown', error: 'spojení s místním procesem spadlo — ověř stav' });
       }
       replies.current.clear();
@@ -271,7 +275,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const id = newId();
     const timer = window.setTimeout(() => {
       replies.current.delete(id);
-      if (command.op !== 'ack') setUncertain({ id, at: Date.now(), label: COMMAND_LABEL[command.op], reason: 'místní proces neodpověděl' });
+      if (command.op !== 'ack') addUncertain({ id, at: Date.now(), label: COMMAND_LABEL[command.op], reason: 'místní proces neodpověděl' });
       resolve({ ok: false, sent: 'unknown', error: 'místní proces neodpověděl — ověř stav' });
     }, REPLY_TIMEOUT_MS);
     replies.current.set(id, { op: command.op, resolve: (reply) => { window.clearTimeout(timer); resolve(reply); } });
@@ -373,9 +377,28 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   const ack = useCallback(() => send({ op: 'ack' }), [send]);
 
+  /**
+   * Brzda: zavře pozici HNED, mimo zámek jednoho příkazu obrazovky — nečeká na visící vstup ani posun.
+   * Nezávisí na ceně ani na čerstvosti stavu (službu smí zkusit vždy, když je spojení otevřené).
+   * Vlastní pojistka jen proti dvojkliku; souběh se zavřením z obrazovky řeší služba (druhé zavření
+   * čeká na první, nikdy dva exity). Nic se neopakuje.
+   */
+  const closingNow = useRef(false);
+  const closeNow = useCallback(async (): Promise<{ status: 'sent' | 'blocked' | 'unknown'; text: string | null }> => {
+    if (closingNow.current) return { status: 'blocked', text: 'Zavření už běží — počkej na výsledek.' };
+    const sym = symbolRef.current;
+    if (!sym) return { status: 'blocked', text: 'Kontrakt není znám — nic se neodeslalo.' };
+    closingNow.current = true;
+    try {
+      const reply = await send({ op: 'flatten', clientId: newId(), symbol: sym });
+      if (reply.ok) return { status: 'sent', text: null };
+      return reply.sent === false ? { status: 'blocked', text: reply.error ?? 'Neodesláno.' } : { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
+    } finally { closingNow.current = false; }
+  }, [send]);
+
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, entryReady, entryBlockedReason, silent, uncertain, dismissUncertain: () => setUncertain(null), tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
+    available, entryReady, entryBlockedReason, silent, uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
     onPlaceEntry, onManageEntry, ack,
   };
