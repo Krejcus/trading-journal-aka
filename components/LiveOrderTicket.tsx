@@ -801,6 +801,8 @@ interface Props {
   entryBareSupported?: boolean;
   entryBarePendingSupported?: boolean;
   entryBareLimitSupported?: boolean;
+  /** Vstup jen se SL nebo jen s TP (jeden účet přes Rithmic). */
+  entrySingleLegSupported?: boolean;
   /** Vlastní přijatý holý Market bez nohou (desk `newestOpenBareEntry`); výchozí null = „Přidat SL/TP“ se neukáže. */
   entryBareEntry?: LiveBareEntryRecord | null;
   /** Pozice leadera skupiny workeru na symbolu grafu (`liveAttachIntent.position`); výchozí null. */
@@ -881,7 +883,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   isDark, shownOpenPnl, instrument, quote, draft, onDraft, fromBox, units, onUnits, scope, onScope,
   group, target, onTarget, quoteInfo, position = null, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice = null,
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
-  entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
+  entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entrySingleLegSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
   bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose, soloLabel = null,
 }) => {
@@ -1007,7 +1009,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       // Jedna noha nikdy; Limit/Stop obě; Market bez obou jen s capability (U4).
-      : liveTicketLegsProblem(draft, entryBareSupported, entryBarePendingSupported, entryBareLimitSupported) ?? (bareDraft
+      : liveTicketLegsProblem(draft, entryBareSupported, entryBarePendingSupported, entryBareLimitSupported, entrySingleLegSupported) ?? (bareDraft
         ? (draft.sizing !== 'qty' ? 'Bez SL/TP jen v kontraktech — bez SL nejde velikost podle rizika.'
           : barePendingDraft ? liveBarePendingBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0)
             : liveBareMarketBlockReason(bareGateAt(Date.now()), m?.quantity ?? 0))

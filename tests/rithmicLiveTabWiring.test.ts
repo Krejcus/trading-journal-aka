@@ -8,6 +8,7 @@ import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
 import { rithmicFlattenReply, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
+import { liveTicketLegsProblem } from '../lib/liveBareEntry';
 
 const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
 const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
@@ -165,6 +166,15 @@ describe('hook místního procesu', () => {
     // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu.
     expect(hook).toMatch(/if \(pending && pending\.op !== 'ack' && !reply\.ok && reply\.sent !== false\) addUncertain\(/);
     expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
+  });
+
+  it('vstup bez SL/TP a s jednou nohou jen v režimu jednoho účtu', () => {
+    expect(liveTicketLegsProblem({ type: 'limit', stopLoss: 100, takeProfit: null }, false, false, false)).toMatch(/Vyplň SL i TP/);
+    expect(liveTicketLegsProblem({ type: 'limit', stopLoss: 100, takeProfit: null }, false, false, false, true)).toBeNull();
+    expect(liveTicketLegsProblem({ type: 'market', stopLoss: null, takeProfit: 100 }, false, false, false, true)).toBeNull();
+    expect(chart).toMatch(/entryBareSupported entryBarePendingSupported/);
+    expect(chart).toMatch(/available: usable, singleLeg: true/);
+    expect(screen).toMatch(/entrySingleLegSupported=\{solo\?\.singleLeg === true\}/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {

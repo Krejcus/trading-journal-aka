@@ -144,10 +144,11 @@ export const isBareTicketDraft = (draft: Pick<TicketDraft, 'type' | 'stopLoss' |
  * Nohy návrhu panelu: jedna noha nikdy (payload by worker odmítl), Limit/Stop
  * obě, nebo s capability ani jednu, Market bez obou jen s capability. Null = nohy jsou v pořádku.
  */
-export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>, bareSupported: boolean, barePendingSupported = false, bareLimitSupported = false): string | null {
+export function liveTicketLegsProblem(draft: Pick<TicketDraft, 'type' | 'stopLoss' | 'takeProfit'>, bareSupported: boolean, barePendingSupported = false, bareLimitSupported = false, singleLegSupported = false): string | null {
   const hasStop = draft.stopLoss != null;
   const hasTarget = draft.takeProfit != null;
-  if (hasStop !== hasTarget) return 'Vyplň SL i TP, nebo u Marketu ani jedno.';
+  // Jedna noha: jen kde ji umí broker sám (jeden účet přes Rithmic); kopírka ji neumí.
+  if (hasStop !== hasTarget) return singleLegSupported ? null : 'Vyplň SL i TP, nebo u Marketu ani jedno.';
   if (hasStop) return null;
   if (draft.type !== 'market') return barePendingSupported || (draft.type === 'limit' && bareLimitSupported) ? null : 'Limit a Stop potřebují SL i TP.';
   return bareSupported ? null : 'Worker zatím neumí Market bez SL/TP — doplň SL i TP.';

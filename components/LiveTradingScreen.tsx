@@ -253,6 +253,8 @@ interface Props {
 export interface LiveTradingSolo {
   label: string;
   available: boolean;
+  /** Služba umí vstup jen se SL nebo jen s TP. */
+  singleLeg?: boolean;
   /** Brzda: zavře pozici hned, mimo zámek jednoho příkazu obrazovky (nečeká na visící příkaz). */
   emergencyClose?: { run: () => void; busy: boolean };
 }
@@ -1211,6 +1213,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             // U4/U8/U10 (3. 11. 2026): jen podklady panelu; příkazy dál jen přes callbacky desku.
             entryBareSupported={entryBareSupported}
             entryBarePendingSupported={entryBarePendingSupported}
+            entrySingleLegSupported={solo?.singleLeg === true}
             entryBareLimitSupported={entryBareLimitSupported}
             entryBareEntry={entryBareEntry}
             entryLeaderPosition={entryLeaderPosition}

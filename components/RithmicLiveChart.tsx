@@ -40,7 +40,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
   const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : null;
-  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable }), [trading.system, symbol, usable, linkNote]);
+  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true }), [trading.system, symbol, usable, linkNote]);
   // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
   const rejectionBaseline = useRef<number | null>(null);
   if (!state) rejectionBaseline.current = null;
@@ -70,11 +70,16 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     setCloseBusy(true);
     void closeNow().then(result => setCloseNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => { closeRunning.current = false; setCloseBusy(false); });
   }, [closeNow]);
+  const downSince = useRef(0);
+  const wasOpen = useRef(false);
+  if (link === 'open') wasOpen.current = true;
+  else if (wasOpen.current) { wasOpen.current = false; downSince.current = Date.now(); }
   const extraToasts = useMemo<TradeToast[]>(() => [
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
     ...uncertainList.map(item => card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
     ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
-    ...(link !== 'open' ? [card('rithmic-link-down', 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.')] : []),
+    // Výpadek hlásí karta jen krátce (po obnově by lhala); trvalý stav nese štítek účtu v hlavičce.
+    ...(link !== 'open' ? [{ ...card(`rithmic-link-down:${downSince.current}`, 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.'), sticky: false, ms: 8_000 }] : []),
     ...(blocked ? [card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
@@ -117,6 +122,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         position={trading.position} marketData={trading.marketData} solo={solo} copyEvents={trading.events} extraToasts={extraToasts}
         onPlaceEntry={trading.onPlaceEntry} onManageEntry={trading.onManageEntry}
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
+        entryBareSupported entryBarePendingSupported
         entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />
