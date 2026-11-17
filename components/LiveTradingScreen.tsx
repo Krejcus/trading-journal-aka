@@ -1079,7 +1079,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           data-solo-reduce
           disabled={solo.reduce.busy}
           onClick={solo.reduce.run}
-          title="Zavře jednu část pozice hned u trhu (její TP se posune za trh, její SL zruší burza). Zbytek pozice si nechá své SL/TP."
+          title="Zavře jednu část pozice hned u trhu — tu s méně ochranným SL (její TP se posune za trh, její SL zruší burza). Zbytek pozice si nechá své SL/TP. Celou pozici zavírá vedlejší červené tlačítko."
           className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-500 hover:bg-amber-500/20 disabled:cursor-wait disabled:opacity-60"
         >{solo.reduce.busy ? 'Zavírám část…' : `Zavřít ${solo.reduce.quantity} ks`}</button>}
         {solo?.emergencyClose && <button

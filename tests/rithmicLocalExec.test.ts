@@ -47,7 +47,7 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
     // `liveEnvironment`: stejný adaptér, jen se hlásí jako skutečné prostředí (zkouška pojistek skutečného účtu).
     broker: options.liveEnvironment ? new Proxy(broker, { get: (target, key) => (key === 'environment' ? 'live' : Reflect.get(target, key)) }) : broker,
     symbols: { ESZ6: { tickSize: 0.25 } }, maxQuantity: 2, maxPosition: 2, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
-    serverPrice: () => price, ...options.config,
+    serverPrice: () => price, serverQuote: () => (price === null ? null : { bid: price, ask: price + 0.25 }), ...options.config,
   });
   exec.attach();
   await broker.start();
@@ -406,6 +406,37 @@ describe('místní služba: částečné zavření přes vlastní TP jedné ochr
     await t.run({ op: 'reduce', clientId: 'q1', symbol: 'ESZ6' });
     // 6997 − 8 ticků = 6995
     expect([...t.server.orders.values()].filter((o) => o.status === 'open' && o.price === 6995)).toHaveLength(1);
+    t.broker.stop();
+  });
+
+  it('pozice klesne kvůli SL druhé části, výstup dál pracuje → žádný úspěch; nejistý krok zastaví další posuny do potvrzení', async () => {
+    const t = await twoParts();
+    await addOne(t);
+    const stops = t.exec.state().orders.filter((o) => o.role === 'stop');
+    const pending = t.run({ op: 'reduce', clientId: 'r5', symbol: 'ESZ6' });
+    await sleep(60);
+    const moved = [...t.server.orders.values()].find((o) => o.status === 'open' && o.price === 6998)!;
+    const otherStop = stops.map((o) => t.server.orders.get(o.orderId)!).find((o) => o.parent !== moved.parent)!;
+    t.server.fill(otherStop.basketId, 6980);
+    expect(await pending).toMatchObject({ ok: false, sent: 'unknown' });
+    // stejná zpráva podruhé nic neodešle; posun noh stojí do potvrzení
+    expect(await t.run({ op: 'reduce', clientId: 'r5', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    const leftStop = t.exec.state().orders.find((o) => o.role === 'stop')!;
+    expect(await t.run({ op: 'move', orderId: leftStop.orderId, price: 6978 })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
+  it('bez čerstvé nabídky a poptávky se částečné zavření neodešle', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, serverQuote: () => null } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    await addOne(t);
+    const frames = t.frames();
+    expect(await t.run({ op: 'reduce', clientId: 'r6', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/nabídku a poptávku/) });
+    expect([...t.server.orders.values()].filter((o) => o.status === 'open' && o.priceType === 1 && o.price !== 7030)).toHaveLength(0);
+    expect(t.frames()).toBe(frames);
     t.broker.stop();
   });
 

@@ -980,7 +980,10 @@ export class LocalExec {
           const symbol = typeof command.symbol === 'string' ? command.symbol : '';
           const spec = this.config.symbols[symbol];
           if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
-          if (!CLIENT_ID.test(typeof command.clientId === 'string' ? command.clientId : '')) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          const reduceId = typeof command.clientId === 'string' ? command.clientId : '';
+          if (!CLIENT_ID.test(reduceId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          // Stejná zpráva podruhé (opakované doručení) nesmí zavřít další část.
+          if (this.seenClientIds.has(`reduce:${reduceId}`)) refuse('příkaz s tímto clientId už byl přijat');
           const net0 = this.positions.get(symbol)?.netQuantity ?? 0;
           if (Math.abs(net0) < 2) return refuse('částečně zavřít jde jen pozici s aspoň 2 kontrakty');
           if (this.legsUncertain.has(symbol) || this.legsMoving.has(symbol)) return refuse('posun SL/TP na tomto kontraktu právě běží nebo skončil nejistě — ověř ceny u brokera a potvrď incident');
@@ -1031,19 +1034,24 @@ export class LocalExec {
           // Kotace dál než 40 ticků od ceny služby se nebere (stará).
           const quote = this.config.serverQuote?.(symbol) ?? null;
           const side = long ? quote?.bid : quote?.ask;
-          const near = typeof side === 'number' && Number.isFinite(side) && Math.abs(side - server) <= 40 * spec.tickSize;
-          const base = near ? (long ? Math.min(side as number, server) : Math.max(side as number, server)) : server;
+          // Bez čerstvé kotace se nezkouší naslepo: výstup by mohl zůstat viset (TP blíž trhu, výsledek neznámý).
+          if (typeof side !== 'number' || !Number.isFinite(side) || Math.abs(side - server) > 40 * spec.tickSize) return refuse('služba nemá čerstvou nabídku a poptávku — částečné zavření neodesílám (jde zavřít celou pozici)');
+          const base = long ? Math.min(side, server) : Math.max(side, server);
           const price = Math.round((long ? base - through : base + through) / spec.tickSize) * spec.tickSize;
           if (!(price > 0) || !this.onGrid(price, spec.tickSize)) return refuse('cenu výstupu nejde spočítat');
           // SL té ochrany nesmí být už za touto cenou (trh je u SL) — pak ať rozhodne SL nebo celé zavření.
           if (long ? price <= chosen.stop.stopPrice! : price >= chosen.stop.stopPrice!) return refuse('trh je příliš blízko SL — částečné zavření neodesílám');
+          this.seenClientIds.add(`reduce:${reduceId}`);
           this.legsMoving.add(symbol);
           try {
             await this.broker.modifyOrder(accountId, chosen.target.brokerOrderId, { quantity: chosen.target.quantity, orderType: 'Limit', limitPrice: price });
             const deadline = this.now() + (this.config.reduceConfirmMs ?? 3_000);
             for (;;) {
               const net = this.positions.get(symbol)?.netQuantity ?? 0;
-              if (Math.sign(net) === Math.sign(net0) && Math.abs(net) === Math.abs(net0) - chosen.quantity) {
+              // Úspěch = vyplnil se PRÁVĚ tento výstup a pozice tomu odpovídá. Samotný pokles pozice nestačí —
+              // mohl ho způsobit SL jiné části, zatímco tento výstup dál pracuje u trhu.
+              const exit = this.orders.get(chosen.target.brokerOrderId);
+              if (exit?.status === 'filled' && Math.sign(net) === Math.sign(net0) && Math.abs(net) === Math.abs(net0) - chosen.quantity) {
                 return { ok: true, result: { orderId: chosen.target.brokerOrderId, quantity: chosen.quantity, price } };
               }
               if (this.now() >= deadline) {
@@ -1051,6 +1059,10 @@ export class LocalExec {
                 // (SL, ruční zásah) — obojí musí vidět a posoudit obsluha.
                 const order = this.orders.get(chosen.target.brokerOrderId);
                 const working = order !== undefined && !TERMINAL.has(order.status);
+                // Nejistý krok nad ochranou → další posuny noh a přikoupení stojí do potvrzení obsluhou
+                // (stejné pravidlo jako u posunu více noh). Zavření pozice jde vždy.
+                this.legsUncertain.add(symbol);
+                this.changed();
                 return { ok: false, sent: 'unknown', error: working && net === net0
                   ? 'výstup je u trhu, ale ještě se nevyplnil — sleduj pozici (TP té části je teď blíž trhu)'
                   : 'pozice se změnila jinak, než odpovídá částečnému zavření — ověř stav' };
