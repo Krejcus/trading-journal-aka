@@ -203,6 +203,84 @@ describe('místní služba: Stop vstup', () => {
   });
 });
 
+describe('místní služba: přikoupení a posun dvou ochran', () => {
+  const add = (extra: Record<string, unknown> = {}) => entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030, ...extra });
+  async function inPosition(config: Record<string, unknown> = {}) {
+    const t = await setup({ config: { positionSettleMs: 20, ...config } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const firstId = (first as { result: { orderId: string } }).result.orderId;
+    t.server.fill(firstId, 6990);
+    await sleep(120);
+    return { t, firstId };
+  }
+
+  it('přikoupení: jen Market na stranu pozice se stejnými SL/TP do pozice se SL i TP', async () => {
+    const { t } = await inPosition();
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 1 })]);
+    const frames = t.frames();
+    // Limit, Stop, opačná strana, holý vstup, jiné SL nebo TP → nic neodejde
+    expect(await t.run(entry({ limitPrice: 6985, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(entry({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(add({ side: 'Sell', stopPrice: 7030, targetPrice: 6980 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(add({ stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(add({ stopPrice: 6985 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(add({ targetPrice: 7025 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(add({ targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    const placed = await t.run(add());
+    expect(placed).toMatchObject({ ok: true, result: { stopTicks: 80, targetTicks: 120 } });
+    expect(t.frames()).toBe(frames + 1);
+    t.broker.stop();
+  });
+
+  it('přikoupení nejde do pozice bez ochrany, se samostatnou ochranou ani těsně po vyplnění', async () => {
+    const bare = await setup({ config: { positionSettleMs: 20 } });
+    const placed = await bare.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    bare.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    expect(await bare.run(add())).toMatchObject({ ok: false, sent: false });
+    bare.broker.stop();
+    // výchozí usazení 1 s → hned po vyplnění ne
+    const fresh = await setup();
+    const first = await fresh.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    fresh.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    const reply = await fresh.run(add());
+    expect(reply).toMatchObject({ ok: false, sent: false });
+    expect((reply as { error: string }).error).toMatch(/právě mění/);
+    fresh.broker.stop();
+  });
+
+  it('dvě ochrany: posun jedné nohy ne, posun obou najednou ano; změněný stav a nejistota další posun zastaví', async () => {
+    const { t } = await inPosition({ moveConfirmMs: 200 });
+    const placed = await t.run(add());
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 7000);
+    await sleep(160);
+    const state = t.exec.state();
+    expect(state.positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    const stops = state.orders.filter((o) => o.role === 'stop');
+    expect(stops).toHaveLength(2);
+    const expect2 = stops.map((o) => ({ orderId: o.orderId, price: o.price! }));
+    // jedna z více noh přes `move` ne
+    expect(await t.run({ op: 'move', orderId: stops[0].orderId, price: 6985 })).toMatchObject({ ok: false, sent: false });
+    // špatné „co jsem viděl" (jen jedna noha, nebo jiná cena) ne
+    expect(await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: expect2.slice(0, 1) })).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: expect2.map((item) => ({ ...item, price: item.price + 1 })) })).toMatchObject({ ok: false, sent: false });
+    // špatná strana trhu ne
+    expect(await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 7005, expect: expect2 })).toMatchObject({ ok: false, sent: false });
+    const moved = await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: expect2 });
+    expect(moved.ok).toBe(true);
+    await sleep(60);
+    expect(t.exec.state().orders.filter((o) => o.role === 'stop').map((o) => o.price)).toEqual([6985, 6985]);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: posun, incidenty, stav', () => {
   it('posun jde jen u SL/TP vlastního vstupu a vlastního Limitu; cizí příkaz a cena mimo krok ne', async () => {
     const t = await setup();

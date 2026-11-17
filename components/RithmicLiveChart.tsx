@@ -80,10 +80,11 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
     // Výpadek hlásí karta jen krátce (po obnově by lhala); trvalý stav nese štítek účtu v hlavičce.
     ...(link !== 'open' ? [{ ...card(`rithmic-link-down:${downSince.current}`, 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.'), sticky: false, ms: 8_000 }] : []),
+    ...(trading.legsNote ? [card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Dvě ochrany na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš obě.`)] : []),
     ...(blocked ? [card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
-  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
@@ -124,6 +125,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         {...(trading.bareLegTrade ? { bareLegTrade: trading.bareLegTrade, onBareLeg: trading.onBareLeg } : {})}
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
         entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported
+        entryScaleIn={trading.scaleIn}
         entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />

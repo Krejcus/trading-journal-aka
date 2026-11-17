@@ -13,6 +13,7 @@ import type { MarketCandle } from '../services/marketDataCalculations';
 import type { LocalExecCommand, LocalExecOrderView, LocalExecState } from '../services/rithmic/localExec';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
+import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
 export const RITHMIC_SOLO_ACCOUNT = 1;
@@ -91,6 +92,23 @@ export function rithmicFlattenReply(reply: Reply): Reply {
   if (result.status === 'submitted' || result.status === 'already-flat') return reply;
   if (result.status === 'rejected') return { ok: false, sent: false, error: reason ?? 'Rithmic zavření pozice odmítl.' };
   return { ok: false, sent: 'unknown', error: reason ?? 'Výsledek zavření není znám — ověř stav.' };
+}
+
+/** Pracující nohy pozice podle role a která z nich se kreslí jako čára. Čistá funkce, jen zobrazení. */
+export function rithmicLegView(orders: readonly LocalExecOrderView[], net: number) {
+  const working = (role: 'stop' | 'target') => orders.filter((order) => order.role === role && order.status === 'working' && order.price !== undefined);
+  const stops = working('stop');
+  const targets = working('target');
+  const long = net >= 0;
+  const pick = (list: LocalExecOrderView[], highest: boolean) => list.reduce<LocalExecOrderView | null>((best, order) => (!best || (highest ? order.price! > best.price! : order.price! < best.price!) ? order : best), null);
+  // Fallback na nepotvrzenou nohu, ať čára nezmizí během změny.
+  const any = (role: 'stop' | 'target') => orders.find((order) => order.role === role) ?? null;
+  const stop = pick(stops, long) ?? any('stop');
+  const target = pick(targets, !long) ?? any('target');
+  const prices = (list: LocalExecOrderView[]) => [...new Set(list.map((order) => order.price!))].sort((a, b) => a - b);
+  const note = [prices(stops).length > 1 ? `SL má ${prices(stops).length} ceny (${prices(stops).map((value) => value.toFixed(2)).join(' / ')})` : null,
+    prices(targets).length > 1 ? `TP má ${prices(targets).length} ceny (${prices(targets).map((value) => value.toFixed(2)).join(' / ')})` : null].filter(Boolean).join(', ') || null;
+  return { stops, targets, stop, target, note };
 }
 
 interface Seen { net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null }
@@ -277,14 +295,15 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const entryReady = available && feedLive && !silent && price !== null;
   const silentRef = useRef(false);
   silentRef.current = silent;
+  const scaleInRef = useRef<LiveTicketScaleIn | null>(null);
   const availableRef = useRef(false);
   availableRef.current = available;
   const entryReadyRef = useRef(false);
   entryReadyRef.current = entryReady;
-  const IN_POSITION = 'V pozici další vstup zatím nejde (přikoupení služba neumí) — nejdřív pozici zavři.';
+  const IN_POSITION = 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP, nejvýš 2 kontrakty).';
   const NOT_READY = 'Spojení s Rithmicem není připravené — nic se neodeslalo.';
   const inPosition = Boolean(state?.positions.some((item) => item.symbol === hello?.symbol));
-  const entryBlockedReason = entryReady ? (inPosition ? IN_POSITION : null)
+  const entryBlockedReason = entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
     : link !== 'open' ? 'Místní proces Rithmicu není připojený.'
     : !state?.connected ? 'Rithmic je odpojený.'
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
@@ -309,14 +328,29 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const orders = state?.orders.filter((order) => order.symbol === symbol) ?? [];
   const net = state?.positions.find((item) => item.symbol === symbol) ?? null;
   const entryOrder = !net ? orders.find((order) => order.role === 'entry' && order.price !== undefined) ?? null : null;
-  const stopOrder = orders.find((order) => order.role === 'stop') ?? null;
-  const targetOrder = orders.find((order) => order.role === 'target') ?? null;
+  // Pozice může mít dvě ochrany (přikoupení): čára ukazuje OCHRANNĚJŠÍ SL (blíž trhu) a BLIŽŠÍ TP.
+  const legView = rithmicLegView(orders, net?.netQuantity ?? 0);
+  const stopOrder = legView.stop;
+  const targetOrder = legView.target;
 
   // Podklad pro čipy „+ SL / + TP" a práci s nohami otevřené pozice. Jen zobrazení; příkaz ověří služba.
   const bareLegTrade = useMemo<BareLeaderTrade | null>(() => (net && net.averagePrice !== undefined ? {
     entryOperationId: `rithmic:${symbol}`, symbol, side: net.netQuantity > 0 ? 'Buy' : 'Sell', quantity: Math.abs(net.netQuantity), referencePrice: net.averagePrice,
     hasStop: stopOrder != null, hasTarget: targetOrder != null,
   } as BareLeaderTrade : null), [symbol, net?.netQuantity, net?.averagePrice, stopOrder != null, targetOrder != null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Režim přikoupení v lístku: jen pozice se SL i TP ze vstupů (ne samostatná ochrana). Jestli opravdu jde, ověří služba.
+  const scaleIn = useMemo<LiveTicketScaleIn | null>(() => {
+    if (!net) return null;
+    const quantity = Math.abs(net.netQuantity);
+    const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
+    if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
+    const reason = legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
+      : legView.stops.length !== quantity || legView.targets.length !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.'
+      : quantity >= 2 ? 'Pozice má 2 kontrakty — víc služba nepustí.' : null;
+    return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason, pendingAdd: null };
+  }, [net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  scaleInRef.current = scaleIn;
 
   const position = useMemo<LiveChartPosition | null>(() => {
     if (!symbol) return null;
@@ -358,7 +392,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const base = { type: 'leader-entry-placed' as const, operationId, checkedAt: Date.now() };
     if (!entryReadyRef.current) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: NOT_READY }] };
     // Přikoupení služba neumí: druhý vstup by měl vlastní (nebo žádnou) ochranu a graf by ji ukázal jako ochranu celé pozice.
-    if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: IN_POSITION }] };
+    if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) {
+      // Přikoupení: jen Market na stranu pozice a jen když ho režim přikoupení nabízí; všechno znovu ověří služba.
+      const add = scaleInRef.current;
+      const sameSide = add && (draft.side === 'Buy') === (add.side === 'buy');
+      if (!add?.canAdd || !sameSide || draft.orderType !== 'Market') return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: add && !add.canAdd ? add.reason ?? IN_POSITION : IN_POSITION }] };
+    }
     const clientId = operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(-28) || newId();
     const tag = `ui-${clientId}`;
     const sym = symbolRef.current;
@@ -388,10 +427,17 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (silentRef.current && action !== 'close-position') return blocked('Místní proces neodpovídá — nic se neodeslalo. Zavřít pozici jde.');
     if (action === 'move-stop' || action === 'move-target') {
       const role = action === 'move-stop' ? 'stop' : 'target';
-      const leg = list.find((order) => order.role === role);
-      if (!leg) return blocked(`Pozice nemá ${role === 'stop' ? 'SL' : 'TP'} — přidat ho služba zatím neumí. Pozici jde jen zavřít.`);
+      const view = rithmicLegView(list, current?.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0);
+      const legs = role === 'stop' ? view.stops : view.targets;
+      const leg = role === 'stop' ? view.stop : view.target;
+      if (!leg) return blocked(`Pozice nemá ${role === 'stop' ? 'SL' : 'TP'} — přidej ho čipem u čáry pozice, nebo pozici zavři.`);
       if (leg.price !== expectPrice) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
       if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
+      if (legs.length > 1) {
+        // Dvě ochrany: posouvají se obě najednou (a tím se srovnají na jednu cenu).
+        measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => rithmicLegView(s.orders.filter((order) => order.symbol === sym), 1)[role === 'stop' ? 'stops' : 'targets'].every((order) => order.price === newPrice));
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: newPrice, expect: legs.map((order) => ({ orderId: order.orderId, price: order.price! })) }));
+      }
       measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === newPrice));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: newPrice }));
     }
@@ -439,7 +485,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const list = stateRef.current?.orders.filter((order) => order.symbol === sym) ?? [];
     const role = intent.leg === 'stopLoss' ? 'stop' : 'target';
     const name = role === 'stop' ? 'SL' : 'TP';
-    const leg = list.find((order) => order.role === role && order.status === 'working');
+    const view = rithmicLegView(list, stateRef.current?.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0);
+    const legs = role === 'stop' ? view.stops : view.targets;
+    const leg = legs.length ? (role === 'stop' ? view.stop : view.target) : null;
     if (intent.kind === 'add') {
       if (leg) return blocked(`Pozice už ${name} má.`);
       if (list.length > 0) return blocked(`Pozice už má ${role === 'stop' ? 'TP' : 'SL'} — k pozici jde zatím mít jen SL, nebo jen TP (ne obojí).`);
@@ -449,6 +497,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!leg) return blocked(`Pozice ${name} nemá.`);
     if (intent.kind === 'move') {
       if (leg.price !== intent.current) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
+      if (legs.length > 1) {
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: intent.price, expect: legs.map((order) => ({ orderId: order.orderId, price: order.price! })) }));
+      }
       measure(`Posun ${name} → čára`, (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === intent.price));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: intent.price }));
     }
@@ -489,6 +540,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
-    onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack,
+    onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack, scaleIn, legsNote: legView.note,
   };
 }

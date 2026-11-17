@@ -194,6 +194,22 @@ describe('vstup se serverovou ochranou', () => {
     t.broker.stop();
   });
 
+  it('podmínka volajícího se vyhodnotí těsně před zápisem: s důvodem nic neodejde a záměr nezůstane', async () => {
+    const t = await setup();
+    const frames = t.sent(330);
+    let asked = 0;
+    const error = await thrown(t.broker.placeBracket({ ...bracket(t, 'guard1', { limitPrice: 6900 }), guard: () => { asked += 1; return 'pozice se mezitím zavřela'; } }));
+    expect(error).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(error.message).toMatch(/pozice se mezitím zavřela/);
+    expect(asked).toBe(1);
+    expect(t.sent(330)).toBe(frames);
+    expect(t.broker.unresolvedBracketTags(t.account(), 'ESZ6')).toEqual([]);
+    // bez důvodu projde a stejná značka jde použít (záměr po odmítnutí nezůstal)
+    await t.broker.placeBracket({ ...bracket(t, 'guard1', { limitPrice: 6900 }), guard: () => null });
+    expect(t.sent(330)).toBe(frames + 1);
+    t.broker.stop();
+  });
+
   it('stejná značka podruhé se neodešle; neplatné ticky a chybějící SL i TP také ne', async () => {
     const t = await setup();
     await t.broker.placeBracket(bracket(t, 'dup'));
