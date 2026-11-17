@@ -31,7 +31,7 @@ interface Props {
   onCrash: () => void;
 }
 
-const card = (id: string, tone: TradeToast['tone'], badge: string, title: string, line: string): TradeToast => ({ id, at: 0, tone, badge, title, line, pnl: null, accounts: 0, sticky: true, wrapLine: true });
+const card = (id: string, tone: TradeToast['tone'], badge: string, title: string, line: string): TradeToast => ({ id, at: Date.now(), tone, badge, title, line, pnl: null, accounts: 0, sticky: true, wrapLine: true });
 
 const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash }) => {
   const url = useMemo(rithmicLocalUrl, []);
