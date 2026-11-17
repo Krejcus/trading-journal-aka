@@ -66,3 +66,10 @@ ochrany; opačné pořadí by dalo ochranu na víc kusů, než pozice má (při 
 k kusů zůstane bez ochrany → incident a rozhodnutí člověka. Je to stejný vzor jako výměna ochrany za svázaný pár;
 před stavbou chce vlastní návrh, oponenturu a měření obou kroků. Zatím platí: část jde zavřít jen u pozice ze
 dvou vstupů (vstup + přikoupení).
+
+### Proč se dělení jednoho vstupu nestaví hned (17. 11. večer)
+
+Adaptér i hlídač ochrany dnes počítají s tím, že nohy mají přesně množství vstupu: adaptér změnu množství nohy
+odmítá a hlídač by zmenšené nohy vyhodnotil jako neúplnou ochranu (incident + blokace). Dělení vstupu tedy není
+jen nový příkaz služby — musí se změnit trvalý záznam ochrany (kolik kusů má ochrana krýt) a pravidla hlídače.
+To je zásah do jádra ochrany pozice a patří mu vlastní návrh, oponentura a měření, ne úprava za běhu ostrého testu.
