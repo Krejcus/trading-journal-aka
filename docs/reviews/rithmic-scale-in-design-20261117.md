@@ -72,3 +72,31 @@ INV-DEFAULT-02 (bez splnění podmínek odmítnout), INV-UI-01 (obrazovka nic ne
    by otevřel novou pozici se svou ochranou. Je to přijatelné (má vlastní SL/TP), nebo má služba
    po zavření pozice hlásit incident? Tradovate cesta takový vstup ruší; tady by to byl
    automatický zápis.
+
+## v2 po oponentuře critica (17. 11.) — tohle platí
+
+Verdikt critica k v1: „UPRAVIT NÁVRH". Změny:
+
+1. **První verze jen MARKET přikoupení.** Čekající přikoupení (Limit/Stop) se nestaví: po zavření
+   pozice by otevřelo obchod, který uživatel nezamýšlel, a posun SL pozice během čekání by rozešel
+   jeho plánované nohy (změna ticků čekající ochrany není změřená).
+2. **Nejvýš 2 ochrany** (drží `maxPosition: 2`) — `move-legs` jsou nejvýš 2 zápisy a vejdou se do
+   lhůty odpovědi.
+3. **Podmínky přikoupení navíc:** prázdné `fillsAhead`, žádná rezervace kontraktu, usazená pozice
+   (jako u `protect`), a služba zná role VŠECH pracujících příkazů kontraktu (po restartu bez
+   záměrů → odmítnout přikoupení i `move-legs`).
+4. **Proč se po skluzu nic nesrovnává:** každý vstup má vlastní ochranu na své množství. Když se
+   vyplní noha první ochrany, zbude 1 ks s vlastním SL/TP. Rozdílné ceny noh proto nejsou díra
+   v ochraně, jen dvě různé úrovně výstupu.
+5. **Stav „dvě ceny":** graf kreslí jako čáru OCHRANNĚJŠÍ SL (bližší trhu) a BLIŽŠÍ TP a u pozice
+   napíše „SL 2 ceny" / „TP 2 ceny". ×, brzda i BE fungují dál; BE a každý posun role jde přes
+   `move-legs` a tím ceny srovná. Další přikoupení se ve stavu dvou cen nenabízí (strop je stejně 2).
+6. **`move-legs`:** před KAŽDÝM zápisem znovu ověří, že noha pracuje a pozice se nezměnila; zastaví
+   po první chybě (i neodeslané); výsledek vyjmenuje, které nohy novou cenu mají. Nejistý výsledek
+   se zapíše mezi nejisté příkazy (neschovává se).
+7. **Všechny cesty posunu jdou přes `move-legs`, když má role víc noh:** tažení čáry, BE, panel
+   Správa, Shift+E (`onBareLeg` i `onManageEntry` v hooku). Služba posun JEDNÉ z více noh role
+   přes `move` odmítne.
+8. **Obrazovka:** hook plní `entryScaleIn` jen když jsou splněné podmínky (pozice celá krytá, jedna
+   cena na roli, 1 ks, Market); texty režimu přikoupení, které mluví o skupině/workeru/Flattenu,
+   dostanou solo variantu. Pozice jen se SL (bez TP) smí přikoupit jen se SL.
