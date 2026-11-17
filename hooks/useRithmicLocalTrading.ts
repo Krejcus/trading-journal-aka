@@ -322,6 +322,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!symbol) return null;
     // Bez stavu z živého spojení se „bez pozice" netvrdí — neznámé není flat.
     if (!state) return { key: 'rithmic-unknown', symbol: null, lines: [], summary: null, issue: 'Stav u Rithmicu není znám (spojení s místním procesem)', issueKind: 'unknown' };
+    // Ochranný příkaz bez pozice by po spuštění otevřel opačnou pozici — musí být vidět i bez čar.
+    if (!net && orders.some((order) => order.status === 'working' && order.tag?.startsWith('uiprot-'))) {
+      return { key: 'rithmic-orphan-protection', symbol: null, lines: [], summary: null, issue: 'Ochranný SL/TP pracuje bez pozice — zruš ho tlačítkem Zavřít pozici', issueKind: 'unknown' };
+    }
     let summary: LiveChartPositionSummary | null = null;
     if (net && net.averagePrice !== undefined) {
       const quantity = Math.abs(net.netQuantity);
@@ -342,7 +346,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     // Slot překresluje jen při změně klíče → patří do něj vše, co má být v grafu aktuální.
     const key = JSON.stringify([symbol, summary?.kind, summary?.side, summary?.quantity, summary?.entry, summary?.stop, summary?.target, summary?.mark, summary?.openPnl]);
     return { key, symbol, lines: [], summary, issue: null };
-  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const marketData = useMemo<LiveTradingMarketData | null>(() => (candles.length && symbol ? ({
     candles,

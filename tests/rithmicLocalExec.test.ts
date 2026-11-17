@@ -252,11 +252,36 @@ describe('místní služba: posun, incidenty, stav', () => {
     // druhý výstupní příkaz (TP k pozici se SL) ne — dva nesvázané výstupy
     expect(await t.run(protect({ kind: 'target', price: 7010 }))).toMatchObject({ ok: false, sent: false });
     expect(t.frames()).toBe(frames + 1);
+    // při pracující ochraně další vstup ne (služba, nejen obrazovka)
+    expect(await t.run(entry({ side: 'Sell', limitPrice: 7010, stopPrice: 7020, targetPrice: 6995 }))).toMatchObject({ ok: false, sent: false });
+    // posun na špatnou stranu trhu nebo bez ceny služby ne
+    expect(await t.run({ op: 'move', orderId: stopId, price: 7005 })).toMatchObject({ ok: false, sent: false });
+    t.setPrice(null);
+    expect(await t.run({ op: 'move', orderId: stopId, price: 6985 })).toMatchObject({ ok: false, sent: false });
+    t.setPrice(7000);
     // posun: jen cena, typ zůstává stop
     expect((await t.run({ op: 'move', orderId: stopId, price: 6985 })).ok).toBe(true);
     await sleep(60);
     expect(t.server.orders.get(stopId)).toMatchObject({ priceType: 4, triggerPrice: 6985, quantity: 1 });
     expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('vyplnění samostatné ochrany není incident (pořadí zpráv o pozici a příkazu nerozhoduje)', async () => {
+    const t = await setup({ config: { protectiveGraceMs: 60 } });
+    const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    t.server.fill((bare as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(80);
+    const placed = await t.run({ op: 'protect', clientId: 'fill1', symbol: 'ESZ6', kind: 'target', price: 7010 });
+    const targetId = (placed as { result: { orderId: string } }).result.orderId;
+    await sleep(100);
+    t.server.fill(targetId, 7010);
+    await sleep(200);
+    const state = t.exec.state();
+    expect(state.positions).toEqual([]);
+    expect(state.blocked).toBeNull();
+    expect(state.incidents.some((incident) => incident.kind === 'protective-order-mismatch')).toBe(false);
     t.broker.stop();
   });
 
@@ -275,9 +300,8 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.server.orders.set('901', { basketId: '901', accountId: 'ACC1', userTag: 'cizi', symbol: 'ESZ6', exchange: 'CME', side: 2, priceType: 2, quantity: 1, price: 0, triggerPrice: 0, status: 'open', filled: 0 });
     t.server.notifyLive('901', 1);
     t.server.fill('901', 7000);
-    await sleep(120);
-    t.server.notifyLive(targetId, 1);
-    await sleep(80);
+    // žádná další zpráva o příkazu nepřijde — nesoulad musí ohlásit časovač, ne příští událost
+    await sleep(220);
     const state = t.exec.state();
     expect(state.blocked).toMatch(/protective-order-mismatch/);
     expect(t.server.orders.get(targetId)!.status).toBe('open');

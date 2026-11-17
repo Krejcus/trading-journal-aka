@@ -187,27 +187,43 @@ export class LocalExec {
   /**
    * Samostatná ochrana bez pozice, nebo s jiným množstvím než pozice: nic se samo neruší ani nemění
    * (ochrana se nikdy neopravuje obchodem) — jen se zastaví nové vstupy a obsluha rozhodne.
-   * Krátká prodleva po vzniku příkazu: zpráva o pozici smí přijít o chvíli později.
+   * Nesoulad se hlásí, až když VYDRŽÍ celou lhůtu (pořadí zpráv o pozici a o příkazu není zaručené:
+   * vyplnění ochrany smí na chvíli vypadat jako „příkaz bez pozice"). Lhůtu hlídá časovač, ne další
+   * událost — na klidném účtu by sirotek jinak zůstal neohlášený.
    */
-  private readonly protectiveSeen = new Map<string, number>();
+  private readonly protectiveMismatchSince = new Map<string, number>();
   private readonly protectiveReported = new Set<string>();
+  private protectiveTimer: ReturnType<typeof setTimeout> | null = null;
   private watchProtective(): void {
+    const grace = this.config.protectiveGraceMs ?? 3_000;
+    let recheckIn: number | null = null;
     for (const order of this.orders.values()) {
       if (!order.tag?.startsWith(PROTECT_TAG)) continue;
       const id = order.brokerOrderId;
-      if (TERMINAL.has(order.status)) { this.protectiveSeen.delete(id); continue; }
-      if (!this.protectiveSeen.has(id)) this.protectiveSeen.set(id, this.now());
-      if (this.protectiveReported.has(id) || this.now() - this.protectiveSeen.get(id)! < (this.config.protectiveGraceMs ?? 3_000)) continue;
+      if (TERMINAL.has(order.status) || this.protectiveReported.has(id)) { this.protectiveMismatchSince.delete(id); continue; }
       const net = this.positions.get(order.symbol)?.netQuantity ?? 0;
       const closes = order.side === 'Sell' ? net > 0 : net < 0;
       const open = order.quantity - order.filledQuantity;
-      if (closes && open === Math.abs(net)) continue;
+      if (closes && open === Math.abs(net)) { this.protectiveMismatchSince.delete(id); continue; }
+      const since = this.protectiveMismatchSince.get(id) ?? this.now();
+      this.protectiveMismatchSince.set(id, since);
+      const left = grace - (this.now() - since);
+      if (left > 0) { recheckIn = recheckIn === null ? left : Math.min(recheckIn, left); continue; }
       this.protectiveReported.add(id);
+      this.protectiveMismatchSince.delete(id);
       const what = net === 0 ? 'pracuje bez pozice' : !closes ? 'je na stejné straně jako pozice' : `má ${open} ks, pozice ${Math.abs(net)}`;
       const message = `ochranný příkaz ${id} (${order.symbol}) ${what} — nic neměním, zruš ho nebo zavři pozici ručně`;
       this.incidents.push({ kind: 'protective-order-mismatch', message, at: this.now() });
       if (this.incidents.length > 30) this.incidents.shift();
       this.blocked = `protective-order-mismatch: ${message}`.slice(0, 240);
+    }
+    if (recheckIn !== null && !this.protectiveTimer) {
+      this.protectiveTimer = setTimeout(() => {
+        this.protectiveTimer = null;
+        this.watchProtective();
+        this.changed();
+      }, recheckIn + 5);
+      (this.protectiveTimer as { unref?: () => void }).unref?.();
     }
   }
 
@@ -288,6 +304,11 @@ export class LocalExec {
       switch (command.op) {
         case 'ack':
           this.blocked = null;
+          // Nejistý zápis ochrany, který se v knize neobjevil, nesmí blokovat další ochranu navždy:
+          // obsluha potvrzením říká, že stav u brokera zkontrolovala.
+          for (const [reservedTag] of this.reserved) {
+            if (reservedTag.startsWith(PROTECT_TAG) && ![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
+          }
           this.changed();
           return { ok: true, result: { acknowledged: true } };
         case 'entry': {
@@ -302,6 +323,11 @@ export class LocalExec {
           const quantity = command.quantity;
           if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > this.config.maxQuantity) {
             return refuse(`množství ${String(quantity)} je mimo povolený rozsah 1–${this.config.maxQuantity}`);
+          }
+          // Pracující samostatná ochrana = pozice se hlídá jedním výstupem; další vstup by ji rozešel s pozicí
+          // (opačný by pozici zavřel a ochrana by zůstala sama, stejnosměrný by kryla jen zčásti).
+          if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith(PROTECT_TAG))) {
+            return refuse('pozice má samostatný SL/TP — další vstup teď nejde; nejdřív pozici zavři nebo ochranu zruš');
           }
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
           if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
@@ -465,7 +491,15 @@ export class LocalExec {
               await new Promise((resolve) => setTimeout(resolve, 25));
             }
           } else if (order.tag?.startsWith(PROTECT_TAG) && (order.orderType === 'Stop' || order.orderType === 'Limit')) {
-            // Samostatná ochrana: jen cena, typ ani množství se nemění.
+            // Samostatná ochrana: jen cena, typ ani množství se nemění. Stejné meze jako při zadání.
+            const server = this.config.serverPrice?.(order.symbol) ?? null;
+            if (server === null) return refuse('služba nemá čerstvou cenu — ochranu neposouvám');
+            const closesLong = order.side === 'Sell';
+            const below = price < server;
+            if (order.orderType === 'Stop' ? closesLong !== below : closesLong === below) return refuse('nová cena ochrany je na špatné straně trhu — spustila by se hned');
+            const distance = Math.round(Math.abs(price - server) / spec.tickSize);
+            if (distance < 1) return refuse('ochrana je příliš blízko trhu');
+            if (distance > (this.config.maxProtectionTicks ?? 400)) return refuse(`ochrana je ${distance} ticků od trhu — víc než povolených ${this.config.maxProtectionTicks ?? 400}`);
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: order.orderType, ...(order.orderType === 'Stop' ? { stopPrice: price } : { limitPrice: price }),
             });
