@@ -148,8 +148,11 @@ describe('hook místního procesu', () => {
     expect(close.match(/send\(/g)).toHaveLength(1);
     expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
     expect(hook).toMatch(/addUncertain = \(next: RithmicUncertainCommand\) => publishUncertain\(\[\.\.\.uncertainCommands\.filter\(item => item\.id !== next\.id\), next\]\.slice\(-5\)\)/);
-    expect(screen).toMatch(/\{solo\?\.emergencyClose && summary\?\.kind === 'position' && <button/);
-    expect(chart).toMatch(/link === 'open' \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
+    expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
+    expect(chart).toMatch(/link === 'open' && offerBrake \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
+    // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
+    expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
+    expect(close).toMatch(/addUncertain\(\{ id: `close-now:/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {

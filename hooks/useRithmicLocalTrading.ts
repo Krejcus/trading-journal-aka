@@ -392,13 +392,18 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     try {
       const reply = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       if (reply.ok) return { status: 'sent', text: null };
-      return reply.sent === false ? { status: 'blocked', text: reply.error ?? 'Neodesláno.' } : { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
+      if (reply.sent === false) return { status: 'blocked', text: reply.error ?? 'Neodesláno.' };
+      // Nejistý výsledek od služby (ne jen timeout/výpadek) musí být vidět — brzda nejde přes hlášky obrazovky.
+      addUncertain({ id: `close-now:${Date.now()}`, at: Date.now(), label: COMMAND_LABEL.flatten, reason: reply.error ?? 'výsledek není znám' });
+      return { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
     } finally { closingNow.current = false; }
   }, [send]);
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, entryReady, entryBlockedReason, silent, uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
+    available, entryReady, entryBlockedReason, silent,
+    /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
+    mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
     onPlaceEntry, onManageEntry, ack,
   };

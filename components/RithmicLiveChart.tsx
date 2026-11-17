@@ -63,9 +63,12 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeNote, setCloseNote] = useState<{ at: number; text: string } | null>(null);
   const { closeNow } = trading;
+  const closeRunning = useRef(false);
   const emergencyClose = useCallback(() => {
+    if (closeRunning.current) return; // dvojklik před překreslením
+    closeRunning.current = true;
     setCloseBusy(true);
-    void closeNow().then(result => setCloseNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => setCloseBusy(false));
+    void closeNow().then(result => setCloseNote(result.status === 'blocked' ? { at: Date.now(), text: result.text ?? 'Neodesláno.' } : null)).finally(() => { closeRunning.current = false; setCloseBusy(false); });
   }, [closeNow]);
   const extraToasts = useMemo<TradeToast[]>(() => [
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
@@ -77,8 +80,10 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
   ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí.
-  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, emergencyClose, closeBusy]);
+  // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
+  // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
+  const offerBrake = trading.mayHaveExposure || uncertainList.length > 0;
+  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });

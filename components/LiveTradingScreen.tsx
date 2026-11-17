@@ -1066,12 +1066,12 @@ const LiveTradingScreen: React.FC<Props> = ({
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
         {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
-        {solo?.emergencyClose && summary?.kind === 'position' && <button
+        {solo?.emergencyClose && <button
           type="button"
           data-solo-emergency-close
           disabled={solo.emergencyClose.busy}
           onClick={solo.emergencyClose.run}
-          title="Zavře pozici tohoto účtu hned Marketem a zruší její SL/TP. Nečeká na jiný rozběhnutý příkaz."
+          title="Zavře pozici tohoto účtu hned Marketem a zruší její příkazy. Nečeká na jiný rozběhnutý příkaz."
           className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/20 disabled:cursor-wait disabled:opacity-60"
         ><X size={12} />{solo.emergencyClose.busy ? 'Zavírám…' : 'Zavřít pozici'}</button>}
         {copierChip && <button
@@ -1089,7 +1089,7 @@ const LiveTradingScreen: React.FC<Props> = ({
             onClick={() => (disarm.unverified ? setDisarmConfirm(open => !open) : void runDisarm())}
             title="Vypne kopírku stejnou cestou jako Live Dashboard. Pozice nezavírá; followeři přestanou dostávat posuny SL a výstupy."
             className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/50 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/10 disabled:cursor-wait disabled:opacity-60"
-          ><Power size={12} />{disarmBusy ? 'Vypínám…' : disarm.label}</button>
+          ><Power size={12} />{disarmBusy ? 'Vypínám…' : solo ? `${disarm.label} Tradovate` : disarm.label}</button>
           {disarmConfirm && <div role="dialog" aria-label="Vypnout kopírku bez ověřeného stavu" className={`absolute right-0 top-[calc(100%+6px)] z-[95] grid w-[340px] gap-2 rounded-xl border p-3 text-[11.5px] leading-snug shadow-xl ${isDark ? 'border-white/10 bg-[#0d1219] text-slate-200' : 'border-slate-200 bg-white text-slate-800'}`}>
             <b className="text-[12.5px]">Vypnout kopírku bez ověřeného stavu?</b>
             <span>{UNVERIFIED_DISARM_TEXT}</span>
