@@ -2,12 +2,13 @@
 // Jeden účet mimo kopírku: příkazy jdou místnímu procesu, který je sám ověřuje (LocalExec).
 // `copier`, `disarm` a navigace jsou SKUTEČNÉ ze desku — stav kopírky Tradovate, OFF a cesta na
 // Dashboard zůstávají vidět i tady (INV-UI-02). Sdílený zámek příkazů desku se sem nepředává.
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import LiveTradingScreenSlot from './LiveTradingScreenSlot';
 import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
 import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
 import { rithmicLocalUrl } from '../lib/rithmicLocalLink';
+import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import type { TradeToast } from '../lib/liveTradeToasts';
 import { buildLiveStatusStrip } from '../services/liveStatusStrip';
 
@@ -90,7 +91,17 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const wasOpen = useRef(false);
   if (link === 'open') wasOpen.current = true;
   else if (wasOpen.current) { wasOpen.current = false; downSince.current = Date.now(); }
+  // Konec burzovní seance: denní příkazy (i SL/TP) burza zruší. Upozornění s předstihem, jen když je co ztratit.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const hasPosition = Boolean(trading.state?.positions.some(item => item.symbol === symbol));
+  const hasPendingEntry = Boolean(trading.state?.orders.some(order => order.symbol === symbol && order.role === 'entry' && order.status === 'working'));
+  const sessionWarning = link === 'open' ? cmeSessionCloseWarning(clock, { position: hasPosition, pendingEntry: hasPendingEntry }) : null;
   const extraToasts = useMemo<TradeToast[]>(() => [
+    ...(sessionWarning ? [card('rithmic-session-close', 'amber', 'Pozor', 'Blíží se konec seance', sessionWarning)] : []),
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
     ...uncertainList.map(item => item.confirmed ? card(`rithmic-verified:${item.id}`, 'green', 'Rithmic', 'Broker potvrdil stav příkazu', item.reason) : card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
     ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
@@ -106,7 +117,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
       : card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
-  ], [uncertainList, closeNote, reduceNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote, trading.readOnly, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [sessionWarning, uncertainList, closeNote, reduceNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote, trading.readOnly, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
