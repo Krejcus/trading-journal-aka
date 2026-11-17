@@ -188,8 +188,14 @@ describe('místní služba: Stop vstup', () => {
     t.server.notifyLive(entryId, 1, { price: 7025, price_type: undefined });
     await sleep(60);
     expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010, plannedStop: 7000, plannedTarget: 7030 });
-    // posun Stop vstupu služba zatím neumí
-    expect(await t.run({ op: 'move', orderId: entryId, price: 7012 })).toMatchObject({ ok: false, sent: false });
+    // posun Stop vstupu: jen spoušť, ochrana (vzdálenosti) jde s ním; spoušť nesmí přejít na druhou stranu trhu
+    expect(await t.run({ op: 'move', orderId: entryId, price: 6999 })).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'move', orderId: entryId, price: 7012.1 })).toMatchObject({ ok: false, sent: false });
+    expect((await t.run({ op: 'move', orderId: entryId, price: 7012 })).ok).toBe(true);
+    expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7012 });
+    expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7012, plannedStop: 7002, plannedTarget: 7032 });
+    t.setPrice(null);
+    expect(await t.run({ op: 'move', orderId: entryId, price: 7014 })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
   });
 
@@ -201,6 +207,10 @@ describe('místní služba: Stop vstup', () => {
     const entryId = (placed as { result: { orderId: string } }).result.orderId;
     expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7010 });
     expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010 });
+    // posun holého Stopu: jen spoušť, na správné straně trhu
+    expect(await t.run({ op: 'move', orderId: entryId, price: 7000 })).toMatchObject({ ok: false, sent: false });
+    expect((await t.run({ op: 'move', orderId: entryId, price: 7006 })).ok).toBe(true);
+    expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7006 });
     t.broker.stop();
   });
 });

@@ -196,6 +196,17 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
   });
 
+  it('posun čekajícího Stop vstupu: jen přes Rithmic (jeden účet), jen 1 kontrakt, s ochranou i bez', () => {
+    const stop = (patch = {}) => ({ kind: 'pending', side: 'long', quantity: 1, entry: 110, entryType: 'Stop', stop: 107, target: 116, ...patch }) as never;
+    // cesta kopírky Stop dál neposouvá
+    expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true })).toMatch(/jen čekající Limit/);
+    expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true })).toMatch(/zatím nejde/);
+    expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true, relativeLegs: true })).toBeNull();
+    expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true, relativeLegs: true })).toBeNull();
+    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true, relativeLegs: true })).toMatch(/1 kontraktu/);
+    expect(screen).toMatch(/stopEntryMove: solo != null,/);
+  });
+
   it('SL/TP k otevřené pozici: jen jeden z nich, odebrat jde jen samostatnou ochranu', () => {
     const leg = hook.slice(hook.indexOf('const onBareLeg = useCallback'), hook.indexOf('const ack = useCallback'));
     expect(leg).toMatch(/if \(list\.length > 0\) return blocked\(/);

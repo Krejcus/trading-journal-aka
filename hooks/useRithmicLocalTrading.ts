@@ -475,7 +475,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       const entry = list.find((order) => order.role === 'entry' && order.status === 'working' && order.price === expectPrice);
       if (!entry) return blocked('Čekající vstup s touto cenou už u Rithmicu není.');
       if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
-      measure('Posun Limitu → čára', (s) => s.orders.some((order) => order.orderId === entry.orderId && order.price === newPrice));
+      measure(entry.entryType === 'Stop' ? 'Posun Stopu → čára' : 'Posun Limitu → čára', (s) => s.orders.some((order) => order.orderId === entry.orderId && order.price === newPrice));
       return finish(await send({ op: 'move', orderId: entry.orderId, price: newPrice }));
     }
     if (action === 'cancel-entry') {

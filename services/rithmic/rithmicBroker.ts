@@ -1779,16 +1779,20 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const ownEntry = !ownLeg && known.brokerOrderType?.startsWith('BRACKET:') === true ? protection.bracketByEntry(accountId, brokerOrderId) : undefined;
       if (ownEntry) {
         if (known.filledQuantity > 0) throw new BrokerRequestNotSentError(`Rithmic: vstup ${brokerOrderId} se už plní — cenu neměním`);
-        if (known.limitPrice === undefined || known.stopPrice !== undefined) throw new BrokerRequestNotSentError(`Rithmic: vstup ${brokerOrderId} není čekající Limit — cenu neměním`);
-        if (changes.orderType !== 'Limit' || changes.stopPrice !== undefined) throw new BrokerRequestNotSentError('Rithmic: u vstupu s ochranou se mění jen limitní cena');
+        // Stop vstup (spoušť bez limitní ceny) i Limit: mění se jen ta jedna cena. Změřeno 17. 11. 2026 pro oba typy.
+        const stopEntry = known.stopPrice !== undefined;
+        if (!stopEntry && known.limitPrice === undefined) throw new BrokerRequestNotSentError(`Rithmic: vstup ${brokerOrderId} nemá cenu — neměním`);
+        if (changes.orderType !== (stopEntry ? 'Stop' : 'Limit')) throw new BrokerRequestNotSentError(`Rithmic: vstup s ochranou ${brokerOrderId} je ${stopEntry ? 'Stop' : 'Limit'}, typ se nemění`);
+        if (stopEntry ? changes.limitPrice !== undefined : changes.stopPrice !== undefined) throw new BrokerRequestNotSentError('Rithmic: u vstupu s ochranou se mění jen jeho vlastní cena');
         if (changes.quantity !== known.quantity) throw new BrokerRequestNotSentError(`Rithmic: množství vstupu s ochranou se nemění (má ${known.quantity}, požadováno ${changes.quantity})`);
-        if (typeof changes.limitPrice !== 'number' || !Number.isFinite(changes.limitPrice)) throw new BrokerRequestNotSentError('Rithmic: změna vstupu bez nové ceny');
+        const nextEntry = stopEntry ? changes.stopPrice : changes.limitPrice;
+        if (typeof nextEntry !== 'number' || !Number.isFinite(nextEntry)) throw new BrokerRequestNotSentError('Rithmic: změna vstupu bez nové ceny');
       }
       if (known.orderType === 'Unsupported' && !ownLeg && !ownEntry) {
         throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} je typu, který adaptér nemění (${known.brokerOrderType ?? 'neznámý'})`);
       }
       if (TERMINAL.has(known.status)) throw new BrokerRequestNotSentError(`Rithmic: příkaz ${brokerOrderId} už skončil, změnu neodesílám`);
-      let priceType = ownEntry ? 'LIMIT' as const : rithmicPriceType(changes.orderType);
+      let priceType = ownEntry ? (known.stopPrice !== undefined ? 'STOP_MARKET' as const : 'LIMIT' as const) : rithmicPriceType(changes.orderType);
       let price = changes.limitPrice;
       let triggerPrice = changes.stopPrice;
       if (ownLeg) {

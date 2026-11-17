@@ -632,23 +632,32 @@ export class LocalExec {
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
-          } else if (order.tag?.startsWith('ui-') && order.limitPrice !== undefined && order.stopPrice === undefined
-            && this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId)) {
-            // Čekající vlastní vstup s ochranou: jen cena. SL/TP jsou vzdálenosti od vyplnění, posunou se s ním.
+          } else if (order.tag?.startsWith('ui-') && (order.limitPrice !== undefined || order.stopPrice !== undefined)
+            && (this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId) || order.orderType === 'Stop')) {
+            // Čekající vlastní vstup s ochranou (Limit i Stop) a vlastní holý Stop: mění se jen jeho cena.
+            // SL/TP jsou vzdálenosti od vyplnění, posunou se s ním.
+            const stopEntry = order.stopPrice !== undefined;
+            const bracketed = this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId);
             if (order.filledQuantity > 0) return refuse('vstup se už plní — cenu neměním');
             // Částečné plnění během změny není změřené → zatím jen 1 kontrakt (ten se částečně nevyplní).
-            if (order.quantity !== 1) return refuse('posun vstupu s ochranou jde zatím jen u 1 kontraktu');
+            if (order.quantity !== 1) return refuse('posun čekajícího vstupu jde zatím jen u 1 kontraktu');
             const server = this.config.serverPrice?.(order.symbol) ?? null;
-            if (server === null) return refuse('služba nemá čerstvou cenu — posun vstupu s ochranou neodesílám');
-            // Přes trh by se vyplnil jinde, než kde graf ukazuje vstup i ochranu.
-            if (order.side === 'Buy' ? price > server : price < server) return refuse('nová cena Limitu je přes trh — vyplnil by se hned za jinou cenu; zruš ho a použij Market');
-            await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
-            // Úspěch až podle stavu: nová cena je v knize A příkaz je dál vstupem s ochranou. Zachování ochrany
-            // po změně stojí na měření z 17. 11. 2026 — kdyby ji Rithmic zahodil, musí se to poznat hned, ne až po vyplnění.
+            if (server === null) return refuse('služba nemá čerstvou cenu — posun vstupu neodesílám');
+            if (stopEntry) {
+              // Spoušť musí zůstat ZA trhem ve směru vstupu, jinak by se Stop spustil hned.
+              if (order.side === 'Buy' ? price <= server : price >= server) return refuse('nová spoušť Stopu je na špatné straně trhu — spustil by se hned');
+            } else if (order.side === 'Buy' ? price > server : price < server) {
+              // Přes trh by se vyplnil jinde, než kde graf ukazuje vstup i ochranu.
+              return refuse('nová cena Limitu je přes trh — vyplnil by se hned za jinou cenu; zruš ho a použij Market');
+            }
+            await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: stopEntry ? 'Stop' : 'Limit', ...(stopEntry ? { stopPrice: price } : { limitPrice: price }) });
+            // Úspěch až podle stavu: nová cena je v knize A (u vstupu s ochranou) příkaz ochranu dál nese. Zachování
+            // ochrany po změně stojí na měření z 17. 11. 2026 — kdyby ji Rithmic zahodil, musí se to poznat hned.
             const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
             for (;;) {
               const current = this.orders.get(orderId);
-              if (current && current.limitPrice === price) {
+              if (current && (stopEntry ? current.stopPrice : current.limitPrice) === price) {
+                if (!bracketed) break;
                 if (current.brokerOrderType?.startsWith('BRACKET:') && this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId)) break;
                 this.blocked = `bracket-lost-after-move: vstup ${orderId} po posunu nenese ochranu — zkontroluj a případně ho zruš`.slice(0, 240);
                 this.changed();

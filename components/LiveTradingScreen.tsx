@@ -704,6 +704,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     groupLimitMove: manageGroupLimitMoveSupported === true,
     groupLimitStateHash: manageGroupLimitStateHash,
     moveBareEntry: manageMoveBareEntrySupported === true,
+    stopEntryMove: solo != null,
     attachChips,
     bareLegs: legTrade != null,
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
