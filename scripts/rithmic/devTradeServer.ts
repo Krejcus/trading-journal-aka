@@ -318,8 +318,6 @@ async function main(): Promise<void> {
   const tickSize = ref?.tickSize ?? 0.25;
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
-  // Tep: stránka podle něj pozná, že proces žije, i když trh stojí. Bez tepu si čerstvost nevyrábí.
-  setInterval(() => broadcast({ type: 'beat', at: Date.now(), feed: freshPrice(Date.now()) !== null }), 1_000).unref();
 
   // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
   const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);
@@ -335,6 +333,13 @@ async function main(): Promise<void> {
   let rmsEpoch: number | undefined;
   let loadingLimits = false;
   const effectiveLimits = () => broker.isConnected() && broker.routeEpoch?.(broker.accountIds()[0]) === rmsEpoch && Date.now() - rmsAt < 15_000 ? rms : null;
+  let publishedLimits: ReturnType<typeof effectiveLimits> = null;
+  function publishLimits() {
+    const next = effectiveLimits();
+    if (next?.buy === publishedLimits?.buy && next?.sell === publishedLimits?.sell && next?.order === publishedLimits?.order) return;
+    publishedLimits = next;
+    broadcast({ type: 'limits', limits: next });
+  }
   async function refreshLimits() {
     if (loadingLimits || !broker.isConnected()) return;
     const account = broker.accountIds()[0];
@@ -348,7 +353,7 @@ async function main(): Promise<void> {
       rmsEpoch = epoch;
       rmsAt = Date.now();
     } catch { rms = null; } finally { loadingLimits = false; }
-    broadcast({ type: 'limits', limits: effectiveLimits() });
+    publishLimits();
   }
   exec = new LocalExec({
     broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: manualCap, quantityLimits: effectiveLimits,
@@ -392,6 +397,12 @@ async function main(): Promise<void> {
   exec.attach();
   await broker.start();
   await refreshLimits();
+  setInterval(() => {
+    const at = Date.now();
+    broadcast({ type: 'beat', at, feed: freshPrice(at) !== null });
+    // A stalled RMS refresh can expire even while the market feed remains active.
+    publishLimits();
+  }, 1_000).unref();
   setInterval(() => void refreshLimits(), 5_000).unref();
   if (!READ_ONLY && !LIVE_TRADING && broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   if (LIVE_TRADING) {

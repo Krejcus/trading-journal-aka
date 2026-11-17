@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-17 — Rithmic na localhostu po výpadku spojení
+
+- Příkaz z panelu nese množství zobrazené pozice a ID jejích ochran. Služba odmítne zastaralé přikoupení i po zásahu stopu. U částečného zavření ověří vybraný vstup, vyplnění jeho TP, zrušení sesterského SL, přesný zůstatek pozice a původní ochrany zbývajících kusů.
+- Po mezeře v místním spojení klient kontroluje stáří tepu už při kliknutí. Po více než 30 sekundách načte nový snímek. Ztracené potvrzení zrušení lze dohledat podle ID příkazu, účtu a kontraktu. Obnova jen čte stav. Scénář v prohlížeči s `?drop=cancel` a obnovou stránky potvrdil zrušení Limitu na 3 MNQ s nulovým plněním.
+- Dva testy nízkoúrovňového klienta ukazují důvod omezení. Samostatný čekající Limit může po zásahu původního SL znovu otevřít pozici. Při zmenšení společné ochrany ze tří kusů na dva a výpadku před výstupem zůstane po zásahu stopu jeden kus bez ochrany. Přikoupení Marketem a částečný výstup z oddělených ochran jsou podporované.
+- Místní WebSocket, 60 cyklů. Limit 0,57 ms v mediánu a 1,42 ms na 95. percentilu, zrušení 0,44 a 1,04 ms. Sedm cyklů na 3 MNQ mělo medián 239,5 ms od Marketu po otevřenou pozici s oběma ochranami, 5,1 ms od otevření nového spojení po přijetí stavu a 8,2 ms od zavření po nulovou pozici i příkazy. Simulátor páruje po 250 ms. Skutečné uspání Macu, poslední úpravy na Rithmic Test a aktuální RMS na Lucidu zbývají ověřit.
+
 ### 2026-11-17 — Rithmic: limity podle účtu a produktu, obnova a měření na localhostu
 
 Místní služba načítá účtové i produktové RMS. Nový souhlas může použít tyto limity, starší osobní strop dál platí. Příkaz potřebuje čerstvou ověřenou mez pro stranu a jednotlivý příkaz. Při expozici na jiném kontraktu služba neumí prokázat zbývající kapacitu celého účtu a nepřidá další vstup. Panel ukazuje režim, účet a platné stropy. Při volbě kořene MNQ služba na startu zjistí aktuální měsíc u Rithmicu a drží ho po celou relaci.

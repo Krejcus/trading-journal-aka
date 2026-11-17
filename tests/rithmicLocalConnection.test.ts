@@ -41,6 +41,32 @@ describe('spojení s místní službou Rithmicu', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
   afterEach(() => { vi.useRealTimers(); });
 
+  it('po uspání odmítne vstup už při kliku a stará zpráva neobnoví stav účtu', async () => {
+    const t = setup();
+    t.connection.start();
+    const old = t.sockets[0];
+    old.open();
+    const before = Date.now();
+    vi.setSystemTime(before + 6_000); // No timer callbacks during suspension.
+    old.push({ type: 'tick', at: before });
+    expect(await t.connection.send({ op: 'entry' })).toMatchObject({ ok: false, sent: false });
+    expect(t.messages).toEqual([]);
+    const close = t.connection.send({ op: 'flatten' });
+    old.push({ type: 'reply', id: 'c1', ok: true, result: { status: 'already-flat' } });
+    expect(await close).toMatchObject({ ok: true });
+    expect(await t.connection.send({ op: 'entry' })).toMatchObject({ ok: false, sent: false });
+    vi.setSystemTime(before + 90_000);
+    old.push({ type: 'state', state: { connected: true } });
+    expect(old.closed).toBe(true);
+    old.drop(); // Browser close event after close().
+    await vi.advanceTimersByTimeAsync(2_000);
+    t.sockets[1].open();
+    t.sockets[1].push({ type: 'state', state: { connected: true } });
+    expect(t.sockets[1].sent).toEqual([]);
+    expect(t.messages).toHaveLength(1);
+    t.connection.stop();
+  });
+
   it('bez otevřeného spojení příkaz neodejde a není nejistý', async () => {
     const t = setup();
     t.connection.start();
@@ -137,7 +163,7 @@ describe('spojení s místní službou Rithmicu', () => {
     t.connection.stop();
   });
 
-  it('hlídač tepu: mlčení se ohlásí jednou a první zpráva ho zruší', async () => {
+  it('hlídač tepu: mlčení se ohlásí jednou a čerstvý tep ho zruší', async () => {
     const t = setup();
     t.connection.start();
     t.sockets[0].open();
@@ -145,7 +171,7 @@ describe('spojení s místní službou Rithmicu', () => {
     expect(t.log).not.toContain('silent:true');
     await vi.advanceTimersByTimeAsync(3_000);
     expect(t.log.filter((entry) => entry === 'silent:true')).toHaveLength(1);
-    t.sockets[0].push({ type: 'beat', feed: true });
+    t.sockets[0].push({ type: 'beat', at: Date.now(), feed: true });
     expect(t.log.at(-1)).toBe('silent:false');
     t.connection.stop();
   });

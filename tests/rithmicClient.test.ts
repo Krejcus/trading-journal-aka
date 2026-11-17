@@ -365,3 +365,41 @@ describe('RithmicClient', () => {
     expect(closed.map((c) => c.info.intentional)).toEqual([true]);
   });
 });
+
+describe('výpadek klienta mezi kroky vícekontraktového obchodu', () => {
+  it('samostatné čekající přikoupení přežije původní SL a může znovu otevřít pozici', async () => {
+    const { server, client } = setup();
+    try {
+      await client.connect(['order']);
+      const initial = await client.placeBracketOrder({ ...limit('initial'), stopTicks: 40, targetTicks: 80 });
+      server.fill(initial.basketId, 7000);
+      const additional = await client.placeBracketOrder({ ...limit('additional'), price: 6995, stopTicks: 20, targetTicks: 100 });
+      const stop = [...server.orders.values()].find(o => o.parent === initial.basketId && o.priceType === 4)!;
+      client.close();
+      // Orders can be matched during an outage. Test a stop execution delivered before the add.
+      server.fill(stop.basketId, 6990);
+      expect(server.positions.get('ACC1|ESZ6')).toBe(0);
+      expect(server.orders.get(additional.basketId)?.status).toBe('open');
+      server.fill(additional.basketId, 6990);
+      expect(server.positions.get('ACC1|ESZ6')).toBe(1);
+    } finally { client.close(); }
+  });
+
+  it('pokles množství ochrany z 3 na 2 před výstupem ponechá při výpadku jeden kus otevřený', async () => {
+    const { server, client } = setup();
+    try {
+      await client.connect(['order']);
+      const initial = await client.placeBracketOrder({ ...limit('three'), quantity: 3, stopTicks: 40, targetTicks: 80 });
+      server.fill(initial.basketId, 7000);
+      const legs = [...server.orders.values()].filter(o => o.parent === initial.basketId);
+      const target = legs.find(o => o.priceType === 1)!;
+      await client.modifyOrder({ accountId: 'ACC1', basketId: target.basketId, symbol: 'ESZ6', exchange: 'CME', quantity: 2, priceType: 'LIMIT', price: target.price });
+      client.close(); // The second, independent exit did not reach the venue.
+      expect(legs.map(o => o.quantity)).toEqual([2, 2]);
+      const stop = legs.find(o => o.priceType === 4)!;
+      server.fill(stop.basketId, 6990);
+      expect(server.positions.get('ACC1|ESZ6')).toBe(1);
+      expect([...server.orders.values()].filter(o => o.status === 'open')).toHaveLength(0);
+    } finally { client.close(); }
+  });
+});

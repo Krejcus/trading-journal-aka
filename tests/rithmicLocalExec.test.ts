@@ -8,6 +8,7 @@ import {
   type RithmicAccountRegistryEntry,
   type RithmicAccountRegistryStore,
 } from '../services/rithmic/rithmicAccountRegistry';
+import { commandStatus } from '../services/rithmic/rithmicCommandStatus';
 import { createRithmicBroker } from '../services/rithmic/rithmicBroker';
 import { LocalExec, type LocalExecCommand, type LocalExecConfig } from '../services/rithmic/localExec';
 import { memoryProtectionStore, type ProtectionStore } from '../services/rithmic/rithmicProtection';
@@ -678,12 +679,50 @@ describe('místní služba: částečné zavření přes vlastní TP jedné ochr
     return t;
   }
   async function addOne(t: Awaited<ReturnType<typeof twoParts>>) {
-    const added = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030 }));
+    const { positions, brackets } = t.exec.state();
+    const expectedPosition = JSON.stringify([positions[0].netQuantity, brackets.filter(b => b.state === 'protected').map(b => b.entryId).sort()]);
+    const added = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030, expectedPosition }));
     expect(added.ok).toBe(true);
     await flush();
     t.server.fill((added as { result: { orderId: string } }).result.orderId, 7000);
     await sleep(160);
   }
+
+  it('staré přikoupení po zásahu SL nevytvoří nový vstup ani když je účet opět flat', async () => {
+    const t = await twoParts();
+    try {
+      const before = t.exec.state();
+      const expectedPosition = JSON.stringify([1, before.brackets.filter(b => b.state === 'protected').map(b => b.entryId)]);
+      const stop = before.orders.find(o => o.role === 'stop')!;
+      t.server.fill(stop.orderId, stop.price!);
+      await flush();
+      const count = t.frames();
+      const add = entry({ orderType: 'Market', referencePrice: 7000, limitPrice: undefined, stopPrice: 6980, targetPrice: 7030, expectedPosition });
+      expect(await t.run(add)).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/od zobrazení/) });
+      expect(t.frames()).toBe(count);
+      expect(t.exec.state().positions).toEqual([]);
+    } finally { t.broker.stop(); }
+  });
+
+  it('zmenšení pozice potvrdí až po zrušení původního SL a kontrole ochrany zbytku', async () => {
+    const t = await twoParts();
+    try {
+      await addOne(t);
+      const stale = await t.run({ op: 'reduce', clientId: 'old', symbol: 'ESZ6', expectedQuantity: 3 });
+      expect(stale).toMatchObject({ ok: false, sent: false });
+      const wrongEntry = await t.run({ op: 'reduce', clientId: 'other', symbol: 'ESZ6', expectedEntryId: 'old-entry' });
+      expect(wrongEntry).toMatchObject({ ok: false, sent: false });
+      t.server.controls.sisterStaysAfterFill = true;
+      const pending = t.run({ op: 'reduce', clientId: 'orphan', symbol: 'ESZ6', expectedQuantity: 1 });
+      await sleep(50);
+      const moved = [...t.server.orders.values()].find(o => o.status === 'open' && o.price === 6998)!;
+      t.server.fill(moved.basketId, 6999.75);
+      expect(await pending).toMatchObject({ ok: false, sent: 'unknown', error: expect.stringMatching(/sesterského SL/) });
+      expect(t.exec.state().blocked).toBeTruthy();
+      expect(t.exec.state().positions[0].netQuantity).toBe(1);
+      expect(t.exec.state().orders.filter(o => o.role === 'stop')).toHaveLength(2);
+    } finally { t.broker.stop(); }
+  });
 
   it('jedna ochrana → nejde; dvě ochrany → jeden zápis na TP za trh, úspěch až po zmenšení pozice', async () => {
     const t = await twoParts();
@@ -1271,4 +1310,24 @@ it('restores a three-contract open position and both protective legs after a bro
     expect(protections()).toEqual(before);
     expect(t.frames()).toBe(writes);
   } finally { t.exec.detach(); t.broker.stop(); }
+});
+
+it('zrušení po výpadku ověří jen z kladného nálezu zrušeného původního příkazu bez plnění', async () => {
+  const t = await setup();
+  try {
+    const result = await t.run(entry());
+    const orderId = (result as { result: {orderId: string} }).result.orderId;
+    const query = { originalOp: 'cancel', account: 'ACC1', symbol: 'ESZ6', orderId };
+    await flush();
+    expect(await commandStatus(t.broker, query, 'ESZ6')).toBeNull();
+    expect(await t.run({ op: 'cancel', orderId })).toMatchObject({ ok: true });
+    await flush();
+    const writes = t.server.received.filter(m => m.templateId === 316).length;
+    expect(await commandStatus(t.broker, query, 'ESZ6')).toMatchObject({ orderId, status: 'canceled', filled: 0 });
+    expect(await commandStatus(t.broker, { ...query, account: 'other' }, 'ESZ6')).toBeNull();
+    expect(await commandStatus(t.broker, { ...query, orderId: '99999' }, 'ESZ6')).toBeNull();
+    t.server.orders.get(orderId)!.filled = 1;
+    expect(await commandStatus(t.broker, query, 'ESZ6')).toBeNull();
+    expect(t.server.received.filter(m => m.templateId === 316)).toHaveLength(writes);
+  } finally { t.broker.stop(); }
 });

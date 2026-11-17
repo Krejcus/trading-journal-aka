@@ -405,7 +405,17 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         }
         order.price = f.price as number | undefined;
         order.triggerPrice = f.trigger_price as number | undefined;
+        const quantityChanged = order.quantity !== Number(f.quantity);
         order.quantity = Number(f.quantity);
+        // Rithmic Test, measureLegQuantity: resizing an active bracket leg also resizes its sister.
+        if (quantityChanged && order.parent) {
+          for (const sibling of orders.values()) {
+            if (sibling !== order && sibling.parent === order.parent && sibling.status === 'open') {
+              sibling.quantity = order.quantity;
+              notify(sibling, 2, 14);
+            }
+          }
+        }
         ok();
         notify(order, 2, 14);
         return;

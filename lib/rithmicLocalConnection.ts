@@ -43,13 +43,15 @@ export interface RithmicLinkOptions {
 }
 
 const OPEN = 1;
+// Longer than a command reply timeout. Resume from a full snapshot after a prolonged gap.
+const RESYNC_GAP_MS = 30_000;
 
 export class RithmicLocalConnection {
   private socket: RithmicLinkSocket | null = null;
   private stopped = true;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private beat: ReturnType<typeof setInterval> | null = null;
-  private lastMessageAt = 0;
+  private lastHeartbeatAt = 0;
   private silent = false;
   private counter = 0;
   private readonly replies = new Map<string, { op: string; resolve: (reply: RithmicLinkReply) => void }>();
@@ -72,7 +74,10 @@ export class RithmicLocalConnection {
     this.stopped = false;
     this.connect();
     this.beat = setInterval(() => {
-      if (this.socket?.readyState !== OPEN || this.now() - this.lastMessageAt <= this.beatTimeoutMs || this.silent) return;
+      if (this.socket?.readyState !== OPEN) return;
+      const age = this.now() - this.lastHeartbeatAt;
+      if (age > RESYNC_GAP_MS) { this.socket.close(); return; }
+      if (age <= this.beatTimeoutMs || this.silent) return;
       this.silent = true;
       this.options.handlers.onSilent(true);
     }, 1_000);
@@ -100,6 +105,11 @@ export class RithmicLocalConnection {
     return new Promise((resolve) => {
       const socket = this.socket;
       if (!socket || socket.readyState !== OPEN) { resolve({ ok: false, sent: false, error: 'místní proces není připojený' }); return; }
+      // Timers and React may still be suspended when a click arrives after sleep.
+      if (command.op !== 'flatten' && command.op !== 'lookup' && this.now() - this.lastHeartbeatAt > this.beatTimeoutMs) {
+        resolve({ ok: false, sent: false, error: 'Místní služba neodpovídá — počkej na obnovení stavu účtu.' });
+        return;
+      }
       const id = this.newId();
       if (command.op !== 'ack' && command.op !== 'lookup') {
         try { this.options.handlers.beforeSend?.(id, command); } catch (error) {
@@ -149,7 +159,7 @@ export class RithmicLocalConnection {
     this.socket = mine;
     mine.onopen = () => {
       if (this.socket !== mine) return;
-      this.lastMessageAt = this.now();
+      this.lastHeartbeatAt = this.now();
       this.options.handlers.onLink('open');
     };
     mine.onclose = () => {
@@ -167,8 +177,13 @@ export class RithmicLocalConnection {
       let message: Record<string, unknown>;
       try { message = JSON.parse(String(event.data)) as Record<string, unknown>; } catch { return; }
       if (!message || typeof message !== 'object') return;
-      this.lastMessageAt = this.now();
-      if (this.silent) { this.silent = false; this.options.handlers.onSilent(false); }
+      const receivedAt = this.now();
+      if (receivedAt - this.lastHeartbeatAt > RESYNC_GAP_MS) { mine.close(); return; }
+      if (message.type === 'beat' || message.type === 'tick') {
+        if (typeof message.at !== 'number' || receivedAt - message.at > this.beatTimeoutMs) return;
+        this.lastHeartbeatAt = Math.max(this.lastHeartbeatAt, Math.min(receivedAt, message.at));
+        if (this.silent) { this.silent = false; this.options.handlers.onSilent(false); }
+      }
       if (message.type === 'reply') {
         const id = String(message.id);
         const pending = this.replies.get(id);

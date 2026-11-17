@@ -25,11 +25,11 @@ o `reduceThroughTicks`, výchozí 8 ticků). Burza ho hned vyplní za nejlepší
    pracující příkaz kontraktu; žádná samostatná ochrana, žádný čekající vstup.
 2. Pozice je usazená (žádné čerstvé vyplnění), neběží ani neskončil nejistě posun noh, služba má čerstvou cenu.
 3. Vybere se ochrana s MÉNĚ ochranným SL (dál od trhu); při shodě ta novější. Zbytek pozice tak nese menší riziko.
-4. Úspěch = stav ukáže pozici menší o množství ochrany. Bez potvrzení do lhůty → „unknown", nic se neopakuje.
+4. Služba potvrdí výsledek až po vyplnění vybraného TP a zrušení jeho sesterského SL. Hlášená pozice musí souhlasit se součtem plnění a zbylé kusy musí dál krýt původní SL a TP. Při neúplném potvrzení do lhůty vrátí nejistý výsledek a krok neopakuje.
 
 ### Co se NEstaví
 
-- Zmenšení jedné ochrany s víc kusy (vstup 2 ks jedním příkazem): změna množství nohy není změřená.
+- Zmenšení jedné ochrany s víc kusy (vstup 2 ks jedním příkazem): změna množství upraví obě nohy současně. Měření a výpadkový scénář jsou níže.
 - Částečné zavření pozice se samostatnou ochranou nebo bez ochrany (tam je jen celé zavření).
 - Výběr konkrétního kusu uživatelem.
 
@@ -73,3 +73,7 @@ Adaptér i hlídač ochrany dnes počítají s tím, že nohy mají přesně mno
 odmítá a hlídač by zmenšené nohy vyhodnotil jako neúplnou ochranu (incident + blokace). Dělení vstupu tedy není
 jen nový příkaz služby — musí se změnit trvalý záznam ochrany (kolik kusů má ochrana krýt) a pravidla hlídače.
 To je zásah do jádra ochrany pozice a patří mu vlastní návrh, oponentura a měření, ne úprava za běhu ostrého testu.
+
+### Výpadek mezi zmenšením ochrany a výstupem
+
+Regresní test v `tests/rithmicClient.test.ts` otevírá v simulátoru tři kusy. Po zmenšení obou ochranných příkazů na dva kusy klient odpojí a nechá simulátor vyplnit stop. Zbude jeden otevřený kus bez pracujícího příkazu. Služba tuto dvoukrokovou operaci nenabízí. Pro její zpřístupnění je potřeba ověřit postup, který ochranu zachová i při ztrátě spojení mezi zápisy.

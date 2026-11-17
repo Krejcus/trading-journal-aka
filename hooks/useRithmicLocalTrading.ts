@@ -228,8 +228,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     let identity: Hello | null = null;
     function lookupPending(item: PendingRithmicCommand, info: Hello) {
       const generation = recoveryGeneration;
-      if (!info.account || !item.clientId || !['entry', 'replace-entry'].includes(item.op)) return;
-      void connection.send({ op: 'lookup', account: info.account, symbol: info.symbol, originalOp: item.op, clientId: item.clientId }).then(reply => {
+      if (!info.account) return;
+      if (item.op === 'cancel' ? !item.orderId : !item.clientId || !['entry', 'replace-entry'].includes(item.op)) return;
+      void connection.send({ op: 'lookup', account: info.account, symbol: info.symbol, originalOp: item.op, clientId: item.clientId, orderId: item.orderId }).then(reply => {
         if (generation !== recoveryGeneration || !reply.ok || !reply.result || !journal?.list().some(x => x.id === item.id)) return;
         const order = reply.result as { status: string; orderId: string; filled: number; quantity: number };
         const status: Record<string, string> = { working: 'čeká', canceled: 'zrušen', filled: 'vyplněn', rejected: 'odmítnut', pending: 'přijat' };
@@ -245,7 +246,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
         beforeSend: (id, command) => {
           if (!journal) throw new Error('Účet není potvrzený nebo místní úložiště není dostupné.');
           if ((command.op === 'entry' || command.op === 'replace-entry') && journal.list().length > 0) throw new Error('Ověř předchozí příkaz u brokera.');
-          journal.put({ id, op: command.op, at: Date.now(), ...(typeof command.clientId === 'string' ? { clientId: command.clientId } : {}) });
+          journal.put({ id, op: command.op, at: Date.now(),
+            ...(typeof command.clientId === 'string' ? { clientId: command.clientId } : {}),
+            ...(command.op === 'cancel' && typeof command.orderId === 'string' ? { orderId: command.orderId } : {}) });
         },
         onCertain: id => journal?.remove(id),
         onLink: setLink,
@@ -271,6 +274,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
           stateRef.current = null;
           lastMarketAt.current = 0;
           setHelloFresh(false);
+          setLimits(null);
           priceRef.current = null;
           feedBox.reset();
           setFeedLive(false);
@@ -420,6 +424,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const pointValue = hello?.pointValue ?? 2;
   const orders = state?.orders.filter((order) => order.symbol === symbol) ?? [];
   const net = state?.positions.find((item) => item.symbol === symbol) ?? null;
+  const expectedPosition = JSON.stringify([net?.netQuantity ?? 0, net ? (state?.brackets ?? [])
+    .filter(b => b.symbol === symbol && b.state === 'protected').map(b => b.entryId).sort() : []]);
   // Během výměny čekajícího vstupu (zrušit → zadat znovu) drží graf původní čáru, aby na okamžik nezmizela.
   const entryOrder = !net ? orders.find((order) => order.role === 'entry' && order.price !== undefined) ?? heldEntry : null;
   // Pozice může mít dvě ochrany (přikoupení): čára ukazuje OCHRANNĚJŠÍ SL (blíž trhu) a BLIŽŠÍ TP.
@@ -504,7 +510,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const onPlaceEntry = useCallback(async (draft: LiveEntryPreviewDraft, operationId: string): Promise<LeaderEntryPlaceResult> => {
     const base = { type: 'leader-entry-placed' as const, operationId, checkedAt: Date.now() };
     if (!entryReadyRef.current) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: NOT_READY }] };
-    // Přikoupení služba neumí: druhý vstup by měl vlastní (nebo žádnou) ochranu a graf by ji ukázal jako ochranu celé pozice.
+    // Povolené přikoupení nese totožnost pozice, kterou panel právě ukazoval.
     if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) {
       // Přikoupení: jen Market na stranu pozice a jen když ho režim přikoupení nabízí; všechno znovu ověří služba.
       const add = scaleInRef.current;
@@ -518,14 +524,14 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       ? s.orders.some((order) => order.tag === tag && order.status === 'working')
       : s.positions.some((item) => item.symbol === sym) && (draft.stopLoss === undefined || s.orders.some((order) => order.symbol === sym && order.role === 'stop' && order.status === 'working'))));
     const reply = await send({
-      op: 'entry', clientId, symbol: draft.symbol, side: draft.side, quantity: draft.quantity, orderType: draft.orderType,
+      op: 'entry', clientId, expectedPosition, symbol: draft.symbol, side: draft.side, quantity: draft.quantity, orderType: draft.orderType,
       ...(draft.orderType === 'Limit' ? { limitPrice: draft.price } : draft.orderType === 'Stop' ? { triggerPrice: draft.price } : { referencePrice: draft.referencePrice ?? priceRef.current ?? undefined }),
       ...(draft.stopLoss !== undefined ? { stopPrice: draft.stopLoss } : {}), ...(draft.takeProfit !== undefined ? { targetPrice: draft.takeProfit } : {}),
     });
     if (reply.ok) return { ...base, status: 'acknowledged', blockers: [], entryBrokerOrderId: String((reply.result as { orderId?: string } | undefined)?.orderId ?? '') };
     if (reply.sent === false) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: reply.error ?? 'Neodesláno.' }] };
     return { ...base, status: 'unknown', blockers: [], reason: reply.error ?? 'Výsledek není znám — ověř stav.' };
-  }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [send, expectedPosition]);
 
   const onManageEntry = useCallback(async (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
     const base = { type: 'leader-order-managed' as const, operationId: `manage:${newId()}`, action, checkedAt: Date.now() };
@@ -680,22 +686,25 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     // Služba zavře část s méně ochranným SL; při shodě tu novější.
     const long = net.netQuantity > 0;
     const first = [...legView.stops].sort((a, b) => (long ? a.price! - b.price! : b.price! - a.price!) || (a.entryId! < b.entryId! ? 1 : -1))[0];
-    return { quantity: first.quantity - first.filledQuantity };
+    return { entryId: first.entryId!, quantity: first.quantity - first.filledQuantity };
   }, [net?.netQuantity, legView.stops, legView.targets]); // eslint-disable-line react-hooks/exhaustive-deps
+  const expectedEntryId = reducible?.entryId;
+  const expectedQuantity = reducible?.quantity;
   const reducing = useRef(false);
   const reduceOne = useCallback(async (): Promise<{ status: 'sent' | 'blocked' | 'unknown'; text: string | null }> => {
     if (reducing.current) return { status: 'blocked', text: 'Částečné zavření už běží — počkej na výsledek.' };
     const sym = symbolRef.current;
     if (!sym) return { status: 'blocked', text: 'Kontrakt není znám — nic se neodeslalo.' };
+    if (expectedEntryId === undefined || expectedQuantity === undefined) return { status: 'blocked', text: 'Část pozice už není k dispozici.' };
     reducing.current = true;
     try {
       const before = stateRef.current?.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0;
       measureRef.current?.('Částečné zavření → pozice menší', (s) => Math.abs(s.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0) < Math.abs(before));
-      const reply = await send({ op: 'reduce', clientId: newId(), symbol: sym });
+      const reply = await send({ op: 'reduce', clientId: newId(), symbol: sym, expectedPosition, expectedEntryId, expectedQuantity });
       if (reply.ok) return { status: 'sent', text: null };
       return reply.sent === false ? { status: 'blocked', text: reply.error ?? 'Neodesláno.' } : { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
     } finally { reducing.current = false; }
-  }, [send]);
+  }, [send, expectedPosition, expectedEntryId, expectedQuantity]);
   // × u SL/TP jen když ho služba opravdu provede: právě jedna samostatná ochrana (ne noha vstupu, ne svázaný pár).
   const standalone = orders.filter((order) => order.status === 'working' && order.tag?.startsWith('uiprot-') === true);
   const legsRemovable = standalone.length === 1 && orders.filter((order) => order.status === 'working' && (order.role === 'stop' || order.role === 'target')).length === 1;

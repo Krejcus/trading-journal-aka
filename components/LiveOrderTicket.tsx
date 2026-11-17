@@ -1007,7 +1007,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : draft.type === 'market' && !entryMarketSupported ? 'Worker zatím neumí nativní Market — použij Limit.'
     : draft.type === 'market' && (quoteInfo.capturedAt == null || Date.now() - quoteInfo.capturedAt > MARKET_QUOTE_MAX_AGE_MS) ? `Cena grafu je starší než ${MARKET_QUOTE_MAX_AGE_MS / 1000} s${quoteInfo.capturedAt != null ? ` (${((Date.now() - quoteInfo.capturedAt) / 1000).toFixed(1).replace('.', ',')} s)` : ''} — Market teď nejde (zkus Limit).`
     : entryScaleIn && draft.side !== entryScaleIn.side ? 'V pozici jde jen přikoupit na její stranu — zmenšit / otočit ji z panelu nejde (zavři ×).'
-    : scaleIn && soloLabel && draft.type !== 'market' ? 'Přikoupení jde zatím jen Marketem.'
+    : scaleIn && soloLabel && draft.type !== 'market' ? 'Přikoupit lze Marketem. Čekající příkaz by po zavření pozice mohl otevřít nový obchod.'
     : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
     : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.'
     : scaleIn && draft.type !== 'market' && m && m.quantity > 1 ? 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.'

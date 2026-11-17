@@ -56,7 +56,7 @@ export async function attachSimulation(http: Server, port: number) {
   };
   const broadcast = (message: unknown) => { for (const client of ws.clients) send(client, message); };
   http.on('upgrade', (req, socket, head) => {
-    if (req.url !== path && req.url !== path + '?drop=1') return;
+    if (![path, path + '?drop=1', path + '?drop=cancel'].includes(req.url ?? '')) return;
     if (req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) { socket.destroy(); return; }
     ws.handleUpgrade(req, socket, head, client => ws.emit('connection', client, req));
   });
@@ -69,7 +69,7 @@ export async function attachSimulation(http: Server, port: number) {
   for (let at = Math.floor(now / minute) * minute - 360 * minute; at < now; at += 10_000) record(at);
   record(now);
   ws.on('connection', (client, request) => {
-    let reqDrop = request.url === path + '?drop=1';
+    let dropOp = request.url === path + '?drop=1' ? 'entry' : request.url === path + '?drop=cancel' ? 'cancel' : null;
     const current = candles.current(symbol, Date.now());
     send(client, { type: 'hello', system: 'Rithmic Test', account: 'LOCAL-SIM', limits, readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
     send(client, { type: 'state', state: exec.state() });
@@ -83,7 +83,7 @@ export async function attachSimulation(http: Server, port: number) {
         return;
       }
       const reply = await exec.execute(message.command);
-      if (reqDrop && message.command.op === 'entry' && reply.ok) { reqDrop = false; client.terminate(); return; }
+      if (dropOp === message.command.op && reply.ok) { dropOp = null; client.terminate(); return; }
       send(client, { type: 'reply', id: message.id, ...reply });
     });
     client.on('error', () => client.terminate());

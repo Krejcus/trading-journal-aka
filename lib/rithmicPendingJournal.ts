@@ -3,6 +3,7 @@ export interface PendingRithmicCommand {
   at: number;
   op: string;
   clientId?: string;
+  orderId?: string;
 }
 
 export class RithmicPendingJournal {
