@@ -66,6 +66,9 @@ export const RITHMIC_TEMPLATES: Readonly<Record<number, string>> = {
   321: 'ResponseShowOrders',
   324: 'RequestShowOrderHistorySummary',
   325: 'ResponseShowOrderHistorySummary',
+  // 328/329: doplněk mimo knihovnu async_rithmic — viz rithmicProtoExtra.ts.
+  328: 'RequestOCOOrder',
+  329: 'ResponseOCOOrder',
   330: 'RequestBracketOrder',
   331: 'ResponseBracketOrder',
   332: 'RequestUpdateTargetBracketLevel',

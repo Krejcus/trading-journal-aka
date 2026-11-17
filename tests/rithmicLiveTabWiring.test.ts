@@ -221,7 +221,7 @@ describe('hook místního procesu', () => {
 
   it('SL/TP k otevřené pozici: jen jeden z nich, odebrat jde jen samostatnou ochranu', () => {
     const leg = hook.slice(hook.indexOf('const onBareLeg = useCallback'), hook.indexOf('const ack = useCallback'));
-    expect(leg).toMatch(/if \(list\.length > 0\) return blocked\(/);
+    expect(leg).toMatch(/if \(others\.length > 0 && !\(others\.length === 1 && others\[0\]\.tag\?\.startsWith\('uiprot-'\) && others\[0\]\.role === \(role === 'stop' \? 'target' : 'stop'\)\)\) \{/);
     expect(leg).toMatch(/send\(\{ op: 'protect', clientId: newId\(\), symbol: sym, kind: role, price: intent\.price \}\)/);
     expect(leg).toMatch(/if \(!leg\.tag\?\.startsWith\('uiprot-'\)\) return blocked\(/);
     expect(leg).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);

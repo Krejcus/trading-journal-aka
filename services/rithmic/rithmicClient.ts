@@ -57,6 +57,17 @@ export interface RithmicOrderAck {
 }
 
 /** Stav příkazu z notifikace burzy (352) nebo Rithmicu (351); hodnoty jak je poslal server. */
+export interface RithmicOcoLeg {
+  userTag: string;
+  symbol: string;
+  exchange: string;
+  side: RithmicSide;
+  quantity: number;
+  priceType: 'LIMIT' | 'STOP_MARKET';
+  price?: number;
+  triggerPrice?: number;
+}
+
 export interface RithmicOrderUpdate {
   source: 'exchange' | 'rithmic';
   notifyType: string;
@@ -407,6 +418,41 @@ export class RithmicClient {
       throw new RithmicRequestError('Rithmic: potvrzení bez basket_id', 'unknown', templateId);
     }
     return { basketId, userTag, sentAt: response.sentAt, ackAt: response.completedAt };
+  }
+
+  /**
+   * Dva svázané příkazy (OCO, šablona 328): vyplnění nebo zrušení jednoho ruší druhý NA SERVERU.
+   * Každá noha má vlastní značku. Vrací ID obou příkazů ve stejném pořadí, v jakém byly nohy zadané.
+   */
+  async placeOcoOrder(request: {
+    accountId: string;
+    legs: readonly [RithmicOcoLeg, RithmicOcoLeg];
+  }): Promise<{ basketIds: string[]; sentAt: number; ackAt: number }> {
+    const message = 'RequestOCOOrder';
+    const legs = request.legs;
+    for (const leg of legs) {
+      if (leg.priceType === 'LIMIT' ? leg.price === undefined : leg.triggerPrice === undefined) throw new Error('Rithmic: noze OCO chybí cena');
+    }
+    const response = await this.plant('order').request(328, {
+      ...this.accountFields(request.accountId),
+      user_tag: legs.map((leg) => leg.userTag),
+      symbol: legs.map((leg) => leg.symbol),
+      exchange: legs.map((leg) => leg.exchange),
+      quantity_64: legs.map((leg) => leg.quantity),
+      // Opakovaná pole se párují podle pořadí → každá noha musí mít hodnotu v každém poli (nepoužitá cena = 0).
+      price: legs.map((leg) => (leg.priceType === 'LIMIT' ? leg.price! : 0)),
+      trigger_price: legs.map((leg) => (leg.priceType === 'STOP_MARKET' ? leg.triggerPrice! : 0)),
+      transaction_type: legs.map((leg) => rithmicEnum(message, 'TransactionType', leg.side)),
+      duration: legs.map(() => rithmicEnum(message, 'Duration', 'DAY')),
+      price_type: legs.map((leg) => rithmicEnum(message, 'PriceType', leg.priceType)),
+      trade_route: legs.map((leg) => this.tradeRoute(leg.exchange)),
+      manual_or_auto: legs.map(() => rithmicEnum(message, 'OrderPlacement', 'MANUAL')),
+    });
+    const ids = (fields: RithmicFields | undefined): string[] => (Array.isArray(fields?.basket_id) ? (fields!.basket_id as unknown[]).map(String).filter(Boolean) : fields?.basket_id ? [String(fields.basket_id)] : []);
+    const basketIds = [...new Set([...response.rows.filter((row) => row.templateId === 329).flatMap((row) => ids(row.fields)), ...ids(response.terminal?.fields)])];
+    // Server přijal, ale ID obou příkazů nevrátil: stav neznáme, musí se dohledat podle značek.
+    if (basketIds.length !== 2) throw new RithmicRequestError(`Rithmic: potvrzení OCO s ${basketIds.length} ID místo 2`, 'unknown', 328);
+    return { basketIds, sentAt: response.sentAt, ackAt: response.completedAt };
   }
 
   async placeOrder(request: RithmicOrderRequest): Promise<RithmicOrderAck> {

@@ -497,7 +497,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const leg = legs.length ? (role === 'stop' ? view.stop : view.target) : null;
     if (intent.kind === 'add') {
       if (leg) return blocked(`Pozice už ${name} má.`);
-      if (list.length > 0) return blocked(`Pozice už má ${role === 'stop' ? 'TP' : 'SL'} — k pozici jde zatím mít jen SL, nebo jen TP (ne obojí).`);
+      // Druhá noha: jde jen k JEDNÉ samostatné ochraně opačného druhu — služba ji zruší a obě zadá znovu jako
+      // svázaný pár (vyplnění jedné pak druhou zruší burza). Jestli to opravdu jde, rozhodne služba.
+      const others = list.filter((order) => order.status === 'working' || order.status === 'pending');
+      if (others.length > 0 && !(others.length === 1 && others[0].tag?.startsWith('uiprot-') && others[0].role === (role === 'stop' ? 'target' : 'stop'))) {
+        return blocked('Pozice už má pracující příkazy (SL/TP ze vstupu nebo čekající vstup) — další ochranu přidat nejde.');
+      }
       measure(`Přidání ${name} → čára`, (s) => s.orders.some((order) => order.symbol === sym && order.role === role && order.status === 'working'));
       return finish(await send({ op: 'protect', clientId: newId(), symbol: sym, kind: role, price: intent.price }));
     }

@@ -8,6 +8,7 @@
 import * as protobufNs from 'protobufjs/light';
 import { RITHMIC_PROTO_JSON } from './proto/rithmicProtoJson';
 import { RITHMIC_TEMPLATES } from './proto/rithmicTemplates';
+import { RITHMIC_PROTO_EXTRA } from './proto/rithmicProtoExtra';
 
 type ProtobufModule = typeof import('protobufjs/light');
 const protobuf: ProtobufModule =
@@ -24,6 +25,8 @@ export interface RithmicMessage {
 }
 
 const root = protobuf.Root.fromJSON(RITHMIC_PROTO_JSON as protobufNs.INamespace);
+// Zprávy, které vygenerovaná sada nemá (OCO).
+(root.lookup('rti') as protobufNs.Namespace).addJSON(RITHMIC_PROTO_EXTRA as Record<string, protobufNs.AnyNestedObject>);
 const typeCache = new Map<number, protobufNs.Type>();
 const baseType = root.lookupType('rti.Base');
 

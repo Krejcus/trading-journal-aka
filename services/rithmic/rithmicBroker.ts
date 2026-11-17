@@ -38,6 +38,7 @@ import {
   type BrokerPort,
   type BrokerPosition,
   type BrokerResyncSnapshot,
+  type OrderSide,
   type OrderType,
 } from '../brokerPort';
 import type { RithmicAccountRegistry } from './rithmicAccountRegistry';
@@ -135,6 +136,11 @@ export interface RithmicBrokerPort extends BrokerPort {
   isHalted(): boolean;
   accountIds(): number[];
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
+  /**
+   * Dva výstupní příkazy svázané burzou (OCO): SL (Stop) a TP (Limit) na stejné množství. Vyplnění nebo
+   * zrušení jednoho ruší druhý na serveru (změřeno 17. 11. 2026). Jeden zápis; nejistý výsledek se neopakuje.
+   */
+  placeExitPair(request: { accountId: number; symbol: string; side: OrderSide; quantity: number; stop: { tag: string; stopPrice: number }; target: { tag: string; limitPrice: number } }): Promise<{ stopOrderId: string; targetOrderId: string }>;
   liquidatePosition(request: BrokerLiquidateRequest): Promise<BrokerLiquidateResult>;
   /** Stav serverové ochrany vlastního vstupu (jen čtení paměti; pozice z živých zpráv). */
   bracketState(accountId: number, entryBrokerOrderId: string): { state: BracketState; detail: string };
@@ -1565,6 +1571,39 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         if (error instanceof RithmicRequestError && error.outcome !== 'unknown') inflight.delete(request.tag);
         else if (inflight.has(request.tag)) inflight.get(request.tag)!.uncertain = true;
         return rethrowWrite(error, 'nový příkaz');
+      }
+    },
+
+    async placeExitPair(request) {
+      const active = activeClient();
+      const text = accountText(request.accountId, true);
+      const exchange = rithmicExchangeForSymbol(request.symbol);
+      if (!exchange) throw new BrokerRequestNotSentError(`Rithmic: neznámá burza pro symbol ${request.symbol}`);
+      if (!active.hasTradeRoute(exchange)) throw new BrokerRequestNotSentError(`Rithmic: účet nemá trade route pro ${exchange}`);
+      const tags = [request.stop.tag, request.target.tag];
+      if (!tags[0] || !tags[1] || tags[0] === tags[1]) throw new BrokerRequestNotSentError('Rithmic: svázaný pár potřebuje dvě různé značky');
+      for (const tag of tags) if (protection.hasTag(request.accountId, tag)) throw new BrokerRequestNotSentError(`Rithmic: značku ${tag} už nese vstup s ochranou`);
+      if (!(Number.isInteger(request.quantity) && request.quantity > 0)) throw new BrokerRequestNotSentError('Rithmic: svázaný pár bez platného množství');
+      if (![request.stop.stopPrice, request.target.limitPrice].every((price) => Number.isFinite(price) && price > 0)) throw new BrokerRequestNotSentError('Rithmic: svázaný pár bez platných cen');
+      assertNotFlattening(request.accountId, request.symbol, 'nová ochrana');
+      const orderKey = `${request.accountId}:${request.symbol}`;
+      for (const tag of tags) { postFlattenTags.get(orderKey)?.add(tag); inflight.set(tag, { key: orderKey, at: now(), uncertain: false }); }
+      try {
+        const side = rithmicSide(request.side);
+        const ack = await active.placeOcoOrder({
+          accountId: text,
+          legs: [
+            { userTag: request.stop.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'STOP_MARKET', triggerPrice: request.stop.stopPrice },
+            { userTag: request.target.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'LIMIT', price: request.target.limitPrice },
+          ],
+        });
+        return { stopOrderId: ack.basketIds[0], targetOrderId: ack.basketIds[1] };
+      } catch (error) {
+        for (const tag of tags) {
+          if (error instanceof RithmicRequestError && error.outcome !== 'unknown') inflight.delete(tag);
+          else if (inflight.has(tag)) inflight.get(tag)!.uncertain = true;
+        }
+        return rethrowWrite(error, 'svázaná ochrana');
       }
     },
 

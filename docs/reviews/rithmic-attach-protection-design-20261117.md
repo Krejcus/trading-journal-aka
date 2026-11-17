@@ -80,3 +80,38 @@ Rozhodnutí Filipa: „postavil bych obojí, aby šel buď jen SL, nebo jen TP".
 
 Neověřeno na účtu: spuštění samostatného SL a vyplnění TP trhem (jen testy na falešném serveru),
 zavření zvenčí při pracující ochraně, chování po restartu služby.
+
+## Doplněk 17. 11. večer — SL a potom TP (nebo naopak) k otevřené pozici: svázaný pár (OCO)
+
+Požadavek Filipa: „když budu v marketu, nejdřív natáhnu SL a potom i TP". Postaveno.
+
+### Co se změřilo na Rithmic Test (`scripts/rithmic/measureOco.ts`)
+
+- Šablona 328/329 (definice z knihovny rithmic-rs, viz `services/rithmic/proto/rithmicProtoExtra.ts`): odpověď za
+  106–115 ms, vrací ID obou příkazů. Obě nohy nesou vlastní značku a `linked_basket_ids` (i ve snímku).
+- Posun jedné nohy (314) vazbu zachová. Zrušení jedné nohy zruší OBĚ. Vyplnění jedné zruší druhou do 20 ms.
+- Limit dál než ~30 b od posledního obchodu burza odmítne („outside bands") — příkaz zůstane na původní ceně.
+
+### Jak to služba dělá (`protect` u pozice s jednou samostatnou ochranou opačného druhu)
+
+1. Kontroly PŘED čímkoli: jediný pracující příkaz kontraktu je vlastní samostatná ochrana (`uiprot-`) opačného
+   druhu, celé množství pozice, nevyplněná; cena služby čerstvá a leží mezi SL a TP; neběží jiná změna ochrany.
+2. Zruší původní nohu a čeká na potvrzení stavem. Bez potvrzení se pár NEZADÁ (hrozily by dvě ochrany) → blokace.
+3. Znovu ověří pozici, že na kontraktu nic nepracuje a cenu; pak JEDEN zápis: svázaný pár SL+TP.
+4. Úspěch až když obě nohy pracují.
+
+Mezi kroky 2 a 3 je pozice krátce bez ochrany (změřeno ~120 ms; celé 272–290 ms). Je to vědomý kompromis:
+opačné pořadí (nejdřív pár, pak zrušit starou nohu) by na okamžik dalo dvě ochrany na jednu pozici a při
+zásahu ceny by pozici obrátilo — to je horší než chvilka bez ochrany. Když krok 3 neprojde (burza odmítne,
+výsledek není znám, stav se změnil), služba to ohlásí incidentem `protection-removed` /
+`protect-replace-uncertain`, zastaví nové vstupy a NIC neopakuje — rozhoduje člověk (přidat SL znovu, nebo zavřít).
+
+### Další pravidla
+
+- Zrušení jedné nohy páru u otevřené pozice služba odmítne (zmizely by obě). Posun obou noh jde.
+- Zavření pozice (brzda) ruší vše jako dosud. Vyplnění jedné nohy → druhou ruší burza; karta zavření má důvod SL/TP.
+- Noha páru je pro adaptér obyčejný Stop/Limit (příkaz s vazbou A vlastní značkou); noha ochrany vstupu značku nenese.
+- SL i TP NAJEDNOU jedním příkazem z obrazovky se nestaví (obrazovka přidává po jedné) — služba by to uměla.
+
+Neověřeno: vyplnění staré nohy přesně během výměny na skutečném trhu, chování po restartu služby uprostřed
+výměny (po restartu je stav vidět z knihy: buď jedna noha, pár, nebo nic → hlídač a obsluha), tažení čipů v appce.

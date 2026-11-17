@@ -197,7 +197,8 @@ export class LocalExec {
   private onFill(fill: BrokerFill): void {
     if (!(fill.quantity > 0) || !Number.isFinite(fill.price)) return;
     const signed = fill.side === 'Buy' ? fill.quantity : -fill.quantity;
-    if (fill.filledAt < this.resyncAt) return; // vyplnění z doby před obnovou spojení se do nového obchodu nepočítá
+    // (Čas vyplnění z brány se s místními hodinami neporovnává — hodiny se liší; změřeno 17. 11.: karta pak nevznikla
+    // vůbec. Chybnou kartu po obnově spojení hlídá potvrzení nulové pozice níže.)
     let trip = this.trips.get(fill.symbol);
     if (!trip) {
       // Pozice známá před prvním viděným vyplněním (běžně 0; po restartu může být otevřená).
@@ -297,7 +298,6 @@ export class LocalExec {
         this.fillsAhead = [];
         this.pendingClose.clear();
         this.trips.clear(); // v mezeře mohla uniknout vyplnění → výsledek by nebyl pravdivý
-        this.resyncAt = this.now();
         for (const order of event.resync.orders) this.orders.set(order.brokerOrderId, order);
         for (const position of event.resync.positions) this.positions.set(position.symbol, { netQuantity: position.netQuantity });
       }
@@ -322,7 +322,6 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
-  private resyncAt = 0;
   /** Kdy služba naposledy poslala zavření kontraktu — vyplnění krátce poté je „ručně" (příkaz zavření nenese značku). */
   private readonly flattenSentAt = new Map<string, number>();
   private readonly lastPositionAt = new Map<string, number>();
@@ -736,7 +735,18 @@ export class LocalExec {
           // Jakýkoli jiný pracující příkaz kontraktu (noha vstupu, jiná ochrana, čekající vstup, zavírání) = ne:
           // dva nesvázané výstupy by po vyplnění jednoho nechaly druhý otevřít opačnou pozici.
           const working = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status));
-          if (working.length > 0) return refuse('pozice už má pracující příkaz (SL/TP nebo čekající vstup) — přidat jde jen jeden SL nebo jeden TP k pozici bez příkazů');
+          // Druhá noha k pozici, která už má JEDNU samostatnou ochranu opačného druhu: původní se zruší a obě se
+          // zadají znovu jako svázaný pár (OCO) — vyplnění jedné pak druhou zruší burza. Jiný tvar = odmítnout.
+          const exitSide: OrderSide = net > 0 ? 'Sell' : 'Buy';
+          const lone = working.length === 1 ? working[0] : null;
+          const pairWith = lone && lone.tag?.startsWith(PROTECT_TAG) && lone.status === 'working' && lone.side === exitSide
+            && lone.filledQuantity === 0 && lone.quantity === quantity && lone.orderType === (kind === 'stop' ? 'Limit' : 'Stop')
+            && (kind === 'stop' ? lone.limitPrice : lone.stopPrice) !== undefined ? lone : null;
+          if (working.length > 0 && !pairWith) {
+            return refuse(working.some((order) => order.tag?.startsWith(PROTECT_TAG) && order.orderType === (kind === 'stop' ? 'Stop' : 'Limit'))
+              ? `pozice už ${kind === 'stop' ? 'SL' : 'TP'} má — posuň ho, nepřidávej druhý`
+              : 'pozice už má pracující příkazy (SL/TP ze vstupu nebo čekající vstup) — další ochranu nezadávám');
+          }
           if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');
           // Vstup s ochranou, jehož nohy ještě nedorazily (nebo se neví): nohy jsou výstup → další by byl druhý.
           if (this.broker.listBrackets(accountId).some((bracket) => bracket.symbol === symbol && !bracket.closed)) {
@@ -757,6 +767,68 @@ export class LocalExec {
           const distance = Math.round(Math.abs(price - server) / spec.tickSize);
           if (distance < 1) return refuse('ochrana je příliš blízko trhu');
           if (distance > (this.config.maxProtectionTicks ?? 400)) return refuse(`ochrana je ${distance} ticků od trhu — víc než povolených ${this.config.maxProtectionTicks ?? 400}`);
+          if (pairWith) {
+            const stopPrice = kind === 'stop' ? price : pairWith.stopPrice!;
+            const targetPrice = kind === 'target' ? price : pairWith.limitPrice!;
+            // Obě ceny musí dávat smysl i spolu a stávající noha musí být pořád na své straně trhu (jinak by se
+            // nový pár spustil hned).
+            if (long ? !(stopPrice < server && server < targetPrice) : !(targetPrice < server && server < stopPrice)) return refuse('SL a TP musí ležet na opačných stranách trhu — stávající ochrana je už u ceny');
+            if (this.legsUncertain.has(symbol) || this.legsMoving.has(symbol)) return refuse('změna ochrany na tomto kontraktu právě běží nebo skončila nejistě — ověř stav a potvrď incident');
+            this.seenClientIds.add(clientId);
+            this.legsMoving.add(symbol);
+            const fail = (kindOf: string, message: string): LocalExecResult => {
+              // Od zrušení původní ochrany je každý nedokončený krok stav, který musí vidět a potvrdit člověk.
+              this.incidents.push({ kind: kindOf, message, at: this.now() });
+              if (this.incidents.length > 30) this.incidents.shift();
+              this.blocked = `${kindOf}: ${message}`.slice(0, 240);
+              this.changed();
+              return { ok: false, sent: 'unknown', error: message };
+            };
+            try {
+              // 1) Zrušit původní nohu a POČKAT na potvrzení stavem. Bez potvrzení se pár nezadává (hrozily by dvě ochrany).
+              await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
+              const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+              for (;;) {
+                const old = this.orders.get(pairWith.brokerOrderId);
+                if (old && TERMINAL.has(old.status)) {
+                  if (old.status !== 'canceled' || old.filledQuantity > 0) return fail('protect-replace-interrupted', `původní ${kind === 'stop' ? 'TP' : 'SL'} se mezitím vyplnil — druhou ochranu nezadávám, zkontroluj pozici`);
+                  break;
+                }
+                if (this.now() >= deadline) return fail('protect-replace-uncertain', `zrušení původního ${kind === 'stop' ? 'TP' : 'SL'} není potvrzené — nový pár nezadávám; ověř u brokera, jakou ochranu pozice má`);
+                await new Promise((resolve) => setTimeout(resolve, 20));
+              }
+              // 2) Stav se během čekání nesměl změnit: stejná pozice, žádný jiný příkaz, cena pořád mezi SL a TP.
+              const netNow = this.positions.get(symbol)?.netQuantity ?? 0;
+              const others = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status));
+              const fresh = this.config.serverPrice?.(symbol) ?? null;
+              const stillOk = netNow === net && others.length === 0 && fresh !== null && (long ? stopPrice < fresh && fresh < targetPrice : targetPrice < fresh && fresh < stopPrice);
+              if (!stillOk) return fail('protection-removed', `původní ochrana je zrušená a nový pár SL+TP neodešel (stav se mezitím změnil) — pozice ${netNow === 0 ? 'je zavřená' : 'je BEZ ochrany: přidej SL nebo ji zavři'}`);
+              // 3) Jeden zápis: svázaný pár. Neodeslaný i nejistý výsledek = pozice může být bez ochrany → incident, nic se neopakuje.
+              const stopTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-s`;
+              const targetTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-t`;
+              let pair;
+              try {
+                pair = await this.broker.placeExitPair({ accountId, symbol, side: exitSide, quantity, stop: { tag: stopTag, stopPrice }, target: { tag: targetTag, limitPrice: targetPrice } });
+              } catch (error) {
+                const text = error instanceof Error ? error.message : String(error);
+                return fail('protection-removed', error instanceof BrokerRequestNotSentError
+                  ? `původní ochrana je zrušená a nový pár SL+TP neodešel (${text}) — pozice je BEZ ochrany: přidej SL nebo ji zavři`
+                  : `původní ochrana je zrušená a výsledek nového páru SL+TP není znám (${text}) — ověř u brokera, jakou ochranu pozice má`);
+              }
+              // 4) Úspěch až podle stavu: obě nohy pracují.
+              const confirmBy = this.now() + (this.config.moveConfirmMs ?? 1_500);
+              for (;;) {
+                const stop = this.orders.get(pair.stopOrderId);
+                const target = this.orders.get(pair.targetOrderId);
+                if (stop?.status === 'working' && target?.status === 'working') return { ok: true, result: { orderId: kind === 'stop' ? pair.stopOrderId : pair.targetOrderId, quantity, paired: true } };
+                if ((stop && TERMINAL.has(stop.status)) || (target && TERMINAL.has(target.status))) return fail('protection-removed', 'nový pár SL+TP burza nepřijala (nebo se hned spustil) — zkontroluj pozici a její ochranu');
+                if (this.now() >= confirmBy) return fail('protect-replace-uncertain', 'nový pár SL+TP není potvrzený stavem — ověř u brokera, jakou ochranu pozice má');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+              }
+            } finally {
+              this.legsMoving.delete(symbol);
+            }
+          }
           this.seenClientIds.add(clientId);
           this.reserved.set(tag, { symbol, quantity: 0 });
           let ack;
@@ -958,6 +1030,11 @@ export class LocalExec {
           // Jen vlastní příkazy (vstup `ui-`, samostatná ochrana `uiprot-`). Příkaz zadaný jinde služba neruší —
           // to, že ho graf jen zobrazuje, je pojistka obrazovky, ne služby. Brzda (`flatten`) ruší na kontraktu vše.
           if (!target.tag?.startsWith('ui')) return refuse('rušit jde jen příkaz zadaný z této appky — cizí příkaz zruš tam, kde vznikl (nebo zavři pozici)');
+          // Svázaný pár SL+TP: zrušení jedné nohy zruší na burze OBĚ → u otevřené pozice by zmizela celá ochrana.
+          if (target.tag.startsWith(PROTECT_TAG) && (this.positions.get(target.symbol)?.netQuantity ?? 0) !== 0
+            && [...this.orders.values()].some((order) => order !== target && order.symbol === target.symbol && !TERMINAL.has(order.status) && order.tag?.startsWith(PROTECT_TAG))) {
+            return refuse('SL a TP jsou svázané — zrušením jednoho by zmizely oba; posuň je, nebo zavři pozici');
+          }
           await this.broker.cancelOrder(accountId, orderId);
           return { ok: true, result: { orderId } };
         }

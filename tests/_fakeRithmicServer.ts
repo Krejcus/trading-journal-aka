@@ -22,6 +22,8 @@ export interface FakeOrder {
   stopTicks?: number;
   targetTicks?: number;
   linked?: string;
+  /** Svázaný pár (OCO): společný klíč obou příkazů. */
+  oco?: string;
   /** Rodič nohy bracketu (original_basket_id). */
   parent?: string;
   /** Číselný BracketType (6 = TARGET_AND_STOP_STATIC); nesou ho rodič i nohy. */
@@ -219,8 +221,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: price });
     }
     // Změřeno: vyplnění jedné nohy bracketu zruší její sestru.
-    if (order.parent && !controls.sisterStaysAfterFill) {
-      for (const sister of [...orders.values()].filter((o) => o.parent === order.parent && o !== order && o.status === 'open')) {
+    if ((order.parent || order.oco) && !controls.sisterStaysAfterFill) {
+      for (const sister of [...orders.values()].filter((o) => (order.parent ? o.parent === order.parent : o.oco === order.oco) && o !== order && o.status === 'open')) {
         sister.status = 'cancelled';
         notify(sister, 3, 15);
       }
@@ -334,6 +336,28 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         if (controls.frontMonth) ok({ trading_symbol: controls.frontMonth });
         else socket.push(114, { user_msg: userMsg, rp_code: ['7', 'no data'] });
         return;
+      case 328: {
+        // Svázaný pár (změřeno 17. 11. 2026): dvě ID v odpovědi, obě nohy nesou vazbu i vlastní značku.
+        if (controls.rejectNextOrder) {
+          const reason = controls.rejectNextOrder;
+          controls.rejectNextOrder = false;
+          socket.push(329, { user_msg: userMsg, rp_code: ['6', reason] });
+          return;
+        }
+        if (controls.ignoreNextOrder) { controls.ignoreNextOrder = false; return; }
+        const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+        const pair = [0, 1].map((i) => createOrder({
+          account_id: f.account_id, user_tag: list(f.user_tag)[i], symbol: list(f.symbol)[i], exchange: list(f.exchange)[i],
+          transaction_type: list(f.transaction_type)[i], price_type: list(f.price_type)[i], quantity: Number(list(f.quantity_64)[i]),
+          ...(Number(list(f.price_type)[i]) === 1 ? { price: list(f.price)[i] } : { trigger_price: list(f.trigger_price)[i] }),
+        } as RithmicFields));
+        const key = `oco${pair[0].basketId}`;
+        for (const order of pair) { order.oco = key; order.linked = pair.map((o) => o.basketId).join(','); }
+        row({ basket_id: pair.map((o) => o.basketId), user_tag: pair.map((o) => o.userTag) });
+        ok();
+        for (const order of pair) notify(order, 1, 13);
+        return;
+      }
       case 312:
       case 330: {
         if (controls.ignoreNextOrder) {
@@ -394,7 +418,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         ok();
         if (controls.cancelStuck) return;
         // Změřeno: zrušení jedné nohy bracketu zruší i sestru.
-        const group = order.parent ? [...orders.values()].filter((o) => o.parent === order.parent && o.status === 'open') : [order];
+        const group = order.parent ? [...orders.values()].filter((o) => o.parent === order.parent && o.status === 'open')
+          : order.oco ? [...orders.values()].filter((o) => o.oco === order.oco && o.status === 'open') : [order];
         for (const member of [order, ...group.filter((o) => o !== order)]) {
           member.status = 'cancelled';
           notify(member, 3, 15);
@@ -469,7 +494,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       for (const socket of sockets) if (socket.readyState === 1) socket.push(77, {});
     },
     newOrderFrames(): number {
-      return received.filter((r) => r.templateId === 312 || r.templateId === 330).length;
+      return received.filter((r) => r.templateId === 312 || r.templateId === 330 || r.templateId === 328).length;
     },
   };
 }

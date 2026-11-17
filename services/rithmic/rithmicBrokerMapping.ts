@@ -96,7 +96,9 @@ function observedType(priceType: string): { orderType: ObservedOrderType; broker
 function bracketKind(update: RithmicOrderUpdate): string | null {
   if (update.bracketType && update.bracketType !== 'BRACKETTYPE_UNSPECIFIED') return `BRACKET:${update.bracketType}`;
   if (update.originalBasketId && update.originalBasketId !== update.basketId) return 'BRACKET:LEG';
-  if (update.linkedBasketIds) return 'BRACKET:LINKED';
+  // Vazba bez rodiče: noha ochrany vstupu značku nenese (změřeno). Příkaz S vlastní značkou a vazbou je noha
+  // svázaného páru (OCO, změřeno 17. 11. 2026) — obyčejný Stop/Limit, jeho skutečný typ se zachová.
+  if (update.linkedBasketIds && !update.userTag) return 'BRACKET:LINKED';
   return null;
 }
 

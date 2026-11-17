@@ -15,7 +15,7 @@ export const READ_ONLY_ALLOWED_TEMPLATES: ReadonlySet<number> = new Set([
 ]);
 
 /** Šablony, které u Rithmicu něco zakládají, mění, ruší nebo zavírají. Jen pro test úplnosti a hlášky. */
-export const RITHMIC_WRITE_TEMPLATES: ReadonlySet<number> = new Set([312, 314, 316, 330, 332, 334, 346, 3504]);
+export const RITHMIC_WRITE_TEMPLATES: ReadonlySet<number> = new Set([312, 314, 316, 328, 330, 332, 334, 346, 3504]);
 
 /** Vrátí číslo první šablony, která v režimu jen pro čtení odejít nesmí; null = všechno je čtení. */
 export function readOnlyViolation(data: Uint8Array): number | null {
