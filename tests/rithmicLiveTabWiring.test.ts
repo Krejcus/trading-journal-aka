@@ -80,7 +80,8 @@ describe('brána dostupnosti', () => {
   it('místní proces: žádná produkční adresa mezi originy, jen Rithmic Test', () => {
     const origins = server.slice(server.indexOf('const ALLOWED_ORIGINS'), server.indexOf(']);', server.indexOf('const ALLOWED_ORIGINS')));
     expect(origins).not.toMatch(/vercel|https:\/\//);
-    expect(server).toMatch(/allowedSystems: \['Rithmic Test'\]/);
+    // Bez přepínače skutečného obchodování (a souhlasu vydaného člověkem) je povolený jen Rithmic Test.
+    expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
   });
 });
 
@@ -236,7 +237,7 @@ describe('hook místního procesu', () => {
   });
 
   it('režim jen pro čtení: jiný systém než Rithmic Test jen s --read-only, zápisy blokované na spojení, ve službě i na obrazovce', () => {
-    expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY\) throw new Error\(/);
+    expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING\) throw new Error\(/);
     expect(server).toMatch(/const blockedTemplate = readOnlyViolation\(data\);/);
     // Seznam povolených: každá požadavková šablona protokolu je buď výslovně čtecí, nebo zápisová — nic nezůstane nezařazené.
     for (const [id, name] of Object.entries(RITHMIC_TEMPLATES)) {
@@ -251,7 +252,8 @@ describe('hook místního procesu', () => {
     expect(readOnlyViolation(encodeRithmicFrame(18, { user_msg: ['x'] }))).toBeNull();
     expect(readOnlyViolation(new Uint8Array([1, 2, 3]))).not.toBeNull();
     expect(server).toMatch(/if \(READ_ONLY\) throw new Error\('účet je připojený jen pro čtení/);
-    expect(server).toMatch(/allowedSystems: \['Rithmic Test'\]/);
+    // Bez přepínače skutečného obchodování (a souhlasu vydaného člověkem) je povolený jen Rithmic Test.
+    expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
     expect(hook).toMatch(/const available = link === 'open' && helloFresh && Boolean\(state\?\.connected\) && !readOnly;/);
     expect(chart).toMatch(/offerBrake && !trading\.readOnly \? \{ emergencyClose:/);
     expect(chart).toMatch(/trading\.bareLegTrade && !trading\.readOnly \?/);

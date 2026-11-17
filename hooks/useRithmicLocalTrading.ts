@@ -26,7 +26,7 @@ const REPLY_TIMEOUT_MS = 15_000;
 const BEAT_TIMEOUT_MS = 4_000;
 
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume?: number }
-interface Hello { readOnly?: boolean; feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
+interface Hello { readOnly?: boolean; /** Služba posílá příkazy na SKUTEČNÝ účet (souhlas vydaný člověkem). */ live?: boolean; feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 export interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown }
 export type RithmicLocalLinkState = 'off' | 'connecting' | 'open' | 'closed';
 
@@ -543,7 +543,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,

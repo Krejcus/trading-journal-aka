@@ -37,6 +37,12 @@ export interface LocalExecConfig {
    */
   systemName: string;
   allowedSystems: readonly string[];
+  /**
+   * Obchodování na SKUTEČNÉM systému (adaptér není v demo prostředí). Bez tohoto nastavení služba mimo demo
+   * odmítne vše. `problem()` se ptá před každým příkazem: bez platného souhlasu nevznikne nová expozice
+   * (vstup, přikoupení); zavření, rušení a správa ochrany jdou vždy.
+   */
+  liveTrading?: { problem: () => string | null; requireStop: boolean };
   now?: () => number;
 }
 
@@ -498,7 +504,12 @@ export class LocalExec {
       const command = raw as unknown as Record<string, unknown>;
       if (!command || typeof command !== 'object') refuse('příkaz není objekt');
       if (!this.config.allowedSystems.includes(this.config.systemName)) refuse(`systém ${this.config.systemName} není pro místní službu povolený`);
-      if (this.broker.environment !== 'demo') refuse('místní služba je povolená jen pro testovací prostředí');
+      const live = this.broker.environment !== 'demo';
+      if (live) {
+        if (!this.config.liveTrading) refuse('místní služba je povolená jen pro testovací prostředí');
+        const problem = this.config.liveTrading!.problem();
+        if (problem !== null && command.op === 'entry') refuse(`obchodování na skutečném účtu je vypnuté: ${problem}`);
+      }
       const accountId = this.broker.accountIds()[0];
       if (accountId === undefined) return refuse('adaptér nemá účet (není připojený)');
       switch (command.op) {
@@ -549,6 +560,7 @@ export class LocalExec {
           const limitPrice = command.limitPrice as number | undefined;
           const stopPrice = command.stopPrice as number | undefined;
           const targetPrice = command.targetPrice as number | undefined;
+          if (live && this.config.liveTrading!.requireStop && stopPrice === undefined) refuse('na skutečném účtu musí mít každý vstup SL');
           const server = this.config.serverPrice?.(symbol) ?? null;
           const maxDrift = this.config.maxReferenceDriftTicks ?? 20;
           let reference: number;

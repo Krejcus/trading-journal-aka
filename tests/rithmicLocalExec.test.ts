@@ -30,7 +30,7 @@ function memoryRegistryStore(): RithmicAccountRegistryStore {
   };
 }
 
-async function setup(options: { server?: Server; registryStore?: RithmicAccountRegistryStore; config?: Partial<LocalExecConfig>; price?: number | null; protectionStore?: ProtectionStore } = {}) {
+async function setup(options: { server?: Server; registryStore?: RithmicAccountRegistryStore; config?: Partial<LocalExecConfig>; price?: number | null; protectionStore?: ProtectionStore; liveEnvironment?: boolean } = {}) {
   const server = options.server ?? createFakeRithmicServer();
   const registryStore = options.registryStore ?? memoryRegistryStore();
   const registry = new RithmicAccountRegistry(registryStore);
@@ -44,7 +44,9 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
   });
   let price: number | null = options.price === undefined ? 7000 : options.price;
   exec = new LocalExec({
-    broker, symbols: { ESZ6: { tickSize: 0.25 } }, maxQuantity: 2, maxPosition: 2, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
+    // `liveEnvironment`: stejný adaptér, jen se hlásí jako skutečné prostředí (zkouška pojistek skutečného účtu).
+    broker: options.liveEnvironment ? new Proxy(broker, { get: (target, key) => (key === 'environment' ? 'live' : Reflect.get(target, key)) }) : broker,
+    symbols: { ESZ6: { tickSize: 0.25 } }, maxQuantity: 2, maxPosition: 2, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
     serverPrice: () => price, ...options.config,
   });
   exec.attach();
@@ -211,6 +213,41 @@ describe('místní služba: Stop vstup', () => {
     expect(await t.run({ op: 'move', orderId: entryId, price: 7000 })).toMatchObject({ ok: false, sent: false });
     expect((await t.run({ op: 'move', orderId: entryId, price: 7006 })).ok).toBe(true);
     expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7006 });
+    t.broker.stop();
+  });
+});
+
+describe('místní služba: skutečný účet je vypnutý, dokud ho nezapne platný souhlas', () => {
+  it('bez nastavení skutečného obchodování služba mimo demo odmítne všechno', async () => {
+    const t = await setup({ liveEnvironment: true });
+    const frames = t.frames();
+    expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'flatten', clientId: 'f1', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('s platným souhlasem jde vstup jen se SL; bez souhlasu nevznikne nová expozice, ale zavření a rušení jdou dál', async () => {
+    let problem: string | null = null;
+    const t = await setup({ liveEnvironment: true, config: { liveTrading: { problem: () => problem, requireStop: true }, positionSettleMs: 20 } });
+    // vstup bez SL ne
+    expect(await t.run(entry({ stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/SL/) });
+    const placed = await t.run(entry());
+    expect(placed.ok).toBe(true);
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    // souhlas vypršel / byl smazán: další vstup ne, zrušení čekajícího ano
+    problem = 'souhlas vypršel';
+    const frames = t.frames();
+    expect(await t.run(entry({ limitPrice: 6985 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/vypnuté: souhlas vypršel/) });
+    expect(t.frames()).toBe(frames);
+    expect((await t.run({ op: 'cancel', orderId: entryId })).ok).toBe(true);
+    t.broker.stop();
+  });
+
+  it('se souhlasem bez povinného SL projde i holý vstup', async () => {
+    const t = await setup({ liveEnvironment: true, config: { liveTrading: { problem: () => null, requireStop: false } } });
+    expect((await t.run(entry({ stopPrice: undefined, targetPrice: undefined }))).ok).toBe(true);
     t.broker.stop();
   });
 });
