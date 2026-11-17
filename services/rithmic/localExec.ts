@@ -45,6 +45,12 @@ export interface LocalExecOrderView {
   price?: number;
   /** Vstup, ke kterému noha patří. */
   entryId?: string;
+  /**
+   * Jen u čekajícího vstupu s ochranou: kde SL/TP vzniknou, POKUD se vstup vyplní přesně za svou
+   * cenu (Rithmic je počítá od ceny vyplnění). Jen zobrazení — příkazy to ještě nejsou.
+   */
+  plannedStop?: number;
+  plannedTarget?: number;
   tag?: string;
 }
 
@@ -204,6 +210,7 @@ export class LocalExec {
         orderId: order.brokerOrderId, symbol: order.symbol, side: order.side, quantity: order.quantity, filledQuantity: order.filledQuantity,
         status: order.status, role, ...(price !== undefined ? { price } : {}),
         ...(known && known.role !== 'entry' ? { entryId: known.entryId } : {}), ...(order.tag ? { tag: order.tag } : {}),
+        ...this.planned(order, brackets.find((bracket) => bracket.entryId === order.brokerOrderId)),
       });
     }
     return {
@@ -376,6 +383,16 @@ export class LocalExec {
       const sent = error instanceof BrokerRequestNotSentError ? false : 'unknown';
       return { ok: false, sent, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private planned(order: BrokerOrder, bracket: { stopTicks?: number; targetTicks?: number } | undefined): { plannedStop?: number; plannedTarget?: number } {
+    const tick = this.config.symbols[order.symbol]?.tickSize;
+    if (!bracket || !tick || order.limitPrice === undefined || order.filledQuantity > 0) return {};
+    const up = order.side === 'Buy' ? 1 : -1;
+    return {
+      ...(bracket.stopTicks !== undefined ? { plannedStop: order.limitPrice - up * bracket.stopTicks * tick } : {}),
+      ...(bracket.targetTicks !== undefined ? { plannedTarget: order.limitPrice + up * bracket.targetTicks * tick } : {}),
+    };
   }
 
   private isLeg(accountId: number, orderId: string): boolean {

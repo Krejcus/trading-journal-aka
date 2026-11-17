@@ -62,6 +62,9 @@ describe('místní služba: validace vstupu', () => {
     const reply = await t.run(entry());
     expect(reply).toMatchObject({ ok: true, result: { stopTicks: 40, targetTicks: 80 } });
     expect(t.frames()).toBe(1);
+    await flush();
+    // čekající vstup nese plánované SL/TP (od limitní ceny) pro zobrazení
+    expect(t.exec.state().orders[0]).toMatchObject({ role: 'entry', price: 6990, plannedStop: 6980, plannedTarget: 7010 });
     t.broker.stop();
   });
 

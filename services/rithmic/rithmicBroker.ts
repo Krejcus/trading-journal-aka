@@ -139,7 +139,7 @@ export interface RithmicBrokerPort extends BrokerPort {
   /** Stav serverové ochrany vlastního vstupu (jen čtení paměti; pozice z živých zpráv). */
   bracketState(accountId: number, entryBrokerOrderId: string): { state: BracketState; detail: string };
   /** Vlastní vstupy s ochranou a jejich nohy (jen pro zobrazení). */
-  listBrackets(accountId: number): Array<{ tag: string; symbol: string; entryId: string; closed: boolean; legs: Array<{ orderId: string; role: 'stop' | 'target' | 'unknown' }> }>;
+  listBrackets(accountId: number): Array<{ tag: string; symbol: string; entryId: string; closed: boolean; stopTicks?: number; targetTicks?: number; legs: Array<{ orderId: string; role: 'stop' | 'target' | 'unknown' }> }>;
 }
 
 type State = 'idle' | 'connecting' | 'connected' | 'down' | 'halted';
@@ -1648,7 +1648,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
 
     listBrackets(accountId: number) {
       return protection.bracketsFor(accountId).flatMap((intent) => (intent.entryId
-        ? [{ tag: intent.tag, symbol: intent.symbol, entryId: intent.entryId, closed: intent.closedAt !== undefined, legs: protection.legsOf(accountId, intent.entryId).map((leg) => ({
+        ? [{ tag: intent.tag, symbol: intent.symbol, entryId: intent.entryId, closed: intent.closedAt !== undefined,
+          ...(intent.stopTicks !== undefined ? { stopTicks: intent.stopTicks } : {}), ...(intent.targetTicks !== undefined ? { targetTicks: intent.targetTicks } : {}), legs: protection.legsOf(accountId, intent.entryId).map((leg) => ({
           orderId: leg.orderId,
           role: (book.get(accountId, leg.orderId)?.stopPrice !== undefined ? 'stop' : book.get(accountId, leg.orderId)?.limitPrice !== undefined ? 'target' : leg.role) as 'stop' | 'target' | 'unknown',
         })) }]

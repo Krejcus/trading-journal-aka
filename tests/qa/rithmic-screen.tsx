@@ -157,14 +157,15 @@ function App() {
     } else if (entryOrder) {
       summary = {
         kind: 'pending', side: entryOrder.side === 'Buy' ? 'long' : 'short', quantity: entryOrder.quantity, entry: entryOrder.price ?? null, entryType: 'Limit',
-        openPnl: null, mark: price, stop: null, target: null, protection: '', accounts: 1, scopeLabel: null,
+        // Plánované SL/TP (vzniknou až po vyplnění, počítané od limitní ceny) — jen zobrazení.
+        openPnl: null, mark: price, stop: entryOrder.plannedStop ?? null, target: entryOrder.plannedTarget ?? null, protection: '', accounts: 1, scopeLabel: null,
         leader: { accountId: ACCOUNT, quantity: entryOrder.quantity, entry: entryOrder.price ?? null }, rows: [],
       };
     }
     // Slot překresluje jen při změně klíče → patří do něj vše, co má být v grafu aktuální.
     const key = JSON.stringify([symbol, summary?.kind, summary?.side, summary?.quantity, summary?.entry, summary?.stop, summary?.target, summary?.mark, summary?.openPnl]);
     return { key, symbol, lines: [], summary, issue: null };
-  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, stopOrder?.price, targetOrder?.price, price, pointValue]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, price, pointValue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const marketData = useMemo<LiveTradingMarketData | null>(() => (candles.length && symbol ? ({
     candles,
