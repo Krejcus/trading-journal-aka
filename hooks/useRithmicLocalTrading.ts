@@ -434,10 +434,18 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const targetOrder = legView.target;
 
   // Podklad pro čipy „+ SL / + TP" a práci s nohami otevřené pozice. Jen zobrazení; příkaz ověří služba.
-  const bareLegTrade = useMemo<BareLeaderTrade | null>(() => (net && net.averagePrice !== undefined ? {
+  // Jen zobrazení: během zavírání pozice služba nejdřív ruší SL/TP a pak zavírá — nabídka „+ SL / + TP" by na chvíli
+  // probliknula. Po dobu zavírání (nejdéle 4 s) se proto nenabízí; nic to neautorizuje ani neblokuje.
+  const [closingUntil, setClosingUntil] = useState(0);
+  useEffect(() => {
+    if (closingUntil === 0) return undefined;
+    const timer = setTimeout(() => setClosingUntil(0), Math.max(0, closingUntil - Date.now()));
+    return () => clearTimeout(timer);
+  }, [closingUntil]);
+  const bareLegTrade = useMemo<BareLeaderTrade | null>(() => (closingUntil === 0 && net && net.averagePrice !== undefined ? {
     entryOperationId: `rithmic:${symbol}`, symbol, side: net.netQuantity > 0 ? 'Buy' : 'Sell', quantity: Math.abs(net.netQuantity), referencePrice: net.averagePrice,
     hasStop: stopOrder != null, hasTarget: targetOrder != null,
-  } as BareLeaderTrade : null), [symbol, net?.netQuantity, net?.averagePrice, stopOrder != null, targetOrder != null]); // eslint-disable-line react-hooks/exhaustive-deps
+  } as BareLeaderTrade : null), [symbol, net?.netQuantity, net?.averagePrice, stopOrder != null, targetOrder != null, closingUntil]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Režim přikoupení v lístku: jen pozice se SL i TP ze vstupů (ne samostatná ochrana). Jestli opravdu jde, ověří služba.
   // Čekající vstupy (i přikoupení) jako klíč: jejich příchod nebo zmizení musí pohled přikoupení přepočítat.
@@ -603,6 +611,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     }
     if (action === 'close-position') {
       measure('Zavření pozice → čáry pryč', (s) => !s.positions.some((item) => item.symbol === sym) && !s.orders.some((order) => order.symbol === sym));
+      setClosingUntil(Date.now() + 4_000);
       const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       const reply = rithmicFlattenReply(raw);
       return finish(reply);
@@ -672,6 +681,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!sym) return { status: 'blocked', text: 'Kontrakt není znám — nic se neodeslalo.' };
     closingNow.current = true;
     try {
+      setClosingUntil(Date.now() + 4_000);
       const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       const reply = rithmicFlattenReply(raw);
       if (reply.ok) return { status: 'sent', text: null };
