@@ -24,6 +24,8 @@ export interface LocalExecConfig {
   positionSettleMs?: number;
   /** Jak dlouho musí nesoulad samostatné ochrany s pozicí vydržet, než se ohlásí (výchozí 3 s). */
   protectiveGraceMs?: number;
+  /** Posun dvou noh: druhá se pošle jen když první stihla tento čas (výchozí 2 s) — jinak by se nestihla odpověď. */
+  moveLegsBudgetMs?: number;
   /** Jak dlouho čekat na potvrzení posunu vstupu s ochranou stavem (výchozí 1,5 s). */
   moveConfirmMs?: number;
   /** Poslední cena ze strany služby; reference od klienta se smí lišit nejvýš o `maxReferenceDriftTicks`. */
@@ -85,6 +87,8 @@ export type LocalExecCommand =
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
   | { op: 'move'; orderId: string; price: number }
+  /** Posune VŠECHNY pracující nohy jedné role (pozice s víc ochranami) na jednu cenu; `expect` = cena, kterou uživatel viděl. */
+  | { op: 'move-legs'; symbol: string; role: 'stop' | 'target'; price: number; expect: Array<{ orderId: string; price: number }> }
   | { op: 'cancel'; orderId: string }
   | { op: 'flatten'; clientId: string; symbol: string }
   | { op: 'ack' };
@@ -198,6 +202,10 @@ export class LocalExec {
    * vyplnění ochrany smí na chvíli vypadat jako „příkaz bez pozice"). Lhůtu hlídá časovač, ne další
    * událost — na klidném účtu by sirotek jinak zůstal neohlášený.
    */
+  /** Kontrakty, kde posun více noh skončil nejistě: další změny noh i přikoupení stojí do potvrzení obsluhou. */
+  private readonly legsUncertain = new Set<string>();
+  /** Právě běžící posun více noh (jeden na kontrakt). */
+  private readonly legsMoving = new Set<string>();
   private readonly lastFillAt = new Map<string, number>();
   private readonly lastPositionAt = new Map<string, number>();
   private readonly protectiveMismatchSince = new Map<string, number>();
@@ -227,6 +235,31 @@ export class LocalExec {
       this.incidents.push({ kind: 'protective-order-mismatch', message, at: this.now() });
       if (this.incidents.length > 30) this.incidents.shift();
       this.blocked = `protective-order-mismatch: ${message}`.slice(0, 240);
+    }
+    // Součet ochran vstupů proti pozici: každá ochrana se hlídá sama za sebe, ale když pozici zmenší něco
+    // zvenčí, obě zůstanou „chráněno" a po spuštění by pozici obrátily. Nic se samo neruší — jen blokace.
+    const accountId = this.broker.accountIds()[0];
+    if (accountId !== undefined) {
+      const symbols = new Set(this.broker.listBrackets(accountId).filter((bracket) => !bracket.closed).map((bracket) => bracket.symbol));
+      for (const symbol of symbols) {
+        const key = `coverage:${symbol}`;
+        const legs = this.legsOf(accountId, symbol);
+        const net = this.positions.get(symbol)?.netQuantity ?? 0;
+        const open = (list: BrokerOrder[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+        const over = legs ? [legs.stops, legs.targets].some((list) => list.length > 0 && open(list) > Math.abs(net)) : false;
+        if (!over) { this.protectiveMismatchSince.delete(key); this.protectiveReported.delete(key); continue; }
+        if (this.protectiveReported.has(key)) continue;
+        const since = this.protectiveMismatchSince.get(key) ?? this.now();
+        this.protectiveMismatchSince.set(key, since);
+        const left = grace - (this.now() - since);
+        if (left > 0) { recheckIn = recheckIn === null ? left : Math.min(recheckIn, left); continue; }
+        this.protectiveReported.add(key);
+        this.protectiveMismatchSince.delete(key);
+        const message = `SL/TP na ${symbol} mají dohromady víc kusů než pozice (${Math.abs(net)}) — po spuštění by pozici obrátily; nic neměním, zavři pozici nebo příkazy zruš`;
+        this.incidents.push({ kind: 'protection-exceeds-position', message, at: this.now() });
+        if (this.incidents.length > 30) this.incidents.shift();
+        this.blocked = `protection-exceeds-position: ${message}`.slice(0, 240);
+      }
     }
     if (recheckIn !== null && !this.protectiveTimer) {
       this.protectiveTimer = setTimeout(() => {
@@ -296,6 +329,72 @@ export class LocalExec {
     };
   }
 
+  /** Pracující nohy vlastních neuzavřených vstupů s ochranou na kontraktu, podle role. Null = role některého příkazu neznám. */
+  private legsOf(accountId: number, symbol: string): { stops: BrokerOrder[]; targets: BrokerOrder[]; brackets: Array<{ entryId: string; stopTicks?: number; targetTicks?: number }> } | null {
+    const brackets = this.broker.listBrackets(accountId).filter((bracket) => bracket.symbol === symbol && !bracket.closed);
+    const stops: BrokerOrder[] = [];
+    const targets: BrokerOrder[] = [];
+    const known = new Set<string>();
+    for (const bracket of brackets) {
+      known.add(bracket.entryId);
+      for (const leg of bracket.legs) {
+        const order = this.orders.get(leg.orderId);
+        if (!order || TERMINAL.has(order.status)) continue;
+        if (leg.role === 'unknown') return null;
+        known.add(leg.orderId);
+        (leg.role === 'stop' ? stops : targets).push(order);
+      }
+    }
+    // Každý pracující příkaz kontraktu musí být známý (vstup nebo noha vlastní ochrany).
+    for (const order of this.orders.values()) {
+      if (order.symbol === symbol && !TERMINAL.has(order.status) && !known.has(order.brokerOrderId)) return null;
+    }
+    return { stops, targets, brackets };
+  }
+
+  /**
+   * Proč teď NEJDE přikoupit (null = jde). První verze: jen do pozice, kterou CELOU kryjí vlastní
+   * vstupy s ochranou (každý ve stavu „chráněno"), se SL i TP na jedné ceně, a přikoupení nese
+   * přesně tytéž ceny. Nic se po vyplnění nesrovnává — každá část má vlastní ochranu na své množství.
+   */
+  private scaleInProblem(accountId: number, symbol: string, side: OrderSide, stopPrice: number | undefined, targetPrice: number | undefined, ownTag: string | null): string | null {
+    const net = this.positions.get(symbol)?.netQuantity ?? 0;
+    if (net === 0) return 'pozice se mezitím zavřela — přikoupení neodesílám';
+    if ((side === 'Buy') !== (net > 0)) return 'vstup proti otevřené pozici nejde — pozici zavři';
+    if ([...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag !== ownTag)) return 'na cestě je jiný příkaz tohoto kontraktu — přikoupení teď nejde';
+    this.fillsAhead = this.fillsAhead.filter((fill) => this.now() - fill.at < 5_000);
+    if (this.fillsAhead.some((fill) => fill.symbol === symbol)) return 'pozice se právě mění (čerstvé vyplnění) — přikup za okamžik';
+    const filledAt = this.lastFillAt.get(symbol);
+    if (filledAt !== undefined && ((this.lastPositionAt.get(symbol) ?? 0) < filledAt || this.now() - filledAt < (this.config.positionSettleMs ?? 1_000))) {
+      return 'pozice se právě mění (čerstvé vyplnění) — přikup za okamžik';
+    }
+    // Jiný vstup s ochranou, o kterém broker ještě nedal vědět (i z doby před restartem služby).
+    if (this.broker.unresolvedBracketTags(accountId, symbol).some((pendingTag) => pendingTag !== ownTag)) return 'jiný vstup s ochranou ještě není potvrzený — přikoupení teď nejde';
+    if (this.legsUncertain.has(symbol)) return 'poslední posun SL/TP skončil nejistě — nejdřív ověř ceny u brokera a potvrď incident';
+    const legs = this.legsOf(accountId, symbol);
+    if (!legs) return 'na kontraktu pracuje příkaz, který služba nezná — přikoupení nejde';
+    if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
+    for (const bracket of legs.brackets) {
+      if (bracket.stopTicks === undefined || bracket.targetTicks === undefined) return 'pozice nemá SL i TP — přikoupit jde jen do pozice se SL i TP';
+      const state = this.broker.bracketState(accountId, bracket.entryId).state;
+      if (state !== 'protected') return state === 'entry-working' ? 'čeká jiný vstup — přikoupení teď nejde' : 'ochrana pozice není úplná — přikoupení nejde';
+    }
+    // Právě jedna potvrzená noha každého druhu na ochranu, na opačné straně než pozice; nic navíc ani nepotvrzeného.
+    const exitSide: OrderSide = net > 0 ? 'Sell' : 'Buy';
+    for (const list of [legs.stops, legs.targets]) {
+      if (list.length !== legs.brackets.length || list.some((order) => order.status !== 'working' || order.side !== exitSide)) return 'ochrana pozice není v očekávaném tvaru — přikoupení nejde';
+    }
+    const open = (list: BrokerOrder[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+    if (open(legs.stops) !== Math.abs(net) || open(legs.targets) !== Math.abs(net)) return 'SL/TP nekryjí celou pozici — přikoupení nejde';
+    const stopAt = new Set(legs.stops.map((order) => order.stopPrice));
+    const targetAt = new Set(legs.targets.map((order) => order.limitPrice));
+    if (stopAt.size !== 1 || targetAt.size !== 1) return 'SL nebo TP pozice má víc cen — nejdřív je srovnej posunem';
+    if (stopPrice === undefined || targetPrice === undefined || !stopAt.has(stopPrice) || !targetAt.has(targetPrice)) {
+      return `přikoupení musí mít SL a TP pozice (SL ${[...stopAt][0]}, TP ${[...targetAt][0]})`;
+    }
+    return null;
+  }
+
   /** Cena musí ležet na mřížce kroku kontraktu — nic se tiše nezaokrouhluje. */
   private onGrid(price: number, tickSize: number): boolean {
     const steps = price / tickSize;
@@ -322,6 +421,7 @@ export class LocalExec {
           for (const [reservedTag] of this.reserved) {
             if (reservedTag.startsWith(PROTECT_TAG) && ![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
           }
+          this.legsUncertain.clear();
           // Trvající nesoulad ochrany se po potvrzení ohlásí znovu (po lhůtě) — potvrzení ho neschová.
           this.protectiveReported.clear();
           this.watchProtective();
@@ -412,6 +512,14 @@ export class LocalExec {
           this.fillsAhead = this.fillsAhead.filter((fill) => this.now() - fill.at < 5_000);
           const ahead = this.fillsAhead.filter((fill) => fill.symbol === symbol).reduce((sum, fill) => sum + fill.quantity, 0);
           if (open + ahead + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open + ahead}, čeká ${waiting + onTheWay})`);
+          // Přikoupení do otevřené pozice: jen za přísných podmínek (viz `scaleInProblem`); ověří se teď
+          // a znovu těsně před zápisem (adaptér mezitím čeká na uložení záměru).
+          const adding = (this.positions.get(symbol)?.netQuantity ?? 0) !== 0;
+          if (adding) {
+            if (orderType !== 'Market') return refuse('přikoupení jde zatím jen Marketem');
+            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null);
+            if (problem) return refuse(problem);
+          }
           this.seenClientIds.add(clientId);
           // Rezervace PŘED prvním čekáním; drží i při neznámém výsledku, padá jen když zápis prokazatelně neodešel.
           this.reserved.set(tag, { symbol, quantity });
@@ -424,7 +532,10 @@ export class LocalExec {
             const ack = await release(this.broker.placeOrder(request));
             return { ok: true, result: { orderId: ack.brokerOrderId } };
           }
-          const ack = await release(this.broker.placeBracket({ ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}) }));
+          const ack = await release(this.broker.placeBracket({
+            ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
+            ...(adding ? { guard: () => this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) } : {}),
+          }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
         case 'protect': {
@@ -497,6 +608,10 @@ export class LocalExec {
           const leg = this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs).find((item) => item.orderId === orderId);
           if (leg) {
             if (leg.role !== 'stop' && leg.role !== 'target') return refuse('u nohy ještě není znám typ — posun neodesílám');
+            // Pozice s víc ochranami: role se posouvá celá (`move-legs`), jinak by se ceny rozešly bez vědomí obsluhy.
+            if (this.legsUncertain.has(order.symbol) || this.legsMoving.has(order.symbol)) return refuse('posun SL/TP na tomto kontraktu právě běží nebo skončil nejistě — ověř ceny u brokera a potvrď incident');
+            const siblings = this.legsOf(accountId, order.symbol);
+            if (!siblings || (leg.role === 'stop' ? siblings.stops : siblings.targets).length > 1) return refuse('pozice má víc ochran — posun jde jen pro všechny najednou');
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
@@ -544,6 +659,95 @@ export class LocalExec {
             return refuse('posouvat jde jen SL/TP vlastního vstupu a vlastní čekající Limit');
           }
           return { ok: true, result: { orderId } };
+        }
+        case 'move-legs': {
+          const symbol = typeof command.symbol === 'string' ? command.symbol : '';
+          const spec = this.config.symbols[symbol];
+          if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
+          if (command.role !== 'stop' && command.role !== 'target') refuse('role musí být stop nebo target');
+          const role = command.role as 'stop' | 'target';
+          const price = command.price;
+          if (!finite(price) || price <= 0) return refuse('posun bez platné ceny');
+          if (!this.onGrid(price, spec.tickSize)) refuse(`cena ${price} neleží na kroku ceny ${spec.tickSize}`);
+          const server = this.config.serverPrice?.(symbol) ?? null;
+          if (server === null) return refuse('služba nemá čerstvou cenu — ochranu neposouvám');
+          const net0 = this.positions.get(symbol)?.netQuantity ?? 0;
+          if (net0 === 0) return refuse('není otevřená pozice');
+          const long = net0 > 0;
+          const below = price < server;
+          if (role === 'stop' ? long !== below : long === below) return refuse('nová cena ochrany je na špatné straně trhu — spustila by se hned');
+          const distance = Math.round(Math.abs(price - server) / spec.tickSize);
+          if (distance < 1) return refuse('ochrana je příliš blízko trhu');
+          if (distance > (this.config.maxProtectionTicks ?? 400)) return refuse(`ochrana je ${distance} ticků od trhu — víc než povolených ${this.config.maxProtectionTicks ?? 400}`);
+          const priceOf = (order: BrokerOrder) => (role === 'stop' ? order.stopPrice : order.limitPrice);
+          if (this.legsUncertain.has(symbol)) return refuse('poslední posun SL/TP skončil nejistě — ověř ceny u brokera a potvrď incident');
+          if (this.legsMoving.has(symbol)) return refuse('jiný posun SL/TP právě běží');
+          const legsNow = () => {
+            const all = this.legsOf(accountId, symbol);
+            return all ? (role === 'stop' ? all.stops : all.targets) : null;
+          };
+          const list = legsNow();
+          if (!list) return refuse('na kontraktu pracuje příkaz, který služba nezná — posun neodesílám');
+          if (list.length === 0) return refuse(`pozice nemá ${role === 'stop' ? 'SL' : 'TP'}`);
+          if (list.length > 2) return refuse('víc než dvě ochrany — posun neodesílám');
+          if (list.some((order) => order.status !== 'working')) return refuse('některá noha ještě není potvrzená burzou — posun neodesílám');
+          // „Co jsem viděl": přesně tyto nohy na těchto cenách (ne jen jedna cena — změna druhé nohy by se schovala).
+          const expected = Array.isArray(command.expect) ? command.expect as Array<{ orderId?: unknown; price?: unknown }> : null;
+          if (!expected || expected.length !== list.length || !list.every((order) => expected.some((item) => item.orderId === order.brokerOrderId && item.price === priceOf(order)))) {
+            return refuse('stav se mezitím změnil — čáry už neodpovídají příkazům u brokera');
+          }
+          const ids = list.map((order) => order.brokerOrderId);
+          const fillMark = this.lastFillAt.get(symbol);
+          const startedAt = this.now();
+          const budget = this.config.moveLegsBudgetMs ?? 2_000;
+          const moved: string[] = [];
+          const stop = (sent: false | 'unknown', why: string): LocalExecResult => {
+            // Nejistý výsledek zastaví další změny noh i přikoupení, dokud ho obsluha nepotvrdí.
+            if (sent === 'unknown') {
+              this.legsUncertain.add(symbol);
+              this.blocked = `move-legs-uncertain: ${why}`.slice(0, 240);
+              this.changed();
+            }
+            return { ok: false, sent, error: `${moved.length ? `posunuto: ${moved.join(', ')}; ` : ''}${why} — zbytek neodesílám, zkontroluj ceny SL/TP` };
+          };
+          this.legsMoving.add(symbol);
+          try {
+            for (const legId of ids) {
+              const current = this.orders.get(legId);
+              if (current && priceOf(current) === price && current.status === 'working') continue; // už na ceně
+              // Před KAŽDÝM zápisem: stejné nohy, stejná pozice, žádné nové vyplnění, dost času.
+              const again = legsNow();
+              const netNow = this.positions.get(symbol)?.netQuantity ?? 0;
+              if (!current || TERMINAL.has(current.status) || !again || again.length !== ids.length || !again.every((order) => ids.includes(order.brokerOrderId))
+                || netNow !== net0 || this.lastFillAt.get(symbol) !== fillMark) {
+                return stop(moved.length ? 'unknown' : false, 'pozice nebo ochrana se během posunu změnila');
+              }
+              if (moved.length > 0 && this.now() - startedAt > budget) return stop('unknown', 'první noha trvala příliš dlouho');
+              try {
+                await this.broker.modifyOrder(accountId, legId, { quantity: current.quantity, orderType: role === 'stop' ? 'Stop' : 'Limit', ...(role === 'stop' ? { stopPrice: price } : { limitPrice: price }) });
+              } catch (error) {
+                const notSent = error instanceof BrokerRequestNotSentError;
+                // Po první chybě konec — další zápis po neodeslaném nebo nejistém by šel naslepo.
+                return stop(notSent && moved.length === 0 ? false : 'unknown', `noha ${legId}: ${error instanceof Error ? error.message : String(error)}`);
+              }
+              const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+              for (;;) {
+                const after = this.orders.get(legId);
+                if (after && priceOf(after) === price) break;
+                if (this.now() >= deadline) return stop('unknown', `noha ${legId}: posun nebyl potvrzen stavem`);
+                await new Promise((resolve) => setTimeout(resolve, 25));
+              }
+              moved.push(legId);
+            }
+            // Závěrem znovu: všechny původní nohy pracují na nové ceně.
+            const final = legsNow();
+            if (!final || final.length !== ids.length || !final.every((order) => ids.includes(order.brokerOrderId) && priceOf(order) === price)) {
+              return stop('unknown', 'po posunu nohy neodpovídají očekávání');
+            }
+            return { ok: true, result: { moved, unchanged: ids.length - moved.length } };
+          } finally {
+            this.legsMoving.delete(symbol);
+          }
         }
         case 'cancel': {
           const orderId = typeof command.orderId === 'string' ? command.orderId : '';

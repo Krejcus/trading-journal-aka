@@ -328,6 +328,12 @@ export interface BrokerBracketRequest extends BrokerOrderRequest {
   /** Kladný celý počet ticků; aspoň jedno z dvojice. */
   stopTicks?: number;
   targetTicks?: number;
+  /**
+   * Podmínka volajícího vyhodnocená adaptérem TĚSNĚ před zápisem (až po uložení záměru, kdy se už
+   * nečeká). Vrátí-li důvod, nic se neodešle. Pro vstupy, jejichž oprávněnost závisí na stavu, který
+   * se během ukládání může změnit (přikoupení do pozice).
+   */
+  guard?: () => string | null;
 }
 
 export interface BrokerBracketAck {

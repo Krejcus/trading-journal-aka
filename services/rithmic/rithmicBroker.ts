@@ -138,6 +138,8 @@ export interface RithmicBrokerPort extends BrokerPort {
   liquidatePosition(request: BrokerLiquidateRequest): Promise<BrokerLiquidateResult>;
   /** Stav serverové ochrany vlastního vstupu (jen čtení paměti; pozice z živých zpráv). */
   bracketState(accountId: number, entryBrokerOrderId: string): { state: BracketState; detail: string };
+  /** Značky neuzavřených záměrů vstupu s ochranou, u kterých ještě není znám příkaz u brokera (jen čtení paměti). */
+  unresolvedBracketTags(accountId: number, symbol: string): string[];
   /** Vlastní vstupy s ochranou a jejich nohy (jen pro zobrazení). */
   listBrackets(accountId: number): Array<{ tag: string; symbol: string; entryId: string; closed: boolean; stopTicks?: number; targetTicks?: number; legs: Array<{ orderId: string; role: 'stop' | 'target' | 'unknown' }> }>;
 }
@@ -1601,6 +1603,13 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         void saveProtection();
         throw new BrokerRequestNotSentError(brakeMoved ? `Rithmic: na ${request.symbol} mezitím začalo zavírání pozice — vstup neodesílám` : 'Rithmic: spojení není připravené');
       }
+      // Podmínka volajícího až teď: mezi rozhodnutím a zápisem se čekalo na uložení záměru.
+      const guarded = request.guard?.() ?? null;
+      if (guarded) {
+        protection.dropBracket(request.tag);
+        void saveProtection();
+        throw new BrokerRequestNotSentError(`Rithmic: ${guarded}`);
+      }
       postFlattenTags.get(brakeKey)?.add(request.tag);
       inflight.set(request.tag, { key: brakeKey, at: now(), uncertain: false });
       try {
@@ -1644,6 +1653,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       const net = intent ? trustedLivePosition(accountId, intent.symbol) ?? null : null;
       const { state: bracket, detail } = protection.bracketState(accountId, entryBrokerOrderId, (id) => book.get(accountId, id), net);
       return { state: bracket, detail };
+    },
+
+    unresolvedBracketTags(accountId: number, symbol: string): string[] {
+      return protection.bracketsFor(accountId).filter((intent) => intent.symbol === symbol && intent.closedAt === undefined && !intent.entryId).map((intent) => intent.tag);
     },
 
     listBrackets(accountId: number) {
