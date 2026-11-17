@@ -9,6 +9,7 @@ import { rithmicFlattenReply, rithmicTradeEvents } from '../hooks/useRithmicLoca
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { liveTicketLegsProblem } from '../lib/liveBareEntry';
+import { liveLineMoveBlockReason } from '../lib/liveChartOrderLines';
 import { LIVE_COMMAND_BUSY_TEXT } from '../hooks/liveCommandRuns';
 
 const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
@@ -180,6 +181,14 @@ describe('hook místního procesu', () => {
     expect(liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT)).not.toMatch(/Flatten/);
     expect(chart).toMatch(/available: usable, singleLeg: true/);
     expect(screen).toMatch(/entrySingleLegSupported=\{solo\?\.singleLeg === true\}/);
+  });
+
+  it('posun čekajícího Limitu: nohy jsou u Rithmicu vzdálenosti od vstupu, proti nové ceně se nekontrolují', () => {
+    const pending = { kind: 'pending', side: 'long', quantity: 1, entry: 100, entryType: 'Limit', stop: 97, target: 106 } as never;
+    expect(liveLineMoveBlockReason(pending, 'entry', 90, { moveLimit: true })).toMatch(/SL/);
+    expect(liveLineMoveBlockReason(pending, 'entry', 90, { moveLimit: true, relativeLegs: true })).toBeNull();
+    expect(screen).toMatch(/relativeLegs: solo != null \}\);/);
+    expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {

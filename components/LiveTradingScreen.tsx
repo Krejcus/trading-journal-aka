@@ -866,7 +866,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           return;
         }
         if (snapped === current) return;
-        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true, groupLimitMove: manageGroupLimitMoveSupported === true, moveBareEntry: manageMoveBareEntrySupported === true });
+        const blocked = liveLineMoveBlockReason(guardSummaryAt(Date.now()) ?? summary, kind, snapped, { pendingLegs: managePendingLegsSupported === true || sendBareLegRef.current != null, moveLimit: manageMoveLimitSupported === true, groupLimitMove: manageGroupLimitMoveSupported === true, moveBareEntry: manageMoveBareEntrySupported === true, relativeLegs: solo != null });
         if (blocked) { setLineNotice({ at: Date.now(), tone: 'bad', text: blocked }); return; }
         if (kind !== 'entry' && sendBareLegRef.current && current != null) { sendBareLegRef.current({ kind: 'move', leg: kind, price: snapped, current, ...(startLine?.groupLimitStateHash ? { groupLimitStateHash: startLine.groupLimitStateHash } : {}) }); return; }
         void runLiveManage(kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target', current, snapped, kind, startLine?.groupLimitStateHash);

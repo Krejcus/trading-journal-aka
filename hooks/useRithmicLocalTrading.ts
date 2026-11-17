@@ -384,6 +384,15 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === newPrice));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: newPrice }));
     }
+    if (action === 'move-limit') {
+      // Posun čekajícího Limitu: služba posouvá jen vlastní Limit; SL/TP jsou u Rithmicu vzdálenosti od vstupu,
+      // takže se posunou s ním (graf je ukáže podle stavu služby).
+      const entry = list.find((order) => order.role === 'entry' && order.status === 'working' && order.price === expectPrice);
+      if (!entry) return blocked('Čekající vstup s touto cenou už u Rithmicu není.');
+      if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
+      measure('Posun Limitu → čára', (s) => s.orders.some((order) => order.orderId === entry.orderId && order.price === newPrice));
+      return finish(await send({ op: 'move', orderId: entry.orderId, price: newPrice }));
+    }
     if (action === 'cancel-entry') {
       const entry = list.find((order) => order.role === 'entry' && order.price === expectPrice);
       if (!entry) return blocked('Čekající vstup s touto cenou už u Rithmicu není.');

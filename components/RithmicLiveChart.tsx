@@ -122,7 +122,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         position={trading.position} marketData={trading.marketData} solo={solo} copyEvents={trading.events} extraToasts={extraToasts}
         onPlaceEntry={trading.onPlaceEntry} onManageEntry={trading.onManageEntry}
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
-        entryBareSupported entryBarePendingSupported
+        entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported
         entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />

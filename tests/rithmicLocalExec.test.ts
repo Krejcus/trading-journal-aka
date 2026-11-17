@@ -167,10 +167,18 @@ describe('místní služba: posun, incidenty, stav', () => {
     const placed = await t.run(entry());
     await flush();
     const entryId = (placed as { result: { orderId: string } }).result.orderId;
-    // vstup s ochranou (Unsupported) posunout nejde
-    expect(await t.run({ op: 'move', orderId: entryId, price: 6985 })).toMatchObject({ ok: false, sent: false });
+    // čekající vstup s ochranou: jde posunout jen cena (změřeno 17. 11. — 314 zachová vzdálenosti SL/TP)
+    expect(await t.run({ op: 'move', orderId: entryId, price: 6985.1 })).toMatchObject({ ok: false, sent: false });
+    const sentBefore = t.server.orders.get(entryId)!;
+    expect((await t.run({ op: 'move', orderId: entryId, price: 6985 })).ok).toBe(true);
+    await sleep(60);
+    expect(t.server.orders.get(entryId)!.price).toBe(6985);
+    expect(t.server.orders.get(entryId)!.priceType).toBe(sentBefore.priceType);
+    expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', price: 6985 });
     t.server.fill(entryId, 6990);
     await sleep(80);
+    // po vyplnění už se cena vstupu nemění
+    expect(await t.run({ op: 'move', orderId: entryId, price: 6980 })).toMatchObject({ ok: false, sent: false });
     const state = t.exec.state();
     const stop = state.orders.find((o) => o.role === 'stop')!;
     const target = state.orders.find((o) => o.role === 'target')!;

@@ -179,11 +179,18 @@ describe('vstup se serverovou ochranou', () => {
     expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 2, orderType: 'Stop', stopPrice: 6990 }))).toBeInstanceOf(BrokerRequestNotSentError);
     expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 1, orderType: 'Limit', limitPrice: 6990 }))).toBeInstanceOf(BrokerRequestNotSentError);
     expect(await thrown(t.broker.modifyOrder(t.account(), stop.basketId, { quantity: 1, orderType: 'Stop' }))).toBeInstanceOf(BrokerRequestNotSentError);
-    // vstup bracketu (Unsupported, ne noha) se přes adaptér nemění
+    // čekající vstup bracketu: jen limitní cena (změřeno 17. 11. — 314 zachová vzdálenosti SL/TP); množství ani typ ne
     const resting = await t.broker.placeBracket(bracket(t, 'mv2', { limitPrice: 6900 }));
     await flush();
-    expect(await thrown(t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 1, orderType: 'Limit', limitPrice: 6890 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(await thrown(t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 2, orderType: 'Limit', limitPrice: 6890 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(await thrown(t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 1, orderType: 'Stop', stopPrice: 6890 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(await thrown(t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 1, orderType: 'Limit' }))).toBeInstanceOf(BrokerRequestNotSentError);
     expect(t.sent(314)).toBe(frames);
+    await t.broker.modifyOrder(t.account(), resting.entryBrokerOrderId, { quantity: 1, orderType: 'Limit', limitPrice: 6890 });
+    expect(t.sent(314)).toBe(frames + 1);
+    // vyplněný vstup (pozice `entry` výše) už cenu nemění
+    expect(await thrown(t.broker.modifyOrder(t.account(), entry, { quantity: 1, orderType: 'Limit', limitPrice: 6890 }))).toBeInstanceOf(BrokerRequestNotSentError);
+    expect(t.sent(314)).toBe(frames + 1);
     t.broker.stop();
   });
 

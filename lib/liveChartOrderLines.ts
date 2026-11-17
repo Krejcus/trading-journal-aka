@@ -76,7 +76,8 @@ export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
   kind: 'entry' | 'stopLoss' | 'takeProfit',
   price: number,
-  options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean } = {},
+  /** `relativeLegs`: SL/TP čekajícího vstupu jsou vzdálenosti od vstupu (Rithmic) — posunou se s ním, proti nové ceně se nekontrolují. */
+  options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean; relativeLegs?: boolean } = {},
 ): string | null {
   // Neověřená pozice: jen utažení SL (politika `lib/liveChartRiskPolicy.ts`); pak běžné kontroly.
   const policy = liveUnverifiedActionBlock(summary, kind === 'entry' ? { kind: 'move-limit' }
@@ -89,6 +90,7 @@ export function liveLineMoveBlockReason(
   if (kind === 'entry') {
     if (!(options.moveLimit || options.groupLimitMove) || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
     if (!options.groupLimitMove && summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
+    if (options.relativeLegs) return null;
     if (summary.stop == null || summary.target == null) return 'Ochranné ceny vstupu nejsou známé.';
     return pendingLegSideProblem('stopLoss', summary.side, price, 'Limit', summary.stop)
       ?? pendingLegSideProblem('takeProfit', summary.side, price, 'Limit', summary.target);

@@ -355,10 +355,18 @@ export class LocalExec {
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
+          } else if (order.tag?.startsWith('ui-') && order.limitPrice !== undefined && order.stopPrice === undefined
+            && this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId)) {
+            // Čekající vlastní vstup s ochranou: jen cena. SL/TP jsou vzdálenosti od vyplnění, posunou se s ním.
+            if (order.filledQuantity > 0) return refuse('vstup se už plní — cenu neměním');
+            const server = this.config.serverPrice?.(order.symbol) ?? null;
+            // Přes trh by se vyplnil jinde, než kde graf ukazuje vstup i ochranu.
+            if (server !== null && (order.side === 'Buy' ? price > server : price < server)) return refuse('nová cena Limitu je přes trh — vyplnil by se hned za jinou cenu; zruš ho a použij Market');
+            await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
           } else if (order.orderType === 'Limit' && order.tag?.startsWith('ui-')) {
             await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
           } else {
-            return refuse('posouvat jde jen SL/TP vlastního vstupu a vlastní Limit');
+            return refuse('posouvat jde jen SL/TP vlastního vstupu a vlastní čekající Limit');
           }
           return { ok: true, result: { orderId } };
         }
