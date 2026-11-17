@@ -1,3 +1,4 @@
+import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
 import type { Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createFakeRithmicServer, type FakeOrder } from '../_fakeRithmicServer';
@@ -41,21 +42,23 @@ export async function attachSimulation(http: Server, port: number) {
     onIncident: incident => exec.onIncident(incident),
   });
   const candles = new RithmicCandleBuilder();
+  let limits: Awaited<ReturnType<typeof broker.readQuantityLimits>> = null;
   const exec = new LocalExec({
     broker, symbols: { [symbol]: { tickSize: 0.25 } }, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
-    maxQuantity: 2, maxPosition: 2, serverPrice: () => price, serverQuote: () => ({ bid: price - 0.25, ask: price + 0.25 }),
+    maxQuantity: 2_147_483_647, quantityLimits: () => limits, serverPrice: () => price, serverQuote: () => ({ bid: price - 0.25, ask: price + 0.25 }),
   });
   exec.attach();
   await broker.start();
+  limits = await broker.readQuantityLimits(broker.accountIds()[0], 'MNQ');
   const ws = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   const send = (client: WebSocket, data: unknown) => {
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(data));
   };
   const broadcast = (message: unknown) => { for (const client of ws.clients) send(client, message); };
   http.on('upgrade', (req, socket, head) => {
-    if (req.url !== path) return;
+    if (req.url !== path && req.url !== path + '?drop=1') return;
     if (req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) { socket.destroy(); return; }
-    ws.handleUpgrade(req, socket, head, client => ws.emit('connection', client));
+    ws.handleUpgrade(req, socket, head, client => ws.emit('connection', client, req));
   });
   function record(at: number) {
     price = priceAt(at);
@@ -65,15 +68,22 @@ export async function attachSimulation(http: Server, port: number) {
   const now = Date.now();
   for (let at = Math.floor(now / minute) * minute - 360 * minute; at < now; at += 10_000) record(at);
   record(now);
-  ws.on('connection', client => {
+  ws.on('connection', (client, request) => {
+    let reqDrop = request.url === path + '?drop=1';
     const current = candles.current(symbol, Date.now());
-    send(client, { type: 'hello', system: 'Rithmic Test', readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
+    send(client, { type: 'hello', system: 'Rithmic Test', account: 'LOCAL-SIM', limits, readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
     send(client, { type: 'state', state: exec.state() });
     client.on('message', async raw => {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (!message?.command || typeof message.id !== 'string') return;
+      if (message.command.op === 'lookup') {
+        const result = await commandStatus(broker, message.command, symbol).catch(() => null);
+        send(client, { type: 'reply', id: message.id, ok: true, result });
+        return;
+      }
       const reply = await exec.execute(message.command);
+      if (reqDrop && message.command.op === 'entry' && reply.ok) { reqDrop = false; client.terminate(); return; }
       send(client, { type: 'reply', id: message.id, ...reply });
     });
     client.on('error', () => client.terminate());

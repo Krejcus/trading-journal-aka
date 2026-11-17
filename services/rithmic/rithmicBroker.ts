@@ -18,6 +18,7 @@
  *  - obnovuje se jen přihlášení; stav, který nejde určit, a vynucené odhlášení
  *    adaptér zastaví bez automatické obnovy.
  */
+import { quantityLimits, type RithmicQuantityLimits } from './rithmicQuantityLimits';
 import {
   BrokerRequestNotSentError,
   type BrokerAccountCapability,
@@ -135,6 +136,8 @@ export interface RithmicBrokerPort extends BrokerPort {
   /** Zastaveno bez automatické obnovy (vynucené odhlášení, neurčitelný stav). */
   isHalted(): boolean;
   accountIds(): number[];
+  accountName(accountId: number): string | null;
+  readQuantityLimits(accountId: number, product: string): Promise<RithmicQuantityLimits | null>;
   /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
   executionNet(accountId: number, symbol: string): number | null;
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
@@ -1541,6 +1544,15 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     isConnected: () => state === 'connected',
     isHalted: () => state === 'halted',
     accountIds: () => [...textByNumber.keys()],
+    accountName: account => textByNumber.get(account) ?? null,
+    async readQuantityLimits(account, product) {
+      const active = activeClient();
+      const name = accountText(account, false);
+      const [accountRows, productRows] = await Promise.all([active.accountRmsInfo(), active.productRmsInfo(name)]);
+      if (client !== active) return null;
+      const identity = active.accounts.find(item => item.accountId === name);
+      return identity ? quantityLimits(name, product, accountRows, productRows, identity) : null;
+    },
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
     routeEpoch: () => epoch,
 

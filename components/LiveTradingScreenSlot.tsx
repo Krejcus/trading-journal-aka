@@ -269,6 +269,9 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
   && left.marketData === right.marketData
   && (left.solo?.label ?? null) === (right.solo?.label ?? null) && (left.solo?.available ?? null) === (right.solo?.available ?? null) && Boolean(left.solo?.singleLeg) === Boolean(right.solo?.singleLeg) && Boolean(left.solo?.historyFromApp) === Boolean(right.solo?.historyFromApp)
+  && left.solo?.limitsLabel === right.solo?.limitsLabel && left.solo?.lastCloseLabel === right.solo?.lastCloseLabel
+  && left.solo?.reduce?.run === right.solo?.reduce?.run && left.solo?.reduce?.busy === right.solo?.reduce?.busy && left.solo?.reduce?.quantity === right.solo?.reduce?.quantity
+  && left.solo?.legsRemovable === right.solo?.legsRemovable
   && left.solo?.emergencyClose?.run === right.solo?.emergencyClose?.run && (left.solo?.emergencyClose?.busy ?? null) === (right.solo?.emergencyClose?.busy ?? null)
   && (left.extraToasts ?? []).map(card => card.id).join('|') === (right.extraToasts ?? []).map(card => card.id).join('|')
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')

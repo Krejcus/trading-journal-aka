@@ -757,6 +757,9 @@ const ManageSection: React.FC<{
 interface Props {
   /** Jeden účet bez kopírky (Rithmic): název účtu místo výběru skupiny; mění jen texty. */
   soloLabel?: string | null;
+  limitsLabel?: string;
+  quantityLimits?: { buy: number; sell: number };
+  lastCloseLabel?: string;
   /** Otevřené P&L jako čip u vstupu (`liveShownOpenPnl`); jen zobrazení. */
   shownOpenPnl?: number | null;
   isDark: boolean;
@@ -886,7 +889,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entrySingleLegSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
-  bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose, soloLabel = null,
+  bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose, soloLabel = null, limitsLabel, quantityLimits, lastCloseLabel,
 }) => {
   const ownCommandLockRef = useRef(false);
   const lockRef = commandLockRef ?? ownCommandLockRef;
@@ -1008,7 +1011,8 @@ const LiveOrderTicket: React.FC<Props> = ({
     : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
     : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.'
     : scaleIn && draft.type !== 'market' && m && m.quantity > 1 ? 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.'
-    : scaleIn && m && scaleIn.quantity + m.quantity > entryMaxContracts ? `Pozice by měla ${scaleIn.quantity + m.quantity} kontraktů — strop účtu je ${entryMaxContracts}.`
+    : quantityLimits && draft && m && (scaleIn?.quantity ?? 0) + m.quantity > quantityLimits[draft.side] ? `Pozice by přesáhla limit ${quantityLimits[draft.side]} kontraktů pro ${draft.side === 'buy' ? 'long' : 'short'}.`
+    : !quantityLimits && scaleIn && m && scaleIn.quantity + m.quantity > entryMaxContracts ? `Pozice by měla ${scaleIn.quantity + m.quantity} kontraktů — strop účtu je ${entryMaxContracts}.`
     : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`
       // Jedna noha nikdy; Limit/Stop obě; Market bez obou jen s capability (U4).
@@ -1535,7 +1539,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       <button
         type="button"
         disabled={!group}
-        title={group ? undefined : 'Výběr jednoho účtu přijde s napojením na stav workeru'}
+        title={soloLabel ?? (group ? undefined : 'Výběr jednoho účtu přijde s napojením na stav workeru')}
         onClick={() => setPickerOpen(open => !open)}
         aria-haspopup="menu"
         aria-expanded={pickerOpen}
@@ -1547,10 +1551,12 @@ const LiveOrderTicket: React.FC<Props> = ({
         </span>
         {group && <ChevronDown size={12} className={tone.muted} />}
       </button>
+      {limitsLabel && <small className={tone.muted}>{limitsLabel}</small>}
       {pickerMenu}
     </div>
 
     <div className="live-ticket-stagger -mx-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-2.5 pb-0.5">
+      {lastCloseLabel && <small className={tone.muted}>{lastCloseLabel}</small>}
       {position?.summary && <PositionCard isDark={isDark} summary={position.summary} shownOpenPnl={shownOpenPnl ?? null} muted={tone.muted} ink={tone.ink} field={tone.field} />}
       {attachEntry && attachSide && <AttachSection
         muted={tone.muted}

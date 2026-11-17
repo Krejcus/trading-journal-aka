@@ -462,7 +462,8 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
 
 describe('místní služba: výsledek zavření jen s potvrzenou nulovou pozicí', () => {
   it('opožděná zpráva se starou pozicí po vyplnění výsledek nezahodí — vyjde, jakmile přijde nula', async () => {
-    const t = await setup({ config: { positionSettleMs: 20 } });
+    let offset = 0;
+    const t = await setup({ config: { positionSettleMs: 20, now: () => Date.now() + offset } });
     const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
     await flush();
     t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
@@ -475,6 +476,7 @@ describe('místní služba: výsledek zavření jen s potvrzenou nulovou pozicí
     t.server.pushLivePosition('ACC1', 'ESZ6', 1); // průběžná zpráva ještě se starou pozicí
     await sleep(40);
     expect(t.exec.state().closes).toEqual([]);
+    offset += 12_000;
     t.server.pushLivePosition('ACC1', 'ESZ6', 0);
     await sleep(60);
     expect(t.exec.state().closes).toHaveLength(1);
@@ -1206,4 +1208,67 @@ describe('Rithmic live — pořadí zpráv o pozici, vyplnění a cizí pokyny',
       t.broker.stop();
     }
   });
+});
+
+it('checks directional RMS again before writing and permits three when allowed', async () => {
+  let checks = 0;
+  const t = await setup({ config: { maxQuantity: 20, maxPosition: 20, quantityLimits: () => (++checks === 2 ? null : { buy: 6, sell: 2, order: 4 }) } });
+  try {
+    expect(await t.run(entry({ quantity: 3 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(0);
+    expect(await t.run(entry({ quantity: 5 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(entry({ quantity: 3, side: 'Sell', limitPrice: 7010, stopPrice: 7020, targetPrice: 6970 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(entry({ quantity: 3 }))).toMatchObject({ ok: true });
+    expect(t.frames()).toBe(1);
+  } finally { t.broker.stop(); }
+});
+
+it('recovers a pending close after service restart and a confirmed flat snapshot', async () => {
+  type Store = NonNullable<LocalExecConfig['closeStore']>;
+  let saved: ReturnType<Store['load']> = null;
+  const store: Store = { load: () => saved, save: (_, data) => { saved = structuredClone(data); } };
+  const protectionStore = memoryProtectionStore();
+  const t = await setup({ config: { closeStore: store }, protectionStore });
+  try {
+    const placed = await t.run(entry());
+    await flush();
+    t.server.fill((placed as {result: {orderId: string}}).result.orderId, 6990);
+    await sleep(120);
+    const stop = t.exec.state().orders.find(o => o.role === 'stop')!;
+    t.server.controls.muteLivePositions = true;
+    t.server.fill(stop.orderId, 6980);
+    await sleep(60);
+    expect(store.load('ACC1')?.pending).toHaveLength(1);
+    expect(t.exec.state().closes).toEqual([]);
+    t.exec.detach();
+    t.broker.stop();
+    t.server.controls.muteLivePositions = false;
+    const after = await setup({ server: t.server, registryStore: t.registryStore, protectionStore, config: { closeStore: store } });
+    try {
+      expect(after.exec.state().closes).toHaveLength(1);
+      expect(after.exec.state().closes[0]).toMatchObject({ pointsTotal: -10, quantity: 1 });
+      expect(store.load('ACC1')?.pending).toHaveLength(0);
+    } finally { after.exec.detach(); after.broker.stop(); }
+  } finally { t.exec.detach(); t.broker.stop(); }
+});
+
+it('restores a three-contract open position and both protective legs after a broker reconnect', async () => {
+  const t = await setup({ config: { maxQuantity: 10, maxPosition: 10, quantityLimits: () => ({ buy: 10, sell: 10, order: 10 }) } });
+  try {
+    const placed = await t.run(entry({ quantity: 3 }));
+    expect(placed).toMatchObject({ ok: true });
+    await flush();
+    t.server.fill((placed as {result: {orderId: string}}).result.orderId, 6990);
+    await sleep(100);
+    const protections = () => t.exec.state().orders.filter(o => o.role === 'stop' || o.role === 'target').map(o => [o.orderId, o.quantity]).sort();
+    const before = protections();
+    expect(before).toHaveLength(2);
+    const writes = t.frames();
+    t.server.sockets.find(s => s.readyState === 1 && s.infra === 2)!.drop();
+    await sleep(220);
+    expect(t.broker.isConnected()).toBe(true);
+    expect(t.exec.state().positions).toMatchObject([{ symbol: 'ESZ6', netQuantity: 3 }]);
+    expect(protections()).toEqual(before);
+    expect(t.frames()).toBe(writes);
+  } finally { t.exec.detach(); t.broker.stop(); }
 });

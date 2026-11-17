@@ -40,9 +40,12 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
-  const linkNote = link !== 'open' ? 'odpojeno' : !trading.helloFresh ? 'připojuji' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : trading.liveAccount ? 'SKUTEČNÝ ÚČET' : null;
-  const systemLabel = simulationUrl && !trading.liveAccount ? 'Lokální simulace · LOCAL-SIM' : trading.system ?? 'Rithmic';
-  const soloBase = useMemo(() => ({ label: `${systemLabel} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, legsRemovable: trading.legsRemovable, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [systemLabel, trading.system, symbol, usable, linkNote, trading.legsRemovable]);
+  const linkNote = link !== 'open' ? 'odpojeno' : !trading.helloFresh ? 'připojuji' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : trading.closeOnly ? 'jen zavírání' : trading.liveAccount ? 'SKUTEČNÝ ÚČET' : null;
+  const systemLabel = simulationUrl && !trading.liveAccount ? 'Lokální simulace · LOCAL-SIM' : [trading.system ?? 'Rithmic', trading.accountName].filter(Boolean).join(' · ');
+  const limitsLabel = trading.limits && trading.helloFresh ? `Max. kontraktů · long ${trading.limits.buy} · short ${trading.limits.sell} · příkaz ${trading.limits.order}` : 'Čekám na limity účtu a produktu';
+  const lastClose = state?.closes?.filter(item => item.symbol === symbol).at(-1);
+  const lastCloseLabel = lastClose && trading.pointValue ? `Poslední zavření · ${new Date(lastClose.at).toLocaleString('cs-CZ')} · ${lastClose.quantity} ks · ${(lastClose.pointsTotal * trading.pointValue).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} USD před poplatky` : undefined;
+  const soloBase = useMemo(() => ({ limitsLabel, quantityLimits: trading.limits ?? undefined, lastCloseLabel, label: `${systemLabel} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, legsRemovable: trading.legsRemovable, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [limitsLabel, trading.limits, lastCloseLabel, systemLabel, trading.system, symbol, usable, linkNote, trading.legsRemovable]);
   // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
   const rejectionBaseline = useRef<number | null>(null);
   if (!state) rejectionBaseline.current = null;
@@ -51,7 +54,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const rejection = lastRejection && rejectionBaseline.current !== null && lastRejection.at > rejectionBaseline.current ? lastRejection : null;
   const blocked = state?.blocked ?? null;
   const uncertainList = trading.uncertain;
-  const uncertain = uncertainList.at(-1) ?? null;
+  const uncertain = uncertainList.find(item => !item.confirmed) ?? uncertainList.at(-1) ?? null;
   // Výsledek „Potvrdit incident" se nezahazuje: neúspěch dostane vlastní kartu.
   const [ackNote, setAckNote] = useState<{ at: number; text: string } | null>(null);
   const [crashed, setCrashed] = useState(false);
@@ -89,7 +92,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   else if (wasOpen.current) { wasOpen.current = false; downSince.current = Date.now(); }
   const extraToasts = useMemo<TradeToast[]>(() => [
     // Nejistý výsledek příkazu přežije výpadek spojení i odchod ze záložky (drží ho hook mimo komponentu).
-    ...uncertainList.map(item => card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
+    ...uncertainList.map(item => item.confirmed ? card(`rithmic-verified:${item.id}`, 'green', 'Rithmic', 'Broker potvrdil stav příkazu', item.reason) : card(`rithmic-uncertain:${item.id}`, 'amber', 'Pozor', `${item.label}: výsledek NEZNÁMÝ`, `${item.reason} — ověř pozici a příkazy u brokera, nic neopakuj.`)),
     ...(closeNote ? [card(`rithmic-close-now:${closeNote.at}`, 'red', 'Brzda', 'Zavření pozice neodešlo', closeNote.text)] : []),
     ...(reduceNote ? [card(`rithmic-reduce:${reduceNote.at}`, 'amber', 'Pozor', 'Částečné zavření neodešlo', reduceNote.text)] : []),
     // Výpadek hlásí karta jen krátce (po obnově by lhala); trvalý stav nese štítek účtu v hlavičce.
@@ -128,7 +131,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
           {tabs.map(item => <button key={item.id} type="button" onClick={() => onNavigate(item.id)} className={`rounded-lg px-3 py-1.5 text-[12px] font-bold ${item.id === 'chart' ? 'text-indigo-400' : ''}`}>{item.label}</button>)}
           <span className="flex-1" />
           {strip.notice && <button type="button" onClick={() => onNavigate('overview')} title={strip.notice} className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500">Incident kopírky →</button>}
-          {uncertain && <button type="button" onClick={dismissUncertain} title="Zavřít varování" className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-500">{uncertain.label}: výsledek NEZNÁMÝ — ověř u brokera ×</button>}
+          {uncertain && <button type="button" disabled={!trading.helloFresh || link !== 'open'} onClick={dismissUncertain} title="Zavřít varování" className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-500">{uncertain.confirmed ? 'Zavřít potvrzení' : `${uncertain.label} · výsledek neznámý — ověř u brokera`} ×</button>}
         </nav>
         <div className="grid flex-1 place-items-center px-6 text-center text-[14px]">{waiting ?? 'Čekám na data…'}</div>
       </div>,
@@ -146,12 +149,12 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
         entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported managePendingLegsSupported
         entryScaleIn={trading.scaleIn}
-        entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView}
+        entryMaxContracts={trading.maxContracts} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}
-      {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified onClick={dismissUncertain} title={uncertainList.map(item => `${item.label}: výsledek neznámý — ${item.reason}`).join('; ')}
-        className={`fixed left-[76px] z-[310] rounded-lg border border-amber-500/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-extrabold text-amber-500 hover:bg-amber-500/25 ${blocked ? 'bottom-14' : 'bottom-4'}`}>Stav u brokera ověřen</button>, document.body)}
+      {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified disabled={!trading.helloFresh || link !== 'open'} onClick={dismissUncertain} title={uncertainList.map(item => `${item.label} · ${item.reason}`).join('; ')}
+        className={`fixed left-[76px] z-[310] rounded-lg border border-amber-500/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-extrabold text-amber-500 hover:bg-amber-500/25 ${blocked ? 'bottom-14' : 'bottom-4'}`}>{uncertain?.confirmed ? 'Zavřít potvrzení' : 'Stav u brokera ověřen'}</button>, document.body)}
       {/* Pod nouzovou lištou a jejími dialogy (z-350/600); po pádu grafu se nekreslí. */}
       {blocked && !crashed && !trading.readOnly && createPortal(<button type="button" data-rithmic-ack onClick={() => void confirmIncident()}
         className="fixed bottom-4 left-[76px] z-[310] rounded-lg border border-rose-500/60 bg-rose-500/15 px-3 py-1.5 text-[12px] font-extrabold text-rose-400 hover:bg-rose-500/25">Potvrdit incident</button>, document.body)}

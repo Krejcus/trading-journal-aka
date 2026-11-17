@@ -10,11 +10,17 @@ const consent = (patch: Partial<LiveTradingConsent> = {}): LiveTradingConsent =>
 const ctx = (patch = {}) => ({ system: 'LucidTrading', user: 'U1', accounts: ['ACC-1'], now: NOW, ...patch });
 
 describe('souhlas s obchodováním na skutečném účtu', () => {
+  it('only v2 accepts broker RMS or a larger explicit personal cap', () => {
+    expect(liveTradingConsentProblem(consent({ version: 2, maxQuantity: 'rms' }), ctx())).toBeNull();
+    expect(liveTradingConsentProblem(consent({ version: 2, maxQuantity: 8 }), ctx())).toBeNull();
+    expect(liveTradingConsentProblem(consent({ maxQuantity: 'rms' }), ctx())).toMatch(/strop/);
+    expect(liveTradingConsentProblem(consent({ maxQuantity: 8 }), ctx())).toMatch(/strop/);
+  });
   it('platí jen pro přesný systém, uživatele a jediný účet, po omezenou dobu', () => {
     expect(liveTradingConsentProblem(consent(), ctx())).toBeNull();
     expect(liveTradingConsentProblem(null, ctx())).toMatch(/chybí/);
     expect(liveTradingConsentProblem('ano', ctx())).toMatch(/chybí/);
-    expect(liveTradingConsentProblem(consent({ version: 2 as never }), ctx())).toMatch(/verzi/);
+    expect(liveTradingConsentProblem(consent({ version: 3 as never }), ctx())).toMatch(/verzi/);
     expect(liveTradingConsentProblem(consent(), ctx({ system: 'Apex' }))).toMatch(/systém/);
     expect(liveTradingConsentProblem(consent(), ctx({ user: 'U2' }))).toMatch(/uživatele/);
     expect(liveTradingConsentProblem(consent(), ctx({ accounts: ['ACC-2'] }))).toMatch(/jiný účet/);
@@ -37,8 +43,8 @@ describe('souhlas s obchodováním na skutečném účtu', () => {
     // režim jen pro zavírání: bez souhlasu, ale služba v něm odmítá každý vstup
     expect(server).toMatch(/if \(CLOSE_ONLY\) return 'služba běží jen pro zavírání a správu ochrany \(--close-only\)';/);
     // kontroly příkazů na skutečném trhu chtějí čerstvou cenu ze živého spojení
-    expect(server).toMatch(/serverPrice: \(symbol\) => \(symbol === CONTRACT \? checkPrice\(Date\.now\(\)\) : null\),/);
-    expect(server).toMatch(/if \(!feedOpen\) return null;\n    const last = candles\.lastPrice\(CONTRACT, now, 30_000\);/);
+    expect(server).toMatch(/serverPrice: \(symbol\) => \(symbol === CONTRACT \? freshPrice\(Date\.now\(\)\) : null\),/);
+    expect(server).toContain('if (!feedOpen) return null;\n    return candles.marketPrice(CONTRACT, now, 30_000);');
     expect(server).toMatch(/if \(LIVE_TRADING && READ_ONLY\) throw new Error\(/);
     expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING\) throw new Error\(/);
     expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);

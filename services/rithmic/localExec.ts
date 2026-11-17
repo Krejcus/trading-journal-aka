@@ -16,6 +16,7 @@ export interface LocalExecConfig {
   /** Povolené kontrakty a jejich krok ceny. */
   symbols: Record<string, { tickSize: number }>;
   maxQuantity: number;
+  quantityLimits?: () => import('./rithmicQuantityLimits').RithmicQuantityLimits | null;
   /** Strop velikosti pozice včetně čekajících vstupů (výchozí = `maxQuantity`). */
   maxPosition?: number;
   /** Nejvyšší vzdálenost SL/TP od vstupu v tickách (výchozí 400). */
@@ -54,6 +55,10 @@ export interface LocalExecConfig {
    * (vstup, přikoupení); zavření, rušení a správa ochrany jdou vždy.
    */
   liveTrading?: { problem: () => string | null; requireStop: boolean };
+  closeStore?: {
+    load(account: string): { pending: LocalExecClose[]; closed: LocalExecClose[] } | null;
+    save(account: string, state: { pending: LocalExecClose[]; closed: LocalExecClose[] }): void;
+  };
   now?: () => number;
 }
 
@@ -251,11 +256,20 @@ export class LocalExec {
     // nebo přijde vzápětí. Jinak vyplnění nepatřilo k obchodu, jak ho služba složila (např. začátek neviděla).
     const book = this.positions.get(fill.symbol)?.netQuantity ?? 0;
     if (book === 0 && this.now() - (this.lastPositionAt.get(fill.symbol) ?? 0) < 2_000) this.publishClose(close);
-    else this.pendingClose.set(fill.symbol, { close, until: this.now() + 5_000 });
+    else this.pendingClose.set(fill.symbol, [...(this.pendingClose.get(fill.symbol) ?? []), close]);
+    this.saveCloses();
   }
 
-  private readonly pendingClose = new Map<string, { close: LocalExecClose; until: number }>();
+  private loadedCloseAccount: string | null = null;
+  private saveCloses(): void {
+    if (!this.loadedCloseAccount || !this.config.closeStore) return;
+    try {
+      this.config.closeStore.save(this.loadedCloseAccount, { closed: this.closes, pending: [...this.pendingClose.values()].flat() });
+    } catch { this.onIncident({ kind: 'attention', at: this.now(), message: 'Výsledky obchodů se nepodařilo uložit na disk.' }); }
+  }
+  private readonly pendingClose = new Map<string, LocalExecClose[]>();
   private publishClose(close: LocalExecClose): void {
+    if (this.closes.some(item => item.id === close.id)) return;
     this.closes.push(close);
     if (this.closes.length > 5) this.closes.shift();
   }
@@ -295,12 +309,10 @@ export class LocalExec {
       if (event.position.netQuantity !== 0) this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
       this.lastPositionAt.set(event.position.symbol, this.now());
       const waiting = this.pendingClose.get(event.position.symbol);
-      if (waiting) {
-        // Na živém trhu chodí zprávy o pozici nepřetržitě (průběžný výsledek) a první po vyplnění může ještě nést
-        // starou pozici — ta výsledek nezahazuje. Čeká se na nulu až do lhůty (změřeno 17. 11. na skutečném účtu:
-        // výsledek obchodu zavřeného SL se jinak ztratil).
-        if (event.position.netQuantity === 0 && this.now() <= waiting.until) { this.pendingClose.delete(event.position.symbol); this.publishClose(waiting.close); }
-        else if (this.now() > waiting.until) this.pendingClose.delete(event.position.symbol);
+      if (waiting && event.position.netQuantity === 0) {
+        this.pendingClose.delete(event.position.symbol);
+        for (const close of waiting) this.publishClose(close);
+        this.saveCloses();
       }
       const known = this.positions.get(event.position.symbol);
       this.positions.set(event.position.symbol, {
@@ -329,7 +341,24 @@ export class LocalExec {
         this.orders.clear();
         this.positions.clear();
         this.fillsAhead = [];
-        this.pendingClose.clear();
+        const name = this.broker.accountName(this.broker.accountIds()[0]);
+        if (name && name !== this.loadedCloseAccount) {
+          this.loadedCloseAccount = name;
+          this.pendingClose.clear();
+          this.closes.length = 0;
+          try {
+            const saved = this.config.closeStore?.load(name);
+            for (const close of saved?.closed ?? []) this.publishClose(close);
+            for (const close of saved?.pending ?? []) this.pendingClose.set(close.symbol, [...(this.pendingClose.get(close.symbol) ?? []), close]);
+          } catch { this.onIncident({ kind: 'attention', at: this.now(), message: 'Uložené výsledky obchodů se nepodařilo načíst.' }); }
+        }
+        for (const [symbol, closes] of this.pendingClose) {
+          if (!event.resync.positions.some(position => position.symbol === symbol && position.netQuantity !== 0)) {
+            for (const close of closes) this.publishClose(close);
+            this.pendingClose.delete(symbol);
+            this.saveCloses();
+          }
+        }
         this.trips.clear(); // v mezeře mohla uniknout vyplnění → výsledek by nebyl pravdivý
         for (const order of event.resync.orders) this.orders.set(order.brokerOrderId, order);
         for (const position of event.resync.positions) this.positions.set(position.symbol, { netQuantity: position.netQuantity });
@@ -724,6 +753,10 @@ export class LocalExec {
           // Strop pozice: otevřená pozice + čekající vstupy + tento.
           const net = this.positions.get(symbol)?.netQuantity ?? 0;
           const accountProblem = () => {
+            if (this.config.quantityLimits && (
+              [...this.positions].some(([other, position]) => other !== symbol && position.netQuantity !== 0)
+              || [...this.orders.values()].some(order => order.symbol !== symbol && !TERMINAL.has(order.status))
+            )) return 'Na účtu je další kontrakt s pozicí nebo příkazem. Zbývající společný limit RMS není ověřený.';
             if (this.broker.executionNet(accountId, symbol) !== net || (this.positions.get(symbol)?.netQuantity ?? 0) !== net) {
               return 'Pozice a potvrzená vyplnění se zatím neshodují — nový vstup neodesílám.';
             }
@@ -741,6 +774,16 @@ export class LocalExec {
           // + vstupy na cestě, které kniha ještě nezná (souběžná volání nesmí strop obejít).
           const onTheWay = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && ![...this.orders.values()].some((order) => order.tag === reservedTag))
             .reduce((sum, [, item]) => sum + item.quantity, 0);
+          const rmsProblem = () => {
+            if (!this.config.quantityLimits) return null;
+            const limits = this.config.quantityLimits();
+            if (!limits) return 'Limity účtu a produktu RMS nejsou ověřené.';
+            if (quantity > limits.order) return `Příkaz přesahuje limit RMS ${limits.order} ks.`;
+            const cap = side === 'Buy' ? limits.buy : limits.sell;
+            return open + waiting + onTheWay + quantity > cap ? `Pozice by přesáhla limit RMS ${cap} ks.` : null;
+          };
+          const sizeProblem = rmsProblem();
+          if (sizeProblem) return refuse(sizeProblem);
           const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
           if (open + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open}, čeká ${waiting + onTheWay})`);
           // Přikoupení do otevřené pozice: jen za přísných podmínek (viz `scaleInProblem`); ověří se teď
@@ -783,7 +826,7 @@ export class LocalExec {
           };
           const ack = await release(this.broker.placeBracket({
             ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
-            guard: () => consentNow() ?? accountProblem() ?? marketProblem()
+            guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
               ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };

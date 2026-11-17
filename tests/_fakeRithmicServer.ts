@@ -305,7 +305,11 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
           socket.push(305, { user_msg: userMsg, rp_code: ['6', 'rms unavailable'] });
           return;
         }
-        for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, status: controls.rmsStatus, max_order_quantity: 40 });
+        for (const account of accounts) row({ fcm_id: 'FCM', ib_id: 'IB', account_id: account, status: controls.rmsStatus, presence_bits: 139, buy_limit: 20, sell_limit: 20, max_order_quantity: 40 });
+        ok();
+        return;
+      case 306:
+        row({ fcm_id: 'FCM', ib_id: 'IB', account_id: f.account_id, product_code: 'MNQ', presence_bits: 11, buy_limit: 10, sell_limit: 10, max_order_quantity: 10 });
         ok();
         return;
       case 310:

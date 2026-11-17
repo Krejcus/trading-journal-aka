@@ -2,7 +2,7 @@
 // LiveTradingScreen: spojení, stav, cena a svíčky, karty obchodů a příkazy.
 // Stav v prohlížeči slouží JEN k zobrazení — každý příkaz ověřuje místní proces (LocalExec).
 // Žádné opakování: příkaz bez odpovědi končí „unknown" a nikdy se neposílá znovu.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LiveTradingCopyEvent, LiveTradingMarketData } from '../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
 import type { LiveChartPosition, LiveChartPositionSummary } from '../lib/liveChartPosition';
@@ -15,6 +15,7 @@ import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
+import { RithmicPendingJournal, type PendingRithmicCommand } from '../lib/rithmicPendingJournal';
 import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
 import type { LiveChartWorkingOrders } from './useLiveChartData';
 
@@ -26,7 +27,8 @@ const REPLY_TIMEOUT_MS = 15_000;
 const BEAT_TIMEOUT_MS = 4_000;
 
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume?: number }
-interface Hello { readOnly?: boolean; /** Služba posílá příkazy na SKUTEČNÝ účet (souhlas vydaný člověkem). */ live?: boolean; feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
+type Limits = import('../services/rithmic/rithmicQuantityLimits').RithmicQuantityLimits;
+interface Hello { account?: string; closeOnly?: boolean; limits?: Limits | null; readOnly?: boolean; /** Služba posílá příkazy na SKUTEČNÝ účet (souhlas vydaný člověkem). */ live?: boolean; feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 export interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown }
 export type RithmicLocalLinkState = 'off' | 'connecting' | 'open' | 'closed';
 
@@ -71,16 +73,8 @@ function createFeed() {
  * Poslední příkaz s NEZNÁMÝM výsledkem (spojení spadlo nebo proces neodpověděl). Drží se mimo
  * komponentu, aby varování přežilo odchod ze záložky i obnovu spojení — dokud ho uživatel nezavře.
  */
-export interface RithmicUncertainCommand { id: string; at: number; label: string; reason: string }
+export interface RithmicUncertainCommand { id: string; at: number; label: string; reason: string; confirmed?: boolean }
 const NO_UNCERTAIN: readonly RithmicUncertainCommand[] = [];
-let uncertainCommands: readonly RithmicUncertainCommand[] = NO_UNCERTAIN;
-const uncertainListeners = new Set<() => void>();
-const publishUncertain = (next: readonly RithmicUncertainCommand[]) => { uncertainCommands = next; for (const listener of [...uncertainListeners]) listener(); };
-/** Každý nejistý příkaz zvlášť (vstup i zavření mimo zámek se nesmí přepsat); nejvýš posledních 5. */
-const addUncertain = (next: RithmicUncertainCommand) => publishUncertain([...uncertainCommands.filter(item => item.id !== next.id), next].slice(-5));
-const clearUncertain = () => publishUncertain(NO_UNCERTAIN);
-const subscribeUncertain = (listener: () => void) => { uncertainListeners.add(listener); return () => { uncertainListeners.delete(listener); }; };
-const readUncertain = () => uncertainCommands;
 const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { 'move-legs': 'Posun SL/TP', protect: 'Přidání SL/TP', 'protect-pair': 'Přidání SL a TP', 'replace-entry': 'Změna čekajícího vstupu', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', reduce: 'Částečné zavření', ack: 'Potvrzení incidentu' };
 
 /**
@@ -170,6 +164,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const [candles, setCandles] = useState<MarketCandle[]>([]);
   const [capturedAt, setCapturedAt] = useState(0);
   /** Proces žije (tep) a jeho spojení pro ceny taky. Čerstvost se nikdy nevyrábí v prohlížeči. */
+  const [limits, setLimits] = useState<Limits | null>(null);
   const [feedLive, setFeedLive] = useState(false);
   /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
   const [helloFresh, setHelloFresh] = useState(false);
@@ -205,7 +200,18 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const connectionRef = useRef<RithmicLocalConnection | null>(null);
   /** Proces mlčí déle než BEAT_TIMEOUT_MS (tep chodí každou sekundu). */
   const [silent, setSilent] = useState(false);
-  const uncertain = useSyncExternalStore(subscribeUncertain, readUncertain, readUncertain);
+  const [uncertain, setUncertain] = useState<readonly RithmicUncertainCommand[]>(NO_UNCERTAIN);
+  const journalRef = useRef<RithmicPendingJournal | null>(null);
+  const addUncertain = useCallback((next: RithmicUncertainCommand) => {
+    setUncertain(current => [...current.filter(item => item.id !== next.id), next]);
+  }, []);
+  const clearUncertain = () => {
+    if (!journalRef.current) return;
+    try {
+      for (const item of uncertain) journalRef.current.remove(item.id);
+      setUncertain(NO_UNCERTAIN);
+    } catch { /* Keep the warning if durable acknowledgement failed. */ }
+  };
   const stateRef = useRef<LocalExecState | null>(null);
   const priceRef = useRef<number | null>(null);
   const symbolRef = useRef('');
@@ -216,18 +222,51 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   useEffect(() => {
     if (!url || !enabled) { setLink(url ? 'closed' : 'off'); return undefined; }
     // Jádro spojení (obnova, lhůty, nejisté příkazy, zahazování starého socketu) žije v `RithmicLocalConnection`.
+    let journal: RithmicPendingJournal | null = null;
+    let sessionScope = '';
+    let recoveryGeneration = 0;
+    let identity: Hello | null = null;
+    function lookupPending(item: PendingRithmicCommand, info: Hello) {
+      const generation = recoveryGeneration;
+      if (!info.account || !item.clientId || !['entry', 'replace-entry'].includes(item.op)) return;
+      void connection.send({ op: 'lookup', account: info.account, symbol: info.symbol, originalOp: item.op, clientId: item.clientId }).then(reply => {
+        if (generation !== recoveryGeneration || !reply.ok || !reply.result || !journal?.list().some(x => x.id === item.id)) return;
+        const order = reply.result as { status: string; orderId: string; filled: number; quantity: number };
+        const status: Record<string, string> = { working: 'čeká', canceled: 'zrušen', filled: 'vyplněn', rejected: 'odmítnut', pending: 'přijat' };
+        const label = COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op;
+        journal?.remove(item.id);
+        addUncertain({ ...item, label, confirmed: true, reason: `Příkaz ${order.orderId}: ${status[order.status] ?? order.status}, vyplněno ${order.filled}/${order.quantity}.` });
+      }).catch(() => { /* Keep the item for verification. */ });
+    }
     const connection = new RithmicLocalConnection({
       url,
       reconnectMs: RECONNECT_MS, replyTimeoutMs: REPLY_TIMEOUT_MS, beatTimeoutMs: BEAT_TIMEOUT_MS, newId,
       handlers: {
+        beforeSend: (id, command) => {
+          if (!journal) throw new Error('Účet není potvrzený nebo místní úložiště není dostupné.');
+          if ((command.op === 'entry' || command.op === 'replace-entry') && journal.list().length > 0) throw new Error('Ověř předchozí příkaz u brokera.');
+          journal.put({ id, op: command.op, at: Date.now(), ...(typeof command.clientId === 'string' ? { clientId: command.clientId } : {}) });
+        },
+        onCertain: id => journal?.remove(id),
         onLink: setLink,
-        onUncertain: (item) => addUncertain({ id: item.id, at: item.at, label: COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op, reason: item.reason }),
+        onUncertain: item => {
+          addUncertain({ ...item, label: COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op });
+          if (!connection.isOpen() || !identity) return;
+          try {
+            const saved = journal?.list().find(row => row.id === item.id);
+            if (saved) lookupPending(saved, identity);
+          } catch { /* The existing warning remains visible. */ }
+        },
         // Konec relace (výpadek i odchod ze záložky): nic ze staré relace se nesmí tvářit jako živé.
         // Příkazy smí odejít až po novém `hello` + `state` z nového spojení.
         onSessionReset: () => {
           const ui = uiTick.current;
           if (ui.timer !== null) clearTimeout(ui.timer);
           uiTick.current = { price: null, bar: null, dirty: false, timer: null };
+          identity = null;
+          journalRef.current = journal = null;
+          sessionScope = '';
+          recoveryGeneration++;
           seen.current = null;
           stateRef.current = null;
           lastMarketAt.current = 0;
@@ -248,7 +287,24 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
         onMessage: (message) => {
           if (message.type === 'hello') {
             const info = message as unknown as Hello;
+            identity = info;
             symbolRef.current = info.symbol;
+            const scope = JSON.stringify([info.system, info.account, info.symbol]);
+            if (scope !== sessionScope) {
+              sessionScope = scope;
+              recoveryGeneration++;
+              journal = null;
+              setUncertain(NO_UNCERTAIN);
+              try {
+                if (info.account) journal = new RithmicPendingJournal(window.localStorage, info.system, info.account, info.symbol);
+                journalRef.current = journal;
+                for (const item of journal?.list() ?? []) {
+                  const label = COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op;
+                  addUncertain({ ...item, label, reason: 'Chybí potvrzení výsledku' });
+                  lookupPending(item, info);
+                }
+              } catch { journalRef.current = journal = null; }
+            }
             setHelloFresh(true);
             if (info.feed === true && info.price !== null) {
               lastMarketAt.current = Date.now();
@@ -256,6 +312,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             }
             setFeedLive(info.feed === true && info.price !== null);
             setHello(info);
+            setLimits(info.limits ?? null);
             const bars = info.bars.map(candle);
             // Graf potřebuje aspoň jednu svíčku; testovací trh často stojí.
             if (!bars.length && typeof info.price === 'number') bars.push({ time: Math.floor(Date.now() / 60_000) * 60, open: info.price, high: info.price, low: info.price, close: info.price, volume: 0 });
@@ -279,11 +336,18 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             if (bar) ui.bar = bar;
             ui.dirty = true;
             if (ui.timer === null) ui.timer = setTimeout(() => flushUiTick(), 100);
+          } else if (message.type === 'limits') {
+            setLimits(message.limits as Limits | null);
           } else if (message.type === 'beat') {
             setFeedLive(message.feed === true && Date.now() - lastMarketAt.current <= 30_000);
           } else if (message.type === 'state') {
-            stateRef.current = message.state as LocalExecState;
-            setState(message.state as LocalExecState);
+            const next = message.state as LocalExecState;
+            if (stateRef.current?.connected === false && next.connected && identity && journal) {
+              try { for (const item of journal.list()) lookupPending(item, identity); }
+              catch { /* Keep unresolved operations for manual verification. */ }
+            }
+            stateRef.current = next;
+            setState(next);
           }
         },
       },
@@ -337,11 +401,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const availableRef = useRef(false);
   availableRef.current = available;
   const entryReadyRef = useRef(false);
-  entryReadyRef.current = entryReady;
-  const IN_POSITION = 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP, nejvýš 2 kontrakty).';
+  entryReadyRef.current = entryReady && !!limits && !!hello?.account && !hello.closeOnly && !uncertain.some(item => !item.confirmed);
+  const maxContracts = limits ? Math.min(limits.order, Math.max(limits.buy, limits.sell)) : 0;
+  const IN_POSITION = 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP).';
   const NOT_READY = 'Spojení s Rithmicem není připravené — nic se neodeslalo.';
   const inPosition = Boolean(state?.positions.some((item) => item.symbol === hello?.symbol));
-  const entryBlockedReason = readOnly ? 'Účet je připojený jen pro čtení — příkazy jsou vypnuté.' : entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
+  const entryBlockedReason = uncertain.some(item => !item.confirmed) ? 'Nejdřív ověř výsledek předchozího příkazu.' : readOnly ? 'Účet je připojený jen pro čtení — příkazy jsou vypnuté.' : hello?.closeOnly ? 'Účet je v režimu jen pro zavírání.' : !maxContracts ? 'Limit RMS není dostupný nebo je nulový.' : entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
     : link !== 'open' ? 'Místní proces Rithmicu není připojený.'
     : !state?.connected ? 'Rithmic je odpojený.'
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
@@ -376,10 +441,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
     if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
     const reason = legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
-      : quantity >= 2 ? 'Pozice má 2 kontrakty — víc služba nepustí.'
+      : quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.'
       : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason, pendingAdd: null };
-  }, [net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
   scaleInRef.current = scaleIn;
 
   const position = useMemo<LiveChartPosition | null>(() => {
@@ -528,8 +593,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       measure('Zavření pozice → čáry pryč', (s) => !s.positions.some((item) => item.symbol === sym) && !s.orders.some((order) => order.symbol === sym));
       const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       const reply = rithmicFlattenReply(raw);
-      // Služba doběhla, ale broker výsledek nepotvrdil (ostatní nejistoty zapisuje příjem odpovědi).
-      if (raw.ok && !reply.ok && reply.sent !== false) addUncertain({ id: `close:${Date.now()}`, at: Date.now(), label: COMMAND_LABEL.flatten, reason: reply.error ?? 'výsledek není znám' });
       return finish(reply);
     }
     return blocked('Tuhle akci místní služba zatím neumí.');
@@ -602,7 +665,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       if (reply.ok) return { status: 'sent', text: null };
       if (reply.sent === false) return { status: 'blocked', text: reply.error ?? 'Neodesláno.' };
       // Nejistý výsledek od služby (ne jen timeout/výpadek) musí být vidět — brzda nejde přes hlášky obrazovky.
-      if (raw.ok) addUncertain({ id: `close-now:${Date.now()}`, at: Date.now(), label: COMMAND_LABEL.flatten, reason: reply.error ?? 'výsledek není znám' });
       return { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
     } finally { closingNow.current = false; }
   }, [send]);
@@ -641,7 +703,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     legsRemovable,
     reducible, reduceOne,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,

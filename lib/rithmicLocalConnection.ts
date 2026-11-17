@@ -19,6 +19,8 @@ export interface RithmicLinkSocket {
 }
 
 export interface RithmicLinkHandlers {
+  beforeSend?(id: string, command: { op: string } & Record<string, unknown>): void;
+  onCertain?(id: string): void;
   onLink(state: 'connecting' | 'open' | 'closed'): void;
   /** Zprávy služby kromě odpovědí na příkazy (hello, tick, beat, state). Jen z aktuálního socketu. */
   onMessage(message: Record<string, unknown>): void;
@@ -99,9 +101,17 @@ export class RithmicLocalConnection {
       const socket = this.socket;
       if (!socket || socket.readyState !== OPEN) { resolve({ ok: false, sent: false, error: 'místní proces není připojený' }); return; }
       const id = this.newId();
+      if (command.op !== 'ack' && command.op !== 'lookup') {
+        try { this.options.handlers.beforeSend?.(id, command); } catch (error) {
+          if (command.op === 'entry' || command.op === 'replace-entry') {
+            resolve({ ok: false, sent: false, error: error instanceof Error ? error.message : 'Nelze uložit ID příkazu pro obnovu po výpadku.' });
+            return;
+          }
+        }
+      }
       const timer = setTimeout(() => {
         if (!this.replies.delete(id)) return;
-        if (command.op !== 'ack') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'místní proces neodpověděl' });
+        if (command.op !== 'ack' && command.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'místní proces neodpověděl' });
         resolve({ ok: false, sent: 'unknown', error: 'místní proces neodpověděl — ověř stav' });
       }, this.replyTimeoutMs);
       this.replies.set(id, { op: command.op, resolve: (reply) => { clearTimeout(timer); resolve(reply); } });
@@ -109,7 +119,7 @@ export class RithmicLocalConnection {
         // Odeslání vyhodilo: jestli něco odešlo, se neví → stejné zacházení jako výpadek.
         const pending = this.replies.get(id);
         this.replies.delete(id);
-        if (command.op !== 'ack') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'odeslání místnímu procesu selhalo' });
+        if (command.op !== 'ack' && command.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'odeslání místnímu procesu selhalo' });
         pending?.resolve({ ok: false, sent: 'unknown', error: 'odeslání místnímu procesu selhalo — ověř stav' });
       }
     });
@@ -120,7 +130,7 @@ export class RithmicLocalConnection {
     const pending = [...this.replies];
     this.replies.clear();
     for (const [id, item] of pending) {
-      if (item.op !== 'ack') this.options.handlers.onUncertain({ id, at: this.now(), op: item.op, reason: 'spojení s místním procesem spadlo' });
+      if (item.op !== 'ack' && item.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: item.op, reason: 'spojení s místním procesem spadlo' });
       item.resolve({ ok: false, sent: 'unknown', error: 'spojení s místním procesem spadlo — ověř stav' });
     }
   }
@@ -166,7 +176,17 @@ export class RithmicLocalConnection {
         this.replies.delete(id);
         const reply = message as unknown as RithmicLinkReply;
         // Nejistou odpověď služby zapisuje jedno místo — stejně jako timeout a výpadek.
-        if (pending.op !== 'ack' && !reply.ok && reply.sent !== false) this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: reply.error ?? 'výsledek není znám' });
+        if (pending.op !== 'ack' && pending.op !== 'lookup' && !reply.ok && reply.sent !== false) this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: reply.error ?? 'výsledek není znám' });
+        if (pending.op !== 'ack' && pending.op !== 'lookup' && (reply.ok || reply.sent === false)) {
+          const status = (reply.result as { status?: string } | null)?.status;
+          if (pending.op !== 'flatten' || !reply.ok || status === 'already-flat' || status === 'submitted' || status === 'rejected') {
+            try { this.options.handlers.onCertain?.(id); } catch {
+              this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: 'Výsledek se nepodařilo uložit pro obnovu.' });
+            }
+          } else {
+            this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: 'Zavření nemá jednoznačné potvrzení' });
+          }
+        }
         pending.resolve(reply);
         return;
       }

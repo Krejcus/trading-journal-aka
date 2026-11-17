@@ -7,14 +7,14 @@
  * = okamžité vypnutí nových vstupů. Vypršení ani smazání NIKDY nebrání zavření, rušení a správě ochrany.
  */
 export interface LiveTradingConsent {
-  version: 1;
+  version: 1 | 2;
   system: string;
   user: string;
   account: string;
   grantedAt: number;
   expiresAt: number;
   /** Strop kusů na příkaz i na pozici (nejvýš LIVE_CONSENT_MAX_QUANTITY). */
-  maxQuantity: number;
+  maxQuantity: number | 'rms';
   /** Každý vstup musí nést SL (serverová ochrana). */
   requireStop: boolean;
   /** Věta, kterou člověk opsal — musí odpovídat `liveConsentPhrase(account)`. */
@@ -32,7 +32,7 @@ export function liveTradingConsentProblem(value: unknown, context: LiveConsentCo
   if (context.system === 'Rithmic Test') return 'souhlas se týká jen skutečných systémů — Rithmic Test ho nepotřebuje';
   if (!value || typeof value !== 'object') return 'souhlas s obchodováním na skutečném účtu chybí';
   const consent = value as Partial<LiveTradingConsent>;
-  if (consent.version !== 1) return 'souhlas má neznámou verzi';
+  if (consent.version !== 1 && consent.version !== 2) return 'souhlas má neznámou verzi';
   const text = (item: unknown): item is string => typeof item === 'string' && item.length > 0 && item.length <= 120;
   if (!text(consent.system) || !text(consent.user) || !text(consent.account) || !text(consent.phrase)) return 'souhlas je neúplný';
   if (consent.system !== context.system) return `souhlas je pro systém „${consent.system}", běží „${context.system}"`;
@@ -46,7 +46,10 @@ export function liveTradingConsentProblem(value: unknown, context: LiveConsentCo
   if (consent.grantedAt > context.now + 60_000) return 'souhlas je vydaný v budoucnosti (hodiny?)';
   if (consent.expiresAt - consent.grantedAt > LIVE_CONSENT_MAX_HOURS * 3_600_000 || consent.expiresAt <= consent.grantedAt) return `souhlas smí platit nejvýš ${LIVE_CONSENT_MAX_HOURS} hodin`;
   if (context.now >= consent.expiresAt) return 'souhlas vypršel — vydej nový (scripts/rithmic/grantLiveTrading.ts)';
-  if (!Number.isInteger(consent.maxQuantity) || consent.maxQuantity! < 1 || consent.maxQuantity! > LIVE_CONSENT_MAX_QUANTITY) return `souhlas má neplatný strop kusů (1–${LIVE_CONSENT_MAX_QUANTITY})`;
+  if (!(consent.version === 2 && consent.maxQuantity === 'rms')) {
+    const max = consent.maxQuantity;
+    if (typeof max !== 'number' || !Number.isSafeInteger(max) || max < 1 || max > (consent.version === 1 ? LIVE_CONSENT_MAX_QUANTITY : 2_147_483_647)) return 'souhlas má neplatný strop kusů';
+  }
   if (typeof consent.requireStop !== 'boolean') return 'souhlas neříká, jestli je SL povinný';
   return null;
 }

@@ -251,6 +251,9 @@ interface Props {
  * OFF a čipy v hlavičce dál platí, INV-UI-02); dostupnost příkazů tohoto grafu říká `available`.
  */
 export interface LiveTradingSolo {
+  limitsLabel?: string;
+  quantityLimits?: { buy: number; sell: number };
+  lastCloseLabel?: string;
   label: string;
   available: boolean;
   /** Graf jede na SKUTEČNÉM trhu: starší historie appky se smí připojit (u simulovaného trhu by ceny neseděly). */
@@ -1203,6 +1206,9 @@ const LiveTradingScreen: React.FC<Props> = ({
         <aside className="live-chart-ticket h-full w-[304px]">
           <LiveOrderTicket
             soloLabel={soloAccountLabel}
+            limitsLabel={solo?.limitsLabel}
+            quantityLimits={solo?.quantityLimits}
+            lastCloseLabel={solo?.lastCloseLabel}
             shownOpenPnl={shownOpenPnl}
             isDark={isDark}
             instrument={INSTRUMENT}

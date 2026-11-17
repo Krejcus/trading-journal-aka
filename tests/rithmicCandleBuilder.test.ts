@@ -82,3 +82,14 @@ describe('RithmicCandleBuilder', () => {
     expect(b.lastPrice('ESZ6', T0, 60_000)).toBeNull();
   });
 });
+
+it('uses a newer valid two-sided quote for orders and retains the last trade on the candle', () => {
+  const b = new RithmicCandleBuilder();
+  b.onTick(trade(1000, 100));
+  b.onTick({ ...trade(2000, 0), kind: 'bbo', bidPrice: 104, askPrice: 106 });
+  expect(b.marketPrice('MNQZ6', T0 + 2500, 2000)).toBe(105);
+  expect(b.current('MNQZ6', T0 + 2500)?.close).toBe(100);
+  b.onTick(trade(3000, 104));
+  expect(b.marketPrice('MNQZ6', T0 + 3500, 2000)).toBe(104);
+  expect(b.marketPrice('MNQZ6', T0 + 6000, 2000)).toBeNull();
+});

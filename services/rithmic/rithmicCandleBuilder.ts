@@ -129,6 +129,17 @@ export class RithmicCandleBuilder {
     return nowMs - state.lastPriceAt <= maxAgeMs ? state.lastPrice : null;
   }
 
+  marketPrice(symbol: string, nowMs: number, maxAgeMs: number): number | null {
+    const state = this.symbols.get(symbol);
+    if (!state) return null;
+    const last = this.lastPrice(symbol, nowMs, maxAgeMs);
+    const quote = this.quote(symbol, nowMs, maxAgeMs);
+    if (quote?.bid != null && quote.ask != null && (last === null || Math.max(state.bidAt, state.askAt) >= state.lastPriceAt)) {
+      return (quote.bid + quote.ask) / 2;
+    }
+    return last;
+  }
+
   /** Nejlepší nabídka a poptávka, pokud nejsou starší než `maxAgeMs`. */
   quote(symbol: string, nowMs: number, maxAgeMs: number): { bid: number | null; ask: number | null } | null {
     const state = this.symbols.get(symbol);

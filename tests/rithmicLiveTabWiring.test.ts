@@ -159,12 +159,12 @@ describe('hook místního procesu', () => {
     expect(close).not.toMatch(/availableRef|entryReadyRef|silentRef|busyRef|runWithCommandLock/);
     expect(close.match(/send\(/g)).toHaveLength(1);
     expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
-    expect(hook).toMatch(/addUncertain = \(next: RithmicUncertainCommand\) => publishUncertain\(\[\.\.\.uncertainCommands\.filter\(item => item\.id !== next\.id\), next\]\.slice\(-5\)\)/);
+    expect(hook).toContain('setUncertain(current => [...current.filter(item => item.id !== next.id), next])');
     expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
     expect(chart).toMatch(/link === 'open' && offerBrake && !trading\.readOnly \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
-    expect(close).toMatch(/if \(raw\.ok\) addUncertain\(\{ id: `close-now:/);
+    expect(conn).toContain("reason: 'Zavření nemá jednoznačné potvrzení'");
   });
 
   it('odmítnuté ani nejisté zavření se netváří jako hotové', () => {
@@ -175,7 +175,7 @@ describe('hook místního procesu', () => {
     expect(rithmicFlattenReply({ ok: true, result: {} })).toMatchObject({ ok: false, sent: 'unknown' });
     expect(hook.match(/const reply = rithmicFlattenReply\(raw\);/g)).toHaveLength(2);
     // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu.
-    expect(conn).toMatch(/if \(pending\.op !== 'ack' && !reply\.ok && reply\.sent !== false\) this\.options\.handlers\.onUncertain\(/);
+    expect(conn).toMatch(/if \(pending\.op !== 'ack' && pending\.op !== 'lookup' && !reply\.ok && reply\.sent !== false\) this\.options\.handlers\.onUncertain\(/);
     expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
   });
 

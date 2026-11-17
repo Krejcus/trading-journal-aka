@@ -288,6 +288,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-17 — Rithmic: limity podle účtu a produktu, obnova a měření na localhostu
+
+Místní služba načítá účtové i produktové RMS. Nový souhlas může použít tyto limity, starší osobní strop dál platí. Příkaz potřebuje čerstvou ověřenou mez pro stranu a jednotlivý příkaz. Při expozici na jiném kontraktu služba neumí prokázat zbývající kapacitu celého účtu a nepřidá další vstup. Panel ukazuje režim, účet a platné stropy. Při volbě kořene MNQ služba na startu zjistí aktuální měsíc u Rithmicu a drží ho po celou relaci.
+
+Prohlížeč před odesláním uchová identifikátor příkazu. Po výpadku se vstup či jeho výměna podle značky dohledá u brokera. Chybějící záznam neurčuje výsledek a appka neposílá náhradu. Správu bez průkazného výsledku dál ověřuje obsluha. Výsledek zavření přečká zpožděnou zprávu o pozici i restart služby mezi výstupním plněním a potvrzením nuly. V panelu je i poslední potvrzený výsledek před poplatky. Obchodní kontrola použije novější platnou oboustrannou kotaci. Svíčku nadále tvoří uskutečněné obchody.
+
+Měření 17. 11. na LOCAL-SIM v místním vývojovém buildu. Vstupy na 3 a 10 MNQ uspěly, 11 při stropu 10 neodešlo. V odděleném simulátoru po testu nezůstala pozice ani čekající příkaz. Prohlížečové měření je dostupné na stejné QA stránce s parametrem `?measure=1`, výpadek po přijetí vstupu s `?drop=1`.
+
+| Cesta | Počet | Medián | Rozsah nebo 95. percentil |
+| --- | ---: | ---: | ---: |
+| Klik na Limit → potvrzení v prohlížeči | 7 | 12,8 ms | 6,1–15,2 ms |
+| Klik na Limit → snímek grafu s čekající čárou | 7 | 81,0 ms | 73,1–96,8 ms |
+| WebSocket → potvrzení Limitu (3 nebo 10 MNQ) | 60 | 1,39 ms | p95 4,60 ms |
+| WebSocket → potvrzení zrušení | 60 | 1,23 ms | p95 2,66 ms |
+| Market → snímek pozice s oběma ochranami | 7 | 236,1 ms | 63,0–278,4 ms |
+| Nové místní spojení → snímek otevřené pozice se stejnými ID ochrany | 7 | 5,0 ms | 3,9–5,6 ms |
+| Zavřít → snímek bez pozice a pracujících příkazů | 7 | 6,9 ms | 3,4–12,6 ms |
+
+Plná sada na localhostu: 9 173 prošlých testů, jeden dříve odložený test. Simulátor vyhodnocuje vyplnění na kroku 250 ms. Čas obnovení výše začíná otevřením nového spojení, automatický klient má navíc prodlevu před připojením dvě sekundy. Čas snímku grafu měří dvě volání requestAnimationFrame od přítomnosti čáry. Burza, internet, Rithmic Test, probuzení celého Macu a časy R Traderu v těchto měřeních zahrnuté nejsou. Při zadávání do již otevřené pozice zůstává podporované přikoupení Marketem. Dělení jednoho vícekusového vstupu vyžaduje změnu evidence ochran a řešení selhání mezi zmenšením ochrany a výstupem. Čekající přikoupení potřebuje řešit souběh se zavřením původní pozice při výpadku.
+
 ### 2026-11-17 — Rithmic na localhostu (Codex)
 
 Filip chce nejdřív společně vyzkoušet aplikaci lokálně. Větev `codex/rithmic-local-20261117` vychází z `ffe0d716`. Příkaz `node --import tsx tests/qa/start-rithmic.mjs --simulate` otevře službu na 127.0.0.1:4186, graf je na `/tests/qa/rithmic-simulation.html`. Účet LOCAL-SIM, ceny i vyplnění jsou simulované v paměti. Služba používá skutečnou místní logiku příkazů. Vstup srovnává pozici s výchozím snímkem a jednotlivými exekucemi. Tep spojení už neposouvá čas poslední ceny. Ověřeno přes lokální WebSocket včetně výměny Limitu, vytvoření ochrany a zavření. V prohlížeči ověřena obě tažení. Návrh 24 973 → 24 970,25, poté zadaný Limit zpět na 24 973. SL i TP zůstaly na původních cenách. Při 40 lokálních zadáních Limitu byla doba od odeslání po zprávu stavu 1,7 ms v mediánu a 1,9 ms na 95. percentilu (simulovaný broker v paměti). Zkouška s Rithmic Test a srovnání s R Traderem zůstávají otevřené.

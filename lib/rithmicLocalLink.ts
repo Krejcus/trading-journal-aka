@@ -35,14 +35,14 @@ const allowedHere = (): boolean => {
 };
 
 let adopted = false;
-/** Jednorázově převezme `#rithmic-token=…` z adresy do localStorage a z adresy ho smaže. */
+/** Jednorázově převezme `#rithmic-token=…` z adresy do úložiště této záložky a z adresy ho smaže. */
 function adoptTokenFromLocation(): void {
   if (adopted || !allowedHere()) return;
   adopted = true;
   try {
     const { token, rest } = takeRithmicTokenFromHash(window.location.hash);
     if (rest === window.location.hash) return;
-    if (token) window.localStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, token);
+    if (token) window.sessionStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, token);
     window.history.replaceState(null, '', window.location.pathname + window.location.search + rest);
   } catch { /* soukromé okno, zakázané úložiště */ }
 }
@@ -51,7 +51,15 @@ export function rithmicLocalToken(): string | null {
   if (!allowedHere()) return null;
   adoptTokenFromLocation();
   try {
-    const token = window.localStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
+    let token = window.sessionStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
+    const legacy = window.localStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
+    if (legacy !== null) {
+      if (!token && TOKEN_SHAPE.test(legacy)) {
+        window.sessionStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, legacy);
+        token = legacy;
+      }
+      window.localStorage.removeItem(RITHMIC_LOCAL_TOKEN_KEY);
+    }
     return token && TOKEN_SHAPE.test(token) ? token : null;
   } catch { return null; }
 }

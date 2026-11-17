@@ -9,11 +9,12 @@
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
-import { LIVE_CONSENT_MAX_QUANTITY, liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
+import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
@@ -53,7 +54,7 @@ const arg = (name: string, fallback: string): string => {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 };
-const CONTRACT = arg('contract', 'ESZ6');
+const requestedContract = arg('contract', 'ESZ6').toUpperCase();
 const PORT = Number(arg('port', '3311'));
 const QA_PORT = arg('qa-port', '4185');
 // Další povolené adresy stránky (např. https://<mac>.<tailnet>.ts.net přes Tailscale Serve):
@@ -96,6 +97,7 @@ function fileProtectionStore(path: string): ProtectionStore {
 }
 
 async function main(): Promise<void> {
+  let CONTRACT = requestedContract;
   if (LIVE_TRADING && READ_ONLY) throw new Error('--live-trading a --read-only se vylučují');
   if (LIVE_TRADING && SYSTEM === 'Rithmic Test') throw new Error('--live-trading je jen pro skutečný systém; Rithmic Test ho nepotřebuje');
   if (SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING) throw new Error('Jiný systém než Rithmic Test jde spustit jen s --read-only (nebo s --live-trading a platným souhlasem)');
@@ -179,16 +181,12 @@ async function main(): Promise<void> {
   };
   /**
    * Cena pro KONTROLY příkazů (strana trhu, odchylka reference). Na skutečném trhu musí být čerstvá a ze živého
-   * spojení — zobrazovací cena smí být i hodinu stará, kontrola ne. Testovací trh často stojí, tam platí zobrazovací.
+   * spojení. Zobrazovací cena může být na stojícím trhu starší.
    */
   const freshPrice = (now: number): number | null => {
     if (!feedOpen) return null;
-    const last = candles.lastPrice(CONTRACT, now, 30_000);
-    if (last !== null) return last;
-    const quote = candles.quote(CONTRACT, now, 30_000);
-    return quote && quote.bid !== null && quote.ask !== null ? (quote.bid + quote.ask) / 2 : null;
+    return candles.marketPrice(CONTRACT, now, 30_000);
   };
-  const checkPrice = (now: number) => SYSTEM === 'Rithmic Test' && feedOpen ? displayPrice(now) : freshPrice(now);
   const clients = new Set<WebSocket>();
   type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number };
   /** Historie se drží v paměti procesu: dotaz na Rithmic nejvýš jednou za minutu, souběžná připojení sdílí jeden. */
@@ -301,6 +299,14 @@ async function main(): Promise<void> {
     },
   });
   await ticker.connect(['ticker']);
+  // A root explicitly requests the current delivery month. Pin it for the entire session.
+  if (['MNQ', 'NQ', 'ES', 'MES'].includes(requestedContract)) {
+    const front = await ticker.frontMonthContract(requestedContract, 'CME');
+    if (!front || !new RegExp('^' + requestedContract + '[FGHJKMNQUVXZ]\\d{1,2}$').test(front)) {
+      throw new Error(`Rithmic nepotvrdil aktuální kontrakt pro ${requestedContract}.`);
+    }
+    CONTRACT = front;
+  }
   // Historie svíček (jen čtení): po připojení stránky doplní poslední dny, které graf jinak nemá.
   try {
     await ticker.connect(['history']);
@@ -323,8 +329,29 @@ async function main(): Promise<void> {
   const accountNames = (): string[] => entries.filter((entry) => entry.system === SYSTEM).map((entry) => entry.accountId);
   const consentProblem = (): string | null => liveTradingConsentProblem(readConsent(), { system: SYSTEM, user: creds.user, accounts: accountNames(), now: Date.now() });
   // Souhlas platný při startu určuje strop a povinnost SL; jiný souhlas (nové vydání) chce restart služby.
+  const manualCap = typeof startConsent?.maxQuantity === 'number' ? startConsent.maxQuantity : 2_147_483_647;
+  let rms: Awaited<ReturnType<typeof broker.readQuantityLimits>> = null;
+  let rmsAt = 0;
+  let rmsEpoch: number | undefined;
+  let loadingLimits = false;
+  const effectiveLimits = () => broker.isConnected() && broker.routeEpoch?.(broker.accountIds()[0]) === rmsEpoch && Date.now() - rmsAt < 15_000 ? rms : null;
+  async function refreshLimits() {
+    if (loadingLimits || !broker.isConnected()) return;
+    const account = broker.accountIds()[0];
+    const product = typeof ref?.raw.product_code === 'string' ? ref.raw.product_code : CONTRACT.match(/^([A-Z0-9]+)[FGHJKMNQUVXZ]\d{1,2}$/)?.[1];
+    if (account === undefined || !product) return;
+    loadingLimits = true;
+    const epoch = broker.routeEpoch?.(broker.accountIds()[0]);
+    try {
+      const limits = await broker.readQuantityLimits(account, product);
+      rms = limits && { buy: Math.min(manualCap, limits.buy), sell: Math.min(manualCap, limits.sell), order: Math.min(manualCap, limits.order) };
+      rmsEpoch = epoch;
+      rmsAt = Date.now();
+    } catch { rms = null; } finally { loadingLimits = false; }
+    broadcast({ type: 'limits', limits: effectiveLimits() });
+  }
   exec = new LocalExec({
-    broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: startConsent ? Math.min(startConsent.maxQuantity, LIVE_CONSENT_MAX_QUANTITY) : 2, maxPosition: startConsent ? Math.min(startConsent.maxQuantity, LIVE_CONSENT_MAX_QUANTITY) : 2,
+    broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: manualCap, quantityLimits: effectiveLimits,
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,
@@ -337,7 +364,20 @@ async function main(): Promise<void> {
         return (current as LiveTradingConsent).grantedAt === startConsent?.grantedAt ? null : 'souhlas se od spuštění služby změnil — službu spusť znovu';
       },
     } } : {}),
-    serverPrice: (symbol) => (symbol === CONTRACT ? checkPrice(Date.now()) : null),
+    serverPrice: (symbol) => (symbol === CONTRACT ? freshPrice(Date.now()) : null),
+    closeStore: {
+      load(account) {
+        const file = join(results, 'closes-' + Buffer.from(JSON.stringify([SYSTEM, account])).toString('base64url') + '.json');
+        try { return JSON.parse(readFileSync(file, 'utf8')); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+      },
+      save(account, state) {
+        const file = join(results, 'closes-' + Buffer.from(JSON.stringify([SYSTEM, account])).toString('base64url') + '.json');
+        mkdirSync(results, { recursive: true });
+        writeFileSync(file + '.tmp', JSON.stringify(state), { mode: 0o600 });
+        renameSync(file + '.tmp', file);
+      },
+    },
     replaceMarker: {
       read: () => { try { return JSON.parse(readFileSync(replaceMarkerFile, 'utf8')) as { symbol: string; at: number }; } catch { return null; } },
       write: (value) => {
@@ -351,6 +391,8 @@ async function main(): Promise<void> {
   });
   exec.attach();
   await broker.start();
+  await refreshLimits();
+  setInterval(() => void refreshLimits(), 5_000).unref();
   if (!READ_ONLY && !LIVE_TRADING && broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   if (LIVE_TRADING) {
     // Až teď je znám účet přihlášení. Bez platného souhlasu služba vůbec nepoběží (ne „poběží a uvidí se").
@@ -369,7 +411,7 @@ async function main(): Promise<void> {
     setInterval(() => exec?.checkConsent(), 10_000).unref();
     console.log(CLOSE_ONLY
       ? `\n*** SKUTEČNÝ ÚČET ${SYSTEM} / ${account}: JEN ZAVÍRÁNÍ (vstupy vypnuté) ***\n`
-      : `\n*** SKUTEČNÝ ÚČET: příkazy z appky půjdou na ${SYSTEM} / ${account} · strop ${startConsent!.maxQuantity} ks · SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'} · souhlas do ${new Date(startConsent!.expiresAt).toLocaleString('cs-CZ')} ***\n`);
+      : `\n*** SKUTEČNÝ ÚČET: příkazy z appky půjdou na ${SYSTEM} / ${account} · strop ${startConsent!.maxQuantity === 'rms' ? 'podle RMS' : startConsent!.maxQuantity + ' ks'} · SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'} · souhlas do ${new Date(startConsent!.expiresAt).toLocaleString('cs-CZ')} ***\n`);
   }
   exec.subscribe((state) => broadcast({ type: 'state', state }));
 
@@ -406,7 +448,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, live: LIVE_TRADING, feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: freshPrice(at) ?? displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     void (async () => {
@@ -424,7 +466,6 @@ async function main(): Promise<void> {
           const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand };
           id = message.id ?? null;
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
-          if (READ_ONLY) throw new Error('účet je připojený jen pro čtení — příkazy jsou vypnuté');
           const at = Date.now();
           recent = recent.filter((time) => at - time < 10_000);
           // Brzda (zavření) se neomezuje nikdy.
@@ -432,6 +473,13 @@ async function main(): Promise<void> {
             if (recent.length >= 20) throw new Error('příliš mnoho příkazů za krátkou dobu');
             recent.push(at);
           }
+          const rawCommand = message.command as unknown as Record<string, unknown>;
+          if (rawCommand.op === 'lookup') {
+            const result = await commandStatus(broker, rawCommand, CONTRACT);
+            send(socket, { type: 'reply', id, ok: true, result });
+            return;
+          }
+          if (READ_ONLY) throw new Error('účet je připojený jen pro čtení — příkazy jsou vypnuté');
           const result = await exec!.execute(message.command);
           send(socket, { type: 'reply', id, ...result, serverMs: Math.round(performance.now() - receivedAt) });
         } catch (error) {

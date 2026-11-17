@@ -58,7 +58,7 @@ function App() {
           position={position} marketData={marketData} solo={solo} copyEvents={events}
           onPlaceEntry={onPlaceEntry} onManageEntry={onManageEntry}
           manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
-          entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
+          entryMaxContracts={trading.maxContracts} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
         />
       ) : <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', font: '14px system-ui', color: '#94a3b8', background: '#0b0f16' }}>Čekám na první cenu z Rithmic Test…</div>}
       <div data-qa-overlay style={{ position: 'fixed', left: 70, top: 150, zIndex: 400, maxWidth: 300, opacity: 0.9, padding: '8px 10px', borderRadius: 10, background: 'rgba(15,23,42,0.92)', color: '#e2e8f0', font: '12px system-ui', pointerEvents: 'auto' }}>

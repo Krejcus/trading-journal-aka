@@ -660,6 +660,11 @@ export class RithmicClient {
     return [...response.rows, ...(response.terminal ? [response.terminal] : [])].map((m) => m.fields);
   }
 
+  async productRmsInfo(accountId: string): Promise<RithmicFields[]> {
+    const response = await this.plant('order').request(306, this.accountFields(accountId));
+    return [...response.rows, ...(response.terminal ? [response.terminal] : [])].map(m => m.fields);
+  }
+
   async frontMonthContract(symbol: string, exchange: string): Promise<string | null> {
     const response = await this.plant('ticker').request(113, { symbol, exchange });
     return str(response.terminal?.fields.trading_symbol) || null;
