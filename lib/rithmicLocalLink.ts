@@ -35,14 +35,18 @@ const allowedHere = (): boolean => {
 };
 
 let adopted = false;
-/** Jednorázově převezme `#rithmic-token=…` z adresy do úložiště této záložky a z adresy ho smaže. */
+/**
+ * Jednorázově převezme `#rithmic-token=…` z adresy do TRVALÉHO úložiště prohlížeče a z adresy ho smaže.
+ * Rozhodnutí Filipa 17. 11. 2026: klíč má přežít zavření záložky (úložiště záložky ho ztrácelo při každém zavření).
+ * Klíč je jen místní (služba poslouchá na 127.0.0.1 a navíc hlídá Origin); leží i v souboru na disku.
+ */
 function adoptTokenFromLocation(): void {
   if (adopted || !allowedHere()) return;
   adopted = true;
   try {
     const { token, rest } = takeRithmicTokenFromHash(window.location.hash);
     if (rest === window.location.hash) return;
-    if (token) window.sessionStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, token);
+    if (token) window.localStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, token);
     window.history.replaceState(null, '', window.location.pathname + window.location.search + rest);
   } catch { /* soukromé okno, zakázané úložiště */ }
 }
@@ -51,14 +55,15 @@ export function rithmicLocalToken(): string | null {
   if (!allowedHere()) return null;
   adoptTokenFromLocation();
   try {
-    let token = window.sessionStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
-    const legacy = window.localStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
-    if (legacy !== null) {
-      if (!token && TOKEN_SHAPE.test(legacy)) {
-        window.sessionStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, legacy);
-        token = legacy;
+    let token = window.localStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
+    // Klíč uložený jen pro záložku (krátce používaná varianta) se převezme do trvalého úložiště.
+    const tabOnly = window.sessionStorage.getItem(RITHMIC_LOCAL_TOKEN_KEY);
+    if (tabOnly !== null) {
+      if (!token && TOKEN_SHAPE.test(tabOnly)) {
+        window.localStorage.setItem(RITHMIC_LOCAL_TOKEN_KEY, tabOnly);
+        token = tabOnly;
       }
-      window.localStorage.removeItem(RITHMIC_LOCAL_TOKEN_KEY);
+      window.sessionStorage.removeItem(RITHMIC_LOCAL_TOKEN_KEY);
     }
     return token && TOKEN_SHAPE.test(token) ? token : null;
   } catch { return null; }
