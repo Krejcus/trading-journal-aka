@@ -447,6 +447,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
     if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
     const reason = legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
+      : legView.stops.length >= 2 ? 'Pozice už má dvě části — další přikoupení služba nepustí.'
       : quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.'
       : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason, pendingAdd: null };
@@ -580,14 +581,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       const entry = list.find((order) => order.role === 'entry' && order.status === 'working' && order.price === expectPrice);
       if (!entry) return blocked('Čekající vstup s touto cenou už u Rithmicu není.');
       if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
-      // Vstup se SL/TP: nohy mají zůstat na svých cenách → služba vstup zruší a zadá znovu (Rithmic vzdálenosti
-      // SL/TP u čekajícího vstupu měnit neumí). Vstup bez noh se jen posune.
-      if (entry.plannedStop !== undefined || entry.plannedTarget !== undefined) {
-        measure(entry.entryType === 'Stop' ? 'Posun Stopu → čára' : 'Posun Limitu → čára', (s) => s.orders.some((order) => order.symbol === sym && order.role === 'entry' && order.status === 'working' && order.price === newPrice));
-        return replaceEntry(entry, { price: newPrice });
-      }
-      measure(entry.entryType === 'Stop' ? 'Posun Stopu → čára' : 'Posun Limitu → čára', (s) => s.orders.some((order) => order.orderId === entry.orderId && order.price === newPrice));
-      return finish(await send({ op: 'move', orderId: entry.orderId, price: newPrice }));
+      // Posun čekajícího vstupu = výměna: služba ho zruší a zadá znovu na nové ceně (SL/TP zůstanou na svých cenách;
+      // Rithmic jejich vzdálenosti u čekajícího vstupu měnit neumí). Platí i pro vstup bez noh a pro víc kontraktů —
+      // zrušení se potvrzuje s nulovým plněním, takže částečně vyplněný vstup se nevymění.
+      measure(entry.entryType === 'Stop' ? 'Posun Stopu → čára' : 'Posun Limitu → čára', (s) => s.orders.some((order) => order.symbol === sym && order.role === 'entry' && order.status === 'working' && order.price === newPrice));
+      return replaceEntry(entry, { price: newPrice });
     }
     if (action === 'cancel-entry') {
       const entry = list.find((order) => order.role === 'entry' && order.price === expectPrice);

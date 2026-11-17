@@ -46,7 +46,7 @@ export interface LivePositionLineControls {
   groupLimitStateHash?: string | null;
   /** Čekající Limit/Stop bez SL/TP jde táhnout (capability `manual-order-move-bare-entry-v1`). */
   moveBareEntry?: boolean;
-  /** Jeden účet přes Rithmic: táhnout jde i čekající Stop vstup (1 kontrakt), s ochranou i bez. */
+  /** Jeden účet přes Rithmic: táhnout jde čekající Limit i Stop vstup s libovolným množstvím, s ochranou i bez. */
   stopEntryMove?: boolean;
   /**
    * Štítky „+ SL“ / „+ TP“ u holé pozice (Market bez nohou): `missing` nohy se ještě dají vytáhnout,
@@ -95,14 +95,14 @@ export function liveLineMoveBlockReason(
   if (policy) return policy;
   // Holý Limit/Stop: nohy nejsou; jestli by se nová cena vyplnila hned, rozhodne worker podle své kotace.
   if (kind === 'entry' && options.moveBareEntry && summary.kind === 'pending' && summary.stop == null && summary.target == null) {
-    if (options.stopEntryMove && summary.entryType?.toLowerCase() === 'stop') return summary.quantity === 1 ? null : 'Posun vstupu jde zatím jen u 1 kontraktu.';
+    if (options.stopEntryMove) return null; // služba vstup vymění (zruší a zadá znovu) — jde s libovolným množstvím
     return summary.entryType?.toLowerCase() === 'limit' ? null : 'Posun Stopu bez SL/TP zatím nejde — zruš ho × a zadej znovu.';
   }
   if (kind === 'entry') {
     const entryType = summary.entryType?.toLowerCase();
     const stopEntry = options.stopEntryMove === true && entryType === 'stop';
     if (!(options.moveLimit || options.groupLimitMove) || summary.kind !== 'pending' || !(entryType === 'limit' || stopEntry)) return 'Posouvat jde jen čekající Limit podporovaný workerem.';
-    if (!options.groupLimitMove && summary.quantity !== 1) return stopEntry ? 'Posun vstupu jde zatím jen u 1 kontraktu.' : 'Posun limitu jde zatím jen u 1 kontraktu.';
+    if (!options.groupLimitMove && !options.stopEntryMove && summary.quantity !== 1) return stopEntry ? 'Posun vstupu jde zatím jen u 1 kontraktu.' : 'Posun limitu jde zatím jen u 1 kontraktu.';
     if (options.stopEntryMove) {
       // SL/TP stojí: nový vstup musí zůstat na správné straně každé nohy, kterou má.
       return (summary.stop != null ? pendingLegSideProblem('stopLoss', summary.side, price, stopEntry ? 'Stop' : 'Limit', summary.stop) : null)
@@ -221,8 +221,8 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
     label: `${entryLabel}${pendingEntry != null ? ' · mění se' : ''}`,
     draggable: controls.manageable && !position && pendingEntry == null && (controls.moveBareEntry === true && summary.stop == null && summary.target == null
       // Stop až po ověření na DEMO (worker `BARE_STOP_MOVE_VERIFIED`).
-      ? summary.entryType?.toLowerCase() === 'limit' || (controls.stopEntryMove === true && summary.entryType?.toLowerCase() === 'stop' && summary.quantity === 1)
-      : (controls.groupLimitMove === true || (controls.moveLimit === true && summary.quantity === 1)) && (summary.entryType?.toLowerCase() === 'limit' || (controls.stopEntryMove === true && summary.entryType?.toLowerCase() === 'stop'))) && pendingEntry == null,
+      ? summary.entryType?.toLowerCase() === 'limit' || (controls.stopEntryMove === true && summary.entryType?.toLowerCase() === 'stop')
+      : (controls.groupLimitMove === true || (controls.moveLimit === true && (summary.quantity === 1 || controls.stopEntryMove === true))) && (summary.entryType?.toLowerCase() === 'limit' || (controls.stopEntryMove === true && summary.entryType?.toLowerCase() === 'stop'))) && pendingEntry == null,
     // Čekající vstup: × = zrušit vstup (celé OSO). Pozice: × = zavřít obchod (leader, kopírka zavře kopie).
     cancellable: bare != null || (controls.manageable && (!position || controls.canClose === true)),
     cancelAction: position ? 'close-position' : 'cancel-order',

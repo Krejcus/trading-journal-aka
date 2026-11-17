@@ -217,6 +217,45 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
       need(await until(flat, 10_000), 'po zavření něco zbylo');
       return 'short s ochranou';
     }],
+    ['S11', 'Market 2 ks bez ochrany → + SL → + TP (svázaný pár na 2 ks) → zavření', async () => {
+      ok(await entry({ orderType: 'Market', quantity: 2, referencePrice: px() }), 'Market 2 ks bez ochrany');
+      need(await until(() => net() === 2 && cur().orders.length === 0), `holá pozice 2 ks: ${brief(cur())}`);
+      await wait(1_300);
+      const p = px();
+      ok(await send({ op: 'protect', clientId: cid(), symbol: sym, kind: 'stop', price: grid(p - 40) }, '+ SL 2 ks'), '+ SL');
+      need(await until(() => working('stop').length === 1 && working('stop')[0].quantity === 2), `SL 2 ks: ${brief(cur())}`);
+      await wait(1_300);
+      const pair = ok(await send({ op: 'protect', clientId: cid(), symbol: sym, kind: 'target', price: grid(p + 40) }, '+ TP (pár 2 ks)'), '+ TP');
+      need(pair.paired === true && await until(() => working('stop').length === 1 && working('target').length === 1), `pár: ${brief(cur())}`);
+      need(working('stop')[0].quantity === 2 && working('target')[0].quantity === 2, `množství páru: ${brief(cur())}`);
+      ok(await send({ op: 'flatten', clientId: cid(), symbol: sym }, 'zavření'), 'zavření');
+      need(await until(flat, 10_000), 'po zavření něco zbylo');
+      return 'pár na 2 ks';
+    }],
+    ['S12', 'Market 2 ks bez ochrany → SL i TP najednou na 2 ks → zavření', async () => {
+      ok(await entry({ orderType: 'Market', quantity: 2, referencePrice: px() }), 'Market 2 ks bez ochrany');
+      need(await until(() => net() === 2 && cur().orders.length === 0), `holá pozice 2 ks: ${brief(cur())}`);
+      await wait(1_300);
+      const p = px();
+      const pair = ok(await send({ op: 'protect-pair', clientId: cid(), symbol: sym, stopPrice: grid(p - 40), targetPrice: grid(p + 40) }, 'SL+TP najednou 2 ks'), 'SL+TP najednou');
+      need(pair.paired === true && await until(() => working('stop').length === 1 && working('target').length === 1), `pár: ${brief(cur())}`);
+      need(working('stop')[0].quantity === 2 && working('target')[0].quantity === 2, `množství páru: ${brief(cur())}`);
+      ok(await send({ op: 'flatten', clientId: cid(), symbol: sym }, 'zavření'), 'zavření');
+      need(await until(flat, 10_000), 'po zavření něco zbylo');
+      return 'pár jedním zápisem na 2 ks';
+    }],
+    ['S13', 'Limit BEZ ochrany 3 ks: posun vstupu (výměna), zrušení', async () => {
+      const p = grid(px() - 15);
+      const first = ok(await entry({ orderType: 'Limit', quantity: 3, limitPrice: p }), 'Limit 3 ks bez ochrany');
+      need(await until((s) => s.orders.some((o) => o.role === 'entry' && o.status === 'working')), 'vstup nepracuje');
+      const a = ok(await send({ op: 'replace-entry', clientId: cid(), orderId: first.orderId, price: p + 2 }, 'posun vstupu 3 ks'), 'posun vstupu');
+      await wait(700);
+      const e = working('entry')[0];
+      need(e && e.price === p + 2 && e.quantity === 3 && cur().orders.length === 1, `po posunu: ${brief(cur())}`);
+      ok(await send({ op: 'cancel', orderId: a.orderId }, 'zrušení'), 'zrušení');
+      need(await until(flat), 'po zrušení něco zbylo');
+      return 'holý Limit 3 ks posunut';
+    }],
   ];
 
   let failed = 0;

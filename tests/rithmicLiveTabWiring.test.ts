@@ -207,7 +207,7 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/managePendingLegsSupported/);
   });
 
-  it('posun čekajícího Stop vstupu: jen přes Rithmic (jeden účet), jen 1 kontrakt, s ochranou i bez', () => {
+  it('posun čekajícího Stop vstupu: jen přes Rithmic (jeden účet), s ochranou i bez, s libovolným množstvím', () => {
     const stop = (patch = {}) => ({ kind: 'pending', side: 'long', quantity: 1, entry: 110, entryType: 'Stop', stop: 107, target: 116, ...patch }) as never;
     // cesta kopírky Stop dál neposouvá
     expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true })).toMatch(/jen čekající Limit/);
@@ -215,7 +215,9 @@ describe('hook místního procesu', () => {
     expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true, stopEntryMove: true })).toBeNull();
     expect(liveLineMoveBlockReason(stop(), 'entry', 117, { moveLimit: true, stopEntryMove: true })).toMatch(/TP/);
     expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true, stopEntryMove: true })).toBeNull();
-    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true, stopEntryMove: true })).toMatch(/1 kontraktu/);
+    // víc kontraktů: služba vstup vymění (zruší a zadá znovu), takže množství nevadí
+    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true, stopEntryMove: true })).toBeNull();
+    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true })).toMatch(/jen čekající Limit/);
     expect(screen).toMatch(/stopEntryMove: solo != null,/);
   });
 
