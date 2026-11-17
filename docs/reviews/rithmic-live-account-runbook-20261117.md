@@ -61,3 +61,13 @@ Po měření: Ctrl+C, `--revoke`, pustit zase `--read-only`.
 
 Neověřeno před měřením na skutečném účtu: chování při částečném plnění (proto 1 ks), obnova po uspání Macu
 uprostřed pozice, souběh s R Traderem, týden rollu.
+
+## Doplněk 18. 11. — co se od prvního testu změnilo
+
+- Strop kusů: souhlas bez `--max-quantity` = limit propky (RMS); `--max-quantity N` ho jen zmenší.
+- Příkazy jsou DENNÍ. Na konci seance (23:00 SEČ, 22:00 v létě podle USA) burza zruší čekající vstupy i SL/TP a pozice
+  zůstane bez ochrany — appka na to 15 minut předem upozorní a potom ohlásí incident. Po otevření trhu ochranu zadej znovu.
+- Čekající přikoupení Limitem je zatím jen na Rithmic Test; na skutečném účtu služba přikoupí jen Marketem.
+- Nové k vyzkoušení: zavření 1 ks z pozice otevřené jedním příkazem („Zavřít 1 ks"), šipky vstupu a výstupu v grafu,
+  tažení čekajícího vstupu s víc kontrakty.
+- Sada `scripts/rithmic/nightSuite.ts` je JEN pro Rithmic Test (proti jinému systému se nespustí).

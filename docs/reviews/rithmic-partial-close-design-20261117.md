@@ -77,3 +77,25 @@ To je zásah do jádra ochrany pozice a patří mu vlastní návrh, oponentura a
 ### Výpadek mezi zmenšením ochrany a výstupem
 
 Regresní test v `tests/rithmicClient.test.ts` otevírá v simulátoru tři kusy. Po zmenšení obou ochranných příkazů na dva kusy klient odpojí a nechá simulátor vyplnit stop. Zbude jeden otevřený kus bez pracujícího příkazu. Služba tuto dvoukrokovou operaci nenabízí. Pro její zpřístupnění je potřeba ověřit postup, který ochranu zachová i při ztrátě spojení mezi zápisy.
+
+## Postaveno 17./18. 11. v noci — zavření 1 ks z jednoho vstupu s víc kusy
+
+Větev `claude/rithmic-night-20261117`. Postup (`reduce`, jedna ochrana s ≥ 2 ks):
+
+1. Trvalá značka v souboru (po pádu služby ji nová služba ohlásí incidentem).
+2. Adaptér `beginBracketResize`: do záznamu ochrany zapíše `resizing { to }`, uloží, pošle JEDNU změnu množství TP nohy
+   (burza změní obě), čeká na potvrzení obou noh.
+3. Služba znovu ověří pozici a potvrzená vyplnění.
+4. Market výstup 1 ks (značka `ui-red-…`).
+5. Po potvrzeném vyplnění `endBracketResize(1)` → v záznamu ochrany `exitedOutside += 1`.
+
+Záznam ochrany: expozice vstupu = plnění vstupu − plnění noh − `exitedOutside`. Během `resizing` (nejvýš 10 s) smí
+noha mít už nové množství; potom se nesoulad hlásí jako neúplná ochrana.
+
+Selhání: před krokem 2 nic neodešlo; po něm je každý nedokončený krok incident + blokace vstupů + stop dalším
+změnám ochrany do potvrzení obsluhou. Nic se neopakuje. Výstup nepotvrzený do lhůty dohlídá hlídač podle stavu
+výstupního příkazu (dodatečně zapíše `exitedOutside`, nebo nechá ochranu hlásit jako neúplnou).
+
+Vědomé riziko: mezi zmenšením ochrany a výstupem je 1 ks krátce bez ochrany (jako u výměny ochrany za svázaný pár).
+
+Stav ověření je v `docs/PROJECT_LOG.md` (noční zápis) — proti Rithmic Test se měří scénáři S15 a S16 v `scripts/rithmic/nightSuite.ts`.
