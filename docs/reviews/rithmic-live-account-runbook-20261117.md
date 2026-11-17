@@ -52,7 +52,10 @@ Každý krok: počkat na čáru v grafu, opsat čas z měřicího štítku (klik
 5. Posun SL tažením; BE.
 6. Zavřít pozici brzdou → karta s výsledkem a důvodem „ručně"; v R Traderu nic nezbylo.
 7. Stop vstup se SL/TP nad trhem → posun spouště → zrušení.
-8. (Volitelně, strop 2 ks v souhlasu) Market + přikoupení → „Zavřít 1 ks" → zbylá část má své SL/TP.
+8. (Souhlas s `--allow-no-stop`) Market BEZ ochrany → čipem „+ SL" natáhnout SL → čipem „+ TP" natáhnout TP.
+   Appka přitom SL na okamžik zruší a zadá SL+TP jako svázaný pár (na testu ~0,3 s, z toho ~0,1 s bez ochrany).
+   V R Traderu mají být dva svázané příkazy (OCO). Posunout oba, pak zavřít brzdou.
+9. (Volitelně, strop 2 ks v souhlasu) Market + přikoupení → „Zavřít 1 ks" → zbylá část má své SL/TP.
 
 Po měření: Ctrl+C, `--revoke`, pustit zase `--read-only`.
 
