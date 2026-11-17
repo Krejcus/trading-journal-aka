@@ -162,6 +162,14 @@ async function main(): Promise<void> {
   // Ceny: zvláštní spojení na ticker (adaptér ho nepoužívá). Jen pro zobrazení.
   const candles = new RithmicCandleBuilder();
   let tickCount = 0;
+  let tickDirty = false;
+  let lastBar: { time: number; open: number; high: number; low: number; close: number; volume: number } | null = null;
+  setInterval(() => {
+    if (!tickDirty) return;
+    tickDirty = false;
+    const now = Date.now();
+    broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
+  }, 80).unref();
   /** Poslední obchod; když dlouho žádný nebyl, střed nabídky a poptávky. Jen pro zobrazení. */
   const displayPrice = (now: number): number | null => {
     const last = candles.lastPrice(CONTRACT, now, 3_600_000);
@@ -262,8 +270,13 @@ async function main(): Promise<void> {
         if (tick.symbol !== CONTRACT) return;
         tickCount += 1;
         if (!candles.onTick(tick)) return;
-        const now = Date.now();
-        broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
+        // Dokončená svíčka musí odejít celá: když tick otevřel novou minutu, pošle se ještě poslední stav té předchozí.
+        const bar = candles.current(CONTRACT, Date.now()) as Bar | null;
+        if (lastBar && bar && bar.time !== lastBar.time && tickDirty) broadcast({ type: 'tick', symbol: CONTRACT, price: lastBar.close, bar: lastBar, at: Date.now() });
+        lastBar = bar ? { ...bar } : lastBar;
+        // Na živém trhu chodí stovky ticků za sekundu; stránce stačí poslední stav nejvýš každých 80 ms
+        // (zpráva nese celou rozpracovanou svíčku, takže vynecháním mezikroků se nic neztrácí).
+        tickDirty = true;
       },
       onPlantClosed: (plant, info) => {
         if (plant === 'ticker') feedOpen = false;

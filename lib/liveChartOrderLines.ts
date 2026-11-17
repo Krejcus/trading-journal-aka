@@ -58,6 +58,11 @@ export interface LivePositionLineControls {
    * `attachChips` se pak nepoužívá.
    */
   bareLegs?: boolean;
+  /**
+   * `false` = SL/TP nejdou odebrat jednotlivě (nohy ochrany vstupu nebo svázaný pár — zrušení jedné ruší obě):
+   * čára nemá ×, aby při SL na vstupní ceně (BE) nepřekrýval × pozice. Nezadáno = dosavadní chování.
+   */
+  legRemovable?: boolean;
   /** Čekající přikoupení do pozice (worker `leaderPositions`) — vlastní čára s × (zrušit). */
   pendingAdd?: { price: number | null; quantity: number; orderType: string; label?: string } | null;
   /**
@@ -245,7 +250,7 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.
       dragDeadZonePx: 4,
-      ...(legsLive && pendingPrice == null ? { cancellable: true, cancelAction: 'remove-bracket' as const } : {}),
+      ...(legsLive && pendingPrice == null && controls.legRemovable !== false ? { cancellable: true, cancelAction: 'remove-bracket' as const } : {}),
     });
   }
   const add = controls.pendingAdd;

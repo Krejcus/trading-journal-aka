@@ -257,6 +257,8 @@ export interface LiveTradingSolo {
   historyFromApp?: boolean;
   /** Služba umí vstup jen se SL nebo jen s TP. */
   singleLeg?: boolean;
+  /** SL/TP jde odebrat křížkem (jen jedna samostatná ochrana). U noh vstupu a svázaného páru × není. */
+  legsRemovable?: boolean;
   /** Brzda: zavře pozici hned, mimo zámek jednoho příkazu obrazovky (nečeká na visící příkaz). */
   emergencyClose?: { run: () => void; busy: boolean };
   /** Částečné zavření: zavře jednu z více částí pozice (každá má vlastní SL/TP). Nabízí se, jen když to služba umí. */
@@ -709,6 +711,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     stopEntryMove: solo != null,
     attachChips,
     bareLegs: legTrade != null,
+    ...(solo ? { legRemovable: solo.legsRemovable === true } : {}),
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
     // Jeden účet mimo kopírku: × dává místní služba, stav kopírky do toho nemluví.

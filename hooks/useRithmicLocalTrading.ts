@@ -573,7 +573,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       return reply.sent === false ? { status: 'blocked', text: reply.error ?? 'Neodesláno.' } : { status: 'unknown', text: reply.error ?? 'Výsledek není znám — ověř stav.' };
     } finally { reducing.current = false; }
   }, [send]);
+  // × u SL/TP jen když ho služba opravdu provede: právě jedna samostatná ochrana (ne noha vstupu, ne svázaný pár).
+  const standalone = orders.filter((order) => order.status === 'working' && order.tag?.startsWith('uiprot-') === true);
+  const legsRemovable = standalone.length === 1 && orders.filter((order) => order.status === 'working' && (order.role === 'stop' || order.role === 'target')).length === 1;
   return {
+    legsRemovable,
     reducible, reduceOne,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
     available, helloFresh, readOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
