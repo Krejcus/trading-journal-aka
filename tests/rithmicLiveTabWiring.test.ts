@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { LIVE_HOTKEY_BUSY_TEXT_SOLO, LIVE_HOTKEY_SOLO_FLATTEN_TEXT, liveHotkeyHelp, resolveLiveHotkey } from '../lib/liveHotkeys';
 import { rithmicLocalAllowedHere, takeRithmicTokenFromHash } from '../lib/rithmicLocalLink';
 import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
-import { rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
+import { rithmicFlattenReply, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 
@@ -143,7 +143,7 @@ describe('hook místního procesu', () => {
 
   it('brzda jde mimo zámek obrazovky, nezávisí na ceně a nic neopakuje; nejisté příkazy se nepřepisují', () => {
     const close = hook.slice(hook.indexOf('const closeNow = useCallback'), hook.indexOf('}, [send]);', hook.indexOf('const closeNow = useCallback')));
-    expect(close).toContain("send({ op: 'flatten', clientId: newId(), symbol: sym })");
+    expect(close).toContain("rithmicFlattenReply(await send({ op: 'flatten', clientId: newId(), symbol: sym }))");
     expect(close).not.toMatch(/availableRef|entryReadyRef|silentRef|busyRef|runWithCommandLock/);
     expect(close.match(/send\(/g)).toHaveLength(1);
     expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
@@ -153,6 +153,16 @@ describe('hook místního procesu', () => {
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
     expect(close).toMatch(/addUncertain\(\{ id: `close-now:/);
+  });
+
+  it('odmítnuté ani nejisté zavření se netváří jako hotové', () => {
+    expect(rithmicFlattenReply({ ok: true, result: { status: 'submitted' } }).ok).toBe(true);
+    expect(rithmicFlattenReply({ ok: true, result: { status: 'already-flat' } }).ok).toBe(true);
+    expect(rithmicFlattenReply({ ok: true, result: { status: 'rejected', reason: 'kód 6' } })).toEqual({ ok: false, sent: false, error: 'kód 6' });
+    expect(rithmicFlattenReply({ ok: true, result: { status: 'indeterminate', reason: 'nepřišla' } })).toEqual({ ok: false, sent: 'unknown', error: 'nepřišla' });
+    expect(rithmicFlattenReply({ ok: true, result: {} })).toMatchObject({ ok: false, sent: 'unknown' });
+    expect(hook.match(/rithmicFlattenReply\(await send\(\{ op: 'flatten'/g)).toHaveLength(2);
+    expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {

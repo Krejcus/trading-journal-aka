@@ -21,7 +21,7 @@ const BEAT_TIMEOUT_MS = 4_000;
 
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume?: number }
 interface Hello { feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
-interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown }
+export interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown }
 export type RithmicLocalLinkState = 'off' | 'connecting' | 'open' | 'closed';
 
 export interface RithmicLocalTradingOptions {
@@ -77,6 +77,19 @@ const clearUncertain = () => publishUncertain(NO_UNCERTAIN);
 const subscribeUncertain = (listener: () => void) => { uncertainListeners.add(listener); return () => { uncertainListeners.delete(listener); }; };
 const readUncertain = () => uncertainCommands;
 const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', ack: 'Potvrzení incidentu' };
+
+/**
+ * Odpověď služby na zavření pozice. `ok: true` znamená jen „služba doběhla" — výsledek zavření nese
+ * `result.status`: odmítnuté ani nejisté zavření se NESMÍ tvářit jako hotové.
+ */
+export function rithmicFlattenReply(reply: Reply): Reply {
+  if (!reply.ok) return reply;
+  const result = (reply.result ?? {}) as { status?: unknown; reason?: unknown };
+  const reason = typeof result.reason === 'string' ? result.reason : null;
+  if (result.status === 'submitted' || result.status === 'already-flat') return reply;
+  if (result.status === 'rejected') return { ok: false, sent: false, error: reason ?? 'Rithmic zavření pozice odmítl.' };
+  return { ok: false, sent: 'unknown', error: reason ?? 'Výsledek zavření není znám — ověř stav.' };
+}
 
 interface Seen { net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null }
 
@@ -370,7 +383,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     }
     if (action === 'close-position') {
       measure('Zavření pozice → čáry pryč', (s) => !s.positions.some((item) => item.symbol === sym) && !s.orders.some((order) => order.symbol === sym));
-      return finish(await send({ op: 'flatten', clientId: newId(), symbol: sym }));
+      const reply = rithmicFlattenReply(await send({ op: 'flatten', clientId: newId(), symbol: sym }));
+      if (!reply.ok && reply.sent !== false) addUncertain({ id: `close:${Date.now()}`, at: Date.now(), label: COMMAND_LABEL.flatten, reason: reply.error ?? 'výsledek není znám' });
+      return finish(reply);
     }
     return blocked('Tuhle akci místní služba zatím neumí.');
   }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -390,7 +405,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!sym) return { status: 'blocked', text: 'Kontrakt není znám — nic se neodeslalo.' };
     closingNow.current = true;
     try {
-      const reply = await send({ op: 'flatten', clientId: newId(), symbol: sym });
+      const reply = rithmicFlattenReply(await send({ op: 'flatten', clientId: newId(), symbol: sym }));
       if (reply.ok) return { status: 'sent', text: null };
       if (reply.sent === false) return { status: 'blocked', text: reply.error ?? 'Neodesláno.' };
       // Nejistý výsledek od služby (ne jen timeout/výpadek) musí být vidět — brzda nejde přes hlášky obrazovky.
