@@ -29,6 +29,8 @@ const SYSTEM = cli('system') ?? 'Rithmic Test';
  * (2) místní služba příkazy mimo Rithmic Test odmítá, (3) stránka je nenabízí.
  */
 const READ_ONLY = process.argv.includes('--read-only');
+/** Kolik hodin dokončených minutových svíček si stránka po připojení vezme z historie Rithmicu. */
+const HISTORY_HOURS = 72;
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
 const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
@@ -162,6 +164,14 @@ async function main(): Promise<void> {
     },
   });
   await ticker.connect(['ticker']);
+  // Historie svíček (jen čtení): po připojení stránky doplní poslední dny, které graf jinak nemá.
+  let historyOk = false;
+  try {
+    await ticker.connect(['history']);
+    historyOk = true;
+  } catch (error) {
+    console.log(`[historie] nedostupná (${error instanceof Error ? error.message : String(error)}) — graf začne od startu procesu`);
+  }
   const ref = await ticker.referenceData(CONTRACT, 'CME');
   const tickSize = ref?.tickSize ?? 0.25;
   await ticker.subscribeMarketData(CONTRACT, 'CME');
@@ -210,8 +220,23 @@ async function main(): Promise<void> {
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
-    send(socket, { type: 'hello', readOnly: READ_ONLY, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
-    send(socket, { type: 'state', state: exec!.state() });
+    void (async () => {
+      // Dokončené minuty z historie Rithmicu (poslední 3 dny), novější a rozpracovaná svíčka z živých cen.
+      let history: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> = [];
+      if (historyOk) {
+        try {
+          const rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: now / 1_000 - HISTORY_HOURS * 3_600, toSec: now / 1_000 });
+          history = rows.map((bar) => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })).sort((a, b) => a.time - b.time);
+        } catch (error) {
+          console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — posílám jen svíčky od startu`);
+        }
+      }
+      const at = Date.now();
+      const lastHistory = history.length ? history[history.length - 1].time : -Infinity;
+      const live = [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > lastHistory);
+      send(socket, { type: 'hello', readOnly: READ_ONLY, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(at), bars: [...history, ...live] });
+      send(socket, { type: 'state', state: exec!.state() });
+    })();
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {
       void (async () => {

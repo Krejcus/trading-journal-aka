@@ -14,7 +14,10 @@ import {
   type RithmicSocketFactory,
 } from './rithmicPlant';
 
-export type RithmicPlantName = 'order' | 'ticker' | 'pnl';
+export type RithmicPlantName = 'order' | 'ticker' | 'pnl' | 'history';
+
+/** Jedna svíčka z historie Rithmicu. `time` = začátek svíčky v sekundách (minutové svíčky), jen čtení. */
+export interface RithmicHistoryBar { time: number; open: number; high: number; low: number; close: number; volume: number; trades: number; period: string; marker: number }
 export type RithmicSide = 'BUY' | 'SELL';
 export type RithmicPriceType = 'LIMIT' | 'MARKET' | 'STOP_LIMIT' | 'STOP_MARKET';
 export type RithmicDuration = 'DAY' | 'GTC' | 'IOC' | 'FOK';
@@ -177,6 +180,7 @@ const INFRA_BY_PLANT = {
   order: RITHMIC_INFRA.ORDER_PLANT,
   ticker: RITHMIC_INFRA.TICKER_PLANT,
   pnl: RITHMIC_INFRA.PNL_PLANT,
+  history: RITHMIC_INFRA.HISTORY_PLANT,
 } as const;
 
 function orderUpdate(source: 'exchange' | 'rithmic', message: RithmicMessage, receivedAt: number): RithmicOrderUpdate {
@@ -517,6 +521,37 @@ export class RithmicClient {
         .filter((m) => m.templateId === 352 || !onExchange.has(str(m.fields.basket_id)))
         .map((m) => orderUpdate(m.templateId === 352 ? 'exchange' : 'rithmic', m, response.completedAt));
     });
+  }
+
+  /**
+   * Historie svíček (history plant, šablona 202 → 203). Jen čtení. `fromSec`/`toSec` jsou sekundy od epochy.
+   * Změřeno 17. 11. 2026 na systému LucidTrading (scripts/rithmic/measureHistory.ts): u minutových svíček je
+   * `marker` KONEC svíčky v sekundách a vrací se jen DOKONČENÉ minuty (rozpracovaná ne); denní přestávka trhu
+   * je v datech jako mezera. Hloubka: aspoň 90 dní zpět u běžícího kontraktu, týden 1m ≈ 6 900 svíček za 0,5 s.
+   */
+  async timeBarReplay(request: { symbol: string; exchange: string; barType: 'MINUTE_BAR' | 'DAILY_BAR'; period: number; fromSec: number; toSec: number; maxCount?: number }): Promise<RithmicHistoryBar[]> {
+    const response = await this.plant('history').request(202, {
+      symbol: request.symbol,
+      exchange: request.exchange,
+      bar_type: rithmicEnum('RequestTimeBarReplay', 'BarType', request.barType),
+      bar_type_period: request.period,
+      start_index: Math.floor(request.fromSec),
+      finish_index: Math.floor(request.toSec),
+      ...(request.maxCount !== undefined ? { user_max_count: request.maxCount } : {}),
+      direction: rithmicEnum('RequestTimeBarReplay', 'Direction', 'FIRST'),
+      time_order: rithmicEnum('RequestTimeBarReplay', 'TimeOrder', 'FORWARDS'),
+    });
+    const seconds = request.barType === 'MINUTE_BAR' ? request.period * 60 : 0;
+    return response.rows
+      .filter((m) => num(m.fields.open_price) !== null && num(m.fields.marker) !== null)
+      .map((m) => {
+        const marker = num(m.fields.marker)!;
+        return {
+          time: marker - seconds, open: num(m.fields.open_price)!, high: num(m.fields.high_price) ?? num(m.fields.open_price)!,
+          low: num(m.fields.low_price) ?? num(m.fields.open_price)!, close: num(m.fields.close_price) ?? num(m.fields.open_price)!,
+          volume: num(m.fields.volume) ?? 0, trades: num(m.fields.num_trades) ?? 0, period: str(m.fields.period), marker,
+        };
+      });
   }
 
   async showBrackets(accountId: string): Promise<Array<{ basketId: string; targetTicks: number | null; targetQuantity: number | null; targetQuantityReleased: number | null }>> {
