@@ -123,6 +123,11 @@ export type LocalExecCommand =
   | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit' | 'Stop'; limitPrice?: number; triggerPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number }
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
+  /**
+   * Změna ČEKAJÍCÍHO vlastního vstupu tak, aby SL/TP zůstaly na svých cenách: vstup se zruší a zadá znovu
+   * (nová cena vstupu a/nebo nová cena SL/TP). Rithmic vzdálenosti SL/TP u čekajícího vstupu měnit neumí (změřeno).
+   */
+  | { op: 'replace-entry'; clientId: string; orderId: string; price?: number; stopPrice?: number; targetPrice?: number }
   /** SL i TP k pozici BEZ příkazů jedním zápisem jako svázaný pár (OCO). Jen 1 kontrakt. */
   | { op: 'protect-pair'; clientId: string; symbol: string; stopPrice: number; targetPrice: number }
   | { op: 'move'; orderId: string; price: number }
@@ -345,6 +350,8 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
+  /** ID vstupu, pro který právě běží zkouška nanečisto (jen synchronní úsek `execute`, nikdy přes `await`). */
+  private replaceDryRun: string | null = null;
   private markerChecked = false;
   private setReplaceMarker(value: { symbol: string; at: number } | null): boolean {
     try { this.config.replaceMarker?.write(value); return true; } catch { return false; }
@@ -603,7 +610,7 @@ export class LocalExec {
       if (live) {
         if (!this.config.liveTrading) refuse('místní služba je povolená jen pro testovací prostředí');
         consentProblem = this.consentProblem();
-        if (consentProblem !== null && command.op === 'entry') refuse(`obchodování na skutečném účtu je vypnuté: ${consentProblem}`);
+        if (consentProblem !== null && (command.op === 'entry' || command.op === 'replace-entry')) refuse(`obchodování na skutečném účtu je vypnuté: ${consentProblem}`);
       }
       const accountId = this.broker.accountIds()[0];
       if (accountId === undefined) return refuse('adaptér nemá účet (není připojený)');
@@ -699,7 +706,9 @@ export class LocalExec {
           const targetTicks = ticks(targetPrice, up, 'TP');
           // Strop pozice: otevřená pozice + čekající vstupy + tento.
           const open = Math.abs(this.positions.get(symbol)?.netQuantity ?? 0);
-          const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId))
+          const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId)
+            // Zkouška nanečisto před výměnou vstupu: nahrazovaný vstup se nepočítá (do skutečného zápisu bude zrušený).
+            && order.brokerOrderId !== this.replaceDryRun)
             .reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
           // + vstupy na cestě, které kniha ještě nezná (souběžná volání nesmí strop obejít).
           const onTheWay = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && ![...this.orders.values()].some((order) => order.tag === reservedTag))
@@ -720,6 +729,8 @@ export class LocalExec {
             const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null);
             if (problem) return refuse(problem);
           }
+          // Jen ověření (výměna čekajícího vstupu): všechny kontroly prošly, nic se neodesílá.
+          if (this.replaceDryRun !== null) return { ok: true, result: { dryRun: true } };
           this.seenClientIds.add(clientId);
           // Rezervace PŘED prvním čekáním; drží i při neznámém výsledku, padá jen když zápis prokazatelně neodešel.
           this.reserved.set(tag, { symbol, quantity });
@@ -741,6 +752,60 @@ export class LocalExec {
             guard: () => consentNow() ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
+        }
+        case 'replace-entry': {
+          const orderId = typeof command.orderId === 'string' ? command.orderId : '';
+          const order = this.orders.get(orderId);
+          if (!order || TERMINAL.has(order.status)) return refuse(`vstup ${orderId || '?'} už nepracuje`);
+          if (!order.tag?.startsWith('ui-') || this.isLeg(accountId, orderId)) return refuse('měnit takto jde jen vlastní čekající vstup');
+          if (order.filledQuantity > 0) return refuse('vstup se už plní — neměním ho');
+          const clientId = typeof command.clientId === 'string' ? command.clientId : '';
+          if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          const spec = this.config.symbols[order.symbol];
+          if (!spec) return refuse(`kontrakt ${order.symbol} není povolený`);
+          const bracket = this.broker.listBrackets(accountId).find((item) => item.entryId === orderId);
+          const stopEntry = order.stopPrice !== undefined;
+          const current = stopEntry ? order.stopPrice : order.limitPrice;
+          if (current === undefined || (order.stopPrice !== undefined && order.limitPrice !== undefined)) return refuse('vstup má typ, který takto měnit neumím — zruš ho a zadej znovu');
+          if (bracket ? order.orderType !== 'Unsupported' : order.orderType !== (stopEntry ? 'Stop' : 'Limit')) return refuse('vstup má jiný typ, než s jakým vznikl — zruš ho a zadej znovu');
+          const planned = this.planned(order, bracket);
+          const pick = (value: unknown, fallback: number | undefined): number | undefined => (value === undefined ? fallback : value as number);
+          const price = pick(command.price, current)!;
+          const stopPrice = pick(command.stopPrice, planned.plannedStop);
+          const targetPrice = pick(command.targetPrice, planned.plannedTarget);
+          for (const value of [price, stopPrice, targetPrice]) if (value !== undefined && (!finite(value) || value <= 0)) return refuse('změna vstupu bez platné ceny');
+          if (price === current && stopPrice === planned.plannedStop && targetPrice === planned.plannedTarget) return refuse('nic se nemění');
+          // SL/TP nejde přidat ani odebrat — jen posunout to, co vstup má.
+          if ((command.stopPrice !== undefined && planned.plannedStop === undefined) || (command.targetPrice !== undefined && planned.plannedTarget === undefined)) return refuse('vstup tuhle ochranu nemá — nejde ji takto přidat');
+          const next = {
+            op: 'entry' as const, clientId, symbol: order.symbol, side: order.side, quantity: order.quantity, orderType: stopEntry ? 'Stop' as const : 'Limit' as const,
+            ...(stopEntry ? { triggerPrice: price } : { limitPrice: price }),
+            ...(stopPrice !== undefined ? { stopPrice } : {}), ...(targetPrice !== undefined ? { targetPrice } : {}),
+          };
+          // 1) Zkouška nanečisto: nový vstup musí projít VŠEMI kontrolami dřív, než se starý zruší. Běží celá
+          //    synchronně (bez čekání), takže příznak neuvidí žádný jiný příkaz.
+          this.replaceDryRun = orderId;
+          let dry: Promise<LocalExecResult>;
+          try { dry = this.execute(next as unknown as LocalExecCommand); } finally { this.replaceDryRun = null; }
+          const check = await dry;
+          if (!check.ok) return check;
+          // 2) Zrušit starý vstup a počkat na potvrzení stavem. Pozice neexistuje, takže se nic neodkrývá.
+          await this.broker.cancelOrder(accountId, orderId);
+          const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+          for (;;) {
+            const old = this.orders.get(orderId);
+            if (old && TERMINAL.has(old.status)) {
+              if (old.status !== 'canceled' || old.filledQuantity > 0) return { ok: false, sent: 'unknown', error: 'vstup se mezitím vyplnil — neměním ho; zkontroluj pozici a její SL/TP' };
+              break;
+            }
+            if (this.now() >= deadline) return { ok: false, sent: 'unknown', error: 'zrušení původního vstupu není potvrzené — nový nezadávám; ověř, co u brokera čeká' };
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          // 3) Nový vstup běžnou cestou (všechny kontroly znovu, proti čerstvé ceně). Když neprojde, žádný vstup nečeká.
+          const placed = await this.execute(next as unknown as LocalExecCommand);
+          if (placed.ok) return { ok: true, result: { ...(placed.result as Record<string, unknown>), replaced: orderId } };
+          const failed = placed as { ok: false; sent: false | 'unknown'; error?: string };
+          return { ok: false, sent: 'unknown', error: `původní vstup je zrušený a nový ${failed.sent === false ? 'neodešel' : 'má neznámý výsledek'} (${failed.error ?? 'neznámý důvod'}) — ${failed.sent === false ? 'zadej ho znovu' : 'ověř u brokera, co čeká'}` };
         }
         case 'protect-pair': {
           // Ochrana snižuje riziko → smí i při zastavených vstupech. Jeden zápis: dva příkazy svázané burzou.

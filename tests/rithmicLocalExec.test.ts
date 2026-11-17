@@ -307,6 +307,74 @@ describe('místní služba: skutečný účet je vypnutý, dokud ho nezapne plat
   });
 });
 
+describe('místní služba: změna čekajícího vstupu se zachováním SL/TP (zrušit a zadat znovu)', () => {
+  const replace = (orderId: string, extra: Record<string, unknown>) => ({ op: 'replace-entry', clientId: `x${Math.random().toString(36).slice(2, 10)}`, orderId, ...extra });
+  const idOf = (reply: unknown) => (reply as { result: { orderId: string } }).result.orderId;
+
+  it('posun Limitu: SL a TP zůstanou na svých cenách, starý vstup zrušen, nový má přepočítané vzdálenosti', async () => {
+    const t = await setup({ config: { moveConfirmMs: 200 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const oldId = idOf(first);
+    const moved = await t.run(replace(oldId, { price: 6985 }));
+    expect(moved).toMatchObject({ ok: true, result: { replaced: oldId, stopTicks: 20, targetTicks: 180 } });
+    await flush();
+    expect(t.server.orders.get(oldId)!.status).toBe('cancelled');
+    expect(t.exec.state().orders.filter((o) => o.role === 'entry')).toEqual([expect.objectContaining({ price: 6985, plannedStop: 6980, plannedTarget: 7030 })]);
+    t.broker.stop();
+  });
+
+  it('posun čekajícího SL a TP; ochranu nejde přidat ani nechat beze změny', async () => {
+    const t = await setup({ config: { moveConfirmMs: 200 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const oldId = idOf(first);
+    expect(await t.run(replace(oldId, {}))).toMatchObject({ ok: false, sent: false });
+    const moved = await t.run(replace(oldId, { stopPrice: 6975, targetPrice: 7020 }));
+    expect(moved.ok).toBe(true);
+    await flush();
+    expect(t.exec.state().orders.filter((o) => o.role === 'entry')).toEqual([expect.objectContaining({ price: 6990, plannedStop: 6975, plannedTarget: 7020 })]);
+    const bare = await setup({ config: { moveConfirmMs: 200 } });
+    const plain = await bare.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    expect(await bare.run(replace(idOf(plain), { stopPrice: 6980 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/nemá/) });
+    t.broker.stop();
+    bare.broker.stop();
+  });
+
+  it('neplatná nová cena se pozná PŘED zrušením — starý vstup zůstane', async () => {
+    const t = await setup({ config: { moveConfirmMs: 200 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const oldId = idOf(first);
+    const frames = t.frames();
+    // přes trh (cena služby 7000), za SL, mimo krok, bez ceny služby
+    expect(await t.run(replace(oldId, { price: 7001 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(replace(oldId, { price: 6979 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(replace(oldId, { price: 6985.1 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.server.orders.get(oldId)!.status).toBe('open');
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('Stop vstup: spoušť se posune, SL/TP zůstanou; vstup, který se mezitím vyplnil, se nemění', async () => {
+    const t = await setup({ config: { moveConfirmMs: 200, positionSettleMs: 20 } });
+    const first = await t.run(entry({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010, stopPrice: 7000.25, targetPrice: 7030 }));
+    await flush();
+    const oldId = idOf(first);
+    const moved = await t.run(replace(oldId, { price: 7012 }));
+    expect(moved.ok).toBe(true);
+    await flush();
+    const newId = idOf(moved);
+    expect(t.server.orders.get(newId)).toMatchObject({ priceType: 4, triggerPrice: 7012 });
+    expect(t.exec.state().orders.find((o) => o.orderId === newId)).toMatchObject({ entryType: 'Stop', plannedStop: 7000.25, plannedTarget: 7030 });
+    t.server.fill(newId, 7012);
+    await sleep(100);
+    expect(await t.run(replace(newId, { price: 7014 }))).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobrazení)', () => {
   it('SL: vstup 6990, výstup 6980 → −10 b, důvod sl', async () => {
     const t = await setup({ config: { positionSettleMs: 20 } });
