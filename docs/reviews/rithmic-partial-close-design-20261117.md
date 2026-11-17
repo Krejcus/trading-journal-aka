@@ -54,3 +54,15 @@ beze změny, pořadí zpráv, doba.
 - Karta zavření po dozavření brzdou: 2 ks, vstup 28068,25, výstup 28064,875, −6,75 b, důvod „ručně" — sedí.
 
 Neověřeno: nevyplněný výstup na skutečném trhu, souběh s vyplněním SL téže části, pozice se 3 a více částmi (strop je 2).
+
+## Měření pro dělení JEDNOHO vstupu s víc kusy (17. 11. 2026 večer, `scripts/rithmic/measureLegQuantity.ts`)
+
+Market 2 ks se SL/TP → nohy po 2 ks. Změna množství TP nohy na 1 ks (314): burza změnila na 1 ks OBĚ nohy
+(sestra dostala vlastní zprávu MODIFY), vazba i ceny zůstaly. Druhá změna (SL na 1 ks) už nic nezměnila.
+
+Co z toho plyne (NÁVRH, nepostaveno): částečné zavření jednoho vstupu s N kusy by byly DVA zápisy —
+(1) zmenšit ochranu na N−k (jeden zápis, obě nohy), (2) zavřít k kusů Marketem. Mezi nimi je k kusů krátce bez
+ochrany; opačné pořadí by dalo ochranu na víc kusů, než pozice má (při zásahu SL obrat). Když krok 2 neprojde,
+k kusů zůstane bez ochrany → incident a rozhodnutí člověka. Je to stejný vzor jako výměna ochrany za svázaný pár;
+před stavbou chce vlastní návrh, oponenturu a měření obou kroků. Zatím platí: část jde zavřít jen u pozice ze
+dvou vstupů (vstup + přikoupení).
