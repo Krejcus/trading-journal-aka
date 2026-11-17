@@ -298,6 +298,9 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/liveFills=\{trading\.liveFills\}/);
     // čekající přikoupení Limitem: spouštěč ho zapíná jen na Rithmic Test; samočinné zápisy až po potvrzení účtu, nikdy jen pro čtení
     expect(server).toMatch(/pendingAdd: SYSTEM === 'Rithmic Test',/);
+    // dělení jednoho vstupu a výměna nohy za pár u víc kusů: taky jen Rithmic Test, dokud je Filip neschválí pro skutečný účet
+    expect(server).toMatch(/multiPairSwap: SYSTEM === 'Rithmic Test',/);
+    expect(server).toMatch(/entrySplit: SYSTEM === 'Rithmic Test',/);
     expect(server).toMatch(/if \(!READ_ONLY\) exec\.enableAutomation\(\);/);
     expect(server.indexOf('exec.enableAutomation()')).toBeGreaterThan(server.indexOf("if (typed !== phrase) { broker.stop();"));
     // ochrana zůstává denní: služba platnost do zrušení neposílá

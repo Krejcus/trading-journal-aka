@@ -366,6 +366,7 @@ async function main(): Promise<void> {
     // Čekající přikoupení Limitem: zatím jen na testovacím účtu (otevřené nálezy z oponentury).
     pendingAdd: SYSTEM === 'Rithmic Test',
     multiPairSwap: SYSTEM === 'Rithmic Test',
+    entrySplit: SYSTEM === 'Rithmic Test',
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,

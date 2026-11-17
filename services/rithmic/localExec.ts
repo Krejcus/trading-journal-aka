@@ -23,6 +23,8 @@ export interface LocalExecConfig {
    * proto ji spouštěč zapíná jen na Rithmic Test.
    */
   pendingAdd?: boolean;
+  /** Dělení jednoho vstupu s víc kusy (zmenšit ochranu → zavřít 1 ks). Zapíná jen spouštěč (zatím Rithmic Test). */
+  entrySplit?: boolean;
   /** Výměna jedné nohy za pár SL+TP u víc kusů (zrušit → zadat pár). Pozdní dílčí vyplnění rušené nohy nejde
    *  z dat Rithmicu vyloučit, proto jen tam, kde to spouštěč výslovně zapne (Rithmic Test). */
   multiPairSwap?: boolean;
@@ -1643,6 +1645,7 @@ export class LocalExec {
           // víc kusů, než pozice má (při zásahu SL obrat). Každé selhání po zmenšení = incident, nic se neopakuje.
           if (parts.length === 1 && parts[0].quantity >= 2) {
             const part = parts[0];
+            if (this.config.entrySplit !== true) return refuse('částečné zavření jednoho vstupu s víc kusy je na tomto účtu zatím vypnuté');
             if (part.quantity !== Math.abs(net0) || legs.stops.length !== 1 || legs.targets.length !== 1) return refuse('SL/TP nekryjí přesně celou pozici — částečné zavření nejde');
             if (command.expectedEntryId !== part.entryId
               || (command.expectedQuantity !== undefined && command.expectedQuantity !== 1)) return refuse('Část pozice se od zobrazení změnila (nebo chybí označení vstupu) — částečné zavření neodešlo.');
