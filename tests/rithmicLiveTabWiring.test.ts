@@ -19,6 +19,7 @@ const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
 const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
 const chart = readFileSync('components/RithmicLiveChart.tsx', 'utf8');
 const hook = readFileSync('hooks/useRithmicLocalTrading.ts', 'utf8');
+const conn = readFileSync('lib/rithmicLocalConnection.ts', 'utf8');
 const server = readFileSync('scripts/rithmic/devTradeServer.ts', 'utf8');
 const link = readFileSync('lib/rithmicLocalLink.ts', 'utf8');
 
@@ -138,12 +139,15 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/const entryReady = available && feedLive && !silent && price !== null;/);
     // Po výpadku je první stav výchozí a čekající příkazy končí „unknown" bez opakování.
     expect(hook).toMatch(/seen\.current = null;/);
-    expect(hook).toMatch(/sent: 'unknown', error: 'spojení s místním procesem spadlo/);
-    expect(hook.match(/socket\.send\(/g)).toHaveLength(1);
+    expect(conn).toMatch(/sent: 'unknown', error: 'spojení s místním procesem spadlo/);
+    expect(conn.match(/socket\.send\(/g)).toHaveLength(1);
+    expect(hook).not.toMatch(/new WebSocket\(|socket\.send\(/);
     // Konec relace maže cenu i stav; vstup chce cenu z aktuálního spojení a mlčící proces pustí jen zavření.
     expect(hook).toMatch(/const entryReady = available && feedLive && !silent && price !== null;/);
     expect(hook).toMatch(/if \(silentRef\.current && action !== 'close-position'\) return blocked\(/);
-    expect(hook.match(/resetSession\(\);/g)).toHaveLength(2);
+    // Konec relace hlásí jádro spojení při výpadku i při ukončení (chování hlídá tests/rithmicLocalConnection.test.ts).
+    expect(conn.match(/this\.options\.handlers\.onSessionReset\(\);/g)).toHaveLength(2);
+    expect(hook).toMatch(/onSessionReset: \(\) => \{/);
     // Neznámý stav není „bez pozice".
     expect(hook).toMatch(/if \(!state\) return \{ key: 'rithmic-unknown'/);
   });
@@ -170,7 +174,7 @@ describe('hook místního procesu', () => {
     expect(rithmicFlattenReply({ ok: true, result: {} })).toMatchObject({ ok: false, sent: 'unknown' });
     expect(hook.match(/const reply = rithmicFlattenReply\(raw\);/g)).toHaveLength(2);
     // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu.
-    expect(hook).toMatch(/if \(pending && pending\.op !== 'ack' && !reply\.ok && reply\.sent !== false\) addUncertain\(/);
+    expect(conn).toMatch(/if \(pending\.op !== 'ack' && !reply\.ok && reply\.sent !== false\) this\.options\.handlers\.onUncertain\(/);
     expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
   });
 

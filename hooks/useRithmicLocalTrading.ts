@@ -15,6 +15,7 @@ import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
+import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
 import type { LiveChartWorkingOrders } from './useLiveChartData';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
@@ -173,13 +174,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const [feedLive, setFeedLive] = useState(false);
   /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
   const [helloFresh, setHelloFresh] = useState(false);
-  const lastMessageAt = useRef(0);
   const feedOpen = useRef(false);
   const [events, setEvents] = useState<LiveTradingCopyEvent[]>([]);
   const seen = useRef<Seen | null>(null);
   const plainExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-  const replies = useRef(new Map<string, { resolve: (reply: Reply) => void; op: LocalExecCommand['op'] }>());
+  const connectionRef = useRef<RithmicLocalConnection | null>(null);
   /** Proces mlčí déle než BEAT_TIMEOUT_MS (tep chodí každou sekundu). */
   const [silent, setSilent] = useState(false);
   const uncertain = useSyncExternalStore(subscribeUncertain, readUncertain, readUncertain);
@@ -192,106 +191,68 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   useEffect(() => {
     if (!url || !enabled) { setLink(url ? 'closed' : 'off'); return undefined; }
-    let stopped = false;
-    let retry: number | undefined;
-    let socket: WebSocket | null = null;
-    // Příkazy bez odpovědi v okamžiku ztráty spojení: výsledek není znám, nic se neopakuje.
-    const failPending = () => {
-      for (const [id, pending] of replies.current) {
-        if (pending.op !== 'ack') addUncertain({ id, at: Date.now(), label: COMMAND_LABEL[pending.op], reason: 'spojení s místním procesem spadlo' });
-        pending.resolve({ ok: false, sent: 'unknown', error: 'spojení s místním procesem spadlo — ověř stav' });
-      }
-      replies.current.clear();
-    };
-    // Konec relace (výpadek i odchod ze záložky): nic ze staré relace se nesmí tvářit jako živé.
-    // Příkazy smí odejít až po novém `hello` + `state` z nového spojení.
-    const resetSession = () => {
-      seen.current = null;
-      stateRef.current = null;
-      feedOpen.current = false;
-      setHelloFresh(false);
-      priceRef.current = null;
-      feedBox.reset();
-      setFeedLive(false);
-      setSilent(false);
-      setPrice(null);
-      setState(null);
-    };
-    const connect = () => {
-      if (stopped) return;
-      setLink('connecting');
-      socket = new WebSocket(url);
-      socketRef.current = socket;
-      const mine = socket;
-      mine.onopen = () => { if (socketRef.current !== mine) return; lastMessageAt.current = Date.now(); setLink('open'); };
-      mine.onclose = () => {
-        if (socketRef.current !== mine) return;
-        socketRef.current = null;
-        failPending();
-        // Po obnově je první stav výchozí, ne událost; starý stav se nesmí tvářit jako živý.
-        resetSession();
-        setLink('closed');
-        if (!stopped) retry = window.setTimeout(connect, RECONNECT_MS);
-      };
-      mine.onmessage = (event) => {
-        if (socketRef.current !== mine) return;
-        let message: Record<string, unknown>;
-        try { message = JSON.parse(String(event.data)) as Record<string, unknown>; } catch { return; }
-        lastMessageAt.current = Date.now();
-        setSilent(false);
-        if (message.type === 'hello') {
-          const info = message as unknown as Hello;
-          symbolRef.current = info.symbol;
-          setHelloFresh(true);
-          feedOpen.current = info.feed === true;
-          setFeedLive(feedOpen.current);
-          setHello(info);
-          const bars = info.bars.map(candle);
-          // Graf potřebuje aspoň jednu svíčku; testovací trh často stojí.
-          if (!bars.length && typeof info.price === 'number') bars.push({ time: Math.floor(Date.now() / 60_000) * 60, open: info.price, high: info.price, low: info.price, close: info.price, volume: 0 });
-          setCandles(bars);
-          if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
-        } else if (message.type === 'tick') {
-          const bar = message.bar ? candle(message.bar as Bar) : null;
-          if (typeof message.price === 'number') { priceRef.current = message.price; setPrice(message.price); }
-          feedBox.push(typeof message.price === 'number' ? message.price : null, bar);
-          setCapturedAt(Date.now());
-          if (bar) setCandles((current) => (current.length && current[current.length - 1].time === bar.time ? [...current.slice(0, -1), bar] : current.length && current[current.length - 1].time > bar.time ? current : [...current, bar]));
-        } else if (message.type === 'beat') {
-          feedOpen.current = message.feed === true;
-          setFeedLive(feedOpen.current);
-          if (feedOpen.current) { feedBox.beat(); setCapturedAt(Date.now()); }
-        } else if (message.type === 'state') {
-          stateRef.current = message.state as LocalExecState;
-          setState(message.state as LocalExecState);
-        } else if (message.type === 'reply') {
-          const pending = replies.current.get(String(message.id));
-          const reply = message as unknown as Reply;
-          // Nejistou odpověď služby zapisuje jedno místo — stejně jako timeout a výpadek.
-          if (pending && pending.op !== 'ack' && !reply.ok && reply.sent !== false) addUncertain({ id: String(message.id), at: Date.now(), label: COMMAND_LABEL[pending.op], reason: reply.error ?? 'výsledek není znám' });
-          pending?.resolve(reply);
-          replies.current.delete(String(message.id));
-        }
-      };
-    };
-    connect();
-    // Hlídač tepu: proces mlčí → cena je stará a stojí vstupy, posuny i rušení. Zavření pozice
-    // (brzda) se zkusit smí vždy — skončí nejhůř „unknown".
-    const beat = window.setInterval(() => {
-      if (socketRef.current?.readyState !== WebSocket.OPEN || Date.now() - lastMessageAt.current <= BEAT_TIMEOUT_MS) return;
-      feedOpen.current = false;
-      setFeedLive(false);
-      setSilent(true);
-    }, 1_000);
+    // Jádro spojení (obnova, lhůty, nejisté příkazy, zahazování starého socketu) žije v `RithmicLocalConnection`.
+    const connection = new RithmicLocalConnection({
+      url,
+      reconnectMs: RECONNECT_MS, replyTimeoutMs: REPLY_TIMEOUT_MS, beatTimeoutMs: BEAT_TIMEOUT_MS, newId,
+      handlers: {
+        onLink: setLink,
+        onUncertain: (item) => addUncertain({ id: item.id, at: item.at, label: COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op, reason: item.reason }),
+        // Konec relace (výpadek i odchod ze záložky): nic ze staré relace se nesmí tvářit jako živé.
+        // Příkazy smí odejít až po novém `hello` + `state` z nového spojení.
+        onSessionReset: () => {
+          seen.current = null;
+          stateRef.current = null;
+          feedOpen.current = false;
+          setHelloFresh(false);
+          priceRef.current = null;
+          feedBox.reset();
+          setFeedLive(false);
+          setSilent(false);
+          setPrice(null);
+          setState(null);
+        },
+        // Hlídač tepu: proces mlčí → cena je stará a stojí vstupy, posuny i rušení. Zavření pozice
+        // (brzda) se zkusit smí vždy — skončí nejhůř „unknown".
+        onSilent: (quiet) => {
+          if (quiet) { feedOpen.current = false; setFeedLive(false); }
+          setSilent(quiet);
+        },
+        onMessage: (message) => {
+          if (message.type === 'hello') {
+            const info = message as unknown as Hello;
+            symbolRef.current = info.symbol;
+            setHelloFresh(true);
+            feedOpen.current = info.feed === true;
+            setFeedLive(feedOpen.current);
+            setHello(info);
+            const bars = info.bars.map(candle);
+            // Graf potřebuje aspoň jednu svíčku; testovací trh často stojí.
+            if (!bars.length && typeof info.price === 'number') bars.push({ time: Math.floor(Date.now() / 60_000) * 60, open: info.price, high: info.price, low: info.price, close: info.price, volume: 0 });
+            setCandles(bars);
+            if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
+          } else if (message.type === 'tick') {
+            const bar = message.bar ? candle(message.bar as Bar) : null;
+            if (typeof message.price === 'number') { priceRef.current = message.price; setPrice(message.price); }
+            feedBox.push(typeof message.price === 'number' ? message.price : null, bar);
+            setCapturedAt(Date.now());
+            if (bar) setCandles((current) => (current.length && current[current.length - 1].time === bar.time ? [...current.slice(0, -1), bar] : current.length && current[current.length - 1].time > bar.time ? current : [...current, bar]));
+          } else if (message.type === 'beat') {
+            feedOpen.current = message.feed === true;
+            setFeedLive(feedOpen.current);
+            if (feedOpen.current) { feedBox.beat(); setCapturedAt(Date.now()); }
+          } else if (message.type === 'state') {
+            stateRef.current = message.state as LocalExecState;
+            setState(message.state as LocalExecState);
+          }
+        },
+      },
+    });
+    connectionRef.current = connection;
+    connection.start();
     return () => {
-      stopped = true;
-      window.clearInterval(beat);
-      if (retry !== undefined) window.clearTimeout(retry);
-      const closing = socket;
-      socketRef.current = null;
-      failPending();
-      resetSession();
-      closing?.close();
+      connectionRef.current = null;
+      connection.stop();
     };
   }, [url, enabled, feedBox]);
 
@@ -346,18 +307,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
     : 'Ceny z Rithmicu stojí — nový vstup nejde, zavření a zrušení ano.';
 
-  const send = useCallback((command: LocalExecCommand): Promise<Reply> => new Promise((resolve) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) { resolve({ ok: false, sent: false, error: 'místní proces není připojený' }); return; }
-    const id = newId();
-    const timer = window.setTimeout(() => {
-      replies.current.delete(id);
-      if (command.op !== 'ack') addUncertain({ id, at: Date.now(), label: COMMAND_LABEL[command.op], reason: 'místní proces neodpověděl' });
-      resolve({ ok: false, sent: 'unknown', error: 'místní proces neodpověděl — ověř stav' });
-    }, REPLY_TIMEOUT_MS);
-    replies.current.set(id, { op: command.op, resolve: (reply) => { window.clearTimeout(timer); resolve(reply); } });
-    socket.send(JSON.stringify({ id, command }));
-  }), []);
+  const send = useCallback((command: LocalExecCommand): Promise<Reply> => connectionRef.current?.send(command as unknown as { op: string } & Record<string, unknown>)
+    ?? Promise.resolve({ ok: false, sent: false, error: 'místní proces není připojený' } as Reply), []);
   const measure = (label: string, done: (s: LocalExecState) => boolean) => measureRef.current?.(label, done);
 
   const symbol = hello?.symbol ?? '';
