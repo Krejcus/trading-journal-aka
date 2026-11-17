@@ -292,6 +292,24 @@ describe('hook místního procesu', () => {
     expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: null })).toMatch(/jiný krok/);
   });
 
+  it('noční změny 17./18. 11.: šipky z vyplnění, přikoupení Limitem jen na testu, samočinné zrušení až po potvrzení účtu, varování před koncem seance', () => {
+    // šipky vstupu a výstupu: data ze služby (`marks`), do grafu jen jako zobrazení
+    expect(hook).toMatch(/const liveFills = useMemo\(\(\) => liveChartFills\(marks && marks\.fills\.length \? \{ fills: marks\.fills, open: marks\.open, symbol \} : null\)/);
+    expect(chart).toMatch(/liveFills=\{trading\.liveFills\}/);
+    // čekající přikoupení Limitem: spouštěč ho zapíná jen na Rithmic Test; samočinné zápisy až po potvrzení účtu, nikdy jen pro čtení
+    expect(server).toMatch(/pendingAdd: SYSTEM === 'Rithmic Test',/);
+    expect(server).toMatch(/if \(!READ_ONLY\) exec\.enableAutomation\(\);/);
+    expect(server.indexOf('exec.enableAutomation()')).toBeGreaterThan(server.indexOf("if (typed !== phrase) { broker.stop();"));
+    // ochrana zůstává denní: služba platnost do zrušení neposílá
+    const exec = readFileSync('services/rithmic/localExec.ts', 'utf8');
+    expect(exec).not.toMatch(/goodTillCancel: true/);
+    // varování před koncem seance je jen karta
+    expect(chart).toMatch(/const sessionWarning = link === 'open' \? cmeSessionCloseWarning\(clock, \{ position: hasPosition, pendingEntry: hasPendingEntry \}\) : null;/);
+    // cena pro graf = poslední obchod; kontroly příkazů dál berou čerstvou cenu služby
+    expect(server).toMatch(/const shownPrice = \(now: number\): number \| null => candles\.lastPrice\(CONTRACT, now, 30_000\) \?\? freshPrice\(now\);/);
+    expect(server).toMatch(/serverPrice: \(symbol\) => \(symbol === CONTRACT \? freshPrice\(Date\.now\(\)\) : null\),/);
+  });
+
   it('karty obchodů ze změn stavu', () => {
     const empty = { net: 0, avg: null, entries: new Map(), stop: null, target: null };
     const ctx = { symbol: 'MNQZ6', lastPrice: 100, pointValue: 2, at: 1 };
