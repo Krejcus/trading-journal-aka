@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { LIVE_HOTKEY_BUSY_TEXT_SOLO, LIVE_HOTKEY_SOLO_FLATTEN_TEXT, liveHotkeyHelp, resolveLiveHotkey } from '../lib/liveHotkeys';
 import { rithmicLocalAllowedHere, takeRithmicTokenFromHash } from '../lib/rithmicLocalLink';
 import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
-import { rithmicFlattenReply, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
+import { rithmicFlattenReply, rithmicLegView, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { liveTicketLegsProblem } from '../lib/liveBareEntry';
@@ -176,7 +176,8 @@ describe('hook místního procesu', () => {
     expect(liveTicketLegsProblem({ type: 'market', stopLoss: null, takeProfit: 100 }, false, false, false, true)).toBeNull();
     expect(chart).toMatch(/entryBareSupported entryBarePendingSupported/);
     // V pozici další vstup ne (přikoupení služba neumí) a okamžité odeslání z menu grafu se v solo nenabízí.
-    expect(hook).toMatch(/if \(stateRef\.current\?\.positions\.some\(\(item\) => item\.symbol === symbolRef\.current\)\) return \{ \.\.\.base, status: 'blocked'/);
+    // V pozici jen přikoupení: Market na stranu pozice a jen když ho režim přikoupení nabízí (službu to váže znovu).
+    expect(hook).toMatch(/if \(!add\?\.canAdd \|\| !sameSide \|\| draft\.orderType !== 'Market'\) return \{ \.\.\.base, status: 'blocked'/);
     expect(screen).toMatch(/const instantBareReady = !solo && entryBarePendingSupported/);
     expect(liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT)).not.toMatch(/Flatten/);
     expect(chart).toMatch(/available: usable, singleLeg: true/);
@@ -198,6 +199,21 @@ describe('hook místního procesu', () => {
     expect(leg).toMatch(/if \(!leg\.tag\?\.startsWith\('uiprot-'\)\) return blocked\(/);
     expect(leg).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);
     expect(chart).toMatch(/bareLegTrade: trading\.bareLegTrade, onBareLeg: trading\.onBareLeg/);
+  });
+
+  it('dvě ochrany: čára ukazuje ochrannější SL a bližší TP, posun jde na obě najednou', () => {
+    const leg = (orderId: string, role: 'stop' | 'target', price: number) => ({ orderId, symbol: 'MNQZ6', side: 'Sell', quantity: 1, filledQuantity: 0, status: 'working', role, price }) as never;
+    const long = rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 101), leg('c', 'target', 110), leg('d', 'target', 111)], 2);
+    expect(long.stop?.orderId).toBe('b');
+    expect(long.target?.orderId).toBe('c');
+    expect(long.note).toMatch(/SL má 2 ceny \(100\.00 \/ 101\.00\), TP má 2 ceny/);
+    const short = rithmicLegView([leg('a', 'stop', 120), leg('b', 'stop', 121), leg('c', 'target', 110), leg('d', 'target', 111)], -2);
+    expect(short.stop?.orderId).toBe('a');
+    expect(short.target?.orderId).toBe('d');
+    expect(rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 100)], 2).note).toBeNull();
+    // obě cesty posunu (panel/klávesa i čára) jdou při více nohách přes move-legs s výčtem noh
+    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: legs\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\) \}\)/g)).toHaveLength(2);
+    expect(chart).toMatch(/entryScaleIn=\{trading\.scaleIn\}/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
