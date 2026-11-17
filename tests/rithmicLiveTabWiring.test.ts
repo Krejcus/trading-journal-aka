@@ -115,7 +115,7 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/disabled: marketData != null/);
     // Starší historie appky (skutečný MNQ) se k cizímu zdroji svíček nepřipojuje; kanál TV se neodebírá.
     expect(screen).toMatch(/externalMarketData: marketData != null,/);
-    expect(readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8')).toMatch(/backtestSession \|\| context\.liveOrderEntry\?\.externalMarketData \? \[\] : \[config\.timeframe\]/);
+    expect(readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8')).toMatch(/const htf = externalMarketData \? EXTERNAL_HTF : htfRead;/);
     expect(readFileSync('hooks/useDayChartData.ts', 'utf8')).toMatch(/useTvLiveCandleFeed\(candleWindow\.needsLive && !disabled && now < candleWindow\.dayEnd,/);
     expect(screen).toMatch(/layoutScope=\{solo \? 'live-trading-rithmic' : 'live-trading'\}/);
   });
@@ -143,7 +143,7 @@ describe('hook místního procesu', () => {
 
   it('brzda jde mimo zámek obrazovky, nezávisí na ceně a nic neopakuje; nejisté příkazy se nepřepisují', () => {
     const close = hook.slice(hook.indexOf('const closeNow = useCallback'), hook.indexOf('}, [send]);', hook.indexOf('const closeNow = useCallback')));
-    expect(close).toContain("rithmicFlattenReply(await send({ op: 'flatten', clientId: newId(), symbol: sym }))");
+    expect(close).toContain("const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });");
     expect(close).not.toMatch(/availableRef|entryReadyRef|silentRef|busyRef|runWithCommandLock/);
     expect(close.match(/send\(/g)).toHaveLength(1);
     expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
@@ -152,7 +152,7 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/link === 'open' && offerBrake \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
-    expect(close).toMatch(/addUncertain\(\{ id: `close-now:/);
+    expect(close).toMatch(/if \(raw\.ok\) addUncertain\(\{ id: `close-now:/);
   });
 
   it('odmítnuté ani nejisté zavření se netváří jako hotové', () => {
@@ -161,7 +161,9 @@ describe('hook místního procesu', () => {
     expect(rithmicFlattenReply({ ok: true, result: { status: 'rejected', reason: 'kód 6' } })).toEqual({ ok: false, sent: false, error: 'kód 6' });
     expect(rithmicFlattenReply({ ok: true, result: { status: 'indeterminate', reason: 'nepřišla' } })).toEqual({ ok: false, sent: 'unknown', error: 'nepřišla' });
     expect(rithmicFlattenReply({ ok: true, result: {} })).toMatchObject({ ok: false, sent: 'unknown' });
-    expect(hook.match(/rithmicFlattenReply\(await send\(\{ op: 'flatten'/g)).toHaveLength(2);
+    expect(hook.match(/const reply = rithmicFlattenReply\(raw\);/g)).toHaveLength(2);
+    // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu.
+    expect(hook).toMatch(/if \(pending && pending\.op !== 'ack' && !reply\.ok && reply\.sent !== false\) addUncertain\(/);
     expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
   });
 

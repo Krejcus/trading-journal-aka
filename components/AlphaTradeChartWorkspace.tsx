@@ -52,6 +52,8 @@ import {
 } from 'lucide-react';
 import { Trade } from '../types';
 import { useHtfHistory } from '../hooks/useHtfHistory';
+
+const EXTERNAL_HTF: ReturnType<typeof useHtfHistory> = { candles: [], minuteBridge: [], arrived: 0, loading: false, error: null, startMs: null, loadOlder: async () => undefined };
 import { aggregateWithHtfHistory, withHtfHistory } from '../services/htfHistory';
 import {
   isMarketTimeframe,
@@ -1010,7 +1012,10 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     if (sessionHistoryCandles.length > 0) setHistoryError(null);
   }, [sessionHistoryCandles.length]);
 
-  const htf = useHtfHistory(config.root, backtestSession || context.liveOrderEntry?.externalMarketData ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
+  const externalMarketData = context.liveOrderEntry?.externalMarketData === true;
+  const htfRead = useHtfHistory(config.root, backtestSession || externalMarketData ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
+  // Cizí zdroj svíček (Rithmic graf): historie appky se nepřipojí ani ze sdílené cache, ani ručním dotažením.
+  const htf = externalMarketData ? EXTERNAL_HTF : htfRead;
   const loadOlderRead = htf.loadOlder;
   const htfHistory = historySchema === 'ohlcv-1h' ? htf.candles : EMPTY_SESSION_HISTORY;
   const extendedMinutes = useMemo(() => {
