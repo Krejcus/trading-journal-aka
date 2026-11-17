@@ -11,7 +11,7 @@
  *
  * Spuštění:
  *   npx tsx scripts/rithmic/loginProbe.ts --system "<název systému od propky>" \
- *     [--gateway rprotocol-de.rithmic.com] [--keychain alphatrade-rithmic-prop] [--symbol MNQ] [--no-data]
+ *     [--user <jméno>] [--gateway rprotocol-de.rithmic.com] [--keychain alphatrade-rithmic-prop] [--symbol MNQ] [--no-data]
  */
 import { execFileSync } from 'node:child_process';
 import WebSocket from 'ws';
@@ -45,7 +45,8 @@ if (!/^rprotocol(-[a-z0-9]+)?\.rithmic\.com$/.test(GATEWAY)) {
 function credentials(): { user: string; password: string } {
   try {
     const meta = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const user = /"acct"<blob>="([^"]*)"/.exec(meta)?.[1];
+    // Jméno není tajné: jde zadat i přepínačem --user (heslo se bere jen z Klíčenky).
+    const user = arg('user') ?? /"acct"<blob>="([^"]*)"/.exec(meta)?.[1];
     const password = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
     if (user && password) return { user, password };
   } catch {
@@ -71,7 +72,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       onAttention: (message) => console.log(`pozor: ${message}`),
     },
   });
-  console.log(`Zkouším přihlášení: systém "${SYSTEM}", brána ${GATEWAY}, aplikace "${APP_NAME}", uživatel z Klíčenky (${KEYCHAIN}). Jen čtení.`);
+  console.log(`Zkouším přihlášení: systém "${SYSTEM}", brána ${GATEWAY}, aplikace "${APP_NAME}", uživatel ${creds.user}, heslo z Klíčenky (${KEYCHAIN}). Jen čtení.`);
   try {
     await client.connect(['order']);
   } catch (error) {
