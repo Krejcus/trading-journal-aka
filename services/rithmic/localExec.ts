@@ -301,10 +301,15 @@ export class LocalExec {
         if (event.position.netQuantity === 0 && this.now() <= waiting.until) { this.pendingClose.delete(event.position.symbol); this.publishClose(waiting.close); }
         else if (this.now() > waiting.until) this.pendingClose.delete(event.position.symbol);
       }
+      const known = this.positions.get(event.position.symbol);
+      const published = this.closes.length;
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,
         ...(event.displayAveragePrice !== undefined ? { averagePrice: event.displayAveragePrice } : {}),
       });
+      // Na živém trhu chodí stejná zpráva o pozici mnohokrát za sekundu (průběžný výsledek). Když se nic nezměnilo,
+      // stav se znovu neposílá a hlídače neběží (jejich časovače běží dál samy).
+      if (known && known.netQuantity === event.position.netQuantity && known.averagePrice === event.displayAveragePrice && this.closes.length === published && waiting === undefined) return;
     } else if (event.type === 'connection') {
       this.connected = event.connected;
       if (event.connected && event.resync) {
@@ -350,6 +355,9 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
+  /** Kolikrát služba poslala zavření kontraktu — výměna vstupu si číslo pamatuje a po brzdě nepokračuje. */
+  private readonly flattenCount = new Map<string, number>();
+  private consentWatchAt = 0;
   /** ID vstupu, pro který právě běží zkouška nanečisto (jen synchronní úsek `execute`, nikdy přes `await`). */
   private replaceDryRun: string | null = null;
   private markerChecked = false;
@@ -376,6 +384,10 @@ export class LocalExec {
   /** Souhlas se skutečným účtem skončil a vlastní vstupy dál čekají: ohlásit (jednou), nic nerušit — rozhoduje člověk. */
   private watchConsent(): void {
     if (!this.config.liveTrading) return;
+    // Jen hlídání (ohlášení skončeného souhlasu): soubor se nečte při každé události. Před obchodním zápisem se
+    // souhlas ověřuje vždy znovu a bez mezipaměti.
+    if (this.now() - this.consentWatchAt < 2_000) return;
+    this.consentWatchAt = this.now();
     if (this.consentProblem() === null) { this.consentEndedReported = false; return; }
     const accountId = this.broker.accountIds()[0];
     const legIds = new Set(accountId === undefined ? [] : this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs.map((leg) => leg.orderId)));
@@ -390,6 +402,7 @@ export class LocalExec {
   /** Pravidelná kontrola souhlasu (volá server): vypršení se musí ohlásit i na klidném účtu. */
   checkConsent(): void {
     const before = this.incidents.length;
+    this.consentWatchAt = 0; // výslovná pravidelná kontrola se neomezuje
     this.watchConsent();
     if (this.incidents.length !== before) this.changed();
   }
@@ -624,6 +637,8 @@ export class LocalExec {
           }
           this.legsUncertain.clear();
           this.setReplaceMarker(null);
+          // Obsluha stav ověřila: pozice složená z vyplnění se bere znovu od brokera.
+          this.trips.clear();
           // Trvající nesoulad ochrany se po potvrzení ohlásí znovu (po lhůtě) — potvrzení ho neschová.
           this.protectiveReported.clear();
           this.watchProtective();
@@ -670,6 +685,9 @@ export class LocalExec {
           if (orderType === 'Limit') {
             if (limitPrice === undefined) return refuse('Limit bez ceny');
             reference = limitPrice;
+            // Bez ceny služby nejde ověřit, že Limit není přes trh (pak by nohy vznikly od limitní ceny, ne od vyplnění —
+            // změřeno 17. 11.: burza SL odmítla a pozice zůstala bez ochrany). Na skutečném účtu platí pro každý vstup.
+            if (server === null && (live || stopPrice !== undefined || targetPrice !== undefined)) return refuse('služba nemá čerstvou cenu — vstup neodesílám');
             // Limit přes trh by se vyplnil jinde, než odkud se počítá SL/TP.
             if (server !== null && (stopPrice !== undefined || targetPrice !== undefined) && (side === 'Buy' ? limitPrice > server : limitPrice < server)) {
               refuse('Limit se SL/TP je přes trh — vyplnil by se za jinou cenu, než od které se počítá ochrana; použij Market');
@@ -691,6 +709,7 @@ export class LocalExec {
                 refuse(`cena v appce (${fromClient}) se liší od ceny služby (${server}) o víc než ${maxDrift} ticků — vstup neodesílám`);
               }
             }
+            if (server === null && live) return refuse('služba nemá čerstvou cenu — vstup neodesílám');
             reference = server ?? fromClient ?? 0;
           }
           const maxTicks = this.config.maxProtectionTicks ?? 400;
@@ -705,7 +724,13 @@ export class LocalExec {
           const stopTicks = ticks(stopPrice, up === 1 ? -1 : 1, 'SL');
           const targetTicks = ticks(targetPrice, up, 'TP');
           // Strop pozice: otevřená pozice + čekající vstupy + tento.
-          const open = Math.abs(this.positions.get(symbol)?.netQuantity ?? 0);
+          // Otevřeno = větší z pozice podle brokera a pozice složené z vyplnění, která služba viděla. Zpráva o pozici
+          // může být pozadu libovolně dlouho — vyplněný kus se ze stropu neuvolní uplynutím času, jen potvrzením.
+          const open = Math.max(Math.abs(this.positions.get(symbol)?.netQuantity ?? 0), Math.abs(this.trips.get(symbol)?.net ?? 0));
+          // Pracující příkaz zadaný jinde (jiná platforma) se může vyplnit taky a jeho účel služba nezná → nový vstup ne.
+          if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status) && !order.tag?.startsWith('ui') && !this.isLeg(accountId, order.brokerOrderId))) {
+            return refuse('na kontraktu pracuje příkaz zadaný jinde — nový vstup neodesílám (zruš ho tam, kde vznikl, nebo zavři pozici)');
+          }
           const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId)
             // Zkouška nanečisto před výměnou vstupu: nahrazovaný vstup se nepočítá (do skutečného zápisu bude zrušený).
             && order.brokerOrderId !== this.replaceDryRun)
@@ -782,6 +807,8 @@ export class LocalExec {
             ...(stopEntry ? { triggerPrice: price } : { limitPrice: price }),
             ...(stopPrice !== undefined ? { stopPrice } : {}), ...(targetPrice !== undefined ? { targetPrice } : {}),
           };
+          // Stav brzdy se pamatuje hned na začátku (ještě před prvním čekáním).
+          const brake = this.flattenCount.get(order.symbol) ?? 0;
           // 1) Zkouška nanečisto: nový vstup musí projít VŠEMI kontrolami dřív, než se starý zruší. Běží celá
           //    synchronně (bez čekání), takže příznak neuvidí žádný jiný příkaz.
           this.replaceDryRun = orderId;
@@ -801,6 +828,8 @@ export class LocalExec {
             if (this.now() >= deadline) return { ok: false, sent: 'unknown', error: 'zrušení původního vstupu není potvrzené — nový nezadávám; ověř, co u brokera čeká' };
             await new Promise((resolve) => setTimeout(resolve, 20));
           }
+          // Mezitím někdo stiskl brzdu (Zavřít pozici): po zavření se nový vstup NEZADÁVÁ — vrátil by obchod do trhu.
+          if ((this.flattenCount.get(order.symbol) ?? 0) !== brake) return { ok: false, sent: false, error: 'mezitím proběhlo Zavřít pozici — původní vstup je zrušený a nový jsem nezadal' };
           // 3) Nový vstup běžnou cestou (všechny kontroly znovu, proti čerstvé ceně). Když neprojde, žádný vstup nečeká.
           const placed = await this.execute(next as unknown as LocalExecCommand);
           if (placed.ok) return { ok: true, result: { ...(placed.result as Record<string, unknown>), replaced: orderId } };
@@ -1240,6 +1269,8 @@ export class LocalExec {
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
           if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
           this.flattenSentAt.set(symbol, this.now());
+          // Každé zavření zneplatní rozdělanou výměnu čekajícího vstupu (nový vstup po brzdě už neodejde).
+          this.flattenCount.set(symbol, (this.flattenCount.get(symbol) ?? 0) + 1);
           let result;
           try { result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol }); } catch (error) {
             // Zavření prokazatelně neodešlo → pozdější vyplnění se mu nepřipíše jako „ručně".

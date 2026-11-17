@@ -375,6 +375,74 @@ describe('místní služba: změna čekajícího vstupu se zachováním SL/TP (z
   });
 });
 
+describe('místní služba: nálezy z review 17. 11. večer (brzda, strop, cizí příkaz, čerstvá cena)', () => {
+  it('Zavřít pozici během výměny čekajícího vstupu: nový vstup už neodejde', async () => {
+    const t = await setup({ config: { moveConfirmMs: 300 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const oldId = (first as { result: { orderId: string } }).result.orderId;
+    const [replaced] = await Promise.all([
+      t.run({ op: 'replace-entry', clientId: 'rb1', orderId: oldId, price: 6985 }),
+      t.run({ op: 'flatten', clientId: 'fb1', symbol: 'ESZ6' }),
+    ]);
+    expect(replaced.ok).toBe(false);
+    await sleep(200);
+    expect([...t.server.orders.values()].filter((o) => o.status === 'open')).toHaveLength(0);
+    expect(t.exec.state().orders).toEqual([]);
+    t.broker.stop();
+  });
+
+  it('strop pozice: vyplněný kus se neuvolní časem, i když zpráva o pozici nepřijde', async () => {
+    const t = await setup({ config: { maxPosition: 1, maxQuantity: 1 } });
+    t.server.controls.muteLivePositions = true;
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(5_300);
+    const frames = t.frames();
+    expect(await t.run(entry({ limitPrice: 6988, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  }, 20_000);
+
+  it('pracující příkaz zadaný jinde → nový vstup se neodešle', async () => {
+    const t = await setup();
+    t.server.orders.set('901', { basketId: '901', accountId: 'ACC1', userTag: '', symbol: 'ESZ6', exchange: 'CME', side: 1, priceType: 1, quantity: 1, price: 6950, status: 'open', filled: 0 });
+    t.server.notifyLive('901', 1);
+    await flush();
+    const frames = t.frames();
+    expect(await t.run(entry())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/zadaný jinde/) });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('bez čerstvé ceny služby neodejde Limit se SL/TP (a na skutečném účtu žádný vstup)', async () => {
+    const t = await setup({ price: null });
+    const frames = t.frames();
+    expect(await t.run(entry())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/čerstvou cenu/) });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+    const live = await setup({ price: null, liveEnvironment: true, config: { liveTrading: { problem: () => null, requireStop: false } } });
+    expect(await live.run(entry({ stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/čerstvou cenu/) });
+    live.broker.stop();
+  });
+
+  it('stejná zpráva o pozici znovu neposílá stav', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(150);
+    let pushes = 0;
+    const off = t.exec.subscribe(() => { pushes += 1; });
+    for (let i = 0; i < 30; i += 1) t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+    await sleep(100);
+    expect(pushes).toBeLessThanOrEqual(2);
+    if (typeof off === 'function') off();
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobrazení)', () => {
   it('SL: vstup 6990, výstup 6980 → −10 b, důvod sl', async () => {
     const t = await setup({ config: { positionSettleMs: 20 } });
