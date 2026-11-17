@@ -345,6 +345,8 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.server.notifyLive('900', 1);
     await flush();
     expect(await t.run({ op: 'move', orderId: '900', price: 6895 })).toMatchObject({ ok: false, sent: false });
+    // cizí příkaz se ve stavu NIKDY netváří jako vstup, SL nebo TP této appky
+    expect(t.exec.state().orders.find((o) => o.orderId === '900')).toMatchObject({ role: 'other', limitPrice: 6900 });
     t.broker.stop();
   });
 

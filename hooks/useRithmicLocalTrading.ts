@@ -14,6 +14,8 @@ import type { LocalExecCommand, LocalExecOrderView, LocalExecState } from '../se
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
+import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
+import type { LiveChartWorkingOrders } from './useLiveChartData';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
 export const RITHMIC_SOLO_ACCOUNT = 1;
@@ -390,6 +392,24 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     return { key, symbol, lines: [], summary, issue: null };
   }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.entryType, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Příkazy zadané jinde než v této appce (jiná platforma): jen pro zobrazení, tlumenou čarou. Nejde je táhnout
+  // ani rušit a nic z nich nejde do příkazu. Co už kreslí pozice (vlastní vstup, SL, TP), se nekreslí podruhé.
+  const workingView = useMemo<LiveChartWorkingOrders | null>(() => {
+    if (!state || !symbol) return null;
+    const foreign = orders.filter((order) => order.role === 'other' && order.status === 'working');
+    if (!foreign.length) return null;
+    const view = liveWorkingOrderView({
+      orders: foreign.map((order) => ({
+        id: order.orderId, accountId: RITHMIC_SOLO_ACCOUNT, action: order.side, orderType: order.stopPrice !== undefined && order.limitPrice === undefined ? 'Stop' : order.limitPrice !== undefined && order.stopPrice === undefined ? 'Limit' : order.orderType ?? 'Unsupported',
+        quantity: order.quantity - order.filledQuantity, price: order.limitPrice ?? null, stopPrice: order.stopPrice ?? null, symbol: order.symbol, working: true,
+      })),
+      accountIds: [RITHMIC_SOLO_ACCOUNT], verified: true, contract: symbol, pointValue,
+      drawn: { position: position?.summary ? { kind: position.summary.kind, side: position.summary.side, entry: position.summary.entry, entryType: position.summary.entryType, stop: position.summary.stop, target: position.summary.target, leader: position.summary.leader } : null, symbol },
+    });
+    const title = 'Zadáno jinde než v této appce — jen zobrazení. Spravuj tam, kde příkaz vznikl, nebo zavři pozici.';
+    return { ...view, lines: view.lines.map((line) => ({ ...line, title })), badges: view.badges.map((badge) => ({ ...badge, title })), contract: symbol };
+  }, [state, symbol, pointValue, position?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const marketData = useMemo<LiveTradingMarketData | null>(() => (candles.length && symbol ? ({
     candles,
     quality: { tone: 'info', title: hello?.system === 'Rithmic Test' ? 'Rithmic Test (simulovaný trh)' : `${hello?.system ?? 'Rithmic'} (živý trh)`, reasons: [], lastCandleAt: candles[candles.length - 1].time * 1_000, capturedAt, missingMinutes: 0, source: symbol },
@@ -544,10 +564,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, workingOrders: orders.filter((order) => order.status === 'working').length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
-    onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack, scaleIn, legsNote: legView.note,
+    workingView, onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack, scaleIn, legsNote: legView.note,
   };
 }

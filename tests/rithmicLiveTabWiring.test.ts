@@ -245,6 +245,12 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/historyFromApp: trading\.system !== null && trading\.system !== 'Rithmic Test'/);
   });
 
+  it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {
+    expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working'\);/);
+    expect(hook).toMatch(/const view = liveWorkingOrderView\(\{/);
+    expect(chart).toMatch(/workingOrders=\{trading\.workingView\}/);
+  });
+
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
     expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: 2 })).toBeNull();
     expect(rithmicScreenInstrumentIssue({ symbol: 'ESZ6', tickSize: 0.25, pointValue: 50 })).toMatch(/jen MNQ/);

@@ -82,7 +82,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     ...(link !== 'open' ? [{ ...card(`rithmic-link-down:${downSince.current}`, 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.'), sticky: false, ms: 8_000 }] : []),
     // Krátká karta (stav se mění s každým posunem; trvalá by ukazovala staré ceny).
     // Jen pro čtení: příkazy z jiné platformy graf neumí věrně ukázat (role jen odhaduje) → říct to nahlas.
-    ...(trading.readOnly && trading.workingOrders > 0 ? [{ ...card(`rithmic-foreign:${trading.workingOrders}`, 'amber', 'Info', `Na účtu pracuje ${trading.workingOrders} příkazů`, 'Zadané jinde než v této appce — čáry v grafu je nemusí ukazovat správně (SL/TP se mohou jevit jako vstup, nebo chybět).'), sticky: false, ms: 12_000 }] : []),
+    ...(trading.workingOrders > 0 ? [{ ...card(`rithmic-foreign:${trading.workingOrders}`, 'amber', 'Info', `Na účtu pracuje ${trading.workingOrders} ${trading.workingOrders === 1 ? 'příkaz zadaný' : 'příkazů zadaných'} jinde`, 'Graf je ukazuje tlumenou čarou jen pro zobrazení — z této appky je nejde posunout ani zrušit.'), sticky: false, ms: 10_000 }] : []),
     ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Dvě ochrany na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš obě.`), sticky: false, ms: 9_000 }] : []),
     ...(blocked ? [trading.readOnly
       ? card(`rithmic-blocked:${blocked}`, 'amber', 'Info', 'Služba hlásí stav účtu', `${blocked} Účet je připojený jen pro čtení — nic se neposílá.`)
@@ -131,7 +131,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
         entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported
         entryScaleIn={trading.scaleIn}
-        entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}
+        entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}

@@ -49,6 +49,10 @@ export interface LocalExecOrderView {
   status: BrokerOrder['status'];
   /** Co to je z pohledu obchodníka. */
   role: 'entry' | 'stop' | 'target' | 'other';
+  /** Typ a ceny tak, jak je hlásí broker (pro zobrazení cizích příkazů). */
+  orderType?: string;
+  limitPrice?: number;
+  stopPrice?: number;
   /** Cena čáry v grafu (limit, nebo spoušť stopu); u tržního příkazu chybí. */
   price?: number;
   /** Vstup, ke kterému noha patří. */
@@ -303,12 +307,16 @@ export class LocalExec {
       const known = roleOf.get(order.brokerOrderId);
       // Samostatná ochrana pozice se ukazuje jako SL/TP, ne jako vstup.
       const protective = order.tag?.startsWith(PROTECT_TAG) ? (order.orderType === 'Stop' ? 'stop' as const : order.orderType === 'Limit' ? 'target' as const : 'other' as const) : null;
-      const role = known?.role ?? protective ?? (order.orderType === 'Unsupported' ? 'other' : 'entry');
+      // Vstup je jen VLASTNÍ příkaz (značka ui-). Cokoli zadané jinde (jiná platforma) je „other": graf to ukáže
+      // jako cizí příkaz jen pro zobrazení, nikdy jako vstup, SL nebo TP této appky.
+      const own = order.tag?.startsWith('ui-') === true;
+      const role = known?.role ?? protective ?? (own && order.orderType !== 'Unsupported' ? 'entry' : 'other');
       // Vstup: Stop se kreslí na spoušti (burza k němu může hlásit i ochranný limit), Limit na limitní ceně.
       const price = role === 'stop' ? order.stopPrice : role === 'target' ? order.limitPrice : order.stopPrice ?? order.limitPrice;
       orders.push({
         orderId: order.brokerOrderId, symbol: order.symbol, side: order.side, quantity: order.quantity, filledQuantity: order.filledQuantity,
         status: order.status, role, ...(price !== undefined ? { price } : {}),
+        orderType: order.orderType, ...(order.limitPrice !== undefined ? { limitPrice: order.limitPrice } : {}), ...(order.stopPrice !== undefined ? { stopPrice: order.stopPrice } : {}),
         ...(role === 'entry' && price !== undefined ? { entryType: order.stopPrice !== undefined ? 'Stop' as const : 'Limit' as const } : {}),
         ...(known && known.role !== 'entry' ? { entryId: known.entryId } : {}), ...(order.tag ? { tag: order.tag } : {}),
         ...this.planned(order, brackets.find((bracket) => bracket.entryId === order.brokerOrderId)),
