@@ -20,6 +20,8 @@ export interface LocalExecConfig {
   maxPosition?: number;
   /** Nejvyšší vzdálenost SL/TP od vstupu v tickách (výchozí 400). */
   maxProtectionTicks?: number;
+  /** Jak dlouho čekat na potvrzení posunu vstupu s ochranou stavem (výchozí 1,5 s). */
+  moveConfirmMs?: number;
   /** Poslední cena ze strany služby; reference od klienta se smí lišit nejvýš o `maxReferenceDriftTicks`. */
   serverPrice?: (symbol: string) => number | null;
   maxReferenceDriftTicks?: number;
@@ -359,10 +361,27 @@ export class LocalExec {
             && this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId)) {
             // Čekající vlastní vstup s ochranou: jen cena. SL/TP jsou vzdálenosti od vyplnění, posunou se s ním.
             if (order.filledQuantity > 0) return refuse('vstup se už plní — cenu neměním');
+            // Částečné plnění během změny není změřené → zatím jen 1 kontrakt (ten se částečně nevyplní).
+            if (order.quantity !== 1) return refuse('posun vstupu s ochranou jde zatím jen u 1 kontraktu');
             const server = this.config.serverPrice?.(order.symbol) ?? null;
+            if (server === null) return refuse('služba nemá čerstvou cenu — posun vstupu s ochranou neodesílám');
             // Přes trh by se vyplnil jinde, než kde graf ukazuje vstup i ochranu.
-            if (server !== null && (order.side === 'Buy' ? price > server : price < server)) return refuse('nová cena Limitu je přes trh — vyplnil by se hned za jinou cenu; zruš ho a použij Market');
+            if (order.side === 'Buy' ? price > server : price < server) return refuse('nová cena Limitu je přes trh — vyplnil by se hned za jinou cenu; zruš ho a použij Market');
             await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
+            // Úspěch až podle stavu: nová cena je v knize A příkaz je dál vstupem s ochranou. Zachování ochrany
+            // po změně stojí na měření z 17. 11. 2026 — kdyby ji Rithmic zahodil, musí se to poznat hned, ne až po vyplnění.
+            const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+            for (;;) {
+              const current = this.orders.get(orderId);
+              if (current && current.limitPrice === price) {
+                if (current.brokerOrderType?.startsWith('BRACKET:') && this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId)) break;
+                this.blocked = `bracket-lost-after-move: vstup ${orderId} po posunu nenese ochranu — zkontroluj a případně ho zruš`.slice(0, 240);
+                this.changed();
+                return { ok: false, sent: 'unknown', error: 'vstup po posunu nenese SL/TP — nové vstupy stojí, zkontroluj příkaz u brokera' };
+              }
+              if (this.now() >= deadline) return { ok: false, sent: 'unknown', error: 'posun vstupu nebyl potvrzen stavem — ověř cenu příkazu' };
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
           } else if (order.orderType === 'Limit' && order.tag?.startsWith('ui-')) {
             await this.broker.modifyOrder(accountId, orderId, { quantity: order.quantity, orderType: 'Limit', limitPrice: price });
           } else {

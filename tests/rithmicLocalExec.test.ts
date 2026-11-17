@@ -197,6 +197,28 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.broker.stop();
   });
 
+  it('posun čekajícího vstupu s ochranou: jen 1 kontrakt, jen s cenou služby, ne přes trh', async () => {
+    const t = await setup();
+    const two = await t.run(entry({ quantity: 2 }));
+    await flush();
+    const twoId = (two as { result: { orderId: string } }).result.orderId;
+    const before = t.server.orders.get(twoId)!.price;
+    expect(await t.run({ op: 'move', orderId: twoId, price: 6985 })).toMatchObject({ ok: false, sent: false });
+    await t.run({ op: 'cancel', orderId: twoId });
+    await sleep(60);
+    const one = await t.run(entry());
+    await flush();
+    const oneId = (one as { result: { orderId: string } }).result.orderId;
+    // přes trh (cena služby 7000, nákup nad ní)
+    expect(await t.run({ op: 'move', orderId: oneId, price: 7001 })).toMatchObject({ ok: false, sent: false });
+    // služba nemá cenu → neodesílá (ne „raději pustit")
+    t.setPrice(null);
+    expect(await t.run({ op: 'move', orderId: oneId, price: 6985 })).toMatchObject({ ok: false, sent: false });
+    expect(t.server.orders.get(oneId)!.price).toBe(6990);
+    expect(before).toBe(6990);
+    t.broker.stop();
+  });
+
   it('kritický incident zastaví nové vstupy, dokud ho obsluha nepotvrdí; zavření jde dál', async () => {
     const t = await setup();
     t.server.controls.legsNeverAppear = true;
