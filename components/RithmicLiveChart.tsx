@@ -81,11 +81,15 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     // Výpadek hlásí karta jen krátce (po obnově by lhala); trvalý stav nese štítek účtu v hlavičce.
     ...(link !== 'open' ? [{ ...card(`rithmic-link-down:${downSince.current}`, 'red', 'Spojení', 'Místní proces Rithmicu je odpojený', 'Stav v grafu není znám. Příkazy nejdou, dokud se spojení neobnoví.'), sticky: false, ms: 8_000 }] : []),
     // Krátká karta (stav se mění s každým posunem; trvalá by ukazovala staré ceny).
+    // Jen pro čtení: příkazy z jiné platformy graf neumí věrně ukázat (role jen odhaduje) → říct to nahlas.
+    ...(trading.readOnly && trading.workingOrders > 0 ? [{ ...card(`rithmic-foreign:${trading.workingOrders}`, 'amber', 'Info', `Na účtu pracuje ${trading.workingOrders} příkazů`, 'Zadané jinde než v této appce — čáry v grafu je nemusí ukazovat správně (SL/TP se mohou jevit jako vstup, nebo chybět).'), sticky: false, ms: 12_000 }] : []),
     ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Dvě ochrany na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš obě.`), sticky: false, ms: 9_000 }] : []),
-    ...(blocked ? [card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
+    ...(blocked ? [trading.readOnly
+      ? card(`rithmic-blocked:${blocked}`, 'amber', 'Info', 'Služba hlásí stav účtu', `${blocked} Účet je připojený jen pro čtení — nic se neposílá.`)
+      : card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
     ...(ackNote ? [card(`rithmic-ack:${ackNote.at}`, 'red', 'Chyba', 'Incident se nepotvrdil', ackNote.text)] : []),
     ...(rejection ? [card(`rithmic-rejected:${rejection.at}`, 'amber', 'Odmít.', 'Rithmic příkaz odmítl', rejection.reason)] : []),
-  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [uncertainList, closeNote, link, blocked, ackNote, rejection?.at, rejection?.reason, trading.legsNote, trading.readOnly, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
@@ -134,7 +138,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
       {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified onClick={dismissUncertain} title={uncertainList.map(item => `${item.label}: výsledek neznámý — ${item.reason}`).join('; ')}
         className={`fixed left-[76px] z-[310] rounded-lg border border-amber-500/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-extrabold text-amber-500 hover:bg-amber-500/25 ${blocked ? 'bottom-14' : 'bottom-4'}`}>Stav u brokera ověřen</button>, document.body)}
       {/* Pod nouzovou lištou a jejími dialogy (z-350/600); po pádu grafu se nekreslí. */}
-      {blocked && !crashed && createPortal(<button type="button" data-rithmic-ack onClick={() => void confirmIncident()}
+      {blocked && !crashed && !trading.readOnly && createPortal(<button type="button" data-rithmic-ack onClick={() => void confirmIncident()}
         className="fixed bottom-4 left-[76px] z-[310] rounded-lg border border-rose-500/60 bg-rose-500/15 px-3 py-1.5 text-[12px] font-extrabold text-rose-400 hover:bg-rose-500/25">Potvrdit incident</button>, document.body)}
     </>
   );

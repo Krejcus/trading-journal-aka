@@ -8,6 +8,9 @@ import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
 import { rithmicFlattenReply, rithmicLegView, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
+import { READ_ONLY_ALLOWED_TEMPLATES, RITHMIC_WRITE_TEMPLATES, readOnlyViolation } from '../services/rithmic/readOnlyGuard';
+import { RITHMIC_TEMPLATES } from '../services/rithmic/proto/rithmicTemplates';
+import { encodeRithmicFrame } from '../services/rithmic/rithmicCodec';
 import { liveTicketLegsProblem } from '../lib/liveBareEntry';
 import { liveLineMoveBlockReason } from '../lib/liveChartOrderLines';
 import { LIVE_COMMAND_BUSY_TEXT } from '../hooks/liveCommandRuns';
@@ -219,8 +222,19 @@ describe('hook místního procesu', () => {
 
   it('režim jen pro čtení: jiný systém než Rithmic Test jen s --read-only, zápisy blokované na spojení, ve službě i na obrazovce', () => {
     expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY\) throw new Error\(/);
-    expect(server).toMatch(/const WRITE_TEMPLATES: ReadonlySet<number> = new Set\(\[312, 314, 316, 330, 332, 334, 346, 3504\]\);/);
-    expect(server).toMatch(/if \(WRITE_TEMPLATES\.has\(frame\.templateId\)\) \{/);
+    expect(server).toMatch(/const blockedTemplate = readOnlyViolation\(data\);/);
+    // Seznam povolených: každá požadavková šablona protokolu je buď výslovně čtecí, nebo zápisová — nic nezůstane nezařazené.
+    for (const [id, name] of Object.entries(RITHMIC_TEMPLATES)) {
+      if (!name.startsWith('Request')) continue;
+      const read = READ_ONLY_ALLOWED_TEMPLATES.has(Number(id));
+      const write = RITHMIC_WRITE_TEMPLATES.has(Number(id));
+      expect(read !== write, `${id} ${name}`).toBe(true);
+    }
+    for (const id of RITHMIC_WRITE_TEMPLATES) expect(READ_ONLY_ALLOWED_TEMPLATES.has(id)).toBe(false);
+    expect(readOnlyViolation(encodeRithmicFrame(312, { user_msg: ['x'] }))).toBe(312);
+    expect(readOnlyViolation(encodeRithmicFrame(3504, { user_msg: ['x'] }))).toBe(3504);
+    expect(readOnlyViolation(encodeRithmicFrame(18, { user_msg: ['x'] }))).toBeNull();
+    expect(readOnlyViolation(new Uint8Array([1, 2, 3]))).not.toBeNull();
     expect(server).toMatch(/if \(READ_ONLY\) throw new Error\('účet je připojený jen pro čtení/);
     expect(server).toMatch(/allowedSystems: \['Rithmic Test'\]/);
     expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\) && !readOnly;/);

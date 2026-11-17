@@ -539,7 +539,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, readOnly, entryReady, entryBlockedReason, silent,
+    available, readOnly, workingOrders: orders.filter((order) => order.status === 'working').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,

@@ -11,7 +11,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeRithmicFrames } from '../../services/rithmic/rithmicCodec';
+import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
@@ -25,13 +25,11 @@ const cli = (name: string): string | undefined => { const i = process.argv.index
 const SYSTEM = cli('system') ?? 'Rithmic Test';
 /**
  * Jen pro čtení: graf a stav účtu, ŽÁDNÉ příkazy. Jiný systém než Rithmic Test jde spustit JEN takto.
- * Pojistky jsou tři a nezávislé: (1) na drátě — rámce zápisových šablon se vůbec neodešlou,
+ * Pojistky jsou tři a nezávislé: (1) na drátě — odejdou jen výslovně povolené čtecí šablony (services/rithmic/readOnlyGuard.ts),
  * (2) místní služba příkazy mimo Rithmic Test odmítá, (3) stránka je nenabízí.
  */
 const READ_ONLY = process.argv.includes('--read-only');
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
-/** Šablony, které u Rithmicu něco mění (nový příkaz, změna, zrušení, bracket, úrovně bracketu, zrušit vše, zavřít pozici). */
-const WRITE_TEMPLATES: ReadonlySet<number> = new Set([312, 314, 316, 330, 332, 334, 346, 3504]);
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
 const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
 const KEYCHAIN_SERVICE = cli('keychain') ?? (SYSTEM === 'Rithmic Test' ? 'alphatrade-rithmic-test' : 'alphatrade-rithmic-prop');
@@ -92,11 +90,10 @@ async function main(): Promise<void> {
     // Pojistka na drátě: v režimu jen pro čtení se zápisový rámec nikdy neodešle, ať ho pošle kdokoli.
     const rawSend = socket.send.bind(socket);
     socket.send = (data: Uint8Array) => {
-      for (const frame of decodeRithmicFrames(data)) {
-        if (WRITE_TEMPLATES.has(frame.templateId)) {
-          console.log(`[jen čtení] ZABLOKOVÁN zápisový rámec ${frame.templateId} — nic neodešlo`);
-          throw new Error(`režim jen pro čtení: šablona ${frame.templateId} se neodesílá`);
-        }
+      const blockedTemplate = readOnlyViolation(data);
+      if (blockedTemplate !== null) {
+        console.log(`[jen čtení] ZABLOKOVÁN rámec ${blockedTemplate} — nic neodešlo`);
+        throw new Error(`režim jen pro čtení: šablona ${blockedTemplate} se neodesílá`);
       }
       rawSend(data);
     };
