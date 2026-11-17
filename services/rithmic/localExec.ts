@@ -270,11 +270,12 @@ export class LocalExec {
       // Samostatná ochrana pozice se ukazuje jako SL/TP, ne jako vstup.
       const protective = order.tag?.startsWith(PROTECT_TAG) ? (order.orderType === 'Stop' ? 'stop' as const : order.orderType === 'Limit' ? 'target' as const : 'other' as const) : null;
       const role = known?.role ?? protective ?? (order.orderType === 'Unsupported' ? 'other' : 'entry');
-      const price = role === 'stop' ? order.stopPrice : role === 'target' ? order.limitPrice : order.limitPrice ?? order.stopPrice;
+      // Vstup: Stop se kreslí na spoušti (burza k němu může hlásit i ochranný limit), Limit na limitní ceně.
+      const price = role === 'stop' ? order.stopPrice : role === 'target' ? order.limitPrice : order.stopPrice ?? order.limitPrice;
       orders.push({
         orderId: order.brokerOrderId, symbol: order.symbol, side: order.side, quantity: order.quantity, filledQuantity: order.filledQuantity,
         status: order.status, role, ...(price !== undefined ? { price } : {}),
-        ...(role === 'entry' && price !== undefined ? { entryType: order.limitPrice === undefined && order.stopPrice !== undefined ? 'Stop' as const : 'Limit' as const } : {}),
+        ...(role === 'entry' && price !== undefined ? { entryType: order.stopPrice !== undefined ? 'Stop' as const : 'Limit' as const } : {}),
         ...(known && known.role !== 'entry' ? { entryId: known.entryId } : {}), ...(order.tag ? { tag: order.tag } : {}),
         ...this.planned(order, brackets.find((bracket) => bracket.entryId === order.brokerOrderId)),
       });
@@ -570,7 +571,7 @@ export class LocalExec {
   private planned(order: BrokerOrder, bracket: { stopTicks?: number; targetTicks?: number } | undefined): { plannedStop?: number; plannedTarget?: number } {
     const tick = this.config.symbols[order.symbol]?.tickSize;
     // Limit: od limitní ceny; Stop vstup: od spouště (skutečné vyplnění může být o skluz dál).
-    const base = order.limitPrice ?? order.stopPrice;
+    const base = order.stopPrice ?? order.limitPrice;
     if (!bracket || !tick || base === undefined || order.filledQuantity > 0) return {};
     const up = order.side === 'Buy' ? 1 : -1;
     return {

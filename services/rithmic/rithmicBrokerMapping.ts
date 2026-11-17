@@ -231,7 +231,8 @@ export class RithmicOrderBook {
       filledQuantity,
       // U STOP_MARKET burza hlásí v `price` ochranný limit (změřeno: 20 ticků za spouští) — není to
       // limitní cena příkazu a jádro by z jejích změn dělalo falešné úpravy.
-      ...(/^STOP_MARKET$/i.test(update.priceType) || (!update.priceType && previous?.orderType === 'Stop')
+      // Vstup s ochranou má typ „Unsupported" — Stop se u něj pozná podle tvaru (spoušť bez limitní ceny).
+      ...(/^STOP_MARKET$/i.test(update.priceType) || (!update.priceType && (previous?.orderType === 'Stop' || (previous?.stopPrice !== undefined && previous.limitPrice === undefined)))
         ? {}
         : shape && update.price !== null ? { limitPrice: update.price } : previous?.limitPrice !== undefined ? { limitPrice: previous.limitPrice } : {}),
       ...(shape && update.triggerPrice !== null ? { stopPrice: update.triggerPrice } : previous?.stopPrice !== undefined ? { stopPrice: previous.stopPrice } : {}),
