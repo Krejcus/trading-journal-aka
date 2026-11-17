@@ -121,6 +121,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         copier={copier} disarm={disarm} {...(onDisarm ? { onDisarm } : {})} group={null}
         position={trading.position} marketData={trading.marketData} solo={solo} copyEvents={trading.events} extraToasts={extraToasts}
         onPlaceEntry={trading.onPlaceEntry} onManageEntry={trading.onManageEntry}
+        {...(trading.bareLegTrade ? { bareLegTrade: trading.bareLegTrade, onBareLeg: trading.onBareLeg } : {})}
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
         entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported
         entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={null}

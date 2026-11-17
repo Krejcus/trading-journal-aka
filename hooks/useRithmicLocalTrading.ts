@@ -11,6 +11,8 @@ import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { MarketCandle } from '../services/marketDataCalculations';
 import type { LocalExecCommand, LocalExecOrderView, LocalExecState } from '../services/rithmic/localExec';
+import type { BareLeaderTrade } from '../lib/manualBareClose';
+import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
 export const RITHMIC_SOLO_ACCOUNT = 1;
@@ -76,7 +78,7 @@ const addUncertain = (next: RithmicUncertainCommand) => publishUncertain([...unc
 const clearUncertain = () => publishUncertain(NO_UNCERTAIN);
 const subscribeUncertain = (listener: () => void) => { uncertainListeners.add(listener); return () => { uncertainListeners.delete(listener); }; };
 const readUncertain = () => uncertainCommands;
-const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', ack: 'Potvrzení incidentu' };
+const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { protect: 'Přidání SL/TP', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', ack: 'Potvrzení incidentu' };
 
 /**
  * Odpověď služby na zavření pozice. `ok: true` znamená jen „služba doběhla" — výsledek zavření nese
@@ -310,6 +312,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const stopOrder = orders.find((order) => order.role === 'stop') ?? null;
   const targetOrder = orders.find((order) => order.role === 'target') ?? null;
 
+  // Podklad pro čipy „+ SL / + TP" a práci s nohami otevřené pozice. Jen zobrazení; příkaz ověří služba.
+  const bareLegTrade = useMemo<BareLeaderTrade | null>(() => (net && net.averagePrice !== undefined ? {
+    entryOperationId: `rithmic:${symbol}`, symbol, side: net.netQuantity > 0 ? 'Buy' : 'Sell', quantity: Math.abs(net.netQuantity), referencePrice: net.averagePrice,
+    hasStop: stopOrder != null, hasTarget: targetOrder != null,
+  } as BareLeaderTrade : null), [symbol, net?.netQuantity, net?.averagePrice, stopOrder != null, targetOrder != null]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const position = useMemo<LiveChartPosition | null>(() => {
     if (!symbol) return null;
     // Bez stavu z živého spojení se „bez pozice" netvrdí — neznámé není flat.
@@ -410,6 +418,43 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     return blocked('Tuhle akci místní služba zatím neumí.');
   }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * SL/TP otevřené pozice přes čipy a čáry grafu (cesta `onBareLeg` obrazovky): přidat jde JEN jeden
+   * SL nebo jeden TP k pozici bez jiného příkazu; posun jen ceny; odebrat jde jen samostatnou ochranu.
+   * Všechno znovu ověřuje služba.
+   */
+  const onBareLeg = useCallback(async (_seen: BareLeaderTrade, intent: LiveBareLegIntent): Promise<LeaderOrderManageResult> => {
+    const action: LeaderOrderManageAction = intent.kind === 'add' ? 'add-leg' : intent.kind === 'remove' ? 'remove-leg' : intent.leg === 'stopLoss' ? 'move-stop' : 'move-target';
+    const base = { type: 'leader-order-managed' as const, operationId: `leg:${newId()}`, action, checkedAt: Date.now() };
+    const blocked = (text: string): LeaderOrderManageResult => ({ ...base, status: 'blocked', blockers: [{ code: 'local-exec', text }] });
+    const finish = (reply: Reply): LeaderOrderManageResult => (reply.ok
+      ? { ...base, status: 'acknowledged', blockers: [] }
+      : reply.sent === false ? blocked(reply.error ?? 'Neodesláno.') : { ...base, status: 'unknown', blockers: [], reason: reply.error ?? 'Výsledek není znám — ověř stav.' });
+    if (!availableRef.current) return blocked(NOT_READY);
+    if (silentRef.current) return blocked('Místní proces neodpovídá — nic se neodeslalo. Zavřít pozici jde.');
+    const sym = symbolRef.current;
+    const list = stateRef.current?.orders.filter((order) => order.symbol === sym) ?? [];
+    const role = intent.leg === 'stopLoss' ? 'stop' : 'target';
+    const name = role === 'stop' ? 'SL' : 'TP';
+    const leg = list.find((order) => order.role === role && order.status === 'working');
+    if (intent.kind === 'add') {
+      if (leg) return blocked(`Pozice už ${name} má.`);
+      if (list.length > 0) return blocked(`Pozice už má ${role === 'stop' ? 'TP' : 'SL'} — k pozici jde zatím mít jen SL, nebo jen TP (ne obojí).`);
+      measure(`Přidání ${name} → čára`, (s) => s.orders.some((order) => order.symbol === sym && order.role === role && order.status === 'working'));
+      return finish(await send({ op: 'protect', clientId: newId(), symbol: sym, kind: role, price: intent.price }));
+    }
+    if (!leg) return blocked(`Pozice ${name} nemá.`);
+    if (intent.kind === 'move') {
+      if (leg.price !== intent.current) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
+      measure(`Posun ${name} → čára`, (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === intent.price));
+      return finish(await send({ op: 'move', orderId: leg.orderId, price: intent.price }));
+    }
+    // Noha vstupu s ochranou se sama zrušit nedá (Rithmic by zrušil i sestru) — jen samostatná ochrana.
+    if (!leg.tag?.startsWith('uiprot-')) return blocked(`${name} patří ke vstupu s ochranou — samotný zrušit nejde, jen zavřít pozici.`);
+    measure(`Zrušení ${name} → čára pryč`, (s) => !s.orders.some((order) => order.orderId === leg.orderId));
+    return finish(await send({ op: 'cancel', orderId: leg.orderId }));
+  }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const ack = useCallback(() => send({ op: 'ack' }), [send]);
 
   /**
@@ -441,6 +486,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
-    onPlaceEntry, onManageEntry, ack,
+    onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack,
   };
 }

@@ -191,6 +191,15 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
   });
 
+  it('SL/TP k otevřené pozici: jen jeden z nich, odebrat jde jen samostatnou ochranu', () => {
+    const leg = hook.slice(hook.indexOf('const onBareLeg = useCallback'), hook.indexOf('const ack = useCallback'));
+    expect(leg).toMatch(/if \(list\.length > 0\) return blocked\(/);
+    expect(leg).toMatch(/send\(\{ op: 'protect', clientId: newId\(\), symbol: sym, kind: role, price: intent\.price \}\)/);
+    expect(leg).toMatch(/if \(!leg\.tag\?\.startsWith\('uiprot-'\)\) return blocked\(/);
+    expect(leg).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);
+    expect(chart).toMatch(/bareLegTrade: trading\.bareLegTrade, onBareLeg: trading\.onBareLeg/);
+  });
+
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
     expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: 2 })).toBeNull();
     expect(rithmicScreenInstrumentIssue({ symbol: 'ESZ6', tickSize: 0.25, pointValue: 50 })).toMatch(/jen MNQ/);
