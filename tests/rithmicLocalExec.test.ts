@@ -215,6 +215,23 @@ describe('místní služba: Stop vstup', () => {
   });
 });
 
+describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobrazení)', () => {
+  it('SL: vstup 6990, výstup 6980 → −10 b, důvod sl', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    expect(t.exec.state().closes).toEqual([]);
+    const stop = t.exec.state().orders.find((o) => o.role === 'stop')!;
+    t.server.fill(stop.orderId, 6980);
+    await sleep(120);
+    expect(t.exec.state().closes).toHaveLength(1);
+    expect(t.exec.state().closes[0]).toMatchObject({ symbol: 'ESZ6', side: 'long', quantity: 1, entryAvg: 6990, exitAvg: 6980, pointsTotal: -10, reason: 'sl' });
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: přikoupení a posun dvou ochran', () => {
   const add = (extra: Record<string, unknown> = {}) => entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030, ...extra });
   async function inPosition(config: Record<string, unknown> = {}) {

@@ -7,7 +7,7 @@
  * jádro kopírky a s workerem nemá nic společného. Stav pro zobrazení nikdy nic neautorizuje —
  * každý příkaz si adaptér ověřuje sám.
  */
-import { BrokerRequestNotSentError, type BrokerEvent, type BrokerOrder, type OrderSide } from '../brokerPort';
+import { BrokerRequestNotSentError, type BrokerEvent, type BrokerFill, type BrokerOrder, type OrderSide } from '../brokerPort';
 import type { RithmicBrokerPort, RithmicIncident } from './rithmicBroker';
 import type { BracketState } from './rithmicProtection';
 
@@ -83,6 +83,22 @@ export interface LocalExecState {
   rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }>;
   /** Kritický incident zastavil nové vstupy; uvolní ho jen výslovné potvrzení obsluhou (`ack`). */
   blocked: string | null;
+  /** Poslední zavřené obchody spočítané z vyplnění brokera — JEN zobrazení (karta zavření), nic neautorizuje. */
+  closes: LocalExecClose[];
+}
+
+/** Zavřený obchod: průměry z vyplnění, výsledek v bodech × kusech (bez poplatků). `reason` jen když je jistý. */
+export interface LocalExecClose {
+  id: string;
+  at: number;
+  symbol: string;
+  side: 'long' | 'short';
+  quantity: number;
+  entryAvg: number;
+  exitAvg: number;
+  /** Součet (výstup − vstup) × kusy ve směru obchodu, v bodech. */
+  pointsTotal: number;
+  reason?: 'sl' | 'tp' | 'manual';
 }
 
 export type LocalExecCommand =
@@ -160,6 +176,58 @@ export class LocalExec {
     };
   }
 
+  /**
+   * Skládá obchod z vyplnění, aby karta zavření ukázala výsledek a důvod. Jen zobrazení: nic z toho nevstupuje
+   * do kontrol příkazů. Když začátek obchodu služba neviděla (restart s pozicí bez průměrné ceny) nebo se
+   * pozice obrátila, výsledek se neuvádí vůbec — raději nic než odhad.
+   */
+  private onFill(fill: BrokerFill): void {
+    if (!(fill.quantity > 0) || !Number.isFinite(fill.price)) return;
+    const signed = fill.side === 'Buy' ? fill.quantity : -fill.quantity;
+    let trip = this.trips.get(fill.symbol);
+    if (!trip) {
+      // Pozice známá před prvním viděným vyplněním (běžně 0; po restartu může být otevřená).
+      const held = this.positions.get(fill.symbol);
+      const net = held?.netQuantity ?? 0;
+      const sign = (net !== 0 ? Math.sign(net) : Math.sign(signed)) as 1 | -1;
+      const known = net === 0 || held?.averagePrice !== undefined;
+      trip = { net, sign, inQty: Math.abs(net), inValue: Math.abs(net) * (held?.averagePrice ?? 0), outQty: 0, outValue: 0, known, seen: new Set() };
+      this.trips.set(fill.symbol, trip);
+    }
+    if (trip.seen.has(fill.fillId)) return;
+    trip.seen.add(fill.fillId);
+    const next = trip.net + signed;
+    if (Math.sign(signed) === trip.sign) { trip.inQty += fill.quantity; trip.inValue += fill.quantity * fill.price; }
+    else { trip.outQty += fill.quantity; trip.outValue += fill.quantity * fill.price; }
+    trip.net = next;
+    if (next !== 0 && Math.sign(next) !== trip.sign) { this.trips.delete(fill.symbol); return; } // obrat: nepočítám
+    if (next !== 0) return;
+    this.trips.delete(fill.symbol);
+    if (!trip.known || trip.inQty !== trip.outQty || trip.inQty === 0) return;
+    const entryAvg = trip.inValue / trip.inQty;
+    const exitAvg = trip.outValue / trip.outQty;
+    const reason = this.exitReasonOf(fill);
+    this.closes.push({
+      id: `${fill.symbol}:${fill.fillId}`, at: this.now(), symbol: fill.symbol, side: trip.sign > 0 ? 'long' : 'short', quantity: trip.inQty,
+      entryAvg, exitAvg, pointsTotal: (trip.outValue - trip.inValue) * trip.sign, ...(reason ? { reason } : {}),
+    });
+    if (this.closes.length > 5) this.closes.shift();
+  }
+
+  /** Důvod zavření podle příkazu, který pozici dovřel: noha ochrany = SL/TP, vlastní příkaz = ručně, cizí = neuvádí se. */
+  private exitReasonOf(fill: BrokerFill): 'sl' | 'tp' | 'manual' | null {
+    const order = this.orders.get(fill.brokerOrderId);
+    for (const accountId of this.broker.accountIds()) {
+      const leg = this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs).find((item) => item.orderId === fill.brokerOrderId);
+      if (leg) return leg.role === 'stop' ? 'sl' : leg.role === 'target' ? 'tp' : null;
+    }
+    const tag = fill.tag || order?.tag;
+    if (tag?.startsWith(PROTECT_TAG)) return order?.orderType === 'Stop' ? 'sl' : order?.orderType === 'Limit' ? 'tp' : null;
+    if (tag?.startsWith('ui')) return 'manual';
+    const flat = this.flattenSentAt.get(fill.symbol);
+    return flat !== undefined && this.now() - flat < 15_000 ? 'manual' : null;
+  }
+
   private onEvent(event: BrokerEvent): void {
     if (event.type === 'order') {
       const before = this.orders.get(event.order.brokerOrderId);
@@ -191,10 +259,12 @@ export class LocalExec {
         this.orders.clear();
         this.positions.clear();
         this.fillsAhead = [];
+        this.trips.clear(); // v mezeře mohla uniknout vyplnění → výsledek by nebyl pravdivý
         for (const order of event.resync.orders) this.orders.set(order.brokerOrderId, order);
         for (const position of event.resync.positions) this.positions.set(position.symbol, { netQuantity: position.netQuantity });
       }
-    } else if (event.type !== 'fill') return;
+    } else if (event.type === 'fill') this.onFill(event.fill);
+    else return;
     this.watchProtective();
     this.changed();
   }
@@ -211,6 +281,11 @@ export class LocalExec {
   /** Právě běžící posun více noh (jeden na kontrakt). */
   private readonly legsMoving = new Set<string>();
   private readonly lastFillAt = new Map<string, number>();
+  /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
+  private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
+  private readonly closes: LocalExecClose[] = [];
+  /** Kdy služba naposledy poslala zavření kontraktu — vyplnění krátce poté je „ručně" (příkaz zavření nenese značku). */
+  private readonly flattenSentAt = new Map<string, number>();
   private readonly lastPositionAt = new Map<string, number>();
   private readonly protectiveMismatchSince = new Map<string, number>();
   private readonly protectiveReported = new Set<string>();
@@ -333,6 +408,7 @@ export class LocalExec {
       orders,
       brackets: accountId === null ? [] : brackets.filter((b) => !b.closed).map((b) => ({ entryId: b.entryId, symbol: b.symbol, ...this.broker.bracketState(accountId, b.entryId) })),
       incidents: [...this.incidents],
+      closes: [...this.closes],
       rejections: [...this.rejections],
       blocked: this.blocked,
     };
@@ -793,6 +869,7 @@ export class LocalExec {
           if (!this.config.symbols[symbol]) return refuse(`kontrakt ${symbol || '?'} není povolený`);
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
           if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          this.flattenSentAt.set(symbol, this.now());
           const result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol });
           return { ok: true, result };
         }

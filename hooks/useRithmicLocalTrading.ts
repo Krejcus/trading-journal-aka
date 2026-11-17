@@ -10,7 +10,7 @@ import type { LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import type { MarketCandle } from '../services/marketDataCalculations';
-import type { LocalExecCommand, LocalExecOrderView, LocalExecState } from '../services/rithmic/localExec';
+import type { LocalExecClose, LocalExecCommand, LocalExecOrderView, LocalExecState } from '../services/rithmic/localExec';
 import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
@@ -113,7 +113,10 @@ export function rithmicLegView(orders: readonly LocalExecOrderView[], net: numbe
   return { stops, targets, stop, target, note };
 }
 
-interface Seen { net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null }
+interface Seen { net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null; close?: LocalExecClose | null; at?: number }
+
+/** Karta zavření bez výsledku: hook ji podrží, jestli služba vzápětí nedodá výsledek z vyplnění. */
+export const RITHMIC_PLAIN_EXIT_ID = 'exit-plain:';
 
 /** Karty obchodů ze dvou po sobě jdoucích stavů. Čistá funkce; důvod zavření se neodhaduje. */
 export function rithmicTradeEvents(before: Seen, now: Seen, context: { symbol: string; lastPrice: number | null; pointValue: number; at: number }): LiveTradingCopyEvent[] {
@@ -127,11 +130,25 @@ export function rithmicTradeEvents(before: Seen, now: Seen, context: { symbol: s
   for (const [id, order] of before.entries) {
     if (!now.entries.has(id) && now.net === before.net) add({ kind: 'order-canceled', side: orderSide(order), quantity: order.quantity });
   }
+  const fresh = now.close && now.close.id !== before.close?.id && now.close.symbol === context.symbol ? now.close : null;
+  const closeEvent = (close: LocalExecClose) => ({
+    id: `exit:${close.id}`, at: context.at, symbol: context.symbol, followers: 0, kind: 'exit', side: close.side === 'long' ? 'Long' : 'Short',
+    quantity: close.quantity, price: close.exitAvg, pnlUsd: Math.round(close.pointsTotal * context.pointValue * 100) / 100,
+    ...(close.reason ? { exitReason: close.reason } : {}),
+  }) as unknown as LiveTradingCopyEvent;
   const same = Math.sign(now.net) === Math.sign(before.net);
   if (before.net === 0 && now.net !== 0) add({ kind: 'entry', side: sideOf(now.net), quantity: Math.abs(now.net) });
   else if (before.net !== 0 && now.net === 0) {
-    // Důvod (SL/TP/ručně) ze změny stavu poznat nejde — karta řekne jen „Pozice zavřena".
-    add({ kind: 'exit', side: sideOf(before.net), quantity: Math.abs(before.net) });
+    // Výsledek a důvod dodává služba z vyplnění brokera (`closes`). Zpráva o pozici a zpráva o vyplnění
+    // jdou jiným spojením, pořadí není dané: přišel-li výsledek dřív, karta už je venku; nepřišel-li
+    // ještě, jde ven karta bez výsledku s odkladem (hook ji zahodí, když výsledek dorazí).
+    if (fresh) out.push(closeEvent(fresh));
+    else if (!(now.close && now.at !== undefined && now.at - now.close.at < 5_000)) {
+      add({ kind: 'exit', side: sideOf(before.net), quantity: Math.abs(before.net) });
+      (out[out.length - 1] as { id: string }).id = `${RITHMIC_PLAIN_EXIT_ID}${out[out.length - 1].id}`;
+    }
+  } else if (fresh) {
+    out.push(closeEvent(fresh));
   } else if (same && Math.abs(now.net) > Math.abs(before.net)) add({ kind: 'scale-in', side: sideOf(now.net), quantity: Math.abs(now.net) });
   else if (same && Math.abs(now.net) < Math.abs(before.net)) add({ kind: 'scale-out', side: sideOf(now.net), quantity: Math.abs(now.net) });
   if (now.net !== 0) {
@@ -160,6 +177,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const feedOpen = useRef(false);
   const [events, setEvents] = useState<LiveTradingCopyEvent[]>([]);
   const seen = useRef<Seen | null>(null);
+  const plainExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const replies = useRef(new Map<string, { resolve: (reply: Reply) => void; op: LocalExecCommand['op'] }>());
   /** Proces mlčí déle než BEAT_TIMEOUT_MS (tep chodí každou sekundu). */
@@ -287,13 +305,23 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       entries: new Map(list.filter((order) => order.role === 'entry' && order.price !== undefined && order.status === 'working').map((order) => [order.orderId, order])),
       stop: list.find((order) => order.role === 'stop' && order.status === 'working')?.price ?? null,
       target: list.find((order) => order.role === 'target' && order.status === 'working')?.price ?? null,
+      close: [...(state.closes ?? [])].reverse().find((item) => item.symbol === sym) ?? null, at: state.at,
     };
     const before = seen.current;
     seen.current = now;
     if (!before) return; // první stav je výchozí, ne událost
     const out = rithmicTradeEvents(before, now, { symbol: sym, lastPrice: priceRef.current, pointValue: hello?.pointValue ?? 2, at: Date.now() });
-    if (out.length) setEvents((current) => [...current.slice(-30), ...out]);
+    // Karta bez výsledku čeká 1,5 s na výsledek z vyplnění; když přijde, nahradí ji ta s výsledkem.
+    const plain = out.filter((event) => event.id.startsWith(RITHMIC_PLAIN_EXIT_ID));
+    const rest = out.filter((event) => !event.id.startsWith(RITHMIC_PLAIN_EXIT_ID));
+    if (rest.some((event) => event.id.startsWith('exit:')) && plainExitTimer.current !== null) { clearTimeout(plainExitTimer.current); plainExitTimer.current = null; }
+    if (plain.length) {
+      if (plainExitTimer.current !== null) clearTimeout(plainExitTimer.current);
+      plainExitTimer.current = setTimeout(() => { plainExitTimer.current = null; setEvents((current) => [...current.slice(-30), ...plain]); }, 1_500);
+    }
+    if (rest.length) setEvents((current) => [...current.slice(-30), ...rest]);
   }, [state, hello?.pointValue]);
+  useEffect(() => () => { if (plainExitTimer.current !== null) clearTimeout(plainExitTimer.current); }, []);
 
   // Správa (zrušení, posun, zavření) smí odejít při živém spojení appka ↔ proces ↔ Rithmic a po novém
   // úplném stavu. Nový vstup navíc chce živou cenu; zavření na ceně NEZÁVISÍ (brzda musí fungovat vždy).

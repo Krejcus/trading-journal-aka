@@ -279,5 +279,31 @@ describe('hook místního procesu', () => {
     expect(exit.kind).toBe('exit');
     expect('exitReason' in exit).toBe(false);
     expect(rithmicTradeEvents(empty, empty, ctx)).toEqual([]);
+    // bez výsledku z vyplnění jde karta s odkladem (hook ji zahodí, když výsledek dorazí)
+    expect(String(exit.id)).toMatch(/^exit-plain:/);
+  });
+
+  it('karta zavření: výsledek a důvod jen z vyplnění brokera, v obou pořadích zpráv právě jednou', () => {
+    const empty = { net: 0, avg: null, entries: new Map(), stop: null, target: null, close: null, at: 1_000 };
+    const long = { net: 1, avg: 100, entries: new Map(), stop: 95, target: 110, close: null, at: 1_000 };
+    const ctx = { symbol: 'MNQZ6', lastPrice: 95, pointValue: 2, at: 1 };
+    const close = { id: 'MNQZ6:F1', at: 2_000, symbol: 'MNQZ6', side: 'long' as const, quantity: 1, entryAvg: 100, exitAvg: 95, pointsTotal: -5, reason: 'sl' as const };
+    // výsledek i nulová pozice v jedné zprávě
+    const both = rithmicTradeEvents(long, { ...empty, close, at: 2_000 }, ctx) as unknown as Array<Record<string, unknown>>;
+    expect(both).toHaveLength(1);
+    expect(both[0]).toMatchObject({ id: 'exit:MNQZ6:F1', kind: 'exit', side: 'Long', quantity: 1, price: 95, pnlUsd: -10, exitReason: 'sl' });
+    // výsledek dřív než nulová pozice: karta hned, při nule už žádná další
+    const early = { ...long, close, at: 2_000 };
+    expect(rithmicTradeEvents(long, early, ctx).map(event => event.id)).toEqual(['exit:MNQZ6:F1']);
+    expect(rithmicTradeEvents(early, { ...empty, close, at: 2_300 }, ctx)).toEqual([]);
+    // nulová pozice dřív: odložená karta bez výsledku, pak ta s výsledkem
+    expect(rithmicTradeEvents(long, empty, ctx)[0].id).toMatch(/^exit-plain:/);
+    expect(rithmicTradeEvents(empty, { ...empty, close, at: 2_000 }, ctx).map(event => event.id)).toEqual(['exit:MNQZ6:F1']);
+    // starý výsledek (jiný obchod, před minutou) se k novému zavření nepřipíše; důvod bez jistoty chybí
+    const later = { ...long, close, at: 60_000 };
+    expect(rithmicTradeEvents(later, { ...empty, close, at: 61_000 }, ctx)[0].id).toMatch(/^exit-plain:/);
+    const unknown = rithmicTradeEvents(long, { ...empty, close: { ...close, id: 'MNQZ6:F2', reason: undefined }, at: 2_000 }, ctx)[0] as unknown as Record<string, unknown>;
+    expect('exitReason' in unknown).toBe(false);
+    expect(hook).toMatch(/plainExitTimer\.current = setTimeout\(/);
   });
 });
