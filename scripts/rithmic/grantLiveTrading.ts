@@ -53,7 +53,7 @@ rl.question(`\nPro potvrzení opiš přesně:  ${phrase}\n> `, (answer) => {
   const problem = liveTradingConsentProblem(consent, { system, user, accounts: [account], now });
   if (problem) { console.error(`Souhlas by nebyl platný: ${problem}`); process.exit(1); }
   mkdirSync(dirname(FILE), { recursive: true });
-  writeFileSync(`${FILE}.tmp`, JSON.stringify(consent, null, 2));
+  writeFileSync(`${FILE}.tmp`, JSON.stringify(consent, null, 2), { mode: 0o600 });
   renameSync(`${FILE}.tmp`, FILE);
-  console.log(`\nSouhlas vydán do ${new Date(consent.expiresAt).toLocaleString('cs-CZ')}. Službu spusť s --live-trading (bez --read-only).`);
+  console.log(`\nSouhlas vydán do ${new Date(consent.expiresAt).toLocaleString('cs-CZ')}. Službu spusť v terminálu s --live-trading (bez --read-only); při startu větu potvrdíš ještě jednou.`);
 });

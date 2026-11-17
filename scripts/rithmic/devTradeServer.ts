@@ -7,12 +7,13 @@
  * Spuštění: RITHMIC_USER=... npx tsx scripts/rithmic/devTradeServer.ts [--contract ESZ6] [--port 3311]
  */
 import { execFileSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
-import { liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
+import { LIVE_CONSENT_MAX_QUANTITY, liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
@@ -95,7 +96,11 @@ async function main(): Promise<void> {
   if (SYSTEM !== 'Rithmic Test' && !/^rprotocol(-[a-z0-9]+)?\.rithmic\.com$/.test(GATEWAY)) throw new Error(`Neznámá brána ${GATEWAY}`);
   // Název aplikace včetně předpony, kterou Rithmic přidělil pro conformance (mail 17. 11. 2026: „fikr:").
   const creds = { ...credentials(), systemName: SYSTEM, appName: APP_NAME, appVersion: '0.1.0' };
+  let startConsent: LiveTradingConsent | null = null;
   if (LIVE_TRADING) {
+    // Obchodování na skutečném účtu spouští jen člověk u terminálu: po přihlášení opíše větu s číslem účtu.
+    // Soubor se souhlasem sám nestačí (zapsat ho umí kterýkoli proces) — je to jen časové omezení a odvolání.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('--live-trading jde spustit jen z interaktivního terminálu (potvrzuje se opsáním věty)');
     // Před přihlášením: bez souhlasu pro tento systém a uživatele se služba k účtu vůbec nepřihlásí.
     // (Shoda účtu se ověří po přihlášení, až je účet znám.)
     let early: unknown = null;
@@ -103,6 +108,7 @@ async function main(): Promise<void> {
     const account = early && typeof early === 'object' && typeof (early as { account?: unknown }).account === 'string' ? (early as { account: string }).account : '';
     const problem = liveTradingConsentProblem(early, { system: SYSTEM, user: creds.user, accounts: [account], now: Date.now() });
     if (problem) throw new Error(`Obchodování na skutečném účtu není povolené: ${problem}`);
+    startConsent = early as LiveTradingConsent; // prošel kontrolou (strop kusů i povinnost SL jsou ověřené)
   }
   const socketFactory = (url: string): RithmicSocketLike => {
     const socket = new WebSocket(url, { perMessageDeflate: false }) as unknown as RithmicSocketLike;
@@ -276,9 +282,8 @@ async function main(): Promise<void> {
     system: SYSTEM, user: creds.user, accounts: entries.filter((entry) => entry.system === SYSTEM).map((entry) => entry.accountId), now: Date.now(),
   });
   // Souhlas platný při startu určuje strop a povinnost SL; jiný souhlas (nové vydání) chce restart služby.
-  const startConsent = LIVE_TRADING ? readConsent() as LiveTradingConsent | null : null;
   exec = new LocalExec({
-    broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: startConsent ? startConsent.maxQuantity : 2, maxPosition: startConsent ? startConsent.maxQuantity : 2,
+    broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: startConsent ? Math.min(startConsent.maxQuantity, LIVE_CONSENT_MAX_QUANTITY) : 2, maxPosition: startConsent ? Math.min(startConsent.maxQuantity, LIVE_CONSENT_MAX_QUANTITY) : 2,
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,
@@ -297,6 +302,15 @@ async function main(): Promise<void> {
     // Až teď je znám účet přihlášení. Bez platného souhlasu služba vůbec nepoběží (ne „poběží a uvidí se").
     const problem = consentProblem();
     if (problem) { broker.stop(); throw new Error(`Obchodování na skutečném účtu není povolené: ${problem}`); }
+    const phrase = liveConsentPhrase(startConsent!.account);
+    console.log(`\nSlužba je přihlášená k ${SYSTEM}, účet ${startConsent!.account}. Příkazy z appky půjdou na SKUTEČNÝ účet.`);
+    console.log('Ochranu (SL/TP) zadanou odsud ruš tady; když pozici zavřeš v jiné platformě, zruš i její ochranu.');
+    const typed = await new Promise<string>((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      rl.question(`Pro spuštění opiš přesně:  ${phrase}\n> `, (answer) => { rl.close(); resolve(answer.trim()); });
+    });
+    if (typed !== phrase) { broker.stop(); throw new Error('Věta nesouhlasí — služba se nespustila.'); }
+    setInterval(() => exec?.checkConsent(), 10_000).unref();
     console.log(`\n*** SKUTEČNÝ ÚČET: příkazy z appky půjdou na ${SYSTEM} / ${(startConsent as LiveTradingConsent).account} · strop ${(startConsent as LiveTradingConsent).maxQuantity} ks · SL ${(startConsent as LiveTradingConsent).requireStop ? 'povinný' : 'nepovinný'} · souhlas do ${new Date((startConsent as LiveTradingConsent).expiresAt).toLocaleString('cs-CZ')} ***\n`);
   }
   exec.subscribe((state) => broadcast({ type: 'state', state }));

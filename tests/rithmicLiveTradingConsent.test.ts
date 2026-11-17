@@ -38,6 +38,10 @@ describe('souhlas s obchodováním na skutečném účtu', () => {
     expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING\) throw new Error\(/);
     expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
     expect(server.match(/liveTradingConsentProblem\(/g)).toHaveLength(2);
+    // spuštění jen z terminálu, s opsáním věty po přihlášení; soubor sám nestačí
+    expect(server).toMatch(/if \(!process\.stdin\.isTTY \|\| !process\.stdout\.isTTY\) throw new Error\('--live-trading jde spustit jen z interaktivního terminálu/);
+    expect(server).toMatch(/if \(typed !== phrase\) \{ broker\.stop\(\); throw new Error\(/);
+    expect(server).toMatch(/startConsent = early as LiveTradingConsent;/);
     expect(server).toMatch(/if \(problem\) \{ broker\.stop\(\); throw new Error\(`Obchodování na skutečném účtu není povolené/);
     // souhlas vydává jen člověk v terminálu
     const grant = readFileSync('scripts/rithmic/grantLiveTrading.ts', 'utf8');

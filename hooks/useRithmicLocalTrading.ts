@@ -82,7 +82,7 @@ const addUncertain = (next: RithmicUncertainCommand) => publishUncertain([...unc
 const clearUncertain = () => publishUncertain(NO_UNCERTAIN);
 const subscribeUncertain = (listener: () => void) => { uncertainListeners.add(listener); return () => { uncertainListeners.delete(listener); }; };
 const readUncertain = () => uncertainCommands;
-const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { 'move-legs': 'Posun SL/TP', protect: 'Přidání SL/TP', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', ack: 'Potvrzení incidentu' };
+const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { 'move-legs': 'Posun SL/TP', protect: 'Přidání SL/TP', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', reduce: 'Částečné zavření', ack: 'Potvrzení incidentu' };
 
 /**
  * Odpověď služby na zavření pozice. `ok: true` znamená jen „služba doběhla" — výsledek zavření nese

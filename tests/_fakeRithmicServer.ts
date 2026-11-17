@@ -81,6 +81,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     onlyTargetLeg: false,
     /** Nohy vzniknou, ale žádná zpráva nenese vazbu na rodiče. */
     legsWithoutLink: false,
+    /** Nenormální případ: po vyplnění nohy sestra dál pracuje (osiřelá noha). */
+    sisterStaysAfterFill: false,
     /** Živé zprávy o pozici (450) po vyplnění nepřijdou — PnL spojení je pozadu za order spojením. */
     muteLivePositions: false,
     /** Zavření (3504) server přijme a příkaz vytvoří, ale vyplní ho až `releaseExit()`. */
@@ -215,6 +217,13 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     positions.set(posKey, net);
     for (const s of controls.muteLivePositions ? [] : sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
       s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: price });
+    }
+    // Změřeno: vyplnění jedné nohy bracketu zruší její sestru.
+    if (order.parent && !controls.sisterStaysAfterFill) {
+      for (const sister of [...orders.values()].filter((o) => o.parent === order.parent && o !== order && o.status === 'open')) {
+        sister.status = 'cancelled';
+        notify(sister, 3, 15);
+      }
     }
     const opposite = order.side === 1 ? 2 : 1;
     const direction = order.side === 1 ? 1 : -1;

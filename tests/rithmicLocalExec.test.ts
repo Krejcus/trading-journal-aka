@@ -245,6 +245,40 @@ describe('místní služba: skutečný účet je vypnutý, dokud ho nezapne plat
     t.broker.stop();
   });
 
+  it('Rithmic Paper Trading (pro adaptér demo) je skutečný účet: bez souhlasu nic, s vypršelým souhlasem žádný vstup', async () => {
+    const paper = { systemName: 'Rithmic Paper Trading', allowedSystems: ['Rithmic Paper Trading'] };
+    const none = await setup({ config: paper });
+    expect(await none.run(entry())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/testovací prostředí/) });
+    none.broker.stop();
+    const expired = await setup({ config: { ...paper, liveTrading: { problem: () => 'souhlas vypršel', requireStop: true } } });
+    const frames = expired.frames();
+    expect(await expired.run(entry())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/souhlas vypršel/) });
+    expect(expired.frames()).toBe(frames);
+    expired.broker.stop();
+  });
+
+  it('po skončení souhlasu: čekající vstup nejde posunout (jen zrušit), ohlásí se incidentem; ochrana a zavření jdou dál', async () => {
+    let problem: string | null = null;
+    const t = await setup({ liveEnvironment: true, config: { liveTrading: { problem: () => problem, requireStop: true }, positionSettleMs: 20, protectiveGraceMs: 40 } });
+    const placed = await t.run(entry());
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    expect((await t.run({ op: 'move', orderId: entryId, price: 6985 })).ok).toBe(true);
+    problem = 'souhlas vypršel';
+    expect(await t.run({ op: 'move', orderId: entryId, price: 6999 })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/jen zrušit/) });
+    expect(t.server.orders.get(entryId)!.price).toBe(6985);
+    t.exec.checkConsent();
+    t.exec.checkConsent();
+    expect(t.exec.state().incidents.filter((incident) => incident.kind === 'consent-ended-entries-working')).toHaveLength(1);
+    // vstup se vyplní → správa ochrany a zavření fungují i bez souhlasu
+    t.server.fill(entryId, 6985);
+    await sleep(120);
+    const stop = t.exec.state().orders.find((o) => o.role === 'stop')!;
+    expect((await t.run({ op: 'move', orderId: stop.orderId, price: 6978 })).ok).toBe(true);
+    expect((await t.run({ op: 'flatten', clientId: 'f1', symbol: 'ESZ6' })).ok).toBe(true);
+    t.broker.stop();
+  });
+
   it('se souhlasem bez povinného SL projde i holý vstup', async () => {
     const t = await setup({ liveEnvironment: true, config: { liveTrading: { problem: () => null, requireStop: false } } });
     expect((await t.run(entry({ stopPrice: undefined, targetPrice: undefined }))).ok).toBe(true);
@@ -265,6 +299,70 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
     await sleep(120);
     expect(t.exec.state().closes).toHaveLength(1);
     expect(t.exec.state().closes[0]).toMatchObject({ symbol: 'ESZ6', side: 'long', quantity: 1, entryAvg: 6990, exitAvg: 6980, pointsTotal: -10, reason: 'sl' });
+    t.broker.stop();
+  });
+});
+
+describe('místní služba: částečné zavření přes vlastní TP jedné ochrany', () => {
+  async function twoParts() {
+    const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 300 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    return t;
+  }
+  async function addOne(t: Awaited<ReturnType<typeof twoParts>>) {
+    const added = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030 }));
+    expect(added.ok).toBe(true);
+    await flush();
+    t.server.fill((added as { result: { orderId: string } }).result.orderId, 7000);
+    await sleep(160);
+  }
+
+  it('jedna ochrana → nejde; dvě ochrany → jeden zápis na TP za trh, úspěch až po zmenšení pozice', async () => {
+    const t = await twoParts();
+    expect(await t.run({ op: 'reduce', clientId: 'r0', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    await addOne(t);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    const targets = t.exec.state().orders.filter((o) => o.role === 'target');
+    expect(targets).toHaveLength(2);
+    const frames = t.frames();
+    const pending = t.run({ op: 'reduce', clientId: 'r1', symbol: 'ESZ6' });
+    await sleep(60);
+    // právě jeden TP je teď za trhem (7000 − 8 ticků = 6998), druhý beze změny; žádný nový příkaz
+    const moved = targets.map((o) => t.server.orders.get(o.orderId)!).filter((o) => o.price === 6998);
+    expect(moved).toHaveLength(1);
+    expect(t.frames()).toBe(frames);
+    t.server.fill(moved[0].basketId, 6999.75);
+    const reply = await pending;
+    expect(reply).toMatchObject({ ok: true, result: { quantity: 1, price: 6998 } });
+    await sleep(120);
+    const state = t.exec.state();
+    expect(state.positions).toEqual([expect.objectContaining({ netQuantity: 1 })]);
+    expect(state.orders.filter((o) => o.role === 'stop')).toHaveLength(1);
+    expect(state.orders.filter((o) => o.role === 'target')).toHaveLength(1);
+    expect(state.blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('výstup se nevyplní do lhůty → výsledek není znám, nic se neopakuje ani nevrací', async () => {
+    const t = await twoParts();
+    await addOne(t);
+    const reply = await t.run({ op: 'reduce', clientId: 'r2', symbol: 'ESZ6' });
+    expect(reply).toMatchObject({ ok: false, sent: 'unknown', error: expect.stringMatching(/nevyplnil/) });
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    expect([...t.server.orders.values()].filter((o) => o.status === 'open' && o.price === 6998)).toHaveLength(1);
+    t.broker.stop();
+  });
+
+  it('bez ceny služby a s trhem u SL se nic neodešle', async () => {
+    const t = await twoParts();
+    await addOne(t);
+    t.setPrice(null);
+    expect(await t.run({ op: 'reduce', clientId: 'r3', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    t.setPrice(6981);
+    expect(await t.run({ op: 'reduce', clientId: 'r4', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/blízko SL/) });
     t.broker.stop();
   });
 });
@@ -409,6 +507,9 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.server.notifyLive('900', 1);
     await flush();
     expect(await t.run({ op: 'move', orderId: '900', price: 6895 })).toMatchObject({ ok: false, sent: false });
+    // cizí příkaz služba ani neruší (to, že ho graf jen zobrazuje, není pojistka služby)
+    expect(await t.run({ op: 'cancel', orderId: '900' })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/cizí/) });
+    expect(t.server.orders.get('900')!.status).toBe('open');
     // cizí příkaz se ve stavu NIKDY netváří jako vstup, SL nebo TP této appky
     expect(t.exec.state().orders.find((o) => o.orderId === '900')).toMatchObject({ role: 'other', limitPrice: 6900 });
     t.broker.stop();

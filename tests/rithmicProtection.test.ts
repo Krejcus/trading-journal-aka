@@ -148,7 +148,8 @@ describe('vstup se serverovou ochranou', () => {
     const error = await thrown(t.broker.cancelOrder(t.account(), stop.basketId));
     expect(error).toBeInstanceOf(BrokerRequestNotSentError);
     expect(t.sent(316)).toBe(0);
-    // TP se vyplní → pozice 0, SL dál pracuje (zda ho server ruší sám, není změřeno)
+    // TP se vyplní → pozice 0 a SL (nenormálně) dál pracuje — běžně ho burza zruší sama
+    t.server.controls.sisterStaysAfterFill = true;
     t.server.fill(target.basketId, 7020);
     await sleep(100);
     expect(t.net()).toBe(0);
