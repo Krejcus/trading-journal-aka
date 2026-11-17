@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import LiveTradingScreenSlot from '../../components/LiveTradingScreenSlot';
-import type { LiveTradingCopierState, LiveTradingMarketData } from '../../components/LiveTradingScreen';
+import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData } from '../../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../../lib/liveCandleFeed';
 import type { LiveChartPosition, LiveChartPositionSummary } from '../../lib/liveChartPosition';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
@@ -69,6 +69,9 @@ function App() {
   const [candles, setCandles] = useState<MarketCandle[]>([]);
   const [capturedAt, setCapturedAt] = useState(() => Date.now());
   const [timings, setTimings] = useState<Timing[]>([]);
+  /** Karty obchodů (stejné jako v LIVE a backtestu) — tady vznikají ze změn stavu u Rithmicu. */
+  const [events, setEvents] = useState<LiveTradingCopyEvent[]>([]);
+  const seen = useRef<{ net: number; avg: number | null; entries: Map<string, LocalExecOrderView>; stop: number | null; target: number | null } | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const replies = useRef(new Map<string, (reply: Reply) => void>());
   const stateRef = useRef<LocalExecState | null>(null);
@@ -123,6 +126,50 @@ function App() {
       setTimings((current) => [...current.slice(-7), ...ready.map((item) => ({ label: item.label, ms: Math.round(performance.now() - item.t0) }))]);
     }));
   }, [state]);
+
+  useEffect(() => {
+    if (!state || !symbolRef.current) return;
+    const sym = symbolRef.current;
+    const list = state.orders.filter((order) => order.symbol === sym);
+    const pos = state.positions.find((item) => item.symbol === sym);
+    const now = {
+      net: pos?.netQuantity ?? 0, avg: pos?.averagePrice ?? null,
+      entries: new Map(list.filter((order) => order.role === 'entry' && order.price !== undefined && order.status === 'working').map((order) => [order.orderId, order])),
+      stop: list.find((order) => order.role === 'stop' && order.status === 'working')?.price ?? null,
+      target: list.find((order) => order.role === 'target' && order.status === 'working')?.price ?? null,
+    };
+    const before = seen.current;
+    seen.current = now;
+    if (!before) return; // první stav je výchozí, ne událost
+    const out: LiveTradingCopyEvent[] = [];
+    const add = (event: Omit<LiveTradingCopyEvent, 'id' | 'at' | 'symbol' | 'followers'>) => out.push({ id: `${Date.now()}-${out.length}-${Math.random().toString(36).slice(2, 6)}`, at: Date.now(), symbol: sym, followers: 0, ...event } as LiveTradingCopyEvent);
+    const sideOf = (net: number) => (net > 0 ? 'Long' as const : 'Short' as const);
+    for (const [id, order] of now.entries) {
+      if (!before.entries.has(id)) add({ kind: 'order-placed', side: order.side === 'Buy' ? 'Long' : 'Short', quantity: order.quantity, price: order.price, ...(order.plannedStop !== undefined ? { stopPrice: order.plannedStop } : {}), ...(order.plannedTarget !== undefined ? { targetPrice: order.plannedTarget } : {}) });
+    }
+    for (const [id, order] of before.entries) {
+      if (!now.entries.has(id) && now.net === before.net) add({ kind: 'order-canceled', side: order.side === 'Buy' ? 'Long' : 'Short', quantity: order.quantity });
+    }
+    if (before.net === 0 && now.net !== 0) add({ kind: 'entry', side: sideOf(now.net), quantity: Math.abs(now.net) });
+    else if (before.net !== 0 && now.net === 0) {
+      // Důvod jen odhadem z poslední ceny proti SL/TP; výsledek obchodu tu neznáme, proto bez P&L.
+      const last = priceRef.current;
+      const long = before.net > 0;
+      const reason = last !== null && before.stop !== null && (long ? last <= before.stop : last >= before.stop) ? 'sl'
+        : last !== null && before.target !== null && (long ? last >= before.target : last <= before.target) ? 'tp' : 'manual';
+      add({ kind: 'exit', side: sideOf(before.net), quantity: Math.abs(before.net), exitReason: reason });
+    } else if (Math.sign(now.net) === Math.sign(before.net) && Math.abs(now.net) > Math.abs(before.net)) add({ kind: 'scale-in', side: sideOf(now.net), quantity: Math.abs(now.net) });
+    else if (Math.sign(now.net) === Math.sign(before.net) && Math.abs(now.net) < Math.abs(before.net)) add({ kind: 'scale-out', side: sideOf(now.net), quantity: Math.abs(now.net) });
+    if (now.net !== 0) {
+      const level = (price: number) => (now.avg !== null ? (price - now.avg) * now.net * (hello?.pointValue ?? 2) : undefined);
+      if (now.stop !== null && now.target !== null && (before.stop === null || before.target === null)) add({ kind: 'bracket-placed', side: sideOf(now.net), quantity: Math.abs(now.net), stopPrice: now.stop, targetPrice: now.target });
+      else {
+        if (now.stop !== null && before.stop !== null && now.stop !== before.stop) add({ kind: 'sl-moved', side: sideOf(now.net), quantity: Math.abs(now.net), price: now.stop, levelPnlUsd: level(now.stop) });
+        if (now.target !== null && before.target !== null && now.target !== before.target) add({ kind: 'tp-moved', side: sideOf(now.net), quantity: Math.abs(now.net), price: now.target, levelPnlUsd: level(now.target) });
+      }
+    }
+    if (out.length) setEvents((current) => [...current.slice(-30), ...out]);
+  }, [state, hello?.pointValue]);
 
   const send = useCallback((command: LocalExecCommand): Promise<Reply> => new Promise((resolve) => {
     const socket = socketRef.current;
@@ -237,7 +284,7 @@ function App() {
       {marketData ? (
         <LiveTradingScreenSlot
           open isDark={isDark} tabs={[]} onNavigate={() => undefined} copier={copier} group={null} disarm={null}
-          position={position} marketData={marketData} soloAccountLabel={`Rithmic Test · ${symbol}`}
+          position={position} marketData={marketData} soloAccountLabel={`Rithmic Test · ${symbol}`} copyEvents={events}
           onPlaceEntry={onPlaceEntry} onManageEntry={onManageEntry}
           manageEntryAvgPrice={net?.averagePrice ?? null} manageCloseSupported entryMarketSupported
           entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={ACCOUNT} workingOrders={null}

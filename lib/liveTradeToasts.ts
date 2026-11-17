@@ -32,6 +32,8 @@ export interface TradeToast {
   alertColor?: string;
   /** Telefon: karta s číselníkem ceny a majákem s obíhajícím světlem. */
   alertBeacon?: { price: number };
+  /** Druhý řádek se smí zalomit (chybová hláška, kterou je potřeba přečíst celou). */
+  wrapLine?: boolean;
 }
 
 const price = (value: number | undefined) => (value == null ? '—' : value.toFixed(2));
@@ -78,6 +80,19 @@ export function copyEventToast(event: CopierCopyEvent): TradeToast | null {
     default:
       return null;
   }
+}
+
+/**
+ * Výsledek příkazu z grafu nebo lístku jako karta (stejný vzhled jako karty obchodů).
+ * `ok` = potvrzení, `bad` = prokazatelně neodesláno, `warn` = výsledek je potřeba zkontrolovat.
+ */
+export function manageNoticeToast(notice: { tone: 'ok' | 'bad' | 'warn'; text: string; at: number }): TradeToast {
+  const base = { id: `notice:${notice.at}:${notice.tone}`, at: notice.at, pnl: null, accounts: 0, sticky: false };
+  if (notice.tone === 'ok') return { ...base, tone: 'green', badge: 'Hotovo', title: notice.text, line: '' };
+  if (notice.tone === 'bad') {
+    return { ...base, tone: 'red', badge: 'Neodesláno', title: 'Příkaz neodešel', line: notice.text.replace(/^Neodesláno:\s*/, ''), wrapLine: true, ms: 7_000 };
+  }
+  return { ...base, tone: 'amber', badge: 'Pozor', title: 'Zkontroluj stav', line: notice.text, wrapLine: true, ms: 7_000 };
 }
 
 /** Nové události od posledního zobrazení (první načtení si komponenta jen zapamatuje). */

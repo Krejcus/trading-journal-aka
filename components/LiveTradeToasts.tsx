@@ -49,7 +49,7 @@ const BeaconToast: React.FC<{ toast: TradeToast; isDark: boolean; onClose: () =>
   </div>
 );
 
-const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boolean; onDismiss: (id: string) => void }> = ({ toast, isDark, copierArmed, onDismiss }) => {
+const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boolean; hideAccounts: boolean; onDismiss: (id: string) => void }> = ({ toast, isDark, copierArmed, hideAccounts, onDismiss }) => {
   const onClose = useCallback(() => onDismiss(toast.id), [onDismiss, toast.id]);
   const color = toast.alertColor ?? TONE[toast.tone];
   const [hovered, setHovered] = useState(false);
@@ -82,14 +82,14 @@ const ToastCard: React.FC<{ toast: TradeToast; isDark: boolean; copierArmed: boo
         <span className={`${toast.pnl != null ? 'ml-1.5' : 'ml-auto'} font-mono text-[10px] font-semibold text-slate-500`}>{time(toast.at)}</span>
         <button type="button" onClick={onClose} aria-label="Zavřít" className="px-0.5 text-[13px] leading-none text-slate-500 hover:text-slate-200">×</button>
       </div>
-      <div className="flex min-w-0 items-center gap-[7px]">
-        <span className={`truncate font-mono text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{toast.line}</span>
-        {toast.accounts > 0 && <span className="ml-auto flex shrink-0 gap-[3px]" title={copierArmed
+      {(toast.line || (toast.accounts > 0 && !hideAccounts)) && <div className="flex min-w-0 items-center gap-[7px]">
+        <span className={`${toast.wrapLine ? 'whitespace-normal break-words leading-[1.35]' : 'truncate'} font-mono text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{toast.line}</span>
+        {toast.accounts > 0 && !hideAccounts && <span className="ml-auto flex shrink-0 gap-[3px]" title={copierArmed
           ? `Leader + ${toast.accounts - 1} followerů ve skupině (kopírka zapnutá)`
           : 'Kopírka je vypnutá — followeři se nekopírují'}>
           {Array.from({ length: Math.min(copierArmed ? toast.accounts : 1, 8) }, (_, index) => <i key={index} className="block h-[6px] w-[6px] rounded-full" style={{ background: copierArmed ? TONE.green : TONE.muted }} />)}
         </span>}
-      </div>
+      </div>}
     </div>
   );
 };
@@ -104,7 +104,9 @@ const LiveTradeToasts: React.FC<{
   extra?: readonly TradeToast[];
   /** LIVE: `extra` jsou upozornění, strop 2 karty (`capExtraToasts`). Backtest jimi posílá vše, bez stropu. */
   capExtra?: boolean;
-}> = ({ events, copierArmed, isDark, placement, extra, capExtra = false }) => {
+  /** Jeden účet bez kopírky: bez teček účtů skupiny. */
+  hideAccounts?: boolean;
+}> = ({ events, copierArmed, isDark, placement, extra, capExtra = false, hideAccounts = false }) => {
   const [toasts, setToasts] = useState<TradeToast[]>([]);
   const extraSeenRef = useRef(new Set<string>());
   useEffect(() => {
@@ -133,7 +135,7 @@ const LiveTradeToasts: React.FC<{
   return (
     <div className={`pointer-events-none absolute ${placement ? '' : 'bottom-9 left-2 '}z-[640] flex flex-col gap-2`} style={placement} aria-live="polite">
       {toasts.map(toast => (
-        <ToastCard key={toast.id} toast={toast} isDark={isDark} copierArmed={copierArmed} onDismiss={dismiss} />
+        <ToastCard key={toast.id} toast={toast} isDark={isDark} copierArmed={copierArmed} hideAccounts={hideAccounts} onDismiss={dismiss} />
       ))}
     </div>
   );

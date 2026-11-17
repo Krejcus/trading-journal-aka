@@ -25,6 +25,7 @@ import LiveHotkeysHelp, {
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
+import { manageNoticeToast } from '../lib/liveTradeToasts';
 import { LivePcAlertDialogs, LivePcAlertsButton, useLivePcPriceAlerts } from './LivePcPriceAlerts';
 import { QuantumSpinner } from './QuantumLoader';
 import ChartDataStatus from './ChartDataStatus';
@@ -751,6 +752,14 @@ const LiveTradingScreen: React.FC<Props> = ({
   };
 
   const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch });
+  // Výsledek příkazu jde do stejného sloupce karet jako obchody a upozornění. V režimu jednoho
+  // účtu se potvrzení neukazuje zvlášť — co se stalo, řekne karta události (Příkaz zrušen, SL posunut…).
+  const toastExtras = useMemo(() => {
+    const notice = lineNotice && !(soloAccountLabel && lineNotice.tone === 'ok')
+      ? manageNoticeToast({ tone: lineNotice.tone, at: lineNotice.at, text: soloAccountLabel ? liveSoloNoticeText(lineNotice.text) : lineNotice.text })
+      : null;
+    return notice ? [...priceAlerts.cards, notice] : priceAlerts.cards;
+  }, [lineNotice, priceAlerts.cards, soloAccountLabel]);
   const registerBoxFollow = useLivePositionBoxFollow({
     position,
     target: String(targetKey),
@@ -1085,13 +1094,8 @@ const LiveTradingScreen: React.FC<Props> = ({
         <div className="relative flex min-w-0 flex-1 flex-col">
           <ChartDataStatus quality={chart.quality} />
           <div className="relative min-h-0 flex-1">
-          {/* Všechna oznámení v grafu jsou na jednom místě vlevo dole: výsledek příkazu nejníž, karty nad ním. */}
-          <div className="pointer-events-none absolute bottom-9 left-2 z-[700] flex flex-col-reverse items-start gap-2">
-            {lineNotice && <div role="status" className={`pointer-events-auto max-w-[440px] rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
-              ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
-              : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{soloAccountLabel ? liveSoloNoticeText(lineNotice.text) : lineNotice.text}</div>}
-            <LiveTradeToasts placement={{ position: 'relative' }} events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={priceAlerts.cards} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
-          </div>
+          {/* Všechna oznámení v grafu jsou karty vlevo dole — i výsledek příkazu (dřív text nahoře uprostřed). */}
+          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={toastExtras} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} hideAccounts={Boolean(soloAccountLabel)} />
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}
