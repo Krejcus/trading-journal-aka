@@ -163,7 +163,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       socket = new WebSocket(url);
       socketRef.current = socket;
       const mine = socket;
-      mine.onopen = () => { if (socketRef.current === mine) setLink('open'); };
+      mine.onopen = () => { if (socketRef.current !== mine) return; lastMessageAt.current = Date.now(); setLink('open'); };
       mine.onclose = () => {
         if (socketRef.current !== mine) return;
         socketRef.current = null;
