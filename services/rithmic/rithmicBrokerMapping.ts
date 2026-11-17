@@ -93,12 +93,12 @@ function observedType(priceType: string): { orderType: ObservedOrderType; broker
  * nikdy se nekopíruje ani nemodifikuje (INV-TRAD-07), a jádro ho nesmí poslat dál jako
  * obyčejný vstup bez ochrany.
  */
-function bracketKind(update: RithmicOrderUpdate): string | null {
+function bracketKind(update: RithmicOrderUpdate, tag: string): string | null {
   if (update.bracketType && update.bracketType !== 'BRACKETTYPE_UNSPECIFIED') return `BRACKET:${update.bracketType}`;
   if (update.originalBasketId && update.originalBasketId !== update.basketId) return 'BRACKET:LEG';
   // Vazba bez rodiče: noha ochrany vstupu značku nenese (změřeno). Příkaz S vlastní značkou a vazbou je noha
   // svázaného páru (OCO, změřeno 17. 11. 2026) — obyčejný Stop/Limit, jeho skutečný typ se zachová.
-  if (update.linkedBasketIds && !update.userTag) return 'BRACKET:LINKED';
+  if (update.linkedBasketIds && !tag) return 'BRACKET:LINKED';
   return null;
 }
 
@@ -207,8 +207,10 @@ export class RithmicOrderBook {
     if (accountId === null || !update.basketId) return null;
     // Požadovaná (nepotvrzená) změna z 351 *_RCVD_* nesmí přepsat tvar existujícího příkazu.
     const shape = shapeFromUpdate || !previous;
-    const bracket = bracketKind(update);
-    const wasBracket = previous?.orderType === 'Unsupported' && previous.brokerOrderType?.startsWith('BRACKET:');
+    // Značka = známá identita příkazu (zpráva ji nést nemusí) — podle ní se pozná noha svázaného páru.
+    const tag = update.userTag || previous?.tag || '';
+    const bracket = bracketKind(update, tag);
+    const wasBracket = previous?.orderType === 'Unsupported' && previous.brokerOrderType?.startsWith('BRACKET:') && !(previous.brokerOrderType === 'BRACKET:LINKED' && tag !== '');
     const type: { orderType: ObservedOrderType; brokerOrderType?: string } = bracket
       ? { orderType: 'Unsupported', brokerOrderType: bracket.slice(0, 32) }
       : wasBracket

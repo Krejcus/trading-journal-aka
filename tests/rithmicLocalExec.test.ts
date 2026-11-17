@@ -428,6 +428,8 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
     expect([...t.server.orders.values()].filter((o) => o.status === 'open')).toHaveLength(0);
     expect(t.exec.state().blocked).toMatch(/^protection-removed/);
     expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 1 })]);
+    // bez potvrzení další ochrana ne (na burze může pracovat pár, o kterém služba neví)
+    expect(await t.run(protect())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/nejistě/) });
     // po potvrzení jde ochranu zadat znovu (jeden SL)
     await t.run({ op: 'ack' });
     expect((await t.run(protect())).ok).toBe(true);
