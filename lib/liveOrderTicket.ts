@@ -275,6 +275,9 @@ export const liveDraftChartLines = (
       price: value, color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
       label: bracketLabel(kind, value),
       labelAt: next => bracketLabel(kind, next),
+      // Při tažení VSTUPU návrhu noha stojí: přepočítá se jen její výsledek a kreslí se podbarvená zóna
+      // (stejně jako u už zadaného čekajícího příkazu).
+      ...(draft.type !== 'market' ? { labelForEntry: (nextEntry: number) => bracketLabel(kind, value, nextEntry) } : {}),
       draggable: true, cancellable: true, cancelAction: 'remove-bracket',
     });
   }
