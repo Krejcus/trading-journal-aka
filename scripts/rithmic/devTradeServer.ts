@@ -21,6 +21,7 @@ import type { ProtectionState, ProtectionStore } from '../../services/rithmic/ri
 import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
 
 const SYSTEM = 'Rithmic Test';
+const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
 const URL = 'wss://rituz00100.rithmic.com:443';
 const KEYCHAIN_SERVICE = 'alphatrade-rithmic-test';
 const arg = (name: string, fallback: string): string => {
@@ -71,7 +72,8 @@ function fileProtectionStore(path: string): ProtectionStore {
 
 async function main(): Promise<void> {
   if (SYSTEM !== 'Rithmic Test') throw new Error('Tenhle proces smí jen na Rithmic Test');
-  const creds = { ...credentials(), systemName: SYSTEM, appName: 'AlphaTrade', appVersion: '0.1.0' };
+  // Název aplikace včetně předpony, kterou Rithmic přidělil pro conformance (mail 17. 11. 2026: „fikr:").
+  const creds = { ...credentials(), systemName: SYSTEM, appName: APP_NAME, appVersion: '0.1.0' };
   const socketFactory = (url: string): RithmicSocketLike => new WebSocket(url, { perMessageDeflate: false }) as unknown as RithmicSocketLike;
 
   let entries: RithmicAccountRegistryEntry[] = [];
@@ -210,6 +212,7 @@ async function main(): Promise<void> {
     });
   });
   setInterval(() => console.log(`[ceny] ticků ${tickCount}, poslední cena ${displayPrice(Date.now())}`), 15_000).unref();
+  console.log(`Aplikace u Rithmicu: "${APP_NAME}"`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
   const stop = (): void => {
