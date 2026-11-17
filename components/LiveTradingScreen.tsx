@@ -24,6 +24,7 @@ import LiveHotkeysHelp, {
 } from './LiveHotkeysHelp';
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
+import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { LivePcAlertDialogs, LivePcAlertsButton, useLivePcPriceAlerts } from './LivePcPriceAlerts';
 import { QuantumSpinner } from './QuantumLoader';
 import ChartDataStatus from './ChartDataStatus';
@@ -235,6 +236,11 @@ interface Props {
   onReplayChange?: (active: boolean) => void;
   /** Náhradní zdroj svíček a živé ceny (výchozí = uložený den + živý zdroj appky). */
   marketData?: LiveTradingMarketData | null;
+  /**
+   * Obchodování na jednom účtu bez kopírky (Rithmic): název účtu pro lístek. Skryje čip Kopírka
+   * a hlášky nemluví o leaderovi a kopiích. Chybí = dosavadní texty.
+   */
+  soloAccountLabel?: string | null;
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
@@ -305,7 +311,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
-  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null,
+  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null, soloAccountLabel = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -1016,7 +1022,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         {workerChip && <button type="button" onClick={() => onNavigate('overview')} title={workerChip.title} className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[workerChip.tone].ring}`}>
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
-        {copierChip && <button
+        {copierChip && !soloAccountLabel && <button
           type="button"
           onClick={() => onNavigate('overview')}
           title={`${copierChip.title ?? 'Stav kopírky ze stavu workeru.'} Zapnutí a vypnutí je na Live Dashboardu.`}
@@ -1079,10 +1085,13 @@ const LiveTradingScreen: React.FC<Props> = ({
         <div className="relative flex min-w-0 flex-1 flex-col">
           <ChartDataStatus quality={chart.quality} />
           <div className="relative min-h-0 flex-1">
-          {lineNotice && <div role="status" className={`absolute left-1/2 top-2 z-[700] max-w-[440px] -translate-x-1/2 rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
-            ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
-            : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{lineNotice.text}</div>}
-          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={priceAlerts.cards} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
+          {/* Všechna oznámení v grafu jsou na jednom místě vlevo dole: výsledek příkazu nejníž, karty nad ním. */}
+          <div className="pointer-events-none absolute bottom-9 left-2 z-[700] flex flex-col-reverse items-start gap-2">
+            {lineNotice && <div role="status" className={`pointer-events-auto max-w-[440px] rounded-lg border px-3 py-1.5 text-[11.5px] font-bold shadow-lg ${lineNotice.tone === 'ok'
+              ? 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
+              : lineNotice.tone === 'bad' ? 'border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border-amber-500/40 bg-amber-950/90 text-amber-100'}`}>{soloAccountLabel ? liveSoloNoticeText(lineNotice.text) : lineNotice.text}</div>}
+            <LiveTradeToasts placement={{ position: 'relative' }} events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={priceAlerts.cards} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} />
+          </div>
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}
@@ -1127,6 +1136,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         <div className={`live-chart-ticket-dock ${ticketOpen && !chartReplay ? 'is-open' : ''}`} inert={!ticketOpen || chartReplay} aria-hidden={!ticketOpen || chartReplay || undefined}>
         <aside className="live-chart-ticket h-full w-[304px]">
           <LiveOrderTicket
+            soloLabel={soloAccountLabel}
             shownOpenPnl={shownOpenPnl}
             isDark={isDark}
             instrument={INSTRUMENT}

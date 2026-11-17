@@ -237,13 +237,13 @@ function App() {
       {marketData ? (
         <LiveTradingScreenSlot
           open isDark={isDark} tabs={[]} onNavigate={() => undefined} copier={copier} group={null} disarm={null}
-          position={position} marketData={marketData}
+          position={position} marketData={marketData} soloAccountLabel={`Rithmic Test · ${symbol}`}
           onPlaceEntry={onPlaceEntry} onManageEntry={onManageEntry}
           manageEntryAvgPrice={net?.averagePrice ?? null} manageCloseSupported entryMarketSupported
           entryMaxContracts={2} entryFrontContract={symbol} manageLeaderAccountId={ACCOUNT} workingOrders={null}
         />
       ) : <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', font: '14px system-ui', color: '#94a3b8', background: '#0b0f16' }}>Čekám na první cenu z Rithmic Test…</div>}
-      <div data-qa-overlay style={{ position: 'fixed', left: 8, bottom: 8, zIndex: 400, maxWidth: 420, padding: '8px 10px', borderRadius: 10, background: 'rgba(15,23,42,0.92)', color: '#e2e8f0', font: '12px system-ui', pointerEvents: 'auto' }}>
+      <div data-qa-overlay style={{ position: 'fixed', left: 70, top: 150, zIndex: 400, maxWidth: 300, opacity: 0.9, padding: '8px 10px', borderRadius: 10, background: 'rgba(15,23,42,0.92)', color: '#e2e8f0', font: '12px system-ui', pointerEvents: 'auto' }}>
         <b>Rithmic Test · {symbol || '…'}</b> · {price?.toFixed(2) ?? '—'} · {link === 'open' ? 'připojeno' : link}
         {banner && <div style={{ color: '#f87171', marginTop: 4 }}>{banner}</div>}
         {state?.blocked && <button type="button" data-qa-ack onClick={() => void send({ op: 'ack' })} style={{ marginTop: 4, border: 0, borderRadius: 6, padding: '4px 8px', cursor: 'pointer' }}>Potvrdit incident</button>}

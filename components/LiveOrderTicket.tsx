@@ -706,7 +706,9 @@ const ManageSection: React.FC<{
   plusPrice: number | null;
   onPlusTicks: (ticks: number) => void;
   notice: LiveManageNotice | null;
-}> = ({ muted, field, ink, line, units, displayValue, onCommit, move, onMove, breakEven, onBreakEven, plusTicks, plusPrice, onPlusTicks, notice }) => {
+  /** Jeden účet bez kopírky — nadpis bez „leader". */
+  solo?: boolean;
+}> = ({ muted, field, ink, line, units, displayValue, onCommit, move, onMove, breakEven, onBreakEven, plusTicks, plusPrice, onPlusTicks, notice, solo = false }) => {
   const action = (view: ManageButtonView, onClick: () => void, extra = '') => <button
     type="button"
     disabled={view.disabled}
@@ -715,7 +717,7 @@ const ManageSection: React.FC<{
     className={`h-[26px] rounded-[7px] border px-2 text-[10.5px] font-extrabold disabled:cursor-not-allowed disabled:opacity-45 ${line} ${ink} ${extra}`}
   >{view.label}</button>;
   return <div className={`grid gap-1.5 rounded-[9px] border p-2.5 ${field}`}>
-    <div className={`text-[9px] font-black uppercase tracking-[0.1em] ${muted}`}>Správa pozice · leader</div>
+    <div className={`text-[9px] font-black uppercase tracking-[0.1em] ${muted}`}>{solo ? 'Správa pozice' : 'Správa pozice · leader'}</div>
     <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1.5">
       {(['stopLoss', 'takeProfit'] as const).map(leg => <React.Fragment key={leg}>
         <span className={`text-[11px] font-extrabold ${leg === 'stopLoss' ? 'text-rose-500' : 'text-emerald-500'}`}>{leg === 'stopLoss' ? 'SL' : 'TP'}</span>
@@ -752,6 +754,8 @@ const ManageSection: React.FC<{
 };
 
 interface Props {
+  /** Jeden účet bez kopírky (Rithmic): název účtu místo výběru skupiny; mění jen texty. */
+  soloLabel?: string | null;
   /** Otevřené P&L jako čip u vstupu (`liveShownOpenPnl`); jen zobrazení. */
   shownOpenPnl?: number | null;
   isDark: boolean;
@@ -879,7 +883,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null,
   attachLegs = null, onAttachLegs, manageLeaderAccountId = null, manageGuardAt, manageRunner = null, managePendingLegs = false, attachPanelOpen = true, attachSent = false, onAttachSent, userId = null,
-  bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose,
+  bareClose = null, onBareClose, commandLockRef = null, onNewDraft, onClose, soloLabel = null,
 }) => {
   const ownCommandLockRef = useRef(false);
   const lockRef = commandLockRef ?? ownCommandLockRef;
@@ -1419,7 +1423,9 @@ const LiveOrderTicket: React.FC<Props> = ({
   } : null;
 
   const headerTitle = 'Objednávka';
-  const pickerText = !group
+  const pickerText = soloLabel
+    ? soloLabel
+    : !group
     ? 'Skupina (leader → followeři)'
     : single && picked
       ? `Jen ${picked.name}`
@@ -1563,6 +1569,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       {/* Holá pozice bez (téže) sekce „Přidat SL/TP“ — worker attach nenabízí: × zavřít samostatně. */}
       {!bareCloseInAttach && bareCloseView}
       {manageView && <ManageSection
+        solo={Boolean(soloLabel)}
         muted={tone.muted}
         field={tone.field}
         ink={tone.ink}
@@ -1760,7 +1767,7 @@ const LiveOrderTicket: React.FC<Props> = ({
           : `${draft.side === 'buy' ? 'Koupit' : 'Prodat'} ${m.quantity} ${instrument.symbol}`}</span>
         <small className="font-mono text-[10px] font-semibold opacity-85">
           {draft.type === 'market' ? `MKT · ~${marketReference != null ? formatPrice(marketReference) : '—'}` : `${draft.type === 'stop' ? 'STP' : 'LMT'} @ ${formatPrice(draft.price)}`}{previewSymbol ? ` · ${previewSymbol}` : ''}
-          {' · '}{single && picked ? `jen ${picked.short}` : group?.armed === false ? 'jen leader' : group ? `skupina ×${groupMultiplier}` : 'leader + kopírka'}
+          {' · '}{single && picked ? `jen ${picked.short}` : group?.armed === false ? 'jen leader' : group ? `skupina ×${groupMultiplier}` : soloLabel ? 'jeden účet' : 'leader + kopírka'}
           {limitIsMarketable(draft, quote) ? ' · hned' : ''}
           {bareSend ? ' · BEZ SL/TP' : ''}
         </small>

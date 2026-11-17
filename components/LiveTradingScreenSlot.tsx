@@ -166,6 +166,8 @@ interface Props {
   onCrash?: () => void;
   /** Náhradní zdroj svíček a živé ceny (zkušební napojení); chybí = výchozí zdroj appky. */
   marketData?: LiveTradingMarketData | null;
+  /** Jeden účet bez kopírky (Rithmic): název účtu; mění jen texty obrazovky. */
+  soloAccountLabel?: string | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -263,6 +265,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
   && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
   && left.marketData === right.marketData
+  && (left.soloAccountLabel ?? null) === (right.soloAccountLabel ?? null)
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)
