@@ -104,3 +104,23 @@ Critic i Codex: „OPRAVIT PŘED STAVBOU" (10 nálezů). Co se změnilo proti v1
 Vědomě přijato: token v `localStorage` vývojové appky (jen Rithmic Test); karty obchodů se
 skládají v prohlížeči ze změn stavu (důvod zavření odhadem, bez P&L); blokace po incidentu má
 vedle karty zvláštní tlačítko „Potvrdit incident".
+
+## Review hotového diffu (17. 11.) a co zbývá
+
+Critic i Codex k diffu `a7eb67c7..f516d1dc`: „OPRAVIT PŘED COMMITEM". Opraveno v `ee62c192`/`85245e57`:
+výpadek spojení obrazovku neodmontuje (karta + štítek „odpojeno"), nejistý výsledek příkazu se drží
+mimo komponentu a přežije výpadek i odchod ze záložky, bez stavu se netvrdí „bez pozice", konec
+relace maže cenu i stav, vstup chce cenu z aktuálního spojení, mlčící proces pustí jen zavření,
+pozice bez SL jde zavřít, texty nenavádějí na Flatten skupiny, prázdný stav ukáže incident kopírky,
+„Potvrdit incident" je pod nouzovými vrstvami a hlásí neúspěch, důvod zavření se neodhaduje.
+
+Ověřeno v appce (náhled `alphatrade-rithmic`, port 5273): Limit se SL/TP → čáry + karta, zrušení →
+karta; zastavení místního procesu → obrazovka stojí, štítek „odpojeno", karta; po startu se sama
+připojí.
+
+**Před ostrým účtem navíc (k seznamu v `rithmic-bracket-flatten-design-20261116.md`):**
+- brzda mimo zámek příkazů: samostatné „Zavřít pozici", které nečeká na visící příkaz (dnes až 15 s);
+- deterministické testy hooku s falešným WebSocketem (výpadek uprostřed příkazu, starý socket,
+  reconnect bez karet, hlídač tepu, unmount) — repo zatím nemá infrastrukturu na testy hooků;
+- token mimo `localStorage` (paměť/relace + rotace) a rozhodnutí o produkčním originu;
+- důvod zavření a P&L z exekucí brokera, ne ze změn stavu.
