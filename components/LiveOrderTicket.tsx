@@ -101,6 +101,7 @@ import {
 import { liveManageErrorNotice, liveManageResultNotice, type LiveManageNotice, type LiveManageOutcome, type LiveManageRunner } from '../hooks/useLiveManageRunner';
 import { liveBareCloseLabel, type LiveBareCloseOffer } from '../lib/liveBareCloseUi';
 import { LIVE_COMMAND_BUSY_TEXT, createLiveBareClosePanelClick, runWithCommandLock } from '../hooks/liveCommandRuns';
+import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { useLiveClickGate } from '../hooks/useLiveClickGate';
 import { LIVE_ACTION_CHANGED_TEXT, liveMoveClick, liveMoveKey, liveRepeatClick, type LiveClickGate, type LiveClickState } from '../lib/liveClickGate';
 import {
@@ -1068,7 +1069,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     if (directBlocked != null || directLocked) return;
     if (!previewDraft || !placeEntryLocked || directBusyRef.current) return;
     // Jiný příkaz (× / posun z čáry, Zrušit čekající, Dashboard) právě letí — nic neodejde.
-    if (lockRef.current) { setDirect({ key: directKey, view: { tone: 'warn', text: LIVE_COMMAND_BUSY_TEXT } }); return; }
+    if (lockRef.current) { setDirect({ key: directKey, view: { tone: 'warn', text: soloLabel ? liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT) : LIVE_COMMAND_BUSY_TEXT } }); return; }
     if (bareSend) {
       // Brána znovu v okamžiku kliku (kotace ≤ 3 s, flat, strop) — render mohl být starší.
       const step = liveBareSendClick({ gate: bareGateAt(Date.now()), last: directClickRef.current, draft: previewDraft });

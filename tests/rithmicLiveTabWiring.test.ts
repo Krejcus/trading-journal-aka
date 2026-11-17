@@ -9,6 +9,7 @@ import { rithmicFlattenReply, rithmicTradeEvents } from '../hooks/useRithmicLoca
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { liveTicketLegsProblem } from '../lib/liveBareEntry';
+import { LIVE_COMMAND_BUSY_TEXT } from '../hooks/liveCommandRuns';
 
 const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
 const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
@@ -173,6 +174,10 @@ describe('hook místního procesu', () => {
     expect(liveTicketLegsProblem({ type: 'limit', stopLoss: 100, takeProfit: null }, false, false, false, true)).toBeNull();
     expect(liveTicketLegsProblem({ type: 'market', stopLoss: null, takeProfit: 100 }, false, false, false, true)).toBeNull();
     expect(chart).toMatch(/entryBareSupported entryBarePendingSupported/);
+    // V pozici další vstup ne (přikoupení služba neumí) a okamžité odeslání z menu grafu se v solo nenabízí.
+    expect(hook).toMatch(/if \(stateRef\.current\?\.positions\.some\(\(item\) => item\.symbol === symbolRef\.current\)\) return \{ \.\.\.base, status: 'blocked'/);
+    expect(screen).toMatch(/const instantBareReady = !solo && entryBarePendingSupported/);
+    expect(liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT)).not.toMatch(/Flatten/);
     expect(chart).toMatch(/available: usable, singleLeg: true/);
     expect(screen).toMatch(/entrySingleLegSupported=\{solo\?\.singleLeg === true\}/);
   });

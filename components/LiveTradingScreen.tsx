@@ -756,7 +756,8 @@ const LiveTradingScreen: React.FC<Props> = ({
 
   // Pravé tlačítko = okamžitý holý Limit/Stop (Filip 7. 11.): sólo DEMO (capability), bez pozice, čekajícího vstupu a návrhu.
   const instantBarePosition = liveTicketBarePosition(position, entryLeaderPosition);
-  const instantBareReady = entryBarePendingSupported && onPlaceEntry != null && !chartReplay && draft == null && !instantBarePosition.open && summary == null;
+  // Jeden účet (Rithmic): okamžité odeslání z menu grafu se nenabízí — vstup jen přes panel.
+  const instantBareReady = !solo && entryBarePendingSupported && onPlaceEntry != null && !chartReplay && draft == null && !instantBarePosition.open && summary == null;
   const sendInstantBareRef = useRef<(side: TicketSide, type: 'limit' | 'stop', price: number, quantity: number) => Promise<void>>(async () => undefined);
   sendInstantBareRef.current = async (side, type, price, quantity) => {
     if (!onPlaceEntry) return;

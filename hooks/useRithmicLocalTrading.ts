@@ -279,8 +279,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   availableRef.current = available;
   const entryReadyRef = useRef(false);
   entryReadyRef.current = entryReady;
+  const IN_POSITION = 'V pozici další vstup zatím nejde (přikoupení služba neumí) — nejdřív pozici zavři.';
   const NOT_READY = 'Spojení s Rithmicem není připravené — nic se neodeslalo.';
-  const entryBlockedReason = entryReady ? null
+  const inPosition = Boolean(state?.positions.some((item) => item.symbol === hello?.symbol));
+  const entryBlockedReason = entryReady ? (inPosition ? IN_POSITION : null)
     : link !== 'open' ? 'Místní proces Rithmicu není připojený.'
     : !state?.connected ? 'Rithmic je odpojený.'
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
@@ -343,6 +345,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const onPlaceEntry = useCallback(async (draft: LiveEntryPreviewDraft, operationId: string): Promise<LeaderEntryPlaceResult> => {
     const base = { type: 'leader-entry-placed' as const, operationId, checkedAt: Date.now() };
     if (!entryReadyRef.current) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: NOT_READY }] };
+    // Přikoupení služba neumí: druhý vstup by měl vlastní (nebo žádnou) ochranu a graf by ji ukázal jako ochranu celé pozice.
+    if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: IN_POSITION }] };
     if (draft.orderType === 'Stop') return { ...base, status: 'blocked', blockers: [{ code: 'unsupported', text: 'Stop vstup místní služba neumí — použij Limit nebo Market.' }] };
     const clientId = operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(-28) || newId();
     const tag = `ui-${clientId}`;
@@ -374,7 +378,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (action === 'move-stop' || action === 'move-target') {
       const role = action === 'move-stop' ? 'stop' : 'target';
       const leg = list.find((order) => order.role === role);
-      if (!leg || leg.price !== expectPrice) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
+      if (!leg) return blocked(`Pozice nemá ${role === 'stop' ? 'SL' : 'TP'} — přidat ho služba zatím neumí. Pozici jde jen zavřít.`);
+      if (leg.price !== expectPrice) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
       if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
       measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === newPrice));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: newPrice }));
