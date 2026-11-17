@@ -1,6 +1,6 @@
 # Rithmic — doplnění SL/TP k otevřené pozici (návrh, 17. 11. 2026)
 
-Stav: NÁVRH k oponentuře. Nic z toho není postavené.
+Stav: POSTAVENO (17. 11.) podle rozhodnutí Filipa: k pozici jde přidat BUĎ jen SL, NEBO jen TP — nikdy obojí. Viz „Co je postaveno" na konci; SL + TP najednou dál čeká na OCO.
 
 ## Proč
 
@@ -57,3 +57,26 @@ chování při částečném vyplnění, snímek. Odkládám do té doby.
 3. Má „Zavřít pozici" čekat na potvrzení zrušení samostatného SL stejně jako u nohou? (Ano —
    stejná cesta `liquidatePosition`: zrušit vše → důkaz → zavřít.)
 4. Stačí jako první krok jen SL, nebo je bez TP k pozici zbytečný? (Rozhodnutí produktu: Filip.)
+
+## Co je postaveno (17. 11., `82e043ac`)
+
+Rozhodnutí Filipa: „postavil bych obojí, aby šel buď jen SL, nebo jen TP".
+
+- Služba (`LocalExec`, op `protect`): jeden Stop (SL) nebo Limit (TP) na opačnou stranu, množství =
+  |pozice|, značka `uiprot-`. Odmítne: bez pozice; když kontrakt má jakýkoli pracující příkaz nebo
+  příkaz na cestě; u pozice ze vstupu s ochranou (i když nohy ještě nedorazily); těsně po vyplnění
+  (pozice se usazuje); bez čerstvé ceny služby; na špatné straně trhu; mimo krok a strop ticků.
+- Při pracující samostatné ochraně služba nepustí další vstup.
+- Posun ochrany: jen cena, stejné meze jako při zadání. Odebrání: jen samostatnou ochranu.
+- Hlídač: ochrana bez pozice / s jiným množstvím / na stejné straně, která vydrží 3 s (kontroluje
+  časovač, ne příští událost) → incident + blokace vstupů; nic se samo neruší. Po obnovení shody
+  nebo po potvrzení se trvající nesoulad hlásí znovu.
+- Obrazovka: čipy „+ SL / + TP" u čáry pozice, × u samostatné nohy, sirotek je vidět jako stav
+  pozice a jde zrušit tlačítkem „Zavřít pozici".
+- Ověřeno v appce na Rithmic Test: přidání SL, odmítnutí TP k pozici se SL (s vysvětlením), posun,
+  odebrání, přidání TP, zavření brzdou; po opravách z review znovu přidání SL + zavření.
+- Review: critic i Codex „OPRAVIT PŘED COMMITEM" → všechny nálezy zapracované; konečnou verzi už
+  znovu nepotvrzovali.
+
+Neověřeno na účtu: spuštění samostatného SL a vyplnění TP trhem (jen testy na falešném serveru),
+zavření zvenčí při pracující ochraně, chování po restartu služby.
