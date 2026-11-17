@@ -344,10 +344,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!net) return null;
     const quantity = Math.abs(net.netQuantity);
     const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
+    const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
     if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
     const reason = legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
-      : legView.stops.length !== quantity || legView.targets.length !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.'
-      : quantity >= 2 ? 'Pozice má 2 kontrakty — víc služba nepustí.' : null;
+      : quantity >= 2 ? 'Pozice má 2 kontrakty — víc služba nepustí.'
+      : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason, pendingAdd: null };
   }, [net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
   scaleInRef.current = scaleIn;

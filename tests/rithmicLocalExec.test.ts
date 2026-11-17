@@ -10,7 +10,7 @@ import {
 } from '../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../services/rithmic/rithmicBroker';
 import { LocalExec, type LocalExecCommand, type LocalExecConfig } from '../services/rithmic/localExec';
-import { memoryProtectionStore } from '../services/rithmic/rithmicProtection';
+import { memoryProtectionStore, type ProtectionStore } from '../services/rithmic/rithmicProtection';
 import { createFakeRithmicServer, flush } from './_fakeRithmicServer';
 
 const credentials = { user: 'u', password: 'secret', systemName: 'Rithmic Test', appName: 'AlphaTrade', appVersion: '0.1' };
@@ -30,14 +30,14 @@ function memoryRegistryStore(): RithmicAccountRegistryStore {
   };
 }
 
-async function setup(options: { server?: Server; registryStore?: RithmicAccountRegistryStore; config?: Partial<LocalExecConfig>; price?: number | null } = {}) {
+async function setup(options: { server?: Server; registryStore?: RithmicAccountRegistryStore; config?: Partial<LocalExecConfig>; price?: number | null; protectionStore?: ProtectionStore } = {}) {
   const server = options.server ?? createFakeRithmicServer();
   const registryStore = options.registryStore ?? memoryRegistryStore();
   const registry = new RithmicAccountRegistry(registryStore);
   await registry.load();
   let exec: LocalExec | null = null;
   const broker = createRithmicBroker({
-    url: 'wss://fake', credentials, socketFactory: server.socketFactory, registry, protectionStore: memoryProtectionStore(),
+    url: 'wss://fake', credentials, socketFactory: server.socketFactory, registry, protectionStore: options.protectionStore ?? memoryProtectionStore(),
     onIncident: (incident) => exec?.onIncident(incident),
     requestTimeoutMs: 150, confirmWaitMs: 60, fillWaitMs: 60, reconnectMinMs: 20, reconnectMaxMs: 40,
     legsWaitMs: 25, exitSettleMs: 100, flattenStepMs: 120, flattenCancelWaitMs: 80, flattenPostCheckMs: 40,
@@ -103,11 +103,13 @@ describe('místní služba: validace vstupu', () => {
 
   it('strop pozice počítá otevřenou pozici i čekající vstupy', async () => {
     const t = await setup({ config: { maxPosition: 2 } });
-    expect((await t.run(entry())).ok).toBe(true);
-    expect((await t.run(entry())).ok).toBe(true);
+    expect((await t.run(entry({ quantity: 2 }))).ok).toBe(true);
     await flush();
+    // čekající vstup: další nejde (jeden vlastní vstup najednou), ať už by se do stropu vešel nebo ne
     expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
-    expect(t.frames()).toBe(2);
+    // ani Market s jinými SL/TP — později by se čekající vstup vyplnil do jeho pozice
+    expect(await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6985, targetPrice: 7025 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(1);
     t.broker.stop();
   });
 
@@ -231,6 +233,35 @@ describe('místní služba: přikoupení a posun dvou ochran', () => {
     const placed = await t.run(add());
     expect(placed).toMatchObject({ ok: true, result: { stopTicks: 80, targetTicks: 120 } });
     expect(t.frames()).toBe(frames + 1);
+    t.broker.stop();
+  });
+
+  it('SL pozici zavře během ukládání záměru přikoupení → nic neodejde a rezervace nezůstane', async () => {
+    const base = memoryProtectionStore();
+    let delay = 0;
+    const slow: ProtectionStore = { load: () => base.load(), save: async (state) => { if (delay) await sleep(delay); await base.save(state); } };
+    const t = await setup({ config: { positionSettleMs: 20 }, protectionStore: slow });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    const stop = t.exec.state().orders.find((o) => o.role === 'stop')!;
+    const frames = t.frames();
+    delay = 150;
+    const pending = t.run(add());
+    await sleep(40);
+    t.server.fill(stop.orderId, 6980); // SL se vyplní, zatímco adaptér ukládá záměr
+    const reply = await pending;
+    delay = 0;
+    expect(reply).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    await sleep(150);
+    expect(t.exec.state().positions).toEqual([]);
+    // (falešný server po vyplnění SL nezruší sestru TP jako Rithmic → incident osiřelé nohy; potvrdit)
+    await t.run({ op: 'ack' });
+    // rezervace nezůstala: nový běžný vstup po usazení projde
+    const next = await t.run(entry({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7025 }));
+    expect((next as { error?: string }).error ?? 'ok').toBe('ok');
     t.broker.stop();
   });
 

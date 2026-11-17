@@ -87,7 +87,7 @@ export type LocalExecCommand =
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
   | { op: 'move'; orderId: string; price: number }
-  /** Posune VŠECHNY pracující nohy jedné role (pozice s víc ochranami) na jednu cenu; `expect` = cena, kterou uživatel viděl. */
+  /** Posune VŠECHNY pracující nohy jedné role (pozice s víc ochranami) na jednu cenu; `expect` = nohy a ceny, které appka znala při odeslání (služba ověří, že se od té chvíle nezměnily — ne to, co uživatel viděl při kliku). */
   | { op: 'move-legs'; symbol: string; role: 'stop' | 'target'; price: number; expect: Array<{ orderId: string; price: number }> }
   | { op: 'cancel'; orderId: string }
   | { op: 'flatten'; clientId: string; symbol: string }
@@ -374,6 +374,9 @@ export class LocalExec {
     const legs = this.legsOf(accountId, symbol);
     if (!legs) return 'na kontraktu pracuje příkaz, který služba nezná — přikoupení nejde';
     if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
+    // Dřívější obchody, které už skončily (jen ještě nejsou trvale uzavřené), se nepočítají.
+    legs.brackets = legs.brackets.filter((bracket) => this.broker.bracketState(accountId, bracket.entryId).state !== 'done');
+    if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
     for (const bracket of legs.brackets) {
       if (bracket.stopTicks === undefined || bracket.targetTicks === undefined) return 'pozice nemá SL i TP — přikoupit jde jen do pozice se SL i TP';
       const state = this.broker.bracketState(accountId, bracket.entryId).state;
@@ -514,7 +517,11 @@ export class LocalExec {
           if (open + ahead + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open + ahead}, čeká ${waiting + onTheWay})`);
           // Přikoupení do otevřené pozice: jen za přísných podmínek (viz `scaleInProblem`); ověří se teď
           // a znovu těsně před zápisem (adaptér mezitím čeká na uložení záměru).
-          const adding = (this.positions.get(symbol)?.netQuantity ?? 0) !== 0;
+          // Jeden vlastní vstup najednou: při čekajícím nebo právě odesílaném vstupu další nejde (jinak by se
+          // čekající vstup později vyplnil do cizí pozice, nebo po jejím zavření otevřel nezamýšlený obchod).
+          if (waiting + onTheWay > 0) return refuse('čeká jiný vstup — další jde až po jeho vyplnění nebo zrušení');
+          // Přikoupení = jakákoli existující nebo právě vznikající expozice (i vyplnění, které pozice ještě nehlásí).
+          const adding = (this.positions.get(symbol)?.netQuantity ?? 0) !== 0 || ahead > 0;
           if (adding) {
             if (orderType !== 'Market') return refuse('přikoupení jde zatím jen Marketem');
             const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null);
@@ -611,7 +618,8 @@ export class LocalExec {
             // Pozice s víc ochranami: role se posouvá celá (`move-legs`), jinak by se ceny rozešly bez vědomí obsluhy.
             if (this.legsUncertain.has(order.symbol) || this.legsMoving.has(order.symbol)) return refuse('posun SL/TP na tomto kontraktu právě běží nebo skončil nejistě — ověř ceny u brokera a potvrď incident');
             const siblings = this.legsOf(accountId, order.symbol);
-            if (!siblings || (leg.role === 'stop' ? siblings.stops : siblings.targets).length > 1) return refuse('pozice má víc ochran — posun jde jen pro všechny najednou');
+            if (!siblings) return refuse('na kontraktu pracuje příkaz, který služba nezná — posun neodesílám');
+            if ((leg.role === 'stop' ? siblings.stops : siblings.targets).length > 1) return refuse('pozice má víc ochran — posun jde jen pro všechny najednou');
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
