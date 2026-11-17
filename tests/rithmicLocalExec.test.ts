@@ -669,6 +669,68 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
   });
 });
 
+describe('místní služba: čekající přikoupení Limitem se po zavření pozice samo zruší', () => {
+  const addLimit = (extra: Record<string, unknown> = {}) => entry({ clientId: `add-${Math.random().toString(36).slice(2, 10)}`, orderType: 'Limit', limitPrice: 6985, stopPrice: 6980, targetPrice: 7030, ...extra });
+  async function inPosition() {
+    const t = await setup({ config: { positionSettleMs: 20, protectiveGraceMs: 40 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    return t;
+  }
+
+  it('Limit do otevřené pozice jde jen s označením přikoupení a se stejným SL/TP; označení jinam nepatří', async () => {
+    const t = await inPosition();
+    const frames = t.frames();
+    expect(await t.run(entry({ limitPrice: 6985, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/označené/) });
+    expect(await t.run(addLimit({ stopPrice: 6978 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(addLimit({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    const added = await t.run(addLimit());
+    expect(added.ok).toBe(true);
+    await flush();
+    const addId = (added as { result: { orderId: string } }).result.orderId;
+    expect(t.server.orders.get(addId)!.userTag.startsWith('ui-add-')).toBe(true);
+    // při čekajícím přikoupení další vstup ne
+    expect(await t.run(addLimit({ limitPrice: 6984 }))).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+    // bez pozice označení přikoupení neprojde
+    const flat = await setup();
+    expect(await flat.run(addLimit())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/patří jen/) });
+    flat.broker.stop();
+  });
+
+  it('pozici zavře SL → čekající přikoupení služba sama zruší a zapíše to', async () => {
+    const t = await inPosition();
+    const added = await t.run(addLimit());
+    await flush();
+    const addId = (added as { result: { orderId: string } }).result.orderId;
+    const stop = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open')!;
+    t.server.fill(stop.basketId, 6980);
+    await sleep(250);
+    expect(t.server.orders.get(addId)!.status).toBe('cancelled');
+    expect(t.exec.state().orders).toEqual([]);
+    expect(t.exec.state().incidents.map((incident) => incident.kind)).toContain('pending-add-cancelled');
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('zrušení čekajícího přikoupení neprojde → incident, vstupy stojí, další pokus se nedělá', async () => {
+    const t = await inPosition();
+    const added = await t.run(addLimit());
+    await flush();
+    const addId = (added as { result: { orderId: string } }).result.orderId;
+    t.server.controls.cancelStuck = true;
+    const stop = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open')!;
+    t.server.fill(stop.basketId, 6980);
+    await sleep(2_000);
+    expect(t.server.orders.get(addId)!.status).toBe('open');
+    expect(t.exec.state().blocked).toMatch(/^pending-add-cancel-failed/);
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: částečné zavření přes vlastní TP jedné ochrany', () => {
   async function twoParts() {
     const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 300 } });

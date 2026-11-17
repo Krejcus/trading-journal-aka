@@ -446,11 +446,15 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
     const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
     if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
-    const reason = legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
+    // Čekající přikoupení (Limit do otevřené pozice): vlastní čára s ×; po zavření pozice ho služba sama zruší.
+    const waitingAdd = orders.find((order) => order.role === 'entry' && order.status === 'working' && order.tag?.startsWith('ui-add-') && order.price !== undefined);
+    const reason = waitingAdd ? 'Čeká přikoupení — další jde až po jeho vyplnění nebo zrušení.'
+      : legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
       : legView.stops.length >= 2 ? 'Pozice už má dvě části — další přikoupení služba nepustí.'
       : quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.'
       : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
-    return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason, pendingAdd: null };
+    return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason,
+      pendingAdd: waitingAdd ? { price: waitingAdd.price ?? null, quantity: waitingAdd.quantity, orderType: 'Limit' } : null };
   }, [limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
   scaleInRef.current = scaleIn;
 
@@ -516,9 +520,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       // Přikoupení: jen Market na stranu pozice a jen když ho režim přikoupení nabízí; všechno znovu ověří služba.
       const add = scaleInRef.current;
       const sameSide = add && (draft.side === 'Buy') === (add.side === 'buy');
-      if (!add?.canAdd || !sameSide || draft.orderType !== 'Market') return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: add && !add.canAdd ? add.reason ?? IN_POSITION : IN_POSITION }] };
+      if (!add?.canAdd || !sameSide || (draft.orderType !== 'Market' && draft.orderType !== 'Limit')) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: add && !add.canAdd ? add.reason ?? IN_POSITION : IN_POSITION }] };
     }
-    const clientId = operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(-28) || newId();
+    // Čekající přikoupení (Limit do otevřené pozice) nese označení vazby na pozici — služba ho po zavření pozice zruší.
+    const pendingAdd = draft.orderType === 'Limit' && stateRef.current?.positions.some((item) => item.symbol === symbolRef.current) === true;
+    const clientId = `${pendingAdd ? 'add-' : ''}${operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(pendingAdd ? -24 : -28) || newId()}`;
     const tag = `ui-${clientId}`;
     const sym = symbolRef.current;
     measure(draft.orderType === 'Market' ? 'Market vstup → pozice + SL/TP' : `${draft.orderType} vstup → čára`, (s) => (draft.orderType !== 'Market'

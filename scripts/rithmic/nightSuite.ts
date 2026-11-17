@@ -256,6 +256,25 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
       need(await until(flat), 'po zrušení něco zbylo');
       return 'holý Limit 3 ks posunut';
     }],
+    ['S14', 'Čekající přikoupení Limitem: zadání, pozici zavře TP → služba přikoupení sama zruší', async () => {
+      await marketBracket();
+      const sl = working('stop')[0].price!;
+      const tp = working('target')[0].price!;
+      const addPrice = grid(px() - 12);
+      need(addPrice > sl, 'přikoupení by bylo pod SL');
+      ok(await send({ op: 'entry', clientId: `add-${cid()}`.slice(0, 30), symbol: sym, side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: addPrice, stopPrice: sl, targetPrice: tp }, 'přikoupení Limitem'), 'přikoupení Limitem');
+      need(await until(() => working('entry').length === 1 && net() === 1), `po zadání přikoupení: ${brief(cur())}`);
+      need(working('entry')[0].tag?.startsWith('ui-add-') === true, 'přikoupení nenese značku vazby');
+      // pozici zavře TP posunutý za trh (vyplní se u trhu) → služba má přikoupení zrušit sama
+      const target = working('target')[0];
+      const before = cur().incidents.length;
+      ok(await send({ op: 'move', orderId: target.orderId, price: grid(px() - 2) }, 'TP za trh (zavření pozice)'), 'TP za trh');
+      need(await until(() => net() === 0, 10_000), `pozice se nezavřela: ${brief(cur())}`);
+      need(await until(flat, 8_000), `přikoupení po zavření pozice zůstalo: ${brief(cur())}`);
+      const kinds = cur().incidents.slice(before).map((i) => i.kind);
+      need(kinds.includes('pending-add-cancelled'), `chybí záznam o zrušení přikoupení: ${kinds.join(', ')}`);
+      return 'po zavření pozice služba čekající přikoupení zrušila';
+    }],
   ];
 
   let failed = 0;
@@ -267,7 +286,7 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
     const incidentsBefore = cur().incidents.length;
     try {
       const note = await run();
-      const incidents = cur().incidents.slice(incidentsBefore).map((i) => i.kind);
+      const incidents = cur().incidents.slice(incidentsBefore).map((i) => i.kind).filter((kind) => kind !== 'pending-add-cancelled');
       const clean = incidents.length === 0 && !cur().blocked;
       if (!clean) failed += 1;
       console.log(`${id} ${clean ? 'PROŠEL' : 'PROŠEL S INCIDENTEM'} — ${title}\n     ${note}${clean ? '' : ` | incidenty: ${incidents.join(', ')} | blok: ${cur().blocked}`}\n     časy: ${times.join(' · ')}`);

@@ -186,7 +186,9 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/entryBareSupported entryBarePendingSupported/);
     // V pozici další vstup ne (přikoupení služba neumí) a okamžité odeslání z menu grafu se v solo nenabízí.
     // V pozici jen přikoupení: Market na stranu pozice a jen když ho režim přikoupení nabízí (službu to váže znovu).
-    expect(hook).toMatch(/if \(!add\?\.canAdd \|\| !sameSide \|\| draft\.orderType !== 'Market'\) return \{ \.\.\.base, status: 'blocked'/);
+    // Přikoupení: Market, nebo Limit (čekající přikoupení se po zavření pozice samo zruší); o všem rozhoduje služba.
+    expect(hook).toMatch(/if \(!add\?\.canAdd \|\| !sameSide \|\| \(draft\.orderType !== 'Market' && draft\.orderType !== 'Limit'\)\) return \{ \.\.\.base, status: 'blocked'/);
+    expect(hook).toMatch(/const pendingAdd = draft\.orderType === 'Limit' && stateRef\.current\?\.positions\.some/);
     expect(screen).toMatch(/const instantBareReady = !solo && entryBarePendingSupported/);
     expect(liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT)).not.toMatch(/Flatten/);
     expect(chart).toMatch(/available: usable, singleLeg: true/);

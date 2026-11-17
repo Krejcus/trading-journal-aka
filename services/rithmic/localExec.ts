@@ -155,6 +155,13 @@ const BLOCKING: ReadonlySet<string> = new Set([
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,30}$/;
 /** Značka samostatné ochrany pozice (jeden SL nebo jeden TP zadaný k už otevřené pozici). */
 export const PROTECT_TAG = 'uiprot-';
+/**
+ * Čekající přikoupení Limitem (vstup do UŽ otevřené pozice). Značka je trvalá vazba na pozici: když se pozice
+ * zavře, služba takový příkaz SAMA zruší (rozhodnutí Filipa 17. 11. 2026: „ano, ať se zruší po zavření") —
+ * jinak by se později vyplnil a otevřel obchod, který nikdo nezamýšlel.
+ */
+export const ADD_TAG = 'ui-add-';
+export const ADD_CLIENT_PREFIX = 'add-';
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 export class LocalExec {
@@ -436,8 +443,49 @@ export class LocalExec {
     if (this.incidents.length !== before) this.changed();
   }
 
+  private readonly addCancelTried = new Set<string>();
+  /**
+   * Pozice se zavřela a čekající přikoupení dál pracuje → zrušit (jeden zápis na příkaz, nic se neopakuje).
+   * Zavření musí být potvrzené z obou stran: pozice podle brokera i podle potvrzených vyplnění je nula.
+   * Když zrušení neprojde, je to incident a nové vstupy stojí — čekající přikoupení se může vyplnit.
+   */
+  private watchPendingAdds(): void {
+    const accountId = this.broker.accountIds()[0];
+    if (accountId === undefined || !this.connected) return;
+    for (const order of this.orders.values()) {
+      if (TERMINAL.has(order.status) || !order.tag?.startsWith(ADD_TAG) || this.addCancelTried.has(order.brokerOrderId)) continue;
+      if ((this.positions.get(order.symbol)?.netQuantity ?? 0) !== 0 || this.broker.executionNet(accountId, order.symbol) !== 0) continue;
+      this.addCancelTried.add(order.brokerOrderId);
+      const report = (detail: string): void => {
+        const message = `pozice na ${order.symbol} je zavřená, ale čekající přikoupení ${order.brokerOrderId} se nepodařilo zrušit (${detail}) — zruš ho ručně, jinak může otevřít novou pozici`;
+        this.incidents.push({ kind: 'pending-add-cancel-failed', message, at: this.now() });
+        if (this.incidents.length > 30) this.incidents.shift();
+        this.blocked = `pending-add-cancel-failed: ${message}`.slice(0, 240);
+        this.changed();
+      };
+      void this.broker.cancelOrder(accountId, order.brokerOrderId).then(async () => {
+        // Přijetí požadavku není zrušení: úspěch až podle stavu příkazu.
+        const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+        for (;;) {
+          const current = this.orders.get(order.brokerOrderId);
+          if (current && TERMINAL.has(current.status)) {
+            if (current.status === 'canceled' && current.filledQuantity === 0) {
+              this.incidents.push({ kind: 'pending-add-cancelled', message: `pozice na ${order.symbol} se zavřela — čekající přikoupení jsem zrušil`, at: this.now() });
+              if (this.incidents.length > 30) this.incidents.shift();
+              this.changed();
+            } else report('přikoupení se mezitím vyplnilo — zkontroluj pozici a její SL/TP');
+            return;
+          }
+          if (this.now() >= deadline) { report('zrušení není potvrzené'); return; }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }, (error: unknown) => report(error instanceof Error ? error.message : String(error)));
+    }
+  }
+
   private watchProtective(): void {
     this.watchConsent();
+    this.watchPendingAdds();
     const grace = this.config.protectiveGraceMs ?? 3_000;
     let recheckIn: number | null = null;
     for (const order of this.orders.values()) {
@@ -808,9 +856,15 @@ export class LocalExec {
           // Přikoupení = jakákoli existující nebo právě vznikající expozice (i vyplnění, které pozice ještě nehlásí).
           const adding = net !== 0;
           if (adding) {
-            if (orderType !== 'Market') return refuse('přikoupení jde zatím jen Marketem');
+            if (orderType === 'Stop') return refuse('přikoupení jde Marketem nebo Limitem');
             const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null);
             if (problem) return refuse(problem);
+          }
+          // Čekající přikoupení musí nést značku vazby na pozici (a nic jiného ji nést nesmí) — podle ní se po zavření
+          // pozice samo ruší.
+          const pendingAdd = adding && orderType === 'Limit';
+          if (clientId.startsWith(ADD_CLIENT_PREFIX) !== pendingAdd) {
+            return refuse(pendingAdd ? 'čekající přikoupení musí být označené jako přikoupení (clientId add-…)' : 'označení přikoupení (add-…) patří jen Limitu do otevřené pozice');
           }
           // Jen ověření (výměna čekajícího vstupu): všechny kontroly prošly, nic se neodesílá.
           if (this.replaceDryRun !== null) return { ok: true, result: { dryRun: true } };
@@ -869,8 +923,11 @@ export class LocalExec {
           if (price === current && stopPrice === planned.plannedStop && targetPrice === planned.plannedTarget) return refuse('nic se nemění');
           // SL/TP nejde přidat ani odebrat — jen posunout to, co vstup má.
           if ((command.stopPrice !== undefined && planned.plannedStop === undefined) || (command.targetPrice !== undefined && planned.plannedTarget === undefined)) return refuse('vstup tuhle ochranu nemá — nejde ji takto přidat');
+          // Čekající přikoupení si vazbu na pozici (značku) nese i po výměně.
+          const nextClientId = order.tag.startsWith(ADD_TAG) ? `${ADD_CLIENT_PREFIX}${clientId.slice(0, 26)}` : clientId;
+          if (!order.tag.startsWith(ADD_TAG) && clientId.startsWith(ADD_CLIENT_PREFIX)) return refuse('označení přikoupení (add-…) sem nepatří');
           const next = {
-            op: 'entry' as const, clientId, symbol: order.symbol, side: order.side, quantity: order.quantity, orderType: stopEntry ? 'Stop' as const : 'Limit' as const,
+            op: 'entry' as const, clientId: nextClientId, symbol: order.symbol, side: order.side, quantity: order.quantity, orderType: stopEntry ? 'Stop' as const : 'Limit' as const,
             ...(stopEntry ? { triggerPrice: price } : { limitPrice: price }),
             ...(stopPrice !== undefined ? { stopPrice } : {}), ...(targetPrice !== undefined ? { targetPrice } : {}),
           };
