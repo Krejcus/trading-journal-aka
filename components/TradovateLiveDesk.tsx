@@ -177,6 +177,9 @@ import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
 import { LIVE_CHART_ENABLED } from '../lib/liveChartEnabled';
+import { rithmicLocalAvailable } from '../lib/rithmicLocalLink';
+// Staticky (desk nesmí nic líně načítat — studený start); mimo vývojovou appku se nikdy nevykreslí.
+import RithmicLiveChart from './RithmicLiveChart';
 import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash } from './LiveTradingScreenSlot';
 
 /** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
@@ -425,11 +428,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const chartAvailable = LIVE_CHART_ENABLED && !narrow && !isNativeShell();
   // Telefon a nativní appka: graf dneška z deníku místo desktopového LIVE grafu.
   const phoneChartAvailable = !chartAvailable && Boolean(phoneChart);
+  // Rithmic graf: jen když Tradovate graf neexistuje. Čtení kopírky (chartOpenRef, poll) na něm NEvisí.
+  const [rithmicConfigured] = useState(rithmicLocalAvailable);
+  const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !narrow && rithmicConfigured;
   const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
   useEffect(() => {
-    if (tab === 'chart' && !chartAvailable && !phoneChartAvailable) setTab('overview');
+    if (tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable) setTab('overview');
     if (tab !== 'chart') setPhoneMenuOpen(false);
-  }, [chartAvailable, phoneChartAvailable, tab]);
+  }, [chartAvailable, phoneChartAvailable, rithmicChartAvailable, tab]);
   // Načítá se jen panel aktivní záložky, souběžně se stavem LIVE. Desktop míří
   // rovnou do grafu a vedlejší panely do té doby vůbec nepotřebuje.
   useEffect(() => {
@@ -2085,6 +2091,7 @@ acceptAgentStatus((await executeAgent({
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     ...(chartAvailable || phoneChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
+    ...(rithmicChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
     { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'risk', label: 'Risk', icon: Shield },
@@ -2206,7 +2213,7 @@ acceptAgentStatus((await executeAgent({
     statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt });
   return (
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
-      <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable) && tab === 'chart'} />
+      <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable || rithmicChartAvailable) && tab === 'chart'} />
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
       <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.
@@ -2281,6 +2288,29 @@ acceptAgentStatus((await executeAgent({
           userId={userId}
           alertWatch={priceAlertWatch}
           />
+        </ErrorBoundary>
+      ) : rithmicChartAvailable && tab === 'chart' ? (
+        // Rithmic graf: vlastní příkazy do místního procesu. Skutečný stav kopírky, OFF a pád → nouzová
+        // lišta jako u LIVE grafu (INV-UI-02). Sdílený zámek ani příkazy kopírky sem nejdou.
+        <ErrorBoundary name="RithmicLiveChart" onError={() => setChartCrash('outer')} fallback={<LiveSlotFailure label="Rithmic graf" />}>
+            <RithmicLiveChart
+              open
+              onCrash={noteChartCrash}
+              isDark={theme !== 'light'}
+              tabs={tabs}
+              onNavigate={navigateToTab}
+              navigationBlocked={configMutationPending || copyGroupStatusPollFence.inFlight}
+              copier={{
+                status: agentStatus?.controller ?? null,
+                available: runtimeAvailable,
+                pending: !agentStatusResolved,
+                transport: agentTransport,
+                journalHealth: agentStatus?.journalHealth,
+                reconnectRequired: (live.status?.connections ?? []).filter(connection => live.connectionHealth[connection.id]?.state === 'reconnect-required').length,
+              }}
+              disarm={liveChartDisarmDuringArm(chartData.disarm, armFlowActive)}
+              onDisarm={disarmFromChart}
+            />
         </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
         <ErrorBoundary name="LivePhoneChart" onError={() => { rememberLiveChartCrash(); noteChartCrash(); }} fallback={<LiveSlotFailure label="LIVE graf" />}>

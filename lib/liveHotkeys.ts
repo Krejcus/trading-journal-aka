@@ -58,6 +58,11 @@ export const LIVE_HOTKEY_HELP: ReadonlyArray<{ keys: string; text: string }> = [
  * až ~35 s relaye): Flatten All jím neprochází (INV-UI-02), proto ho text nabízí.
  */
 export const LIVE_HOTKEY_BUSY_TEXT = 'Předchozí živá akce ještě běží — nic se neodeslalo. Zavřít jde hned Flattenem (Shift+F).';
+/** Jeden účet mimo kopírku (Rithmic): Shift+F míří na skupinu kopírky, proto se tu NEnabízí. */
+export const LIVE_HOTKEY_BUSY_TEXT_SOLO = 'Předchozí akce ještě běží — nic se neodeslalo. Počkej na její výsledek.';
+export const LIVE_HOTKEY_SOLO_FLATTEN_TEXT = 'Shift+F tady nic nezavírá — pozici zavři × nebo Shift+X. Flatten All kopírky je na Live Dashboardu.';
+/** Nápověda kláves pro jeden účet mimo kopírku: bez Shift+F. */
+export const liveHotkeyHelp = (solo: boolean): ReadonlyArray<{ keys: string; text: string }> => (solo ? LIVE_HOTKEY_HELP.filter(item => item.keys !== 'Shift+F') : LIVE_HOTKEY_HELP);
 export const LIVE_HOTKEY_HELP_NOTE = 'Vstup odešle jen tlačítko v panelu objednávky. Držená klávesa se nepočítá.';
 
 // ---------------------------------------------------------------------------
@@ -261,6 +266,8 @@ export interface LiveHotkeyState {
   hasDraft: boolean;
   /** Běží jiná živá akce (`liveBusyRef`). Nouzový Flatten tím blokovaný není. */
   busy: boolean;
+  /** Jeden účet mimo kopírku: hláška zámku nesmí navádět na Flatten skupiny. */
+  solo?: boolean;
 }
 
 export type LiveHotkeyOutcome =
@@ -332,7 +339,7 @@ export function resolveLiveHotkey(intent: LiveHotkeyIntent, state: LiveHotkeySta
     case 'close-position':
     case 'cancel-pending': {
       const command = intent.kind;
-      if (state.busy) return { kind: 'blocked', command, text: LIVE_HOTKEY_BUSY_TEXT };
+      if (state.busy) return { kind: 'blocked', command, text: state.solo ? LIVE_HOTKEY_BUSY_TEXT_SOLO : LIVE_HOTKEY_BUSY_TEXT };
       const target = hotkeyTarget(command, state);
       if ('blocked' in target) return { kind: 'blocked', command, text: target.blocked };
       const step = liveRepeatClick(repeat.current, liveHotkeyConfirmKey(command, target.line, target.price), now);

@@ -25,7 +25,7 @@ import LiveHotkeysHelp, {
 import LiveGroupChip from './LiveGroupChip';
 import LiveTradeToasts from './LiveTradeToasts';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
-import { manageNoticeToast } from '../lib/liveTradeToasts';
+import { manageNoticeToast, type TradeToast } from '../lib/liveTradeToasts';
 import { LivePcAlertDialogs, LivePcAlertsButton, useLivePcPriceAlerts } from './LivePcPriceAlerts';
 import { QuantumSpinner } from './QuantumLoader';
 import ChartDataStatus from './ChartDataStatus';
@@ -59,7 +59,7 @@ import {
 } from '../lib/liveOrderTicket';
 import { liveTicketDraftBase, liveTicketInitialQuantity, readLiveTicketPrefs } from '../lib/liveTicketPrefs';
 import { defaultLiveBracketTemplate } from '../lib/liveBracketTemplates';
-import { liveHotkeyAction, liveHotkeyDraft, resolveLiveHotkey } from '../lib/liveHotkeys';
+import { LIVE_HOTKEY_SOLO_FLATTEN_TEXT, liveHotkeyAction, liveHotkeyDraft, resolveLiveHotkey } from '../lib/liveHotkeys';
 import { requestLiveSafetyConfirmation } from '../lib/liveSafetyShortcut';
 import { LIVE_ACTION_CHANGED_TEXT, type LiveClickState } from '../lib/liveClickGate';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
@@ -241,11 +241,21 @@ interface Props {
    * Obchodování na jednom účtu bez kopírky (Rithmic): název účtu pro lístek. Skryje čip Kopírka
    * a hlášky nemluví o leaderovi a kopiích. Chybí = dosavadní texty.
    */
-  soloAccountLabel?: string | null;
+  solo?: LiveTradingSolo | null;
+  /** Další karty vlevo dole (hlášky místní služby). Jen zobrazení. */
+  extraToasts?: readonly TradeToast[] | null;
 }
+
+/**
+ * Jeden účet mimo kopírku (Rithmic). `copier` zůstává SKUTEČNÝ stav kopírky Tradovate (incident,
+ * OFF a čipy v hlavičce dál platí, INV-UI-02); dostupnost příkazů tohoto grafu říká `available`.
+ */
+export interface LiveTradingSolo { label: string; available: boolean }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
 const REPLAY_TICKET_TEXT = 'Přehrávání v grafu — panel objednávky je vypnutý. Flatten All je na Live Dashboardu.';
+
+const REPLAY_TICKET_TEXT_SOLO = 'Přehrávání v grafu — panel objednávky je vypnutý.';
 
 /** Automatika grafu na PC: box s pozicí a zvuky SL/TP. Jen zobrazení. */
 const LiveAutomationButton: React.FC<{ isDark: boolean }> = ({ isDark }) => {
@@ -312,11 +322,17 @@ const LiveTradingScreen: React.FC<Props> = ({
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
-  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null, soloAccountLabel = null,
+  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null, solo = null, extraToasts = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
-  const dayChart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live' });
+  const soloAccountLabel = solo?.label ?? null;
+  // Brána zobrazení událostí a × pozice: v režimu jednoho účtu ji dává místní služba, ne kopírka.
+  const actionsAvailable = solo ? solo.available : copier.available;
+  const closeAllowed = solo ? solo.available : copier.available && copier.status?.armed === true && copier.status.shadowMode !== true;
+  // Události kopírky do grafu jiného účtu nepatří (žádný fallback na `recentCopyEvents`).
+  const shownEvents = !actionsAvailable ? undefined : solo ? copyEvents ?? undefined : copyEvents ?? copier.status?.recentCopyEvents;
+  const dayChart = useDayChartData(day, NO_TRADES, NO_TRADES, now, { perfScope: 'live', disabled: marketData != null });
   // Jiný zdroj svíček a ceny než uložený den (zkušební napojení na Rithmic Test). Jen zobrazení.
   const chart = marketData ?? dayChart;
   const chartComponentMeasured = useRef(false);
@@ -682,13 +698,15 @@ const LiveTradingScreen: React.FC<Props> = ({
     bareLegs: legTrade != null,
     // × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jinak by kopie zůstaly otevřené (Flatten na přehledu).
     canClose: manageCloseSupported && copier.available && copier.status?.armed === true && copier.status.shadowMode !== true,
+    // Jeden účet mimo kopírku: × dává místní služba, stav kopírky do toho nemluví.
+    ...(solo ? { canClose: manageCloseSupported === true && solo.available } : {}),
     entryAvg: manageEntryAvgPrice ?? null,
     pointValue: INSTRUMENT.pointValue,
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
     pendingAdd: entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, solo?.available, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
@@ -704,6 +722,8 @@ const LiveTradingScreen: React.FC<Props> = ({
     fills: copier.available ? liveFills?.fills : undefined,
     fillsSymbol: liveFills?.symbol ?? null,
     available: copier.available,
+    // Jeden účet mimo kopírku: jen jeho vlastní události, brána = místní služba.
+    ...(solo ? { events: shownEvents, fills: undefined, available: solo.available } : {}),
     enabled: !leaving,
     requireFocus: true,
   });
@@ -751,19 +771,21 @@ const LiveTradingScreen: React.FC<Props> = ({
     }
   };
 
-  const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch });
+  // Režim jednoho účtu ukazuje jiný (simulovaný) trh: alerty se tu nezakládají, nekreslí ani nehlásí.
+  const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch, muted: solo != null });
   // Výsledek příkazu jde do stejného sloupce karet jako obchody a upozornění. V režimu jednoho
   // účtu se potvrzení neukazuje zvlášť — co se stalo, řekne karta události (Příkaz zrušen, SL posunut…).
   const toastExtras = useMemo(() => {
     const notice = lineNotice && !(soloAccountLabel && lineNotice.tone === 'ok')
       ? manageNoticeToast({ tone: lineNotice.tone, at: lineNotice.at, text: soloAccountLabel ? liveSoloNoticeText(lineNotice.text) : lineNotice.text })
       : null;
-    return notice ? [...priceAlerts.cards, notice] : priceAlerts.cards;
-  }, [lineNotice, priceAlerts.cards, soloAccountLabel]);
+    const cards = soloAccountLabel ? extraToasts ?? [] : priceAlerts.cards;
+    return notice ? [...cards, notice] : cards;
+  }, [lineNotice, priceAlerts.cards, soloAccountLabel, extraToasts]);
   const registerBoxFollow = useLivePositionBoxFollow({
     position,
     target: String(targetKey),
-    events: copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined,
+    events: shownEvents,
   });
   // Vrstva okna grafu je jediné místo, které zná `api` každého okna.
   const basePriceAlertBridge = priceAlerts.bridge;
@@ -771,9 +793,10 @@ const LiveTradingScreen: React.FC<Props> = ({
     ...basePriceAlertBridge,
     renderLines: (api: Parameters<typeof basePriceAlertBridge.renderLines>[0], dark: boolean) => <>
       <LiveBoxFollowPane api={api} register={registerBoxFollow} />
-      {basePriceAlertBridge.renderLines(api, dark)}
+      {solo ? null : basePriceAlertBridge.renderLines(api, dark)}
     </>,
-  }), [basePriceAlertBridge, registerBoxFollow]);
+    ...(solo ? { quickAdd: () => undefined, move: () => undefined, remove: () => undefined, openEdit: () => undefined } : {}),
+  }), [basePriceAlertBridge, registerBoxFollow, solo != null]); // eslint-disable-line react-hooks/exhaustive-deps
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
     priceAlerts: priceAlertBridge,
@@ -971,7 +994,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     }
     // BE stejnou funkcí jako tlačítko na čáře, spočítané v okamžiku stisku.
     const breakEven = summary ? liveBreakEven(guardSummaryAt(now) ?? summary, manageEntryAvgPrice ?? null) : null;
-    const outcome = resolveLiveHotkey(intent, { lines: orderLines, breakEven, hasDraft: draft != null, busy: liveBusyRef.current }, hotkeyRepeatRef, now);
+    const outcome = resolveLiveHotkey(intent, { lines: orderLines, breakEven, hasDraft: draft != null, busy: liveBusyRef.current, solo: solo != null }, hotkeyRepeatRef, now);
     if (outcome.kind === 'none') return;
     event.preventDefault();
     dispatchLiveHotkeyOutcome(outcome, {
@@ -981,7 +1004,9 @@ const LiveTradingScreen: React.FC<Props> = ({
       cancelLine: line => liveOrderEntry.onOrderLineCancel(line),
       notice: notice => setLineNotice({ at: now, ...notice }),
       // Shift+F jen požádá LiveSafetyControls o dialog Flatten All (INV-UI-02); nic neprovede.
+      // Jeden účet mimo kopírku: dialog by zavíral skupinu Tradovate, ne pozici v tomto grafu.
       openFlatten: () => requestLiveSafetyConfirmation('flatten-group', 'hotkey'),
+      ...(solo ? { openFlatten: () => { setLineNotice({ at: now, tone: 'warn', text: LIVE_HOTKEY_SOLO_FLATTEN_TEXT }); return true; } } : {}),
       toggleHelp: () => setHotkeysHelp(open => !open),
     });
   };
@@ -1031,13 +1056,14 @@ const LiveTradingScreen: React.FC<Props> = ({
         {workerChip && <button type="button" onClick={() => onNavigate('overview')} title={workerChip.title} className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[workerChip.tone].ring}`}>
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
-        {copierChip && !soloAccountLabel && <button
+        {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
+        {copierChip && <button
           type="button"
           onClick={() => onNavigate('overview')}
           title={`${copierChip.title ?? 'Stav kopírky ze stavu workeru.'} Zapnutí a vypnutí je na Live Dashboardu.`}
           className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[copierChip.tone].ring} ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-white/70'}`}
         >
-          <i className={`h-[7px] w-[7px] rounded-full ${TONE[copierChip.tone].dot}`} />Kopírka <b className={TONE[copierChip.tone].text}>{copierChip.value}</b>
+          <i className={`h-[7px] w-[7px] rounded-full ${TONE[copierChip.tone].dot}`} />{soloAccountLabel ? 'Kopírka Tradovate' : 'Kopírka'} <b className={TONE[copierChip.tone].text}>{copierChip.value}</b>
         </button>}
         {disarm && onDisarm && <div className="relative">
           <button
@@ -1071,7 +1097,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           type="button"
           // U3-PC pojistka: během přehrávání v grafu se panel neotevře (nic se z něj neodešle).
           disabled={chartReplay}
-          title={chartReplay ? REPLAY_TICKET_TEXT : undefined}
+          title={chartReplay ? (solo ? REPLAY_TICKET_TEXT_SOLO : REPLAY_TICKET_TEXT) : undefined}
           onClick={() => setTicketOpen(open => !open)}
           className={`ml-1 flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-extrabold disabled:cursor-not-allowed disabled:opacity-45 ${ticketOpen
             ? isDark ? 'bg-white/10 text-white' : 'bg-slate-900/[0.06] text-slate-900'
@@ -1095,7 +1121,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           <ChartDataStatus quality={chart.quality} />
           <div className="relative min-h-0 flex-1">
           {/* Všechna oznámení v grafu jsou karty vlevo dole — i výsledek příkazu (dřív text nahoře uprostřed). */}
-          <LiveTradeToasts events={copier.available ? copyEvents ?? copier.status?.recentCopyEvents : undefined} extra={toastExtras} capExtra copierArmed={copier.available && copier.status?.armed === true && copier.status.shadowMode !== true} isDark={isDark} hideAccounts={Boolean(soloAccountLabel)} />
+          <LiveTradeToasts events={shownEvents} extra={toastExtras} capExtra copierArmed={closeAllowed} isDark={isDark} hideAccounts={Boolean(soloAccountLabel)} />
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}
@@ -1104,15 +1130,15 @@ const LiveTradingScreen: React.FC<Props> = ({
               entryMs={anchor.entryTime!}
               exitMs={anchor.timestamp}
               initialRoot={ROOT}
-              layoutScope="live-trading"
+              layoutScope={solo ? 'live-trading-rithmic' : 'live-trading'}
               defaultLayoutId="1"
               initialCandles={chart.candles}
               isDark={isDark}
               toolbarEnd={<>
-                <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />
+                {!solo && <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />}
                 <LiveFillAnnounceToggle isDark={isDark} />
                 <LiveAutomationButton isDark={isDark} />
-                <LiveHotkeysHelp isDark={isDark} enabled={hotkeysOn} onEnabledChange={changeHotkeys} open={hotkeysHelp} onOpenChange={setHotkeysHelp} />
+                <LiveHotkeysHelp isDark={isDark} enabled={hotkeysOn} onEnabledChange={changeHotkeys} open={hotkeysHelp} onOpenChange={setHotkeysHelp} solo={solo != null} />
                 <LiveThemeToggle isDark={isDark} preference={themePreference} />
               </>}
               tradeIndicators={tradeIndicators}
@@ -1198,7 +1224,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         </aside>
         </div>
       </div>
-      <LivePcAlertDialogs alerts={priceAlerts} lastPrice={lastPrice} conditionMarket={candleClose} watching={alertWatch} isDark={isDark} />
+      {!solo && <LivePcAlertDialogs alerts={priceAlerts} lastPrice={lastPrice} conditionMarket={candleClose} watching={alertWatch} isDark={isDark} />}
     </div>
   );
   return createPortal(screen, document.body);

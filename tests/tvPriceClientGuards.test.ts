@@ -223,12 +223,16 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
           // Telefon čte ověřený podepsaný tick samostatně; svíčkový feed pouze kreslí.
           : file === 'components/day/LivePhoneChart.tsx'
             ? /liveCandles=\{ctl\.chart\.liveFeed\}/
+          // Rithmic graf (jen vývojová appka): vlastní zdroj svíčky z místního procesu, žádný kanál TV.
+          : file === 'hooks/useRithmicLocalTrading.ts'
+            ? /liveFeed: feedBox\.feed,$/
           : /liveCandles=\{ctl\.chart\.liveFeed\}|useLiveCandleBinding\(/;
       expect(line, file).toMatch(allowed);
     }
     // Neutrální rozhraní grafu používají jen grafy dne a jejich napojení.
     expect(importersOf('lib/liveCandleFeed.ts')).toEqual([
-      'components/AlphaTradeChartWorkspace.tsx', 'hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useTvLiveCandleFeed.ts', 'lib/tvLiveCandleReplay.ts',
+      // useRithmicLocalTrading: Rithmic graf vývojové appky skládá vlastní zdroj svíčky (jen typ rozhraní).
+      'components/AlphaTradeChartWorkspace.tsx', 'hooks/useLiveCandleBinding.ts', 'hooks/useLiveTicketQuote.ts', 'hooks/useRithmicLocalTrading.ts', 'hooks/useTvLiveCandleFeed.ts', 'lib/tvLiveCandleReplay.ts',
     ]);
     expect(importersOf('hooks/useLiveCandleBinding.ts')).toEqual([
       'components/AlphaTradeChartWorkspace.tsx', 'components/day/DayCompactChart.tsx', 'components/day/DayFullscreenChart.tsx',

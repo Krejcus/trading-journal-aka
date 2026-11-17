@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Keyboard } from 'lucide-react';
 import {
   LIVE_HOTKEY_DIALOG_SELECTOR,
-  LIVE_HOTKEY_HELP,
+  liveHotkeyHelp,
   LIVE_HOTKEY_HELP_NOTE,
   type LiveHotkeyIntent,
   type LiveHotkeyOutcome,
@@ -174,7 +174,9 @@ const LiveHotkeysHelp: React.FC<{
   onEnabledChange: (enabled: boolean) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}> = ({ isDark, enabled, onEnabledChange, open, onOpenChange }) => {
+  /** Jeden účet mimo kopírku: nápověda bez Shift+F (míří na skupinu kopírky). */
+  solo?: boolean;
+}> = ({ isDark, enabled, onEnabledChange, open, onOpenChange, solo = false }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
@@ -229,7 +231,7 @@ const LiveHotkeysHelp: React.FC<{
         </button>
       </div>
       <ul className={`m-0 grid list-none gap-0.5 px-3 pb-1.5 ${enabled ? '' : 'opacity-50'}`}>
-        {LIVE_HOTKEY_HELP.map(item => <li key={item.keys} className="flex items-baseline gap-2 text-[11px] leading-snug">
+        {liveHotkeyHelp(solo).map(item => <li key={item.keys} className="flex items-baseline gap-2 text-[11px] leading-snug">
           <kbd className={`min-w-[74px] shrink-0 rounded border px-1 py-px text-center font-mono text-[10px] font-bold ${isDark ? 'border-white/15 bg-white/[0.04] text-slate-200' : 'border-slate-300 bg-slate-50 text-slate-700'}`}>{item.keys}</kbd>
           <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{item.text}</span>
         </li>)}

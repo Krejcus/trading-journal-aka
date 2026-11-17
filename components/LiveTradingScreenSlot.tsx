@@ -3,7 +3,8 @@ import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { createPortal } from 'react-dom';
 import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
-import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData, LiveTradingTab } from './LiveTradingScreen';
+import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData, LiveTradingSolo, LiveTradingTab } from './LiveTradingScreen';
+import type { TradeToast } from '../lib/liveTradeToasts';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -166,8 +167,10 @@ interface Props {
   onCrash?: () => void;
   /** Náhradní zdroj svíček a živé ceny (zkušební napojení); chybí = výchozí zdroj appky. */
   marketData?: LiveTradingMarketData | null;
-  /** Jeden účet bez kopírky (Rithmic): název účtu; mění jen texty obrazovky. */
-  soloAccountLabel?: string | null;
+  /** Jeden účet mimo kopírku (Rithmic); `copier` zůstává skutečný stav kopírky. */
+  solo?: LiveTradingSolo | null;
+  /** Další karty vlevo dole (hlášky místní služby). */
+  extraToasts?: readonly TradeToast[] | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -265,7 +268,8 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
   && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
   && left.marketData === right.marketData
-  && (left.soloAccountLabel ?? null) === (right.soloAccountLabel ?? null)
+  && (left.solo?.label ?? null) === (right.solo?.label ?? null) && (left.solo?.available ?? null) === (right.solo?.available ?? null)
+  && (left.extraToasts ?? []).map(card => card.id).join('|') === (right.extraToasts ?? []).map(card => card.id).join('|')
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)

@@ -34,6 +34,8 @@ const QA_PORT = arg('qa-port', '4185');
 // RITHMIC_DEV_ORIGINS=https://a.ts.net,https://b.ts.net. Proces dál poslouchá jen na 127.0.0.1.
 const ALLOWED_ORIGINS = new Set([
   `http://127.0.0.1:${QA_PORT}`, `http://localhost:${QA_PORT}`,
+  // Vývojová appka (záložka LIVE). Produkční adresa se sem dostane až s rozhodnutím o nasazení.
+  'http://localhost:3000', 'http://127.0.0.1:3000',
   ...(process.env.RITHMIC_DEV_ORIGINS ?? '').split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean),
 ]);
 
@@ -114,6 +116,8 @@ async function main(): Promise<void> {
     const text = JSON.stringify(message);
     for (const socket of clients) if (socket.readyState === WebSocket.OPEN) socket.send(text);
   };
+  /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou (neobnovuje se samo). */
+  let feedOpen = false;
   const ticker = new RithmicClient({
     url: URL, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
     events: {
@@ -124,13 +128,19 @@ async function main(): Promise<void> {
         const now = Date.now();
         broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
       },
-      onPlantClosed: (plant, info) => console.log(`[ticker] spojení ${plant} zavřeno (${info.code ?? '?'})`),
+      onPlantClosed: (plant, info) => {
+        feedOpen = false;
+        console.log(`[ticker] spojení ${plant} zavřeno (${info.code ?? '?'}) — ceny stojí, restartuj proces`);
+      },
     },
   });
   await ticker.connect(['ticker']);
   const ref = await ticker.referenceData(CONTRACT, 'CME');
   const tickSize = ref?.tickSize ?? 0.25;
   await ticker.subscribeMarketData(CONTRACT, 'CME');
+  feedOpen = true;
+  // Tep: stránka podle něj pozná, že proces žije, i když trh stojí. Bez tepu si čerstvost nevyrábí.
+  setInterval(() => broadcast({ type: 'beat', at: Date.now(), feed: feedOpen }), 1_000).unref();
 
   exec = new LocalExec({
     broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: 2, maxPosition: 2,
@@ -173,7 +183,7 @@ async function main(): Promise<void> {
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
-    send(socket, { type: 'hello', system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
+    send(socket, { type: 'hello', feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
     send(socket, { type: 'state', state: exec!.state() });
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {

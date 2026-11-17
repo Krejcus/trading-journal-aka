@@ -23,9 +23,10 @@ export function useDayChartData(
   dayTrades: readonly Trade[],
   allTrades: readonly Trade[],
   now: number,
-  options: { perfScope?: 'live' | 'day' } = {},
+  options: { perfScope?: 'live' | 'day'; /** Jiný zdroj dat (Rithmic graf): nic se nenačítá ani neodebírá. */ disabled?: boolean } = {},
 ) {
   const perfScope = options.perfScope;
+  const disabled = options.disabled === true;
   // Detaily (historie plnění) jedním dotazem; sloučené karty berou svůj zdroj.
   const sources = useMemo(() => dayTrades.map(trade => tradeDetailSource(trade, allTrades) ?? trade), [allTrades, dayTrades]);
   const detailKey = sources.filter(isEvidenceJournalTrade).map(trade => String(trade.id)).join(',');
@@ -58,7 +59,7 @@ export function useDayChartData(
   const [historical, setHistorical] = useState<{ day: string; key: string; candles: MarketCandle[]; symbol: string; error?: string; fromDevice?: boolean } | null>(null);
   const historicalKey = `${day}|${anchorKey}|${capKey}`;
   useEffect(() => {
-    if (!detailsReady) return;
+    if (!detailsReady || disabled) return;
     let cancelled = false;
     const load = async () => {
       // Běžící den: nejdřív historie uložená v zařízení, ať se graf při otevření nepřestavuje.
@@ -90,10 +91,10 @@ export function useDayChartData(
     document.addEventListener('visibilitychange', onVisible);
     return () => { cancelled = true; refresh.stop(); document.removeEventListener('visibilitychange', onVisible); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
-  }, [historicalKey, detailsReady, perfScope]);
+  }, [historicalKey, detailsReady, perfScope, disabled]);
 
   const { live, status: liveStatus, problem: liveProblem, requestData } = useLiveCandles('MNQ', {
-    enabled: candleWindow.needsLive,
+    enabled: candleWindow.needsLive && !disabled,
     perfScope,
   });
   // Během obnovení (posun hranice, ověřený kontrakt) zůstávají svíčky téhož dne —

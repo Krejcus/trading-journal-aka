@@ -62,7 +62,7 @@ const toast = (tone: TradeToast['tone'], badge: string, title: string, line: str
  * `conditionMarket` = close svíčky jako na telefonu: jde do uloženého směru, a ten nesmí stát na
  * rychlém kanálu ceny (INV-UI-04). Hlídač si automatický směr stejně přepočítá z IBKR.
  */
-export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionMarket: number | null; watching: string | null }) {
+export function useLivePcPriceAlerts({ conditionMarket, watching, muted = false }: { conditionMarket: number | null; watching: string | null; /** Graf jiného trhu (Rithmic): žádné karty ani zvuky alertů. */ muted?: boolean }) {
   const store = usePriceAlertStore();
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const [editId, setEditId] = useState<string | null>(null);
@@ -75,12 +75,15 @@ export function useLivePcPriceAlerts({ conditionMarket, watching }: { conditionM
   const watchingRef = useRef(watching);
   watchingRef.current = watching;
   // Karty už předané do `LiveTradeToasts` (ten si je drží sám); krátký seznam stačí.
-  const card = useCallback((next: TradeToast) => setCards(current => [...current.slice(-5), next]), []);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+  const card = useCallback((next: TradeToast) => { if (!mutedRef.current) setCards(current => [...current.slice(-5), next]); }, []);
 
   const events = useMemo(() => (state.events ?? []).filter(event => !event.suppressed)
     .map(event => ({ id: event.id, alertId: event.alertId, at: event.at, price: event.level })), [state.events]);
   // Jedno místo pro spuštění: skutečná událost i „Vyzkoušet“ vypadají a znějí stejně.
   const present = (alert: PriceAlert | null, level: number) => {
+    if (mutedRef.current) return;
     if (alert) flash.fire(alert.id);
     const title = priceAlertEventTitle(alert, level);
     const actions = pcAlertFiredActions(alert);
