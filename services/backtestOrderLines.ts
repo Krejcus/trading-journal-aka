@@ -32,6 +32,11 @@ export interface BacktestChartOrderLine {
   labelAt?: (price: number) => string;
   /** Na vstupní čáře: popisek nového SL/TP taženého z tlačítka „SL“ / „TP“. */
   bracketLabelAt?: (kind: Exclude<BacktestChartOrderLineKind, 'entry'>, price: number) => string;
+  /**
+   * Jen u SL/TP čekajícího vstupu, které při tažení VSTUPU stojí na své ceně: popisek přepočítaný pro novou cenu
+   * vstupu. Kde je zadaný, kreslí se při tažení vstupu i podbarvená zóna mezi vstupem a touto čárou.
+   */
+  labelForEntry?: (entryPrice: number) => string;
 }
 
 const money = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(value).toFixed(2)}`;

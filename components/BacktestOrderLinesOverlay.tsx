@@ -438,8 +438,27 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     };
   }, [api, onAddBracket, onChange, selectToDrag]);
 
+  const draggedEntry = dragOverride ? lines.find(item => item.id === dragOverride.lineId && item.kind === 'entry') : undefined;
+  const entryDragLegs = draggedEntry
+    ? lines.filter(item => item.ownerId === draggedEntry.ownerId && item.ownerType === draggedEntry.ownerType && item.kind !== 'entry'
+      && item.labelForEntry !== undefined && Number.isFinite(coordinates[item.id]))
+    : [];
   return (
     <div ref={rootRef} className="pointer-events-none absolute inset-0 z-[115] overflow-hidden" data-backtest-order-lines>
+      {/* Tažení VSTUPU, jehož SL/TP stojí: podbarvené zóny vstup–SL a vstup–TP, jen po dobu tažení. */}
+      {entryDragLegs.map(leg => (
+        <div
+          key={`entry-drag-zone:${leg.id}`}
+          className="pointer-events-none absolute left-0"
+          data-order-entry-drag-zone={leg.kind}
+          style={{
+            right: priceScaleWidth,
+            top: Math.min(coordinates[leg.id], dragOverride!.top),
+            height: Math.abs(coordinates[leg.id] - dragOverride!.top),
+            backgroundColor: leg.kind === 'takeProfit' ? 'rgba(16, 185, 129, 0.10)' : 'rgba(244, 63, 94, 0.10)',
+          }}
+        />
+      ))}
       {bracketDragPreview && Number.isFinite(coordinates[bracketDragPreview.anchorLineId]) && (
         <div
           className="pointer-events-none absolute left-0"
@@ -622,7 +641,8 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 >{kind === 'stopLoss' ? '+ SL' : '+ TP'}</button>
               ))}
               <OrderLineBadge
-                label={dragged && line.labelAt ? line.labelAt(shownPrice) : line.label}
+                label={dragged && line.labelAt ? line.labelAt(shownPrice)
+                  : line.labelForEntry && entryDragLegs.includes(line) ? line.labelForEntry(dragOverride!.price) : line.label}
                 kind={line.kind}
                 color={line.color}
                 isDark={isDark}

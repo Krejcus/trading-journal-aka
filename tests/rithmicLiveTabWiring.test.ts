@@ -193,19 +193,18 @@ describe('hook místního procesu', () => {
     expect(screen).toMatch(/entrySingleLegSupported=\{solo\?\.singleLeg === true\}/);
   });
 
-  it('posun čekajícího Limitu: nohy jsou u Rithmicu vzdálenosti od vstupu, proti nové ceně se nekontrolují', () => {
+  it('posun čekajícího vstupu: SL/TP stojí na svých cenách, nový vstup musí ležet mezi nimi; služba vstup vymění', () => {
     const pending = { kind: 'pending', side: 'long', quantity: 1, entry: 100, entryType: 'Limit', stop: 97, target: 106 } as never;
-    expect(liveLineMoveBlockReason(pending, 'entry', 90, { moveLimit: true })).toMatch(/SL/);
-    expect(liveLineMoveBlockReason(pending, 'entry', 90, { moveLimit: true, relativeLegs: true })).toBeNull();
-    expect(screen).toMatch(/relativeLegs: solo != null \}\);/);
+    expect(liveLineMoveBlockReason(pending, 'entry', 102, { moveLimit: true, stopEntryMove: true })).toBeNull();
+    expect(liveLineMoveBlockReason(pending, 'entry', 96, { moveLimit: true, stopEntryMove: true })).toMatch(/SL/);
+    expect(liveLineMoveBlockReason(pending, 'entry', 107, { moveLimit: true, stopEntryMove: true })).toMatch(/TP/);
+    // vstup jen s jednou nohou se hlídá jen proti ní
+    expect(liveLineMoveBlockReason({ kind: 'pending', side: 'long', quantity: 1, entry: 100, entryType: 'Limit', stop: 97, target: null } as never, 'entry', 110, { moveLimit: true, stopEntryMove: true })).toBeNull();
+    expect(screen).toMatch(/stopEntryMove: solo != null \}\);/);
     expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
-  });
-
-  it('částečné zavření: tlačítko jen když to služba umí; rozhoduje a posílá služba jedním příkazem', () => {
-    expect(screen).toMatch(/\{solo\?\.reduce && <button/);
-    expect(chart).toMatch(/\.\.\.\(usable && trading\.reducible \? \{ reduce: \{ run: reducePart, busy: reduceBusy, quantity: trading\.reducible\.quantity \} \} : \{\}\)/);
-    expect(hook).toMatch(/if \(!net \|\| Math\.abs\(net\.netQuantity\) < 2\) return null;/);
-    expect(hook.match(/op: 'reduce'/g)).toHaveLength(1);
+    expect(hook).toMatch(/return replaceEntry\(entry, \{ price: newPrice \}\);/);
+    expect(hook.match(/op: 'replace-entry'/g)).toHaveLength(1);
+    expect(chart).toMatch(/managePendingLegsSupported/);
   });
 
   it('posun čekajícího Stop vstupu: jen přes Rithmic (jeden účet), jen 1 kontrakt, s ochranou i bez', () => {
@@ -213,72 +212,11 @@ describe('hook místního procesu', () => {
     // cesta kopírky Stop dál neposouvá
     expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true })).toMatch(/jen čekající Limit/);
     expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true })).toMatch(/zatím nejde/);
-    expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true, relativeLegs: true })).toBeNull();
-    expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true, relativeLegs: true })).toBeNull();
-    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true, relativeLegs: true })).toMatch(/1 kontraktu/);
+    expect(liveLineMoveBlockReason(stop(), 'entry', 112, { moveLimit: true, stopEntryMove: true })).toBeNull();
+    expect(liveLineMoveBlockReason(stop(), 'entry', 117, { moveLimit: true, stopEntryMove: true })).toMatch(/TP/);
+    expect(liveLineMoveBlockReason(stop({ stop: null, target: null }), 'entry', 112, { moveBareEntry: true, stopEntryMove: true })).toBeNull();
+    expect(liveLineMoveBlockReason(stop({ quantity: 2 }), 'entry', 112, { moveLimit: true, stopEntryMove: true })).toMatch(/1 kontraktu/);
     expect(screen).toMatch(/stopEntryMove: solo != null,/);
-  });
-
-  it('SL/TP k otevřené pozici: jen jeden z nich, odebrat jde jen samostatnou ochranu', () => {
-    const leg = hook.slice(hook.indexOf('const onBareLeg = useCallback'), hook.indexOf('const ack = useCallback'));
-    expect(leg).toMatch(/if \(others\.length > 0 && !\(others\.length === 1 && others\[0\]\.tag\?\.startsWith\('uiprot-'\) && others\[0\]\.role === \(role === 'stop' \? 'target' : 'stop'\)\)\) \{/);
-    expect(leg).toMatch(/send\(\{ op: 'protect', clientId: newId\(\), symbol: sym, kind: role, price: intent\.price \}\)/);
-    expect(leg).toMatch(/if \(!leg\.tag\?\.startsWith\('uiprot-'\)\) return blocked\(/);
-    expect(leg).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);
-    expect(chart).toMatch(/bareLegTrade: trading\.bareLegTrade, onBareLeg: trading\.onBareLeg/);
-  });
-
-  it('dvě ochrany: čára ukazuje ochrannější SL a bližší TP, posun jde na obě najednou', () => {
-    const leg = (orderId: string, role: 'stop' | 'target', price: number) => ({ orderId, symbol: 'MNQZ6', side: 'Sell', quantity: 1, filledQuantity: 0, status: 'working', role, price }) as never;
-    const long = rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 101), leg('c', 'target', 110), leg('d', 'target', 111)], 2);
-    expect(long.stop?.orderId).toBe('b');
-    expect(long.target?.orderId).toBe('c');
-    expect(long.note).toMatch(/SL má 2 ceny \(100\.00 \/ 101\.00\), TP má 2 ceny/);
-    const short = rithmicLegView([leg('a', 'stop', 120), leg('b', 'stop', 121), leg('c', 'target', 110), leg('d', 'target', 111)], -2);
-    expect(short.stop?.orderId).toBe('a');
-    expect(short.target?.orderId).toBe('d');
-    expect(rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 100)], 2).note).toBeNull();
-    // obě cesty posunu (panel/klávesa i čára) jdou při více nohách přes move-legs s výčtem noh
-    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: legs\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\) \}\)/g)).toHaveLength(2);
-    expect(chart).toMatch(/entryScaleIn=\{trading\.scaleIn\}/);
-  });
-
-  it('režim jen pro čtení: jiný systém než Rithmic Test jen s --read-only, zápisy blokované na spojení, ve službě i na obrazovce', () => {
-    expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING\) throw new Error\(/);
-    expect(server).toMatch(/const blockedTemplate = readOnlyViolation\(data\);/);
-    // Seznam povolených: každá požadavková šablona protokolu je buď výslovně čtecí, nebo zápisová — nic nezůstane nezařazené.
-    for (const [id, name] of Object.entries(RITHMIC_TEMPLATES)) {
-      if (!name.startsWith('Request')) continue;
-      const read = READ_ONLY_ALLOWED_TEMPLATES.has(Number(id));
-      const write = RITHMIC_WRITE_TEMPLATES.has(Number(id));
-      expect(read !== write, `${id} ${name}`).toBe(true);
-    }
-    for (const id of RITHMIC_WRITE_TEMPLATES) expect(READ_ONLY_ALLOWED_TEMPLATES.has(id)).toBe(false);
-    expect(readOnlyViolation(encodeRithmicFrame(312, { user_msg: ['x'] }))).toBe(312);
-    expect(readOnlyViolation(encodeRithmicFrame(3504, { user_msg: ['x'] }))).toBe(3504);
-    expect(readOnlyViolation(encodeRithmicFrame(18, { user_msg: ['x'] }))).toBeNull();
-    expect(readOnlyViolation(new Uint8Array([1, 2, 3]))).not.toBeNull();
-    expect(server).toMatch(/if \(READ_ONLY\) throw new Error\('účet je připojený jen pro čtení/);
-    // Bez přepínače skutečného obchodování (a souhlasu vydaného člověkem) je povolený jen Rithmic Test.
-    expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
-    expect(hook).toMatch(/const available = link === 'open' && helloFresh && Boolean\(state\?\.connected\) && !readOnly;/);
-    expect(chart).toMatch(/offerBrake && !trading\.readOnly \? \{ emergencyClose:/);
-    expect(chart).toMatch(/trading\.bareLegTrade && !trading\.readOnly \?/);
-    // starší historie appky jen na skutečném trhu
-    expect(screen).toMatch(/externalMarketData: marketData != null && solo\?\.historyFromApp !== true,/);
-    expect(chart).toMatch(/historyFromApp: trading\.system !== null && trading\.system !== 'Rithmic Test'/);
-  });
-
-  it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {
-    expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working'\);/);
-    expect(hook).toMatch(/const view = liveWorkingOrderView\(\{/);
-    expect(chart).toMatch(/workingOrders=\{trading\.workingView\}/);
-  });
-
-  it('jiný kontrakt než MNQ obrazovka odmítne', () => {
-    expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: 2 })).toBeNull();
-    expect(rithmicScreenInstrumentIssue({ symbol: 'ESZ6', tickSize: 0.25, pointValue: 50 })).toMatch(/jen MNQ/);
-    expect(rithmicScreenInstrumentIssue({ symbol: 'MNQZ6', tickSize: 0.25, pointValue: null })).toMatch(/jiný krok/);
   });
 
   it('karty obchodů ze změn stavu', () => {

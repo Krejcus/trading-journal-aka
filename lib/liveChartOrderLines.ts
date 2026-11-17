@@ -83,8 +83,11 @@ export function liveLineMoveBlockReason(
   summary: LiveChartPositionSummary,
   kind: 'entry' | 'stopLoss' | 'takeProfit',
   price: number,
-  /** `relativeLegs`: SL/TP čekajícího vstupu jsou vzdálenosti od vstupu (Rithmic) — posunou se s ním, proti nové ceně se nekontrolují. */
-  options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean; relativeLegs?: boolean } = {},
+  /**
+   * `stopEntryMove` (jeden účet přes Rithmic): táhnout jde i čekající Stop; SL/TP při posunu vstupu ZŮSTÁVAJÍ na svých
+   * cenách (služba vstup zruší a zadá znovu), takže nová cena vstupu musí ležet mezi nimi. Vstup smí mít i jen jednu nohu.
+   */
+  options: { pendingLegs?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; moveBareEntry?: boolean; stopEntryMove?: boolean } = {},
 ): string | null {
   // Neověřená pozice: jen utažení SL (politika `lib/liveChartRiskPolicy.ts`); pak běžné kontroly.
   const policy = liveUnverifiedActionBlock(summary, kind === 'entry' ? { kind: 'move-limit' }
@@ -92,15 +95,19 @@ export function liveLineMoveBlockReason(
   if (policy) return policy;
   // Holý Limit/Stop: nohy nejsou; jestli by se nová cena vyplnila hned, rozhodne worker podle své kotace.
   if (kind === 'entry' && options.moveBareEntry && summary.kind === 'pending' && summary.stop == null && summary.target == null) {
-    if (options.relativeLegs && summary.entryType?.toLowerCase() === 'stop') return summary.quantity === 1 ? null : 'Posun vstupu jde zatím jen u 1 kontraktu.';
+    if (options.stopEntryMove && summary.entryType?.toLowerCase() === 'stop') return summary.quantity === 1 ? null : 'Posun vstupu jde zatím jen u 1 kontraktu.';
     return summary.entryType?.toLowerCase() === 'limit' ? null : 'Posun Stopu bez SL/TP zatím nejde — zruš ho × a zadej znovu.';
   }
   if (kind === 'entry') {
-    // Jeden účet přes Rithmic: posouvat jde i čekající Stop (změřeno, že změna spouště ochranu zachová).
-    if (options.relativeLegs && options.moveLimit && summary.kind === 'pending' && summary.entryType?.toLowerCase() === 'stop') return summary.quantity === 1 ? null : 'Posun vstupu jde zatím jen u 1 kontraktu.';
-    if (!(options.moveLimit || options.groupLimitMove) || summary.kind !== 'pending' || summary.entryType?.toLowerCase() !== 'limit') return 'Posouvat jde jen čekající Limit podporovaný workerem.';
-    if (!options.groupLimitMove && summary.quantity !== 1) return 'Posun limitu jde zatím jen u 1 kontraktu.';
-    if (options.relativeLegs) return null;
+    const entryType = summary.entryType?.toLowerCase();
+    const stopEntry = options.stopEntryMove === true && entryType === 'stop';
+    if (!(options.moveLimit || options.groupLimitMove) || summary.kind !== 'pending' || !(entryType === 'limit' || stopEntry)) return 'Posouvat jde jen čekající Limit podporovaný workerem.';
+    if (!options.groupLimitMove && summary.quantity !== 1) return stopEntry ? 'Posun vstupu jde zatím jen u 1 kontraktu.' : 'Posun limitu jde zatím jen u 1 kontraktu.';
+    if (options.stopEntryMove) {
+      // SL/TP stojí: nový vstup musí zůstat na správné straně každé nohy, kterou má.
+      return (summary.stop != null ? pendingLegSideProblem('stopLoss', summary.side, price, stopEntry ? 'Stop' : 'Limit', summary.stop) : null)
+        ?? (summary.target != null ? pendingLegSideProblem('takeProfit', summary.side, price, stopEntry ? 'Stop' : 'Limit', summary.target) : null);
+    }
     if (summary.stop == null || summary.target == null) return 'Ochranné ceny vstupu nejsou známé.';
     return pendingLegSideProblem('stopLoss', summary.side, price, 'Limit', summary.stop)
       ?? pendingLegSideProblem('takeProfit', summary.side, price, 'Limit', summary.target);
@@ -190,9 +197,9 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
   const legsLive = position && controls.bareLegs === true;
   const canMove = legsLive || (controls.manageable && (position || controls.pendingLegs === true));
   const scope = summary.scopeLabel ? ` ${summary.scopeLabel}` : '';
-  const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string) => {
-    const pnl = (at - entry) * dir * summary.quantity * controls.pointValue;
-    return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - entry).toFixed(2)} b${note ? ` · ${note}` : ''}`;
+  const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string, from: number = entry) => {
+    const pnl = (at - from) * dir * summary.quantity * controls.pointValue;
+    return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - from).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   // Holá pozice bez SL nemá co posouvat na BE.
   const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg ?? (legsLive ? entry : null)) : null;
@@ -247,6 +254,8 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
       color: kind === 'stopLoss' ? SL_COLOR : TP_COLOR,
       label: levelLabel(kind, at, pendingPrice != null ? 'mění se' : position ? (kind === 'stopLoss' ? summary.fillNote : undefined) : 'čeká na vstup'),
       labelAt: next => levelLabel(kind, next),
+      // Čekající vstup: při tažení vstupu noha stojí a mění se jen její výsledek (a kreslí se podbarvená zóna).
+      ...(!position ? { labelForEntry: (nextEntry: number) => levelLabel(kind, at, 'čeká na vstup', nextEntry) } : {}),
       draggable: canMove && pendingPrice == null,
       // Chvění při kliknutí nesmí poslat skutečný posun.
       dragDeadZonePx: 4,
