@@ -11,6 +11,9 @@ import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
 const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
 const SYMBOL = arg('symbol') ?? 'MNQZ6';
 const PRICE = Number(arg('price'));
+/** --stop: vstup je Buy STOP_MARKET (cena = spoušť NAD trhem); jinak Buy LIMIT pod trhem. */
+const STOP = process.argv.includes('--stop');
+const STEP = STOP ? 2 : -2;
 if (!Number.isFinite(PRICE) || PRICE <= 0) { console.error('Chybí --price (hluboko pod trhem)'); process.exit(1); }
 const password = execFileSync('security', ['find-generic-password', '-s', 'alphatrade-rithmic-test', '-w'], { encoding: 'utf8' }).replace(/\n$/, '');
 const updates: RithmicOrderUpdate[] = [];
@@ -21,7 +24,7 @@ const client = new RithmicClient({
   events: { onOrderUpdate: (u) => { if (!u.isSnapshot) updates.push(u); } },
 });
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const brief = (o: RithmicOrderUpdate) => `${o.basketId}|${o.status}|${o.notifyType}|price=${o.price}|qty=${o.quantity}|type=${o.priceType}|bracket=${o.bracketType}|tag=${o.userTag}`;
+const brief = (o: RithmicOrderUpdate) => `${o.basketId}|${o.status}|${o.notifyType}|price=${o.price}|trigger=${o.triggerPrice}|qty=${o.quantity}|type=${o.priceType}|bracket=${o.bracketType}|tag=${o.userTag}`;
 
 (async () => {
   await client.connect(['order']);
@@ -36,7 +39,7 @@ const brief = (o: RithmicOrderUpdate) => `${o.basketId}|${o.status}|${o.notifyTy
     console.log(`[${label}] TP bracket:`, JSON.stringify(targets), 'SL bracket:', JSON.stringify(stops));
     return mine;
   };
-  const ack = await client.placeBracketOrder({ accountId: account, userTag: tag, symbol: SYMBOL, exchange: 'CME', side: 'BUY', quantity: 1, priceType: 'LIMIT', price: PRICE, stopTicks: 48, targetTicks: 96 });
+  const ack = await client.placeBracketOrder({ accountId: account, userTag: tag, symbol: SYMBOL, exchange: 'CME', side: 'BUY', quantity: 1, ...(STOP ? { priceType: 'STOP_MARKET' as const, triggerPrice: PRICE } : { priceType: 'LIMIT' as const, price: PRICE }), stopTicks: 48, targetTicks: 96 });
   console.log('zadáno:', JSON.stringify(ack));
   await wait(1_500);
   const before = await read('před posunem');
@@ -44,7 +47,7 @@ const brief = (o: RithmicOrderUpdate) => `${o.basketId}|${o.status}|${o.notifyTy
   if (!basketId) throw new Error('vstup nenalezen');
   let moveError: string | null = null;
   try {
-    const response = await client.modifyOrder({ accountId: account, basketId, symbol: SYMBOL, exchange: 'CME', quantity: 1, priceType: 'LIMIT', price: PRICE - 2 });
+    const response = await client.modifyOrder({ accountId: account, basketId, symbol: SYMBOL, exchange: 'CME', quantity: 1, ...(STOP ? { priceType: 'STOP_MARKET' as const, triggerPrice: PRICE + STEP } : { priceType: 'LIMIT' as const, price: PRICE + STEP }) });
     console.log('odpověď na 314:', JSON.stringify({ rows: response.rows.length, terminal: response.terminal?.fields }));
   } catch (error) { moveError = error instanceof Error ? error.message : String(error); console.log('314 selhalo:', moveError); }
   await wait(1_500);

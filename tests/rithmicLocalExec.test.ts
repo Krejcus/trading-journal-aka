@@ -161,6 +161,44 @@ describe('místní služba: validace vstupu', () => {
   });
 });
 
+describe('místní služba: Stop vstup', () => {
+  it('Stop vstup jde jen se spouští za trhem a s cenou služby; SL/TP se počítají od spouště; posun zatím ne', async () => {
+    const t = await setup();
+    const stop = (extra: Record<string, unknown> = {}) => entry({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010, stopPrice: 7000, targetPrice: 7030, ...extra });
+    const frames = t.frames();
+    // spoušť na špatné straně (cena služby 7000): nákup pod trhem, prodej nad trhem; bez spouště; mimo krok
+    expect(await t.run(stop({ triggerPrice: 6995, stopPrice: 6985, targetPrice: 7015 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(stop({ side: 'Sell', triggerPrice: 7010, stopPrice: 7020, targetPrice: 6990 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(stop({ triggerPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(stop({ triggerPrice: 7010.1 }))).toMatchObject({ ok: false, sent: false });
+    t.setPrice(null);
+    expect(await t.run(stop())).toMatchObject({ ok: false, sent: false });
+    t.setPrice(7000);
+    expect(t.frames()).toBe(frames);
+    const placed = await t.run(stop());
+    expect(placed.ok).toBe(true);
+    await flush();
+    const entryId = (placed as { result: { orderId: string; stopTicks: number; targetTicks: number } }).result.orderId;
+    expect((placed as { result: { stopTicks: number; targetTicks: number } }).result).toMatchObject({ stopTicks: 40, targetTicks: 80 });
+    expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7010, side: 1 });
+    expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010, plannedStop: 7000, plannedTarget: 7030 });
+    // posun Stop vstupu služba zatím neumí
+    expect(await t.run({ op: 'move', orderId: entryId, price: 7012 })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
+  it('Stop vstup bez SL/TP odejde jako obyčejný Stop', async () => {
+    const t = await setup();
+    const placed = await t.run(entry({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010, stopPrice: undefined, targetPrice: undefined }));
+    expect(placed.ok).toBe(true);
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7010 });
+    expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010 });
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: posun, incidenty, stav', () => {
   it('posun jde jen u SL/TP vlastního vstupu a vlastního Limitu; cizí příkaz a cena mimo krok ne', async () => {
     const t = await setup();

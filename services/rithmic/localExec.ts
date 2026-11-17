@@ -51,6 +51,8 @@ export interface LocalExecOrderView {
   price?: number;
   /** Vstup, ke kterému noha patří. */
   entryId?: string;
+  /** Jen u vstupu: Limit, nebo Stop (čeká na spuštění). Jen zobrazení. */
+  entryType?: 'Limit' | 'Stop';
   /**
    * Jen u čekajícího vstupu s ochranou: kde SL/TP vzniknou, POKUD se vstup vyplní přesně za svou
    * cenu (Rithmic je počítá od ceny vyplnění). Jen zobrazení — příkazy to ještě nejsou.
@@ -78,7 +80,8 @@ export interface LocalExecState {
 }
 
 export type LocalExecCommand =
-  | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit'; limitPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number }
+  /** `triggerPrice` = spoušť Stop vstupu; `stopPrice` / `targetPrice` jsou ceny SL / TP. */
+  | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit' | 'Stop'; limitPrice?: number; triggerPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number }
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
   | { op: 'move'; orderId: string; price: number }
@@ -271,6 +274,7 @@ export class LocalExec {
       orders.push({
         orderId: order.brokerOrderId, symbol: order.symbol, side: order.side, quantity: order.quantity, filledQuantity: order.filledQuantity,
         status: order.status, role, ...(price !== undefined ? { price } : {}),
+        ...(role === 'entry' && price !== undefined ? { entryType: order.limitPrice === undefined && order.stopPrice !== undefined ? 'Stop' as const : 'Limit' as const } : {}),
         ...(known && known.role !== 'entry' ? { entryId: known.entryId } : {}), ...(order.tag ? { tag: order.tag } : {}),
         ...this.planned(order, brackets.find((bracket) => bracket.entryId === order.brokerOrderId)),
       });
@@ -328,9 +332,9 @@ export class LocalExec {
           const spec = this.config.symbols[symbol];
           if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
           if (command.side !== 'Buy' && command.side !== 'Sell') refuse('strana musí být Buy nebo Sell');
-          if (command.orderType !== 'Market' && command.orderType !== 'Limit') refuse('typ musí být Market nebo Limit');
+          if (command.orderType !== 'Market' && command.orderType !== 'Limit' && command.orderType !== 'Stop') refuse('typ musí být Market, Limit nebo Stop');
           const side = command.side as OrderSide;
-          const orderType = command.orderType as 'Market' | 'Limit';
+          const orderType = command.orderType as 'Market' | 'Limit' | 'Stop';
           const quantity = command.quantity;
           if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > this.config.maxQuantity) {
             return refuse(`množství ${String(quantity)} je mimo povolený rozsah 1–${this.config.maxQuantity}`);
@@ -347,7 +351,7 @@ export class LocalExec {
           // Idempotence i přes restart služby: značku nesmí nést žádný dnešní příkaz (kniha po
           // výchozím stavu zná i dokončené).
           if (this.seenClientIds.has(clientId) || [...this.orders.values()].some((order) => order.tag === tag)) refuse('příkaz s tímto clientId už byl přijat');
-          for (const field of ['limitPrice', 'stopPrice', 'targetPrice', 'referencePrice'] as const) {
+          for (const field of ['limitPrice', 'triggerPrice', 'stopPrice', 'targetPrice', 'referencePrice'] as const) {
             const value = command[field];
             if (value === undefined) continue;
             if (!finite(value) || value <= 0) refuse(`${field} musí být kladné číslo (nebo chybět)`);
@@ -366,6 +370,14 @@ export class LocalExec {
             if (server !== null && (stopPrice !== undefined || targetPrice !== undefined) && (side === 'Buy' ? limitPrice > server : limitPrice < server)) {
               refuse('Limit se SL/TP je přes trh — vyplnil by se za jinou cenu, než od které se počítá ochrana; použij Market');
             }
+          } else if (orderType === 'Stop') {
+            // Stop vstup (změřeno 17. 11. 2026: Rithmic přijme STOP_MARKET i se serverovou ochranou).
+            const trigger = command.triggerPrice as number | undefined;
+            if (trigger === undefined) return refuse('Stop bez spouštěcí ceny');
+            if (server === null) return refuse('služba nemá čerstvou cenu — Stop vstup neodesílám (mohl by se spustit hned)');
+            // Spoušť musí být ZA trhem ve směru vstupu; jinak by se příkaz spustil okamžitě jako Market.
+            if (side === 'Buy' ? trigger <= server : trigger >= server) return refuse('spoušť Stopu je na špatné straně trhu — spustil by se hned; použij Market nebo Limit');
+            reference = trigger;
           } else {
             const fromClient = command.referencePrice as number | undefined;
             if (stopPrice !== undefined || targetPrice !== undefined) {
@@ -406,7 +418,7 @@ export class LocalExec {
             if (error instanceof BrokerRequestNotSentError) this.reserved.delete(tag);
             throw error;
           });
-          const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}) };
+          const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}), ...(orderType === 'Stop' ? { stopPrice: command.triggerPrice as number } : {}) };
           if (stopTicks === undefined && targetTicks === undefined) {
             const ack = await release(this.broker.placeOrder(request));
             return { ok: true, result: { orderId: ack.brokerOrderId } };
@@ -557,11 +569,13 @@ export class LocalExec {
 
   private planned(order: BrokerOrder, bracket: { stopTicks?: number; targetTicks?: number } | undefined): { plannedStop?: number; plannedTarget?: number } {
     const tick = this.config.symbols[order.symbol]?.tickSize;
-    if (!bracket || !tick || order.limitPrice === undefined || order.filledQuantity > 0) return {};
+    // Limit: od limitní ceny; Stop vstup: od spouště (skutečné vyplnění může být o skluz dál).
+    const base = order.limitPrice ?? order.stopPrice;
+    if (!bracket || !tick || base === undefined || order.filledQuantity > 0) return {};
     const up = order.side === 'Buy' ? 1 : -1;
     return {
-      ...(bracket.stopTicks !== undefined ? { plannedStop: order.limitPrice - up * bracket.stopTicks * tick } : {}),
-      ...(bracket.targetTicks !== undefined ? { plannedTarget: order.limitPrice + up * bracket.targetTicks * tick } : {}),
+      ...(bracket.stopTicks !== undefined ? { plannedStop: base - up * bracket.stopTicks * tick } : {}),
+      ...(bracket.targetTicks !== undefined ? { plannedTarget: base + up * bracket.targetTicks * tick } : {}),
     };
   }
 

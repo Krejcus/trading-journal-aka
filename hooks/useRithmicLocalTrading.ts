@@ -337,7 +337,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       };
     } else if (entryOrder) {
       summary = {
-        kind: 'pending', side: entryOrder.side === 'Buy' ? 'long' : 'short', quantity: entryOrder.quantity, entry: entryOrder.price ?? null, entryType: 'Limit',
+        kind: 'pending', side: entryOrder.side === 'Buy' ? 'long' : 'short', quantity: entryOrder.quantity, entry: entryOrder.price ?? null, entryType: entryOrder.entryType ?? 'Limit',
         // Plánované SL/TP (vzniknou až po vyplnění, počítané od limitní ceny) — jen zobrazení.
         openPnl: null, mark: price, stop: entryOrder.plannedStop ?? null, target: entryOrder.plannedTarget ?? null, protection: '', accounts: 1, scopeLabel: null,
         leader: { accountId: RITHMIC_SOLO_ACCOUNT, quantity: entryOrder.quantity, entry: entryOrder.price ?? null }, rows: [],
@@ -346,7 +346,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     // Slot překresluje jen při změně klíče → patří do něj vše, co má být v grafu aktuální.
     const key = JSON.stringify([symbol, summary?.kind, summary?.side, summary?.quantity, summary?.entry, summary?.stop, summary?.target, summary?.mark, summary?.openPnl]);
     return { key, symbol, lines: [], summary, issue: null };
-  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.entryType, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const marketData = useMemo<LiveTradingMarketData | null>(() => (candles.length && symbol ? ({
     candles,
@@ -359,16 +359,15 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     if (!entryReadyRef.current) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: NOT_READY }] };
     // Přikoupení služba neumí: druhý vstup by měl vlastní (nebo žádnou) ochranu a graf by ji ukázal jako ochranu celé pozice.
     if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: IN_POSITION }] };
-    if (draft.orderType === 'Stop') return { ...base, status: 'blocked', blockers: [{ code: 'unsupported', text: 'Stop vstup místní služba neumí — použij Limit nebo Market.' }] };
     const clientId = operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(-28) || newId();
     const tag = `ui-${clientId}`;
     const sym = symbolRef.current;
-    measure(draft.orderType === 'Limit' ? 'Limit vstup → čára' : 'Market vstup → pozice + SL/TP', (s) => (draft.orderType === 'Limit'
+    measure(draft.orderType === 'Market' ? 'Market vstup → pozice + SL/TP' : `${draft.orderType} vstup → čára`, (s) => (draft.orderType !== 'Market'
       ? s.orders.some((order) => order.tag === tag && order.status === 'working')
       : s.positions.some((item) => item.symbol === sym) && (draft.stopLoss === undefined || s.orders.some((order) => order.symbol === sym && order.role === 'stop' && order.status === 'working'))));
     const reply = await send({
       op: 'entry', clientId, symbol: draft.symbol, side: draft.side, quantity: draft.quantity, orderType: draft.orderType,
-      ...(draft.orderType === 'Limit' ? { limitPrice: draft.price } : { referencePrice: draft.referencePrice ?? priceRef.current ?? undefined }),
+      ...(draft.orderType === 'Limit' ? { limitPrice: draft.price } : draft.orderType === 'Stop' ? { triggerPrice: draft.price } : { referencePrice: draft.referencePrice ?? priceRef.current ?? undefined }),
       ...(draft.stopLoss !== undefined ? { stopPrice: draft.stopLoss } : {}), ...(draft.takeProfit !== undefined ? { targetPrice: draft.takeProfit } : {}),
     });
     if (reply.ok) return { ...base, status: 'acknowledged', blockers: [], entryBrokerOrderId: String((reply.result as { orderId?: string } | undefined)?.orderId ?? '') };
