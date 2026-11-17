@@ -20,7 +20,9 @@ export interface LocalExecConfig {
   maxPosition?: number;
   /** Nejvyšší vzdálenost SL/TP od vstupu v tickách (výchozí 400). */
   maxProtectionTicks?: number;
-  /** Jak dlouho po vzniku samostatné ochrany se ještě nehlásí nesoulad s pozicí (výchozí 3 s). */
+  /** Jak dlouho po vyplnění se čeká na usazení pozice, než jde zadat ochrana (výchozí 1 s). */
+  positionSettleMs?: number;
+  /** Jak dlouho musí nesoulad samostatné ochrany s pozicí vydržet, než se ohlásí (výchozí 3 s). */
   protectiveGraceMs?: number;
   /** Jak dlouho čekat na potvrzení posunu vstupu s ochranou stavem (výchozí 1,5 s). */
   moveConfirmMs?: number;
@@ -155,6 +157,7 @@ export class LocalExec {
       // Vlastní vstup se vyplnil: dokud nepřijde zpráva o pozici, počítá se vyplněné množství zvlášť
       // (jinak by mezi vyplněním a pozicí „zmizelo" a další vstup by obešel strop).
       const grew = event.order.filledQuantity - (before?.filledQuantity ?? 0);
+      if (grew > 0) this.lastFillAt.set(event.order.symbol, this.now());
       if (grew > 0 && event.order.tag?.startsWith('ui-')) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, at: this.now() });
       if (event.order.status === 'rejected' && before?.status !== 'rejected') {
         this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
@@ -165,6 +168,7 @@ export class LocalExec {
       // Rezervu za vyplnění uvolní jen zpráva s NENULOVOU pozicí (ta už vyplnění zahrnuje).
       // Nula může být opožděná zpráva z doby před vyplněním — ta nic neuvolní; zbytek vyprší časem.
       if (event.position.netQuantity !== 0) this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
+      this.lastPositionAt.set(event.position.symbol, this.now());
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,
         ...(event.displayAveragePrice !== undefined ? { averagePrice: event.displayAveragePrice } : {}),
@@ -191,6 +195,8 @@ export class LocalExec {
    * vyplnění ochrany smí na chvíli vypadat jako „příkaz bez pozice"). Lhůtu hlídá časovač, ne další
    * událost — na klidném účtu by sirotek jinak zůstal neohlášený.
    */
+  private readonly lastFillAt = new Map<string, number>();
+  private readonly lastPositionAt = new Map<string, number>();
   private readonly protectiveMismatchSince = new Map<string, number>();
   private readonly protectiveReported = new Set<string>();
   private protectiveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -200,11 +206,13 @@ export class LocalExec {
     for (const order of this.orders.values()) {
       if (!order.tag?.startsWith(PROTECT_TAG)) continue;
       const id = order.brokerOrderId;
-      if (TERMINAL.has(order.status) || this.protectiveReported.has(id)) { this.protectiveMismatchSince.delete(id); continue; }
+      if (TERMINAL.has(order.status)) { this.protectiveMismatchSince.delete(id); this.protectiveReported.delete(id); continue; }
       const net = this.positions.get(order.symbol)?.netQuantity ?? 0;
       const closes = order.side === 'Sell' ? net > 0 : net < 0;
       const open = order.quantity - order.filledQuantity;
-      if (closes && open === Math.abs(net)) { this.protectiveMismatchSince.delete(id); continue; }
+      // Shoda obnovena → příští nesoulad se ohlásí znovu.
+      if (closes && open === Math.abs(net)) { this.protectiveMismatchSince.delete(id); this.protectiveReported.delete(id); continue; }
+      if (this.protectiveReported.has(id)) continue;
       const since = this.protectiveMismatchSince.get(id) ?? this.now();
       this.protectiveMismatchSince.set(id, since);
       const left = grace - (this.now() - since);
@@ -309,6 +317,9 @@ export class LocalExec {
           for (const [reservedTag] of this.reserved) {
             if (reservedTag.startsWith(PROTECT_TAG) && ![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
           }
+          // Trvající nesoulad ochrany se po potvrzení ohlásí znovu (po lhůtě) — potvrzení ho neschová.
+          this.protectiveReported.clear();
+          this.watchProtective();
           this.changed();
           return { ok: true, result: { acknowledged: true } };
         case 'entry': {
@@ -326,7 +337,8 @@ export class LocalExec {
           }
           // Pracující samostatná ochrana = pozice se hlídá jedním výstupem; další vstup by ji rozešel s pozicí
           // (opačný by pozici zavřel a ochrana by zůstala sama, stejnosměrný by kryla jen zčásti).
-          if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith(PROTECT_TAG))) {
+          if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.tag?.startsWith(PROTECT_TAG))
+            || [...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag.startsWith(PROTECT_TAG))) {
             return refuse('pozice má samostatný SL/TP — další vstup teď nejde; nejdřív pozici zavři nebo ochranu zruš');
           }
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
@@ -425,6 +437,16 @@ export class LocalExec {
           const working = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status));
           if (working.length > 0) return refuse('pozice už má pracující příkaz (SL/TP nebo čekající vstup) — přidat jde jen jeden SL nebo jeden TP k pozici bez příkazů');
           if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');
+          // Vstup s ochranou, jehož nohy ještě nedorazily (nebo se neví): nohy jsou výstup → další by byl druhý.
+          if (this.broker.listBrackets(accountId).some((bracket) => bracket.symbol === symbol && !bracket.closed)) {
+            return refuse('pozice patří ke vstupu s ochranou (jeho SL/TP se právě zakládají nebo hlídají) — další ochranu nezadávám');
+          }
+          // Těsně po vyplnění může být místní pozice ještě stará (např. právě vyplněná ochrana): počkat na zprávu
+          // o pozici, která přišla až PO posledním vyplnění, a na krátké usazení.
+          const filledAt = this.lastFillAt.get(symbol);
+          if (filledAt !== undefined && ((this.lastPositionAt.get(symbol) ?? 0) < filledAt || this.now() - filledAt < (this.config.positionSettleMs ?? 1_000))) {
+            return refuse('pozice se právě mění (čerstvé vyplnění) — ochranu zadej za okamžik');
+          }
           const server = this.config.serverPrice?.(symbol) ?? null;
           if (server === null) return refuse('služba nemá čerstvou cenu — ochranu nezadávám (spustila by se možná hned)');
           const long = net > 0;

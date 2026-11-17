@@ -220,7 +220,7 @@ describe('místní služba: posun, incidenty, stav', () => {
   });
 
   it('samostatná ochrana: jen jeden SL nebo jeden TP k pozici bez příkazů, na správné straně trhu; posun jen ceny', async () => {
-    const t = await setup({ config: { protectiveGraceMs: 40 } });
+    const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20 } });
     const protect = (extra: Record<string, unknown> = {}) => ({ op: 'protect', clientId: `p${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', kind: 'stop', price: 6980, ...extra });
     // bez pozice ne
     expect(await t.run(protect())).toMatchObject({ ok: false, sent: false });
@@ -232,6 +232,7 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.server.fill(entryId, 6990);
     await sleep(80);
     expect(t.exec.state().positions).toEqual([expect.objectContaining({ symbol: 'ESZ6', netQuantity: 1 })]);
+    // hned po vyplnění ne (pozice se usazuje) — s výchozí lhůtou 1 s by to teď odmítl; tady je zkrácená
     const frames = t.frames();
     // špatná strana trhu (cena služby 7000): SL nad trhem, TP pod trhem; mimo krok; bez ceny služby
     expect(await t.run(protect({ price: 7005 }))).toMatchObject({ ok: false, sent: false });
@@ -267,8 +268,30 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.broker.stop();
   });
 
+  it('ochrana se nezadá těsně po vyplnění ani k pozici ze vstupu s ochranou', async () => {
+    const t = await setup();
+    const withLegs = await t.run(entry());
+    await flush();
+    t.server.fill((withLegs as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(80);
+    // výchozí usazení 1 s + otevřený bracket → odmítnuto bez odeslání
+    const frames = t.frames();
+    expect(await t.run({ op: 'protect', clientId: 'late1', symbol: 'ESZ6', kind: 'stop', price: 6980 })).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+    const bare = await setup();
+    const placed = await bare.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    bare.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(80);
+    const reply = await bare.run({ op: 'protect', clientId: 'late2', symbol: 'ESZ6', kind: 'stop', price: 6980 });
+    expect(reply).toMatchObject({ ok: false, sent: false });
+    expect((reply as { error: string }).error).toMatch(/právě mění/);
+    bare.broker.stop();
+  });
+
   it('vyplnění samostatné ochrany není incident (pořadí zpráv o pozici a příkazu nerozhoduje)', async () => {
-    const t = await setup({ config: { protectiveGraceMs: 60 } });
+    const t = await setup({ config: { protectiveGraceMs: 60, positionSettleMs: 20 } });
     const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
     await flush();
     t.server.fill((bare as { result: { orderId: string } }).result.orderId, 6990);
@@ -286,7 +309,7 @@ describe('místní služba: posun, incidenty, stav', () => {
   });
 
   it('samostatná ochrana bez pozice zastaví nové vstupy a nic sama nemění', async () => {
-    const t = await setup({ config: { protectiveGraceMs: 40 } });
+    const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20 } });
     const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
     await flush();
     t.server.fill((bare as { result: { orderId: string } }).result.orderId, 6990);
