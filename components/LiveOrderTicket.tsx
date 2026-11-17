@@ -984,13 +984,14 @@ const LiveOrderTicket: React.FC<Props> = ({
     : null;
   const previewDraft: LiveEntryPreviewDraft | null = bareDraft
     ? (bareEntryDraft && !('error' in bareEntryDraft) ? bareEntryDraft : null)
-    : previewSymbol && draft && m && draft.stopLoss != null && draft.takeProfit != null && m.quantity >= 1
+    // Jedna noha jen s výslovnou schopností (jeden účet přes Rithmic); jinak vždy obě.
+    : previewSymbol && draft && m && (entrySingleLegSupported ? draft.stopLoss != null || draft.takeProfit != null : draft.stopLoss != null && draft.takeProfit != null) && m.quantity >= 1
     && (draft.type !== 'market' || (marketReference != null && quoteInfo.capturedAt != null))
     ? { symbol: previewSymbol, side: draft.side === 'buy' ? 'Buy' : 'Sell', quantity: m.quantity,
       ...(draft.type === 'market'
         ? { orderType: 'Market' as const, referencePrice: marketReference!, quoteReceivedAt: Math.round(quoteInfo.capturedAt!) }
         : { orderType: draft.type === 'stop' ? 'Stop' as const : 'Limit' as const, price: draft.price }),
-      stopLoss: draft.stopLoss, takeProfit: draft.takeProfit }
+      ...(draft.stopLoss != null ? { stopLoss: draft.stopLoss } : {}), ...(draft.takeProfit != null ? { takeProfit: draft.takeProfit } : {}) }
     : null;
   const previewBlockedReason = !draft ? null
     : !previewSymbol ? (draft.type === 'market'
@@ -1757,7 +1758,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       <button
         type="button"
         disabled={directBlocked != null || directBusy || directLocked}
-        title={directBlocked ?? (directLocked ? (soloLabel ? 'Výsledek minulého odeslání není známý — zkontroluj účet u brokera. Odeslat jde až po změně návrhu.' : 'Výsledek minulého odeslání není známý — zkontroluj leadera v Tradovate. Odeslat jde až po změně návrhu.') : undefined) ?? 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.'}
+        title={directBlocked ?? (directLocked ? (soloLabel ? 'Výsledek minulého odeslání není známý — zkontroluj účet u brokera. Odeslat jde až po změně návrhu.' : 'Výsledek minulého odeslání není známý — zkontroluj leadera v Tradovate. Odeslat jde až po změně návrhu.') : undefined) ?? (soloLabel ? 'Odešle hned — místní služba znovu ověří pojistky a při problému nic nepošle.' : 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.')}
         // Fokus nesmí zůstat na tlačítku: Enter / mezerník by jinak po zkratce (Shift+B/S) poslal
         // nový návrh bez myši — žádná klávesa neodešle vstup (oponentura vlny B).
         onClick={event => { event.currentTarget.blur(); void sendDirect(); }}
