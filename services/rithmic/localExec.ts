@@ -805,7 +805,9 @@ export class LocalExec {
           const placed = await this.execute(next as unknown as LocalExecCommand);
           if (placed.ok) return { ok: true, result: { ...(placed.result as Record<string, unknown>), replaced: orderId } };
           const failed = placed as { ok: false; sent: false | 'unknown'; error?: string };
-          return { ok: false, sent: 'unknown', error: `původní vstup je zrušený a nový ${failed.sent === false ? 'neodešel' : 'má neznámý výsledek'} (${failed.error ?? 'neznámý důvod'}) — ${failed.sent === false ? 'zadej ho znovu' : 'ověř u brokera, co čeká'}` };
+          // Nový vstup prokazatelně neodešel → stav je jistý (starý zrušen, nic nečeká): žádná „neznámá" karta, jen hláška.
+          if (failed.sent === false) return { ok: false, sent: false, error: `původní vstup je zrušený a nový neodešel (${failed.error ?? 'neznámý důvod'}) — teď nečeká žádný vstup, zadej ho znovu` };
+          return { ok: false, sent: 'unknown', error: `původní vstup je zrušený a nový má neznámý výsledek (${failed.error ?? 'neznámý důvod'}) — ověř u brokera, co čeká` };
         }
         case 'protect-pair': {
           // Ochrana snižuje riziko → smí i při zastavených vstupech. Jeden zápis: dva příkazy svázané burzou.
