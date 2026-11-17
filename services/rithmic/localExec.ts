@@ -290,8 +290,11 @@ export class LocalExec {
       this.lastPositionAt.set(event.position.symbol, this.now());
       const waiting = this.pendingClose.get(event.position.symbol);
       if (waiting) {
-        this.pendingClose.delete(event.position.symbol);
-        if (event.position.netQuantity === 0 && this.now() <= waiting.until) this.publishClose(waiting.close);
+        // Na živém trhu chodí zprávy o pozici nepřetržitě (průběžný výsledek) a první po vyplnění může ještě nést
+        // starou pozici — ta výsledek nezahazuje. Čeká se na nulu až do lhůty (změřeno 17. 11. na skutečném účtu:
+        // výsledek obchodu zavřeného SL se jinak ztratil).
+        if (event.position.netQuantity === 0 && this.now() <= waiting.until) { this.pendingClose.delete(event.position.symbol); this.publishClose(waiting.close); }
+        else if (this.now() > waiting.until) this.pendingClose.delete(event.position.symbol);
       }
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,

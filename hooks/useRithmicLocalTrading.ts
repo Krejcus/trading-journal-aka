@@ -180,15 +180,28 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const plainExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Poslední cena a svíčka čekající na zápis do stavu obrazovky (graf je dostává hned, mimo React). */
   const uiTick = useRef<{ price: number | null; bar: MarketCandle | null; dirty: boolean; timer: ReturnType<typeof setTimeout> | null }>({ price: null, bar: null, dirty: false, timer: null });
-  const flushUiTick = useCallback(() => {
+  const capturedSetAt = useRef(0);
+  /**
+   * `final` = svíčka právě skončila (přišla další minuta). Pole svíček se mění JEN při nové nebo dokončené svíčce:
+   * každá změna pole přiměje graf znovu zpracovat celou historii a indikátory (tisíce svíček) — při změně 10× za
+   * sekundu se graf trhal a při tažení problikával (17. 11. 2026). Rozpracovanou svíčku graf bere z `liveFeed`.
+   */
+  const flushUiTick = useCallback((final = false) => {
     const ui = uiTick.current;
     if (ui.timer !== null) { clearTimeout(ui.timer); ui.timer = null; }
     if (!ui.dirty) return;
     ui.dirty = false;
     const bar = ui.bar;
     if (ui.price !== null) setPrice(ui.price);
-    setCapturedAt(Date.now());
-    if (bar) setCandles((current) => (current.length && current[current.length - 1].time === bar.time ? [...current.slice(0, -1), bar] : current.length && current[current.length - 1].time > bar.time ? current : [...current, bar]));
+    // Čas posledních dat slouží jen k poznání zastaralosti — stačí jednou za sekundu.
+    const nowMs = Date.now();
+    if (nowMs - capturedSetAt.current >= 1_000) { capturedSetAt.current = nowMs; setCapturedAt(nowMs); }
+    if (bar) setCandles((current) => {
+      const last = current[current.length - 1];
+      if (!last || last.time < bar.time) return [...current, bar];
+      if (last.time === bar.time) return final ? [...current.slice(0, -1), bar] : current;
+      return current;
+    });
   }, []);
   const connectionRef = useRef<RithmicLocalConnection | null>(null);
   /** Proces mlčí déle než BEAT_TIMEOUT_MS (tep chodí každou sekundu). */
@@ -256,11 +269,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             // obrazovky při každém ticku graf na živém trhu zasekávalo (17. 11. 2026).
             const ui = uiTick.current;
             // Nová minuta: nejdřív zapsat poslední stav té dokončené.
-            if (ui.bar && bar && bar.time !== ui.bar.time) flushUiTick();
+            if (ui.bar && bar && bar.time !== ui.bar.time) { ui.dirty = true; flushUiTick(true); }
             if (tickPrice !== null) ui.price = tickPrice;
             if (bar) ui.bar = bar;
             ui.dirty = true;
-            if (ui.timer === null) ui.timer = setTimeout(flushUiTick, 100);
+            if (ui.timer === null) ui.timer = setTimeout(() => flushUiTick(), 100);
           } else if (message.type === 'beat') {
             feedOpen.current = message.feed === true;
             setFeedLive(feedOpen.current);

@@ -2213,7 +2213,9 @@ acceptAgentStatus((await executeAgent({
     statusAgeMs: agentStatusObservedAt == null ? null : freshnessNow - agentStatusObservedAt });
   return (
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
-      <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable || rithmicChartAvailable) && tab === 'chart'} />
+      {/* Na grafu Rithmicu se hláška o kapacitě Tradovate neukazuje: s tímto účtem nesouvisí a překrývala lištu grafu.
+          Stav kopírky Tradovate zůstává vidět v čipech hlavičky (Worker, Kopírka Tradovate). */}
+      {!(rithmicChartAvailable && tab === 'chart') && <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable) && tab === 'chart'} />}
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
       <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.

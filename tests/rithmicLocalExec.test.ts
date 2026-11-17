@@ -325,6 +325,27 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
 });
 
 describe('místní služba: výsledek zavření jen s potvrzenou nulovou pozicí', () => {
+  it('opožděná zpráva se starou pozicí po vyplnění výsledek nezahodí — vyjde, jakmile přijde nula', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    const stop = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open')!;
+    await sleep(2_100);
+    t.server.controls.muteLivePositions = true;
+    t.server.fill(stop.basketId, 6980);
+    await sleep(40);
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1); // průběžná zpráva ještě se starou pozicí
+    await sleep(40);
+    expect(t.exec.state().closes).toEqual([]);
+    t.server.pushLivePosition('ACC1', 'ESZ6', 0);
+    await sleep(60);
+    expect(t.exec.state().closes).toHaveLength(1);
+    expect(t.exec.state().closes[0]).toMatchObject({ reason: 'sl', pointsTotal: -10 });
+    t.broker.stop();
+  });
+
   it('vyplnění, které nulovou pozici nepotvrdí, kartu nevyrobí (začátek obchodu služba neviděla)', async () => {
     const t = await setup({ config: { positionSettleMs: 20 } });
     // Zprávy o pozici nechodí: služba vidí jen vyplnění, nulu jí nikdo nepotvrdí.
