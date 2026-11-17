@@ -182,6 +182,10 @@ describe('místní služba: Stop vstup', () => {
     expect((placed as { result: { stopTicks: number; targetTicks: number } }).result).toMatchObject({ stopTicks: 40, targetTicks: 80 });
     expect(t.server.orders.get(entryId)).toMatchObject({ priceType: 4, triggerPrice: 7010, side: 1 });
     expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010, plannedStop: 7000, plannedTarget: 7030 });
+    // burza později hlásí ochranný limit (spoušť + 15 b) ve zprávě bez typu ceny → vstup zůstává Stopem na spoušti
+    t.server.notifyLive(entryId, 1, { price: 7025, price_type: undefined });
+    await sleep(60);
+    expect(t.exec.state().orders.find((o) => o.orderId === entryId)).toMatchObject({ role: 'entry', entryType: 'Stop', price: 7010, plannedStop: 7000, plannedTarget: 7030 });
     // posun Stop vstupu služba zatím neumí
     expect(await t.run({ op: 'move', orderId: entryId, price: 7012 })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();

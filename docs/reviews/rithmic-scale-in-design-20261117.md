@@ -100,3 +100,35 @@ Verdikt critica k v1: „UPRAVIT NÁVRH". Změny:
 8. **Obrazovka:** hook plní `entryScaleIn` jen když jsou splněné podmínky (pozice celá krytá, jedna
    cena na roli, 1 ks, Market); texty režimu přikoupení, které mluví o skupině/workeru/Flattenu,
    dostanou solo variantu. Pozice jen se SL (bez TP) smí přikoupit jen se SL.
+
+## v3 po oponentuře Codexu (17. 11.) — doplňuje v2
+
+Verdikt Codexu k v1/v2: „UPRAVIT NÁVRH". Doplnění:
+
+1. **Rozsah první verze ještě užší:** přikoupení jen MARKETEM, jen do pozice, která má SL I TP
+   (pozice s jednou nohou nebo bez ochrany nepřikupuje), nejvýš 2 ochrany.
+2. **Krytí se počítá po ochranách, ne součtem přes pozici:** každý neuzavřený vstup s ochranou
+   kontraktu musí být ve stavu „chráněno" podle adaptéru (`bracketState`), součet jejich množství
+   = |pozice| a každý pracující příkaz kontraktu je známá noha některého z nich.
+3. **Kontrola těsně před odesláním:** adaptér ukládá záměr před zápisem (čeká) — během toho může
+   SL pozici zavřít. `placeBracket` proto dostane volitelnou podmínku (`guard`), kterou vyhodnotí
+   až PO uložení, těsně před zápisem; když neplatí, záměr zahodí a nic neodešle. Služba v ní znovu
+   ověří všechny podmínky přikoupení (pozice, krytí, ceny noh, usazení po vyplnění).
+4. **`move-legs` (N ≤ 2):** `expect` = cena, kterou uživatel viděl (ochrannější SL / bližší TP);
+   před každou nohou znovu: noha pracuje, pozice má stejné znaménko a množství jako na začátku
+   (zavření mezi nohami → pozice 0 → zbytek se neprovede), nejde o nejistý předchozí krok. Po každém
+   zápisu čeká na potvrzení stavem; bez potvrzení končí „unknown". Výsledek rozlišuje u každé nohy
+   „potvrzeno / neodesláno / neznámé". Opakování je nový příkaz uživatele: nohy, které cenu už
+   mají, přeskočí.
+5. **Rozdílné ceny po skluzu:** přikoupení Marketem dá nohy od ceny vyplnění → obvykle „SL 2 ceny".
+   Služba v tom stavu další přikoupení nepustí (strop 2 by ho nepustil tak jako tak). Riziko se
+   nemění: každá část má vlastní SL/TP ve stejné vzdálenosti v tickách, jakou by měla při přesném
+   vyplnění; liší se o skluz vstupu.
+6. **Hlídač ochrany** (adaptér) dál ověřuje u každého vstupu počet a množství noh, ne jejich ceny.
+   Ceny noh proti vstupu se neověřují ani dnes — zapsáno jako podmínka před ostrým účtem.
+7. **Rezerva stropu pozice** (uvolnění po 5 s / první nenulové zprávě o pozici) je známé přijaté
+   riziko z dřívějšího review; přikoupení ho nezhoršuje, protože navíc vyžaduje prázdnou rezervu,
+   usazenou pozici a krytí celé pozice ochranami. Podmínka před ostrým účtem: uvolňovat rezervu až
+   prokázaným zahrnutím vyplnění do pozice.
+8. **Čekající přikoupení** se nestaví (v2). Až se bude stavět: trvalá vazba na pozici a předem
+   autorizované zrušení při jejím zániku.

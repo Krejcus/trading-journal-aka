@@ -344,7 +344,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       };
     }
     // Slot překresluje jen při změně klíče → patří do něj vše, co má být v grafu aktuální.
-    const key = JSON.stringify([symbol, summary?.kind, summary?.side, summary?.quantity, summary?.entry, summary?.stop, summary?.target, summary?.mark, summary?.openPnl]);
+    const key = JSON.stringify([symbol, summary?.kind, summary?.side, summary?.quantity, summary?.entry, summary?.entryType, entryOrder?.orderId, summary?.stop, summary?.target, summary?.mark, summary?.openPnl]);
     return { key, symbol, lines: [], summary, issue: null };
   }, [symbol, net?.netQuantity, net?.averagePrice, entryOrder?.orderId, entryOrder?.price, entryOrder?.entryType, entryOrder?.quantity, entryOrder?.side, entryOrder?.plannedStop, entryOrder?.plannedTarget, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag, price, pointValue, state === null]); // eslint-disable-line react-hooks/exhaustive-deps
 
