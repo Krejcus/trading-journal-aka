@@ -145,8 +145,37 @@ async function main(): Promise<void> {
     const text = JSON.stringify(message);
     for (const socket of clients) if (socket.readyState === WebSocket.OPEN) socket.send(text);
   };
-  /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou (neobnovuje se samo). */
+  /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou; obnovuje se s rostoucím odstupem. */
   let feedOpen = false;
+  let historyOk = false;
+  const restoring = new Set<'ticker' | 'history'>();
+  /** Po výpadku (uspání počítače, síť) se spojení pro ceny a historii obnoví samo: 5 s, 10 s … nejvýš 60 s. */
+  function scheduleFeedRestore(plant: 'ticker' | 'history', delayMs: number): void {
+    if (restoring.has(plant)) return;
+    restoring.add(plant);
+    setTimeout(() => {
+      void (async () => {
+        try {
+          await ticker.connect([plant]);
+          if (plant === 'ticker') {
+            await ticker.subscribeMarketData(CONTRACT, 'CME');
+            feedOpen = true;
+            console.log('[ticker] ceny obnoveny');
+            // Stránky se připojí znovu a dostanou čerstvé svíčky včetně těch z doby výpadku.
+            for (const socket of clients) socket.close(4000, 'feed restored');
+          } else {
+            historyOk = true;
+            console.log('[historie] obnovena');
+          }
+          restoring.delete(plant);
+        } catch (error) {
+          restoring.delete(plant);
+          console.log(`[ticker] obnova ${plant} selhala (${error instanceof Error ? error.message : String(error)}) — další pokus za ${Math.round(Math.min(delayMs * 2, 60_000) / 1_000)} s`);
+          scheduleFeedRestore(plant, Math.min(delayMs * 2, 60_000));
+        }
+      })();
+    }, delayMs);
+  }
   const ticker = new RithmicClient({
     url: URL, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
     events: {
@@ -158,14 +187,21 @@ async function main(): Promise<void> {
         broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
       },
       onPlantClosed: (plant, info) => {
-        feedOpen = false;
-        console.log(`[ticker] spojení ${plant} zavřeno (${info.code ?? '?'}) — ceny stojí, restartuj proces`);
+        if (plant === 'ticker') feedOpen = false;
+        if (plant === 'history') historyOk = false;
+        // Vynucené odhlášení = stejným jménem se přihlásil někdo jiný (jiná platforma). O přihlášení se
+        // nepřetahujeme: ceny zůstanou stát, dokud obsluha proces nespustí znovu.
+        if (info.forcedLogout) {
+          console.log(`[ticker] spojení ${plant} ukončeno vynuceným odhlášením — jiné přihlášení stejným uživatelem? Znovu se nepřipojuji.`);
+          return;
+        }
+        console.log(`[ticker] spojení ${plant} zavřeno (${info.code ?? '?'}) — zkusím se připojit znovu`);
+        scheduleFeedRestore(plant === 'history' ? 'history' : 'ticker', 5_000);
       },
     },
   });
   await ticker.connect(['ticker']);
   // Historie svíček (jen čtení): po připojení stránky doplní poslední dny, které graf jinak nemá.
-  let historyOk = false;
   try {
     await ticker.connect(['history']);
     historyOk = true;
