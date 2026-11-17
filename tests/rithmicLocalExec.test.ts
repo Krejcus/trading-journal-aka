@@ -1091,3 +1091,119 @@ describe('místní služba: posun, incidenty, stav', () => {
     t.broker.stop();
   });
 });
+
+describe('Rithmic live — pořadí zpráv o pozici, vyplnění a cizí pokyny', () => {
+  const consent = { requireStop: true, problem: () => null };
+
+  it('samotné potvrzení vyplnění nesmí po 5 s uvolnit místo pro druhý vstup', async () => {
+    let now = Date.now();
+    const t = await setup({ liveEnvironment: true, config: { maxPosition: 1, liveTrading: consent, now: () => now } });
+    try {
+      const first = await t.run(entry());
+      expect(first.ok).toBe(true);
+      await flush();
+      const id = (first as { result: { orderId: string } }).result.orderId;
+      const order = t.server.orders.get(id)!;
+      order.filled = 1;
+      order.status = 'complete';
+      t.server.positions.set('ACC1|ESZ6', 1);
+      // Order plant už dodal 351 COMPLETE/F. Burzovní 352 FILL a pozice z PnL plantu dosud nepřišly.
+      for (const socket of t.server.sockets.filter(s => s.readyState === 1 && s.infra === 2)) {
+        socket.push(351, {
+          account_id: 'ACC1', basket_id: id, user_tag: order.userTag, symbol: 'ESZ6', exchange: 'CME',
+          transaction_type: 1, price_type: 1, price: 6990, quantity: 1, total_fill_size: 1,
+          total_unfilled_size: 0, notify_type: 15, status: 'complete', completion_reason: 'F',
+        });
+      }
+      await flush();
+      expect(t.exec.state().orders.some(o => o.orderId === id)).toBe(false);
+      expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
+      now += 5_100;
+      expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
+      expect(t.frames()).toBe(1);
+    } finally {
+      t.broker.stop();
+    }
+  });
+
+  it('cizí čekající nákup zůstává cizí i se značkou začínající písmeny ui', async () => {
+    const t = await setup({ liveEnvironment: true, config: { maxPosition: 1, liveTrading: consent } });
+    try {
+      t.server.orders.set('900', {
+        basketId: '900', accountId: 'ACC1', userTag: 'uiExternal', symbol: 'ESZ6', exchange: 'CME',
+        side: 1, priceType: 1, quantity: 1, price: 6900, status: 'open', filled: 0,
+      });
+      t.server.notifyLive('900', 1);
+      await flush();
+      expect(t.exec.state().orders.find(o => o.orderId === '900')).toMatchObject({ role: 'other', status: 'working' });
+      expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
+      expect(t.frames()).toBe(0);
+    } finally {
+      t.broker.stop();
+    }
+  });
+
+  it('Limit se při ukládání záměru dostane přes trh, žádný zápis neodejde', async () => {
+    const store = memoryProtectionStore();
+    let pause = false;
+    let started: () => void;
+    let resume: () => void;
+    const saving = new Promise<void>(resolve => { started = resolve; });
+    const released = new Promise<void>(resolve => { resume = resolve; });
+    const t = await setup({ protectionStore: {
+      load: () => store.load(),
+      save: async state => {
+        if (pause) { started(); await released; }
+        await store.save(state);
+      },
+    } });
+    try {
+      pause = true;
+      const pending = t.run(entry());
+      await saving;
+      t.setPrice(6989);
+      resume();
+      expect(await pending).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/přes trh/) });
+      expect(t.frames()).toBe(0);
+    } finally { resume(); t.broker.stop(); }
+  });
+
+  it('zpráva bez množství pozice zastaví vstup do další určité zprávy', async () => {
+    const t = await setup();
+    try {
+      for (const socket of t.server.sockets.filter(s => s.readyState === 1 && s.infra === 4)) {
+        socket.push(450, { account_id: 'ACC1', symbol: 'ESZ6', exchange: 'CME' });
+      }
+      await flush();
+      expect(await t.run(entry())).toMatchObject({ ok: false, sent: false });
+      expect(t.frames()).toBe(0);
+      t.server.pushLivePosition('ACC1', 'ESZ6', 0);
+      await flush();
+      expect((await t.run(entry())).ok).toBe(true);
+    } finally { t.broker.stop(); }
+  });
+
+  it('pozice +1 před detaily vstupního fillu nezanechá po zavření na SL fiktivní kontrakt', async () => {
+    let now = Date.now();
+    const t = await setup({ liveEnvironment: true, config: { maxPosition: 1, liveTrading: consent, now: () => now } });
+    try {
+      const first = await t.run(entry());
+      expect(first.ok).toBe(true);
+      await flush();
+      t.server.pushLivePosition('ACC1', 'ESZ6', 1);
+      await flush();
+      t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+      await flush();
+      const stop = t.exec.state().orders.find(o => o.role === 'stop')!;
+      t.server.fill(stop.orderId, 6980);
+      await flush();
+      now += 5_100;
+      expect(t.server.positions.get('ACC1|ESZ6')).toBe(0);
+      expect(t.exec.state().closes.at(-1)).toMatchObject({ quantity: 1, pointsTotal: -10, reason: 'sl' });
+      expect(t.exec.state()).toMatchObject({ positions: [], orders: [], blocked: null });
+      expect(await t.run(entry())).toMatchObject({ ok: true });
+    } finally {
+      t.broker.stop();
+    }
+  });
+});

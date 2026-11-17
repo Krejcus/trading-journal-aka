@@ -135,6 +135,8 @@ export interface RithmicBrokerPort extends BrokerPort {
   /** Zastaveno bez automatické obnovy (vynucené odhlášení, neurčitelný stav). */
   isHalted(): boolean;
   accountIds(): number[];
+  /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
+  executionNet(accountId: number, symbol: string): number | null;
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
   /**
    * Dva výstupní příkazy svázané burzou (OCO): SL (Stop) a TP (Limit) na stejné množství. Vyplnění nebo
@@ -235,7 +237,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
    * změny jiného účtu čtení neruší.
    */
   const positionSeq = new Map<number, number>();
-  const livePositions = new Map<string, number>();
+  const livePositions = new Map<string, number | null>();
   /** Běžící dohledání stavu (účet:příkaz) — nejvýš jedno, ať se čtení nevrší před Flatten. */
   const resolving = new Set<string>();
   /** Po zastavení nebo `stop()` začíná další `start()` s čistou knihou. */
@@ -386,7 +388,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     const delta = book.apply(update);
     // „Živá je novější" platí jen když kniha zprávu opravdu uplatnila.
     if ((delta.order || delta.fill) && update.basketId) touchedAt.set(update.basketId, liveSeq);
-    if (account !== undefined && update.basketId && (delta.fill || delta.awaitingFill || update.notifyType === 'FILL')) {
+    if (account !== undefined && update.basketId && (delta.fill || delta.awaitingFill || (update.notifyType === 'FILL' && !delta.duplicateFill))) {
       const symbol = update.symbol || book.get(account, update.basketId)?.symbol;
       if (symbol) {
         const fillKey = `${account}:${symbol}`;
@@ -489,7 +491,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     }
     if (position.netQuantity === null) {
       positionSeq.set(account, (positionSeq.get(account) ?? 0) + 1);
-      livePositions.delete(`${account}:${position.symbol}`);
+      livePositions.set(`${account}:${position.symbol}`, null);
       incident('attention', `pozice ${position.symbol} bez množství — neznámá, ne nulová`);
       return;
     }
@@ -1011,7 +1013,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   function trustedLivePosition(account: number, symbol: string): number | undefined {
     const key = `${account}:${symbol}`;
     const live = livePositions.get(key);
-    return live !== undefined && validExpectedNet(account, symbol) === live ? live : undefined;
+    return typeof live === 'number' && validExpectedNet(account, symbol) === live ? live : undefined;
   }
 
   /** Čistá pozice kontraktu: důvěryhodná živá hodnota, jinak čtením. `null` = neznámá. */
@@ -1539,6 +1541,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     isConnected: () => state === 'connected',
     isHalted: () => state === 'halted',
     accountIds: () => [...textByNumber.keys()],
+    executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
     routeEpoch: () => epoch,
 
     async placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck> {

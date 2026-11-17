@@ -168,7 +168,7 @@ async function main(): Promise<void> {
     if (!tickDirty) return;
     tickDirty = false;
     const now = Date.now();
-    broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
+    broadcast({ type: 'tick', symbol: CONTRACT, price: freshPrice(now), bar: candles.current(CONTRACT, now), at: now });
   }, 16).unref();
   /** Poslední obchod; když dlouho žádný nebyl, střed nabídky a poptávky. Jen pro zobrazení. */
   const displayPrice = (now: number): number | null => {
@@ -181,14 +181,14 @@ async function main(): Promise<void> {
    * Cena pro KONTROLY příkazů (strana trhu, odchylka reference). Na skutečném trhu musí být čerstvá a ze živého
    * spojení — zobrazovací cena smí být i hodinu stará, kontrola ne. Testovací trh často stojí, tam platí zobrazovací.
    */
-  const checkPrice = (now: number): number | null => {
-    if (SYSTEM === 'Rithmic Test') return displayPrice(now);
+  const freshPrice = (now: number): number | null => {
     if (!feedOpen) return null;
     const last = candles.lastPrice(CONTRACT, now, 30_000);
     if (last !== null) return last;
     const quote = candles.quote(CONTRACT, now, 30_000);
     return quote && quote.bid !== null && quote.ask !== null ? (quote.bid + quote.ask) / 2 : null;
   };
+  const checkPrice = (now: number) => SYSTEM === 'Rithmic Test' && feedOpen ? displayPrice(now) : freshPrice(now);
   const clients = new Set<WebSocket>();
   type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number };
   /** Historie se drží v paměti procesu: dotaz na Rithmic nejvýš jednou za minutu, souběžná připojení sdílí jeden. */
@@ -280,7 +280,13 @@ async function main(): Promise<void> {
         tickDirty = true;
       },
       onPlantClosed: (plant, info) => {
-        if (plant === 'ticker') feedOpen = false;
+        if (plant === 'ticker') {
+          feedOpen = false;
+          candles.reset(CONTRACT);
+          tickDirty = false;
+          lastBar = null;
+          broadcast({ type: 'beat', at: Date.now(), feed: false });
+        }
         if (plant === 'history') historyOk = false;
         // Vynucené odhlášení = stejným jménem se přihlásil někdo jiný (jiná platforma). O přihlášení se
         // nepřetahujeme: ceny zůstanou stát, dokud obsluha proces nespustí znovu.
@@ -307,7 +313,7 @@ async function main(): Promise<void> {
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
   // Tep: stránka podle něj pozná, že proces žije, i když trh stojí. Bez tepu si čerstvost nevyrábí.
-  setInterval(() => broadcast({ type: 'beat', at: Date.now(), feed: feedOpen }), 1_000).unref();
+  setInterval(() => broadcast({ type: 'beat', at: Date.now(), feed: freshPrice(Date.now()) !== null }), 1_000).unref();
 
   // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
   const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);
@@ -400,7 +406,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, live: LIVE_TRADING, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, live: LIVE_TRADING, feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     void (async () => {

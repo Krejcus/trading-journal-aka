@@ -20,6 +20,7 @@ export function rithmicScreenInstrumentIssue(info: { symbol: string; tickSize: n
 }
 
 interface Props {
+  simulationUrl?: string;
   open: boolean;
   isDark: boolean;
   tabs: LiveTradingTab[];
@@ -33,14 +34,15 @@ interface Props {
 
 const card = (id: string, tone: TradeToast['tone'], badge: string, title: string, line: string): TradeToast => ({ id, at: Date.now(), tone, badge, title, line, pnl: null, accounts: 0, sticky: true, wrapLine: true });
 
-const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash }) => {
-  const url = useMemo(rithmicLocalUrl, []);
+const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl }) => {
+  const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl]);
   const trading = useRithmicLocalTrading({ url, enabled: open });
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
   const linkNote = link !== 'open' ? 'odpojeno' : !trading.helloFresh ? 'připojuji' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : trading.liveAccount ? 'SKUTEČNÝ ÚČET' : null;
-  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, legsRemovable: trading.legsRemovable, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [trading.system, symbol, usable, linkNote, trading.legsRemovable]);
+  const systemLabel = simulationUrl && !trading.liveAccount ? 'Lokální simulace · LOCAL-SIM' : trading.system ?? 'Rithmic';
+  const soloBase = useMemo(() => ({ label: `${systemLabel} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, legsRemovable: trading.legsRemovable, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [systemLabel, trading.system, symbol, usable, linkNote, trading.legsRemovable]);
   // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
   const rejectionBaseline = useRef<number | null>(null);
   if (!state) rejectionBaseline.current = null;

@@ -335,6 +335,7 @@ describe('chybějící exekuce', () => {
     await flush();
     expect(t.events.filter((e) => e.type === 'fill')).toHaveLength(1);
     expect(t.leaderEvents.map((e) => e.kind)).toEqual(['submitted', 'canceled', 'filled']);
+    expect(t.broker.executionNet(t.account(), 'ESZ6')).toBe(1);
     t.broker.stop();
   });
 

@@ -26,7 +26,9 @@ interface SymbolState {
   lastPriceAt: number;
   bid: number | null;
   ask: number | null;
-  quoteAt: number;
+  bidAt: number;
+  askAt: number;
+  quoteNotifiedAt: number;
 }
 
 export interface RithmicCandleBuilderOptions {
@@ -48,7 +50,7 @@ export class RithmicCandleBuilder {
   private state(symbol: string): SymbolState {
     let state = this.symbols.get(symbol);
     if (!state) {
-      state = { forming: null, finished: [], lastPrice: null, lastPriceAt: 0, bid: null, ask: null, quoteAt: 0 };
+      state = { forming: null, finished: [], lastPrice: null, lastPriceAt: 0, bid: null, ask: null, bidAt: 0, askAt: 0, quoteNotifiedAt: 0 };
       this.symbols.set(symbol, state);
     }
     return state;
@@ -58,22 +60,27 @@ export class RithmicCandleBuilder {
   onTick(tick: RithmicTick): boolean {
     if (!tick.symbol) return false;
     const state = this.state(tick.symbol);
+    if (tick.isSnapshot && tick.exchangeAt === null && tick.gatewayAt === null) return false;
     if (tick.kind === 'bbo') {
+      const at = Math.min(tickTimeMs(tick), tick.receivedAt);
       let changed = false;
-      if (validPrice(tick.bidPrice) && tick.bidPrice !== state.bid) {
+      if (validPrice(tick.bidPrice) && at >= state.bidAt) {
+        changed = tick.bidPrice !== state.bid;
         state.bid = tick.bidPrice;
-        changed = true;
+        state.bidAt = at;
       }
-      if (validPrice(tick.askPrice) && tick.askPrice !== state.ask) {
+      if (validPrice(tick.askPrice) && at >= state.askAt) {
+        changed ||= tick.askPrice !== state.ask;
         state.ask = tick.askPrice;
-        changed = true;
+        state.askAt = at;
       }
-      if (changed) state.quoteAt = tick.receivedAt;
-      return changed;
+      const refreshed = (state.bidAt === at || state.askAt === at) && at - state.quoteNotifiedAt >= 1_000;
+      if (changed || refreshed) state.quoteNotifiedAt = at;
+      return changed || refreshed;
     }
     if (!validPrice(tick.tradePrice)) return false;
     const price = tick.tradePrice;
-    const at = tickTimeMs(tick);
+    const at = Math.min(tickTimeMs(tick), tick.receivedAt);
     if (tick.isSnapshot) {
       if (at >= state.lastPriceAt) {
         state.lastPrice = price;
@@ -82,7 +89,7 @@ export class RithmicCandleBuilder {
       }
       return false;
     }
-    const minute = Math.floor(at / 60_000) * 60;
+    const minute = Math.floor(tickTimeMs(tick) / 60_000) * 60;
     const size = typeof tick.tradeSize === 'number' && Number.isFinite(tick.tradeSize) && tick.tradeSize > 0 ? tick.tradeSize : 0;
     const forming = state.forming;
     if (forming && minute < forming.time) {
@@ -125,8 +132,11 @@ export class RithmicCandleBuilder {
   /** Nejlepší nabídka a poptávka, pokud nejsou starší než `maxAgeMs`. */
   quote(symbol: string, nowMs: number, maxAgeMs: number): { bid: number | null; ask: number | null } | null {
     const state = this.symbols.get(symbol);
-    if (!state || nowMs - state.quoteAt > maxAgeMs) return null;
-    return { bid: state.bid, ask: state.ask };
+    if (!state) return null;
+    const bid = nowMs - state.bidAt <= maxAgeMs ? state.bid : null;
+    const ask = nowMs - state.askAt <= maxAgeMs ? state.ask : null;
+    if ((bid === null && ask === null) || (bid !== null && ask !== null && bid > ask)) return null;
+    return { bid, ask };
   }
 
   /** Dokončené svíčky od připojení (starší historii dodává jiný zdroj). */

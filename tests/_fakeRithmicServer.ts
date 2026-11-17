@@ -34,6 +34,7 @@ export interface FakeRithmicOptions {
   accounts?: string[];
   password?: string;
   tickSize?: number;
+  exitPrice?: () => number;
 }
 
 export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
@@ -440,7 +441,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         const exit = createOrder({ account_id: f.account_id, symbol: f.symbol, exchange: f.exchange, transaction_type: net > 0 ? 2 : 1, price_type: 2, quantity: Math.abs(net) });
         notify(exit, 1, 13);
         if (controls.delayExitFill) heldExits.push(exit.basketId);
-        else fill(exit.basketId, 7000);
+        else fill(exit.basketId, options.exitPrice?.() ?? 7000);
         return;
       }
       case 320:
@@ -477,7 +478,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     /** Živá burzovní notifikace o příkazu (pro testy závodů). */
     /** Vyplní zavírací příkazy zadržené přes `delayExitFill`. */
     releaseExit(): void {
-      for (const id of heldExits.splice(0)) fill(id, 7000);
+      for (const id of heldExits.splice(0)) fill(id, options.exitPrice?.() ?? 7000);
     },
     notifyLive(basketId: string, exchangeType: number, extra: RithmicFields = {}): void {
       const order = orders.get(basketId);

@@ -288,6 +288,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-17 — Rithmic na localhostu (Codex)
+
+Filip chce nejdřív společně vyzkoušet aplikaci lokálně. Větev `codex/rithmic-local-20261117` vychází z `ffe0d716`. Příkaz `node --import tsx tests/qa/start-rithmic.mjs --simulate` otevře službu na 127.0.0.1:4186, graf je na `/tests/qa/rithmic-simulation.html`. Účet LOCAL-SIM, ceny i vyplnění jsou simulované v paměti. Služba používá skutečnou místní logiku příkazů. Vstup srovnává pozici s výchozím snímkem a jednotlivými exekucemi. Tep spojení už neposouvá čas poslední ceny. Ověřeno přes lokální WebSocket včetně výměny Limitu, vytvoření ochrany a zavření. V prohlížeči ověřena obě tažení. Návrh 24 973 → 24 970,25, poté zadaný Limit zpět na 24 973. SL i TP zůstaly na původních cenách. Při 40 lokálních zadáních Limitu byla doba od odeslání po zprávu stavu 1,7 ms v mediánu a 1,9 ms na 95. percentilu (simulovaný broker v paměti). Zkouška s Rithmic Test a srovnání s R Traderem zůstávají otevřené.
+
 ### 2026-11-15 — Claude: zásek při Go To v backtestu (web NASAZEN 15. 11., iPhone ne)
 
 Filip: po Go To na London / New York se appka „sekne“. Změřeno v jeho

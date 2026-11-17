@@ -63,6 +63,7 @@ export interface RithmicOrderDelta {
   /** Nový stav příkazu, když se něco změnilo. */
   order?: BrokerOrder;
   fill?: BrokerFill;
+  duplicateFill?: boolean;
   /** Notifikace, kterou nejde bezpečně vyložit — volající má stav ověřit čtením. */
   attention?: string;
   /** Rithmic hlásí vyplnění, burzovní exekuce ještě nepřišla: hlídat lhůtu. */
@@ -297,6 +298,8 @@ export class RithmicOrderBook {
               price: update.fillPrice,
               filledAt: update.gatewayAt ?? this.options.now(),
             };
+          } else {
+            delta.duplicateFill = true;
           }
           if (!wasTerminal) status = next.quantity > 0 && next.filledQuantity >= next.quantity ? 'filled' : 'working';
         } else {

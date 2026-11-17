@@ -49,6 +49,15 @@ describe('RithmicCandleBuilder', () => {
     expect(b.current('MNQZ6', T0 + 125_000)).toBeNull();
   });
 
+  it('každá strana kotace má vlastní stáří i při stejné ceně', () => {
+    const b = new RithmicCandleBuilder();
+    b.onTick({ ...trade(0, 0), kind: 'bbo', bidPrice: 100, askPrice: 101 });
+    b.onTick({ ...trade(4_000, 0), kind: 'bbo', bidPrice: 100 });
+    expect(b.quote('MNQZ6', T0 + 5_000, 2_000)).toEqual({ bid: 100, ask: null });
+    b.onTick({ ...trade(5_000, 0), kind: 'bbo', askPrice: 99 });
+    expect(b.quote('MNQZ6', T0 + 5_000, 2_000)).toBeNull();
+  });
+
   it('opožděný obchod ze starší minuty svíčku nepřepíše', () => {
     const b = new RithmicCandleBuilder();
     b.onTick(trade(61_000, 25010));

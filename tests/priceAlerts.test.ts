@@ -228,7 +228,9 @@ describe('upozornění na cenu na PC', () => {
   it('karty upozornění nevytlačí kartu plnění', () => {
     const fill = { id: 'fill', sticky: false };
     const extras = Array.from({ length: 5 }, (_, i) => ({ id: `x${i}`, sticky: false }));
-    expect(read('components/LiveTradingScreen.tsx')).toMatch(/extra=\{priceAlerts\.cards\} capExtra/);
+    const screen = read('components/LiveTradingScreen.tsx');
+    expect(screen).toContain('const cards = soloAccountLabel ? extraToasts ?? [] : priceAlerts.cards;');
+    expect(screen).toMatch(/extra=\{toastExtras\} capExtra/);
     expect(read('components/day/LivePhoneChart.tsx')).toMatch(/extra=\{cards\} capExtra/);
     expect(read('components/BacktestWorkspace.tsx')).not.toMatch(/capExtra/);
     const capped = capExtraToasts([fill, ...extras], toast => toast.id.startsWith('x'));

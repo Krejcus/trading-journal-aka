@@ -60,11 +60,10 @@ function createFeed() {
     feed,
     reset() { forming = null; last = null; for (const listener of [...listeners]) listener(); },
     push(price: number | null, bar: MarketCandle | null) {
-      if (price !== null) last = price;
+      last = price;
       if (bar) forming = bar;
       for (const listener of [...listeners]) listener();
     },
-    beat() { for (const listener of [...listeners]) listener(); },
   };
 }
 
@@ -169,12 +168,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const [price, setPrice] = useState<number | null>(null);
   const [link, setLink] = useState<RithmicLocalLinkState>(url ? 'connecting' : 'off');
   const [candles, setCandles] = useState<MarketCandle[]>([]);
-  const [capturedAt, setCapturedAt] = useState(() => Date.now());
+  const [capturedAt, setCapturedAt] = useState(0);
   /** Proces žije (tep) a jeho spojení pro ceny taky. Čerstvost se nikdy nevyrábí v prohlížeči. */
   const [feedLive, setFeedLive] = useState(false);
   /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
   const [helloFresh, setHelloFresh] = useState(false);
-  const feedOpen = useRef(false);
+  const lastMarketAt = useRef(0);
   const [events, setEvents] = useState<LiveTradingCopyEvent[]>([]);
   const seen = useRef<Seen | null>(null);
   const plainExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,7 +184,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   /**
    * `final` = svíčka právě skončila (přišla další minuta). Pole svíček se mění JEN při nové nebo dokončené svíčce:
    * každá změna pole přiměje graf znovu zpracovat celou historii a indikátory (tisíce svíček) — při změně 10× za
-   * sekundu se graf trhal a při tažení problikával (17. 11. 2026). Rozpracovanou svíčku graf bere z `liveFeed`.
+   * sekundu se graf trhal a při tažení problikával (17. 11. 2026). Rozpracovanou svíčku graf dostává přímo z proudu cen.
    */
   const flushUiTick = useCallback((final = false) => {
     const ui = uiTick.current;
@@ -195,8 +194,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     const bar = ui.bar;
     if (ui.price !== null) setPrice(ui.price);
     // Čas posledních dat slouží jen k poznání zastaralosti — stačí jednou za sekundu.
-    const nowMs = Date.now();
-    if (nowMs - capturedSetAt.current >= 1_000) { capturedSetAt.current = nowMs; setCapturedAt(nowMs); }
+    if (lastMarketAt.current - capturedSetAt.current >= 1_000) { capturedSetAt.current = lastMarketAt.current; setCapturedAt(lastMarketAt.current); }
     if (bar) setCandles((current) => {
       const last = current[current.length - 1];
       if (!last || last.time < bar.time) return [...current, bar];
@@ -232,7 +230,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
           uiTick.current = { price: null, bar: null, dirty: false, timer: null };
           seen.current = null;
           stateRef.current = null;
-          feedOpen.current = false;
+          lastMarketAt.current = 0;
           setHelloFresh(false);
           priceRef.current = null;
           feedBox.reset();
@@ -244,7 +242,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
         // Hlídač tepu: proces mlčí → cena je stará a stojí vstupy, posuny i rušení. Zavření pozice
         // (brzda) se zkusit smí vždy — skončí nejhůř „unknown".
         onSilent: (quiet) => {
-          if (quiet) { feedOpen.current = false; setFeedLive(false); }
+          if (quiet) setFeedLive(false);
           setSilent(quiet);
         },
         onMessage: (message) => {
@@ -252,8 +250,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             const info = message as unknown as Hello;
             symbolRef.current = info.symbol;
             setHelloFresh(true);
-            feedOpen.current = info.feed === true;
-            setFeedLive(feedOpen.current);
+            if (info.feed === true && info.price !== null) {
+              lastMarketAt.current = Date.now();
+              setCapturedAt(lastMarketAt.current);
+            }
+            setFeedLive(info.feed === true && info.price !== null);
             setHello(info);
             const bars = info.bars.map(candle);
             // Graf potřebuje aspoň jednu svíčku; testovací trh často stojí.
@@ -264,7 +265,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             const bar = message.bar ? candle(message.bar as Bar) : null;
             const tickPrice = typeof message.price === 'number' ? message.price : null;
             // Graf dostane KAŽDOU zprávu hned a přímo (mimo React) — cena i svíčka se kreslí při každém snímku.
-            if (tickPrice !== null) priceRef.current = tickPrice;
+            if (tickPrice !== null) {
+              priceRef.current = tickPrice;
+              lastMarketAt.current = Date.now();
+            }
             feedBox.push(tickPrice, bar);
             // Zbytek obrazovky (lístek, P&L, seznam svíček) se překresluje nejvýš 10× za sekundu: překreslení celé
             // obrazovky při každém ticku graf na živém trhu zasekávalo (17. 11. 2026).
@@ -276,9 +280,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             ui.dirty = true;
             if (ui.timer === null) ui.timer = setTimeout(() => flushUiTick(), 100);
           } else if (message.type === 'beat') {
-            feedOpen.current = message.feed === true;
-            setFeedLive(feedOpen.current);
-            if (feedOpen.current) { feedBox.beat(); setCapturedAt(Date.now()); }
+            setFeedLive(message.feed === true && Date.now() - lastMarketAt.current <= 30_000);
           } else if (message.type === 'state') {
             stateRef.current = message.state as LocalExecState;
             setState(message.state as LocalExecState);
