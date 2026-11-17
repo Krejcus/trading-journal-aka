@@ -968,6 +968,45 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     t.broker.stop();
   });
 
+  it('výstup doběhne až po lhůtě a zbylý kus mezitím zavře SL → záznam ochrany se dopíše, nic nezůstane viset', async () => {
+    const { t, entryId } = await twoContracts();
+    const reply = await t.run({ op: 'reduce', clientId: 'sp5', symbol: 'ESZ6' });
+    expect(reply).toMatchObject({ ok: false, sent: 'unknown', error: expect.stringMatching(/není potvrzené/) });
+    const exit = exitOrder(t)!;
+    const stop = [...t.server.orders.values()].find((o) => o.parent === entryId && o.priceType !== 1 && o.status === 'open')!;
+    t.server.fill(stop.basketId, 6980);
+    await sleep(80);
+    t.server.fill(exit.basketId, 6979);
+    await sleep(900);
+    expect(t.exec.state().positions).toEqual([]);
+    const account = t.broker.accountIds()[0];
+    expect(t.broker.executionNet(account, 'ESZ6')).toBe(0);
+    expect(t.broker.bracketState(account, entryId).state).not.toBe('unprotected');
+    t.broker.stop();
+  });
+
+  it('3 ks → 2 → 1: každé dělení zvlášť, ochrana vždy sedí na zbytek', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 400, protectiveGraceMs: 40, maxQuantity: 3, maxPosition: 3 } });
+    const placed = await t.run(entry({ quantity: 3, limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    t.server.fill(entryId, 6990);
+    await sleep(150);
+    for (const [index, left] of [[1, 2], [2, 1]] as const) {
+      const pending = t.run({ op: 'reduce', clientId: `sp6-${index}`, symbol: 'ESZ6' });
+      await sleep(120);
+      t.server.fill(exitOrder(t)!.basketId, 6999);
+      expect(await pending).toMatchObject({ ok: true, result: { split: true } });
+      await sleep(150);
+      expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: left })]);
+      expect([...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open').map((o) => o.quantity)).toEqual([left, left]);
+      expect(t.broker.bracketState(t.broker.accountIds()[0], entryId).state).toBe('protected');
+    }
+    expect(t.exec.state().blocked).toBeNull();
+    expect(await t.run({ op: 'reduce', clientId: 'sp6-3', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
   it('jeden vstup s 1 kusem dál částečně zavřít nejde', async () => {
     const t = await setup({ config: { positionSettleMs: 20 } });
     const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));

@@ -47,7 +47,7 @@ export interface LocalExecConfig {
    * nebo po potvrzení obsluhou. Když služba spadne uprostřed výměny, po startu podle ní ohlásí incident — bez ní by
    * pozice zůstala bez ochrany potichu (holá pozice je jinak povolený stav).
    */
-  replaceMarker?: { read: () => { symbol: string; at: number } | null; write: (value: { symbol: string; at: number } | null) => void };
+  replaceMarker?: { read: () => { symbol: string; at: number; resize?: { entryId: string; exitTag: string; expectNet: number } } | null; write: (value: { symbol: string; at: number; resize?: { entryId: string; exitTag: string; expectNet: number } } | null) => void };
   maxReferenceDriftTicks?: number;
   /**
    * Název systému Rithmicu, ke kterému je adaptér přihlášený, a výslovný seznam povolených.
@@ -173,6 +173,9 @@ export const PROTECT_TAG = 'uiprot-';
 export const ADD_TAG = 'ui-add-';
 export const ADD_CLIENT_PREFIX = 'add-';
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** Značka vlastního VSTUPU. Výstup dělení vstupu (`ui-red-`) vstup není: nepočítá se do rezervy ani mezi čekající vstupy. */
+const isEntryTag = (tag: string | undefined): boolean => tag?.startsWith('ui-') === true && !tag.startsWith('ui-red-');
 
 export class LocalExec {
   private readonly broker: RithmicBrokerPort;
@@ -321,7 +324,7 @@ export class LocalExec {
       // (jinak by mezi vyplněním a pozicí „zmizelo" a další vstup by obešel strop).
       const grew = event.order.filledQuantity - (before?.filledQuantity ?? 0);
       if (grew > 0) this.lastFillAt.set(event.order.symbol, this.now());
-      if (grew > 0 && event.order.tag?.startsWith('ui-')) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, at: this.now() });
+      if (grew > 0 && isEntryTag(event.order.tag)) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, at: this.now() });
       if (event.order.status === 'rejected' && before?.status !== 'rejected') {
         this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
         if (this.rejections.length > 10) this.rejections.shift();
@@ -352,13 +355,15 @@ export class LocalExec {
         // Služba minule skončila uprostřed výměny ochrany: ohlásit (jednou), nic nezadávat — rozhoduje člověk.
         if (!this.markerChecked) {
           this.markerChecked = true;
-          let pending: { symbol: string; at: number } | null = null;
+          let pending: { symbol: string; at: number; resize?: { entryId: string; exitTag: string; expectNet: number } } | null = null;
           try { pending = this.config.replaceMarker?.read() ?? null; } catch { pending = null; }
           if (pending) {
             const message = `služba skončila uprostřed výměny ochrany na ${pending.symbol} — pozice může být BEZ ochrany nebo s jinou, než čekáš; ověř u brokera, pak potvrď`;
             this.incidents.push({ kind: 'protect-replace-interrupted', message, at: this.now() });
             this.blocked = `protect-replace-interrupted: ${message}`.slice(0, 240);
             this.legsUncertain.add(pending.symbol);
+            // Přerušené dělení vstupu: výstup se dohledá v knize a záznam ochrany se dopíše (nic se neodesílá).
+            if (pending.resize) this.pendingResize.set(pending.symbol, pending.resize);
           }
         }
         // Výchozí stav po (znovu)připojení je nová pravda — staré záznamy pryč.
@@ -421,7 +426,7 @@ export class LocalExec {
   /** ID vstupu, pro který právě běží zkouška nanečisto (jen synchronní úsek `execute`, nikdy přes `await`). */
   private replaceDryRun: string | null = null;
   private markerChecked = false;
-  private setReplaceMarker(value: { symbol: string; at: number } | null): boolean {
+  private setReplaceMarker(value: { symbol: string; at: number; resize?: { entryId: string; exitTag: string; expectNet: number } } | null): boolean {
     try { this.config.replaceMarker?.write(value); return true; } catch { return false; }
   }
   /** Kdy služba naposledy poslala zavření kontraktu — vyplnění krátce poté je „ručně" (příkaz zavření nenese značku). */
@@ -466,7 +471,7 @@ export class LocalExec {
     if (this.consentProblem() === null) { this.consentEndedReported = false; return; }
     const accountId = this.broker.accountIds()[0];
     const legIds = new Set(accountId === undefined ? [] : this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs.map((leg) => leg.orderId)));
-    const waiting = [...this.orders.values()].filter((order) => !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') === true && !legIds.has(order.brokerOrderId));
+    const waiting = [...this.orders.values()].filter((order) => !TERMINAL.has(order.status) && isEntryTag(order.tag) && !legIds.has(order.brokerOrderId));
     if (waiting.length === 0) { this.consentEndedReported = false; return; }
     if (this.consentEndedReported) return;
     this.consentEndedReported = true;
@@ -490,12 +495,14 @@ export class LocalExec {
     for (const [symbol, item] of this.pendingResize) {
       const exit = [...this.orders.values()].find((order) => order.tag === item.exitTag);
       if (!exit) continue;
-      if (exit.status === 'filled' && (this.positions.get(symbol)?.netQuantity ?? 0) === item.expectNet && this.broker.executionNet(accountId, symbol) === item.expectNet) {
+      // Vyplněný výstup je prokázané vyplnění mimo nohy — zapíše se vždy, ať je pozice mezitím jakákoli
+      // (např. zbylý kus mezitím zavřel SL); jinak by záznam ochrany zůstal navždy s expozicí navíc.
+      if (exit.status === 'filled') {
         this.pendingResize.delete(symbol);
-        void this.broker.endBracketResize(accountId, item.entryId, exit.filledQuantity).catch(() => undefined);
+        void this.broker.endBracketResize(accountId, item.entryId, exit.filledQuantity).then(() => { this.setReplaceMarker(null); }).catch(() => undefined);
       } else if (exit.status === 'rejected' || exit.status === 'canceled') {
         this.pendingResize.delete(symbol);
-        void this.broker.endBracketResize(accountId, item.entryId, 0).catch(() => undefined);
+        void this.broker.endBracketResize(accountId, item.entryId, exit.filledQuantity).then(() => { this.setReplaceMarker(null); }).catch(() => undefined);
       }
     }
   }
@@ -663,7 +670,7 @@ export class LocalExec {
       const protective = order.tag?.startsWith(PROTECT_TAG) ? (order.orderType === 'Stop' ? 'stop' as const : order.orderType === 'Limit' ? 'target' as const : 'other' as const) : null;
       // Vstup je jen VLASTNÍ příkaz (značka ui-). Cokoli zadané jinde (jiná platforma) je „other": graf to ukáže
       // jako cizí příkaz jen pro zobrazení, nikdy jako vstup, SL nebo TP této appky.
-      const own = order.tag?.startsWith('ui-') === true;
+      const own = isEntryTag(order.tag);
       const role = known?.role ?? protective ?? (own && order.orderType !== 'Unsupported' ? 'entry' : 'other');
       // Vstup: Stop se kreslí na spoušti (burza k němu může hlásit i ochranný limit), Limit na limitní ceně.
       const price = role === 'stop' ? order.stopPrice : role === 'target' ? order.limitPrice : order.stopPrice ?? order.limitPrice;
@@ -1567,8 +1574,8 @@ export class LocalExec {
             const market = this.config.serverPrice?.(symbol) ?? null;
             if (market === null) return refuse('služba nemá čerstvou cenu — částečné zavření neodesílám');
             if (net0 > 0 ? market <= part.stop.stopPrice! : market >= part.stop.stopPrice!) return refuse('trh je u SL — částečné zavření neodesílám');
-            if (!this.setReplaceMarker({ symbol, at: this.now() })) return refuse('značku změny ochrany nejde uložit — nic neměním');
             const exitTag = `ui-red-${reduceId}`;
+            if (!this.setReplaceMarker({ symbol, at: this.now(), resize: { entryId: part.entryId, exitTag, expectNet: net0 - Math.sign(net0) } })) return refuse('značku změny ochrany nejde uložit — nic neměním');
             this.seenClientIds.add(`reduce:${reduceId}`);
             this.legsMoving.add(symbol);
             this.reserved.set(exitTag, { symbol, quantity: 0 });
@@ -1586,6 +1593,9 @@ export class LocalExec {
                 await this.broker.beginBracketResize(accountId, part.entryId, left);
               } catch (error) {
                 if (error instanceof BrokerRequestNotSentError) { this.setReplaceMarker(null); throw error; }
+                // Záměr se ukončí hned: sedí-li nohy na původním množství, je vše při starém; jsou-li už menší,
+                // ohlásí se ochrana jako neúplná (pravda). Jinak by další pokus navždy končil „zmenšení už běží".
+                await this.broker.endBracketResize(accountId, part.entryId, 0).catch(() => undefined);
                 return fail('reduce-resize-uncertain', `zmenšení ochrany na ${left} ks není potvrzené (${error instanceof Error ? error.message : String(error)}) — ověř u brokera množství SL a TP; pozici jsem nezavíral`);
               }
               // Stav se během zmenšování nesměl změnit; jinak se 1 ks nezavírá (ochrana je už menší → ohlásit).
@@ -1600,7 +1610,7 @@ export class LocalExec {
                 const text = error instanceof Error ? error.message : String(error);
                 if (error instanceof BrokerRequestNotSentError) {
                   await this.broker.endBracketResize(accountId, part.entryId, 0);
-                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks neodešlo (${text}) — 1 ks je BEZ ochrany: zavři pozici, nebo ten kus zavři ručně`);
+                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks neodešlo (${text}) — 1 ks je BEZ ochrany: zavři celou pozici (Zavřít), nebo ten kus zavři u brokera`);
                 }
                 this.pendingResize.set(symbol, { entryId: part.entryId, exitTag, expectNet: net0 - Math.sign(net0) });
                 return fail('reduce-exit-uncertain', `ochrana kryje ${left} ks a výsledek zavření 1 ks není znám (${text}) — ověř pozici u brokera`);
@@ -1614,9 +1624,13 @@ export class LocalExec {
                   this.setReplaceMarker(null);
                   return { ok: true, result: { orderId: ack.brokerOrderId, quantity: 1, split: true } };
                 }
+                if (net !== 0 && Math.sign(net) !== Math.sign(net0)) {
+                  this.pendingResize.set(symbol, { entryId: part.entryId, exitTag, expectNet: net0 - Math.sign(net0) });
+                  return fail('reduce-reversed', `po zavření 1 ks je pozice OPAČNÁ (${net} ks) — něco ji mezitím zavřelo jinde; pozice je BEZ ochrany, zavři ji (Zavřít)`);
+                }
                 if (exit?.status === 'rejected' || exit?.status === 'canceled') {
                   await this.broker.endBracketResize(accountId, part.entryId, 0);
-                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks burza nepřijala — 1 ks je BEZ ochrany: zavři pozici, nebo ten kus zavři ručně`);
+                  return fail('reduce-exit-failed', `ochrana kryje ${left} ks, ale zavření 1 ks burza nepřijala — 1 ks je BEZ ochrany: zavři celou pozici (Zavřít), nebo ten kus zavři u brokera`);
                 }
                 if (this.now() >= deadline) {
                   // Výstup může ještě doběhnout: dokončení (nebo neúspěch) dohlídá hlídač podle stavu příkazu.

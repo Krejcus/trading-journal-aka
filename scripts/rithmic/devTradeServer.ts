@@ -392,7 +392,7 @@ async function main(): Promise<void> {
       },
     },
     replaceMarker: {
-      read: () => { try { return JSON.parse(readFileSync(replaceMarkerFile, 'utf8')) as { symbol: string; at: number }; } catch { return null; } },
+      read: () => { try { return JSON.parse(readFileSync(replaceMarkerFile, 'utf8')) as { symbol: string; at: number; resize?: { entryId: string; exitTag: string; expectNet: number } }; } catch { return null; } },
       write: (value) => {
         if (value === null) { rmSync(replaceMarkerFile, { force: true }); return; }
         mkdirSync(results, { recursive: true });
