@@ -395,6 +395,20 @@ describe('místní služba: částečné zavření přes vlastní TP jedné ochr
     t.broker.stop();
   });
 
+  it('cena výstupu jde od nabídky kupců, ne od posledního obchodu', async () => {
+    const quote = { bid: 6997, ask: 7001 };
+    const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 120, serverQuote: () => quote } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    await addOne(t);
+    await t.run({ op: 'reduce', clientId: 'q1', symbol: 'ESZ6' });
+    // 6997 − 8 ticků = 6995
+    expect([...t.server.orders.values()].filter((o) => o.status === 'open' && o.price === 6995)).toHaveLength(1);
+    t.broker.stop();
+  });
+
   it('bez ceny služby a s trhem u SL se nic neodešle', async () => {
     const t = await twoParts();
     await addOne(t);

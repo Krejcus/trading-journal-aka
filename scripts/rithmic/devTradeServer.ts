@@ -316,6 +316,7 @@ async function main(): Promise<void> {
       },
     } } : {}),
     serverPrice: (symbol) => (symbol === CONTRACT ? checkPrice(Date.now()) : null),
+    serverQuote: (symbol) => (symbol === CONTRACT && feedOpen ? candles.quote(CONTRACT, Date.now(), 30_000) : null),
   });
   exec.attach();
   await broker.start();

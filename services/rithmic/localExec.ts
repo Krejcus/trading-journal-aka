@@ -33,6 +33,8 @@ export interface LocalExecConfig {
   reduceConfirmMs?: number;
   /** Poslední cena ze strany služby; reference od klienta se smí lišit nejvýš o `maxReferenceDriftTicks`. */
   serverPrice?: (symbol: string) => number | null;
+  /** Nejlepší nabídka a poptávka ze strany služby (pro cenu výstupu při částečném zavření). */
+  serverQuote?: (symbol: string) => { bid: number | null; ask: number | null } | null;
   maxReferenceDriftTicks?: number;
   /**
    * Název systému Rithmicu, ke kterému je adaptér přihlášený, a výslovný seznam povolených.
@@ -1024,7 +1026,14 @@ export class LocalExec {
           const long = net0 > 0;
           const chosen = [...parts].sort((a, b) => (long ? a.stop.stopPrice! - b.stop.stopPrice! : b.stop.stopPrice! - a.stop.stopPrice!) || (a.entryId < b.entryId ? 1 : -1))[0];
           const through = (this.config.reduceThroughTicks ?? 8) * spec.tickSize;
-          const price = Math.round((long ? server - through : server + through) / spec.tickSize) * spec.tickSize;
+          // Výstup se počítá od strany knihy, do které jde (prodej od nabídky kupců, nákup od nabídky prodejců) —
+          // poslední obchod může ležet jinde (změřeno 17. 11.: od posledního obchodu se na pomalém trhu nevyplnil hned).
+          // Kotace dál než 40 ticků od ceny služby se nebere (stará).
+          const quote = this.config.serverQuote?.(symbol) ?? null;
+          const side = long ? quote?.bid : quote?.ask;
+          const near = typeof side === 'number' && Number.isFinite(side) && Math.abs(side - server) <= 40 * spec.tickSize;
+          const base = near ? (long ? Math.min(side as number, server) : Math.max(side as number, server)) : server;
+          const price = Math.round((long ? base - through : base + through) / spec.tickSize) * spec.tickSize;
           if (!(price > 0) || !this.onGrid(price, spec.tickSize)) return refuse('cenu výstupu nejde spočítat');
           // SL té ochrany nesmí být už za touto cenou (trh je u SL) — pak ať rozhodne SL nebo celé zavření.
           if (long ? price <= chosen.stop.stopPrice! : price >= chosen.stop.stopPrice!) return refuse('trh je příliš blízko SL — částečné zavření neodesílám');
