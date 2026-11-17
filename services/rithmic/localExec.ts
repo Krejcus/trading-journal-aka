@@ -710,7 +710,8 @@ export class LocalExec {
             const value = command[field];
             if (value === undefined) continue;
             if (!finite(value) || value <= 0) refuse(`${field} musí být kladné číslo (nebo chybět)`);
-            if (!this.onGrid(value as number, spec.tickSize)) refuse(`${field} ${String(value)} neleží na kroku ceny ${spec.tickSize}`);
+            // Referenční cena z appky je jen kontrola odchylky a může být i středem nabídky a poptávky (mimo krok).
+            if (field !== 'referencePrice' && !this.onGrid(value as number, spec.tickSize)) refuse(`${field} ${String(value)} neleží na kroku ceny ${spec.tickSize}`);
           }
           const limitPrice = command.limitPrice as number | undefined;
           const stopPrice = command.stopPrice as number | undefined;

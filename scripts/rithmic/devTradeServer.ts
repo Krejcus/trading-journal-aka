@@ -170,7 +170,7 @@ async function main(): Promise<void> {
     if (!tickDirty) return;
     tickDirty = false;
     const now = Date.now();
-    broadcast({ type: 'tick', symbol: CONTRACT, price: freshPrice(now), bar: candles.current(CONTRACT, now), at: now });
+    broadcast({ type: 'tick', symbol: CONTRACT, price: shownPrice(now), bar: candles.current(CONTRACT, now), at: now });
   }, 16).unref();
   /** Poslední obchod; když dlouho žádný nebyl, střed nabídky a poptávky. Jen pro zobrazení. */
   const displayPrice = (now: number): number | null => {
@@ -183,6 +183,12 @@ async function main(): Promise<void> {
    * Cena pro KONTROLY příkazů (strana trhu, odchylka reference). Na skutečném trhu musí být čerstvá a ze živého
    * spojení. Zobrazovací cena může být na stojícím trhu starší.
    */
+  /**
+   * Cena pro GRAF: poslední obchod (to, z čeho jsou svíčky a co ukazují obchodní platformy). Střed nabídky a poptávky
+   * leží mimo krok ceny a neodpovídá žádnému obchodu — do grafu jde jen tehdy, když čerstvý obchod chybí. Kontroly
+   * příkazů (`freshPrice`) berou střed, protože lépe říká, kde trh právě je.
+   */
+  const shownPrice = (now: number): number | null => candles.lastPrice(CONTRACT, now, 30_000) ?? freshPrice(now);
   const freshPrice = (now: number): number | null => {
     if (!feedOpen) return null;
     return candles.marketPrice(CONTRACT, now, 30_000);
@@ -459,7 +465,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: freshPrice(at) ?? displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     void (async () => {
