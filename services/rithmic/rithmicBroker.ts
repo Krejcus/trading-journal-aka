@@ -260,6 +260,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   /** Známé příkazy před výpadkem (jen diagnostika `resync.complete`). */
   let beforeOutage: Map<string, string> | null = null;
   let positionCollector: { account: number; rows: Map<string, number | null>; accountRow: boolean } | null = null;
+  /** Průměrná vstupní cena z posledního snímku pozic. JEN zobrazení — nikdy do kontrol ani do ochrany. */
+  const snapshotAverage = new Map<string, number>();
   let readChain: Promise<unknown> = Promise.resolve();
 
   const currentState = (): State => state;
@@ -490,6 +492,9 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     if (account === undefined || !position.symbol) return;
     if (position.isSnapshot) {
       if (positionCollector && positionCollector.account === account) positionCollector.rows.set(position.symbol, position.netQuantity);
+      // Průměrná cena ze snímku — jen pro zobrazení (čára pozice po obnově spojení i na klidném trhu).
+      if (position.avgOpenFillPrice !== null && position.netQuantity) snapshotAverage.set(`${account}:${position.symbol}`, position.avgOpenFillPrice);
+      else snapshotAverage.delete(`${account}:${position.symbol}`);
       return;
     }
     if (position.netQuantity === null) {
@@ -922,6 +927,14 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         ...(reconnected ? { reconnected: true, resynced: true } : {}),
         resync,
       });
+      // Zobrazení: výchozí stav nese jen množství. Průměrnou cenu ze snímku pošlu hned za ním jako běžnou zprávu
+      // o pozici, aby graf nakreslil čáru pozice i tehdy, když trh stojí a živá zpráva o pozici hned nepřijde.
+      for (const position of positions) {
+        const average = snapshotAverage.get(`${position.accountId}:${position.symbol}`);
+        if (client === created && position.netQuantity !== 0 && average !== undefined && livePositions.get(`${position.accountId}:${position.symbol}`) === position.netQuantity) {
+          emit({ type: 'position', position: { accountId: position.accountId, symbol: position.symbol, netQuantity: position.netQuantity }, displayAveragePrice: average });
+        }
+      }
       // Dluh exekucí vzniklý během připojování (hlídání se tehdy neozbrojuje) nesmí zůstat bez dozoru.
       // Jen příkazy z nového výchozího stavu: starý konečný příkaz, který snímek už nevrací,
       // by svou zastaralou mezerou vyvolával odpojení dokola.

@@ -413,7 +413,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     search: typeof window === 'undefined' ? '' : window.location.search,
     // Po pádu grafu v této session LIVE otevře přehled (žádné kolo pádů).
     // Telefon: LIVE se při obchodování otevírá rovnou na grafu (Filip 1. 11.).
-    chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart)) && !liveChartCrashedThisSession(),
+    // Rithmic graf (místní služba): LIVE se otevře rovnou na něm i po znovunačtení stránky.
+    chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart) || rithmicLocalAvailable()) && !liveChartCrashedThisSession(),
   }));
   const { compact: mobileLayout, narrow } = useLiveLayout();
   // Jediný zámek full-group Flattenu pro lištu, zkratku i těžký přehled.
