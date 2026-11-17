@@ -452,6 +452,26 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
     t.broker.stop();
   });
 
+  it('značka výměny: zapsaná před zrušením, smazaná po úspěchu; po pádu uprostřed ji nová služba ohlásí a drží ochranu do potvrzení', async () => {
+    let marker: { symbol: string; at: number } | null = null;
+    const writes: Array<string | null> = [];
+    const replaceMarker = { read: () => marker, write: (value: { symbol: string; at: number } | null) => { marker = value; writes.push(value?.symbol ?? null); } };
+    const { t } = await bareWithStop({ replaceMarker });
+    expect((await t.run(protect({ kind: 'target', price: 7010 }))).ok).toBe(true);
+    expect(writes).toEqual(['ESZ6', null]);
+    t.broker.stop();
+    // nová služba najde značku z minulého běhu (pád mezi zrušením a párem)
+    marker = { symbol: 'ESZ6', at: 1 };
+    const next = await setup({ config: { replaceMarker } });
+    await sleep(40);
+    expect(next.exec.state().blocked).toMatch(/^protect-replace-interrupted/);
+    expect(await next.run(entry())).toMatchObject({ ok: false, sent: false });
+    await next.run({ op: 'ack' });
+    expect(marker).toBeNull();
+    expect(next.exec.state().blocked).toBeNull();
+    next.broker.stop();
+  });
+
   it('cena mezitím u stávající ochrany → nic se neruší ani nezadává', async () => {
     const { t, stopId } = await bareWithStop();
     t.setPrice(6979);

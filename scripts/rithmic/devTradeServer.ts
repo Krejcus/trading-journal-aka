@@ -9,7 +9,7 @@
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
@@ -295,6 +295,8 @@ async function main(): Promise<void> {
   // Tep: stránka podle něj pozná, že proces žije, i když trh stojí. Bez tepu si čerstvost nevyrábí.
   setInterval(() => broadcast({ type: 'beat', at: Date.now(), feed: feedOpen }), 1_000).unref();
 
+  // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
+  const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);
   // Souhlas se skutečným obchodováním: čte se ze souboru při startu a znovu před každým vstupem.
   const consentFile = join(results, 'live-trading-consent.json');
   const readConsent = (): unknown => { try { return JSON.parse(readFileSync(consentFile, 'utf8')); } catch { return null; } };
@@ -316,6 +318,15 @@ async function main(): Promise<void> {
       },
     } } : {}),
     serverPrice: (symbol) => (symbol === CONTRACT ? checkPrice(Date.now()) : null),
+    replaceMarker: {
+      read: () => { try { return JSON.parse(readFileSync(replaceMarkerFile, 'utf8')) as { symbol: string; at: number }; } catch { return null; } },
+      write: (value) => {
+        if (value === null) { rmSync(replaceMarkerFile, { force: true }); return; }
+        mkdirSync(results, { recursive: true });
+        writeFileSync(`${replaceMarkerFile}.tmp`, JSON.stringify(value));
+        renameSync(`${replaceMarkerFile}.tmp`, replaceMarkerFile);
+      },
+    },
     serverQuote: (symbol) => (symbol === CONTRACT && feedOpen ? candles.quote(CONTRACT, Date.now(), 30_000) : null),
   });
   exec.attach();

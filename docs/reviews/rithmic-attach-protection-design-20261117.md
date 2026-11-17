@@ -115,3 +115,17 @@ výsledek není znám, stav se změnil), služba to ohlásí incidentem `protect
 
 Neověřeno: vyplnění staré nohy přesně během výměny na skutečném trhu, chování po restartu služby uprostřed
 výměny (po restartu je stav vidět z knihy: buď jedna noha, pár, nebo nic → hlídač a obsluha), tažení čipů v appce.
+
+### Po oponentuře (critic „opravit", Codex „blokuje" → zapracováno 17. 11. večer)
+
+- Výměna si po celou dobu drží rezervaci kontraktu a `legsMoving`: souběžná druhá ochrana, vstup ani posun nohy neprojdou.
+- Jen 1 kontrakt (částečné vyplnění staré nohy by dalo pár na víc kusů, než pozice má).
+- Nejisté zrušení staré nohy i každé selhání po něm = incident + blokace + další ochrana až po potvrzení obsluhou.
+- Role nového páru se potvrzují podle značek, typu a cen v knize, ne podle pořadí ID v odpovědi.
+- Zrušení nohy páru se odmítá podle značky (`-s` / `-t`), i když služba sestru ještě nevidí.
+- Noha páru se pozná podle známé značky příkazu, ne podle značky v právě přijaté zprávě.
+- Trvalá značka „výměna běží" (soubor): po pádu služby uprostřed výměny ji nová služba ohlásí incidentem.
+- Přeměřeno na Rithmic Test po opravách: pár za 267 ms, posun, odmítnuté zrušení, karta zavření.
+
+Zůstává: karta zavření může po obnově spojení ukázat starý obchod, pokud adaptér přehraje dřívější vyplnění
+(jen zobrazení, neověřeno); vyplnění staré nohy přesně během výměny na skutečném trhu; tažení čipů v appce.

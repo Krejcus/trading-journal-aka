@@ -35,6 +35,12 @@ export interface LocalExecConfig {
   serverPrice?: (symbol: string) => number | null;
   /** Nejlepší nabídka a poptávka ze strany služby (pro cenu výstupu při částečném zavření). */
   serverQuote?: (symbol: string) => { bid: number | null; ask: number | null } | null;
+  /**
+   * Trvalá značka „výměna ochrany běží" (soubor). Zapisuje se PŘED zrušením staré nohy a maže po potvrzeném páru
+   * nebo po potvrzení obsluhou. Když služba spadne uprostřed výměny, po startu podle ní ohlásí incident — bez ní by
+   * pozice zůstala bez ochrany potichu (holá pozice je jinak povolený stav).
+   */
+  replaceMarker?: { read: () => { symbol: string; at: number } | null; write: (value: { symbol: string; at: number } | null) => void };
   maxReferenceDriftTicks?: number;
   /**
    * Název systému Rithmicu, ke kterému je adaptér přihlášený, a výslovný seznam povolených.
@@ -292,6 +298,18 @@ export class LocalExec {
     } else if (event.type === 'connection') {
       this.connected = event.connected;
       if (event.connected && event.resync) {
+        // Služba minule skončila uprostřed výměny ochrany: ohlásit (jednou), nic nezadávat — rozhoduje člověk.
+        if (!this.markerChecked) {
+          this.markerChecked = true;
+          let pending: { symbol: string; at: number } | null = null;
+          try { pending = this.config.replaceMarker?.read() ?? null; } catch { pending = null; }
+          if (pending) {
+            const message = `služba skončila uprostřed výměny ochrany na ${pending.symbol} — pozice může být BEZ ochrany nebo s jinou, než čekáš; ověř u brokera, pak potvrď`;
+            this.incidents.push({ kind: 'protect-replace-interrupted', message, at: this.now() });
+            this.blocked = `protect-replace-interrupted: ${message}`.slice(0, 240);
+            this.legsUncertain.add(pending.symbol);
+          }
+        }
         // Výchozí stav po (znovu)připojení je nová pravda — staré záznamy pryč.
         this.orders.clear();
         this.positions.clear();
@@ -322,6 +340,10 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
+  private markerChecked = false;
+  private setReplaceMarker(value: { symbol: string; at: number } | null): boolean {
+    try { this.config.replaceMarker?.write(value); return true; } catch { return false; }
+  }
   /** Kdy služba naposledy poslala zavření kontraktu — vyplnění krátce poté je „ručně" (příkaz zavření nenese značku). */
   private readonly flattenSentAt = new Map<string, number>();
   private readonly lastPositionAt = new Map<string, number>();
@@ -589,6 +611,7 @@ export class LocalExec {
             if (reservedTag.startsWith(PROTECT_TAG) && ![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
           }
           this.legsUncertain.clear();
+          this.setReplaceMarker(null);
           // Trvající nesoulad ochrany se po potvrzení ohlásí znovu (po lhůtě) — potvrzení ho neschová.
           this.protectiveReported.clear();
           this.watchProtective();
@@ -796,12 +819,14 @@ export class LocalExec {
               return { ok: false, sent: 'unknown', error: message };
             };
             try {
+              // 0) Trvalá značka před prvním zápisem; když ji nejde uložit, výměna se nezačne.
+              if (!this.setReplaceMarker({ symbol, at: this.now() })) return refuse('značku výměny ochrany nejde uložit — nic neměním');
               // 1) Zrušit původní nohu a POČKAT na potvrzení stavem. Bez potvrzení se pár nezadává (hrozily by dvě ochrany).
               try {
                 await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
               } catch (error) {
                 // Prokazatelně neodesláno = nic se nezměnilo. Cokoli jiného: stará ochrana mohla zmizet → incident.
-                if (error instanceof BrokerRequestNotSentError) throw error;
+                if (error instanceof BrokerRequestNotSentError) { this.setReplaceMarker(null); throw error; }
                 return fail('protect-replace-uncertain', `zrušení původního ${kind === 'stop' ? 'TP' : 'SL'} skončilo nejistě (${error instanceof Error ? error.message : String(error)}) — nový pár nezadávám; ověř u brokera, jakou ochranu pozice má`);
               }
               const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
@@ -844,6 +869,7 @@ export class LocalExec {
                   if (stop.orderType !== 'Stop' || target.orderType !== 'Limit' || stop.stopPrice !== stopPrice || target.limitPrice !== targetPrice || stop.quantity !== quantity || target.quantity !== quantity) {
                     return fail('protect-replace-uncertain', 'nový pár SL+TP má jiný tvar, než byl zadán — ověř u brokera ceny a typy obou příkazů');
                   }
+                  this.setReplaceMarker(null);
                   return { ok: true, result: { orderId: kind === 'stop' ? stop.brokerOrderId : target.brokerOrderId, quantity, paired: true } };
                 }
                 if ((stop && TERMINAL.has(stop.status)) || (target && TERMINAL.has(target.status))) return fail('protection-removed', 'nový pár SL+TP burza nepřijala (nebo se hned spustil) — zkontroluj pozici a její ochranu');
