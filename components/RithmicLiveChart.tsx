@@ -2,7 +2,7 @@
 // Jeden účet mimo kopírku: příkazy jdou místnímu procesu, který je sám ověřuje (LocalExec).
 // `copier`, `disarm` a navigace jsou SKUTEČNÉ ze desku — stav kopírky Tradovate, OFF a cesta na
 // Dashboard zůstávají vidět i tady (INV-UI-02). Sdílený zámek příkazů desku se sem nepředává.
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import LiveTradingScreenSlot from './LiveTradingScreenSlot';
 import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
@@ -41,7 +41,12 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const usable = trading.available && !instrumentIssue;
   const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : null;
   const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable }), [trading.system, symbol, usable, linkNote]);
-  const rejection = state?.rejections.at(-1) ?? null;
+  // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
+  const rejectionBaseline = useRef<number | null>(null);
+  if (!state) rejectionBaseline.current = null;
+  else if (rejectionBaseline.current === null) rejectionBaseline.current = state.rejections.at(-1)?.at ?? 0;
+  const lastRejection = state?.rejections.at(-1) ?? null;
+  const rejection = lastRejection && rejectionBaseline.current !== null && lastRejection.at > rejectionBaseline.current ? lastRejection : null;
   const blocked = state?.blocked ?? null;
   const uncertainList = trading.uncertain;
   const uncertain = uncertainList.at(-1) ?? null;

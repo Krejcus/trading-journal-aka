@@ -805,6 +805,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   }), [basePriceAlertBridge, registerBoxFollow, solo != null]); // eslint-disable-line react-hooks/exhaustive-deps
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
+    externalMarketData: marketData != null,
     priceAlerts: priceAlertBridge,
     chartOrderQuantity: draft && quote ? Math.max(1, ticketQuantity(draft, INSTRUMENT, quote)) : liveTicketInitialQuantity(ticketPrefs, entryMaxContracts),
     chartOrderInstant: instantBareReady,
@@ -946,7 +947,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [manageMoveBareEntrySupported, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [manageMoveBareEntrySupported, marketData != null, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

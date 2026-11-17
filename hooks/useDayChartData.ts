@@ -113,7 +113,7 @@ export function useDayChartData(
     historicalError: sameDay?.error, historicalLoading: !sameDay || sameDay.key !== historicalKey,
   }), [candles, candleWindow, qualityMinute, liveStatus, live, liveProblem, sameDay, historicalKey]);
   // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
-  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && now < candleWindow.dayEnd, candleWindow.dayEnd, requestData, live?.response.sourceSymbol ?? null);
+  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && !disabled && now < candleWindow.dayEnd, candleWindow.dayEnd, requestData, live?.response.sourceSymbol ?? null);
   return {
     candles,
     quality,

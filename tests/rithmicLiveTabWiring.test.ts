@@ -113,6 +113,10 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\{!solo && <LivePcAlertsButton/);
     expect(screen).toMatch(/\{!solo && <LivePcAlertDialogs/);
     expect(screen).toMatch(/disabled: marketData != null/);
+    // Starší historie appky (skutečný MNQ) se k cizímu zdroji svíček nepřipojuje; kanál TV se neodebírá.
+    expect(screen).toMatch(/externalMarketData: marketData != null,/);
+    expect(readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8')).toMatch(/backtestSession \|\| context\.liveOrderEntry\?\.externalMarketData \? \[\] : \[config\.timeframe\]/);
+    expect(readFileSync('hooks/useDayChartData.ts', 'utf8')).toMatch(/useTvLiveCandleFeed\(candleWindow\.needsLive && !disabled && now < candleWindow\.dayEnd,/);
     expect(screen).toMatch(/layoutScope=\{solo \? 'live-trading-rithmic' : 'live-trading'\}/);
   });
 });

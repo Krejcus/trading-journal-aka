@@ -308,6 +308,8 @@ export interface BacktestChartSessionBridge {
  * (odesílání je samostatný krok přes jádro kopírky).
  */
 export interface LiveOrderEntryBridge {
+  /** Svíčky a cena jdou z cizího zdroje (Rithmic graf): starší historie appky se k nim NEpřipojuje. */
+  externalMarketData?: boolean;
   executionInstrument: MarketRoot;
   /** Upozornění na cenu (rychlý alert z pravého kliku, čáry). Nic neobchoduje. */
   priceAlerts?: LivePcAlertBridge;
@@ -1008,7 +1010,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     if (sessionHistoryCandles.length > 0) setHistoryError(null);
   }, [sessionHistoryCandles.length]);
 
-  const htf = useHtfHistory(config.root, backtestSession ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
+  const htf = useHtfHistory(config.root, backtestSession || context.liveOrderEntry?.externalMarketData ? [] : [config.timeframe], rawCandles[0]?.time, context.trade.symbol);
   const loadOlderRead = htf.loadOlder;
   const htfHistory = historySchema === 'ohlcv-1h' ? htf.candles : EMPTY_SESSION_HISTORY;
   const extendedMinutes = useMemo(() => {
