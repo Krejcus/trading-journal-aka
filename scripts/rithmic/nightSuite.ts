@@ -278,7 +278,7 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
     ['S15', 'JEDEN vstup 2 ks se SL/TP → zavřít 1 ks (ochrana se zmenší na 1 ks) → zbytek zavře brzda', async () => {
       await marketBracket(2);
       need(net() === 2 && working('stop')[0].quantity === 2, `2 ks: ${brief(cur())}`);
-      const result = ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 2'), 'zavření 1 ks ze 2');
+      const result = ok(await send({ op: 'reduce', clientId: cid(), symbol: sym, expectedEntryId: (cur() as unknown as { brackets: Array<{ entryId: string; symbol: string }> }).brackets.find((b) => b.symbol === sym)?.entryId }, 'zavření 1 ks ze 2'), 'zavření 1 ks ze 2');
       need(result.split === true, `výsledek: ${JSON.stringify(result)}`);
       need(await until(() => net() === 1 && working('stop').length === 1 && working('target').length === 1 && working('stop')[0].quantity === 1 && working('target')[0].quantity === 1), `po zavření 1 ks: ${brief(cur())}`);
       await wait(1_300);
@@ -290,10 +290,10 @@ const brief = (s: State) => `pozice ${s.positions.map((p) => `${p.netQuantity}@$
     ['S16', 'JEDEN vstup 3 ks → dvakrát zavřít 1 ks → zbyde 1 ks s ochranou 1 ks', async () => {
       await marketBracket(3);
       need(net() === 3, `3 ks: ${brief(cur())}`);
-      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 3'), 'první zavření');
+      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym, expectedEntryId: (cur() as unknown as { brackets: Array<{ entryId: string; symbol: string }> }).brackets.find((b) => b.symbol === sym)?.entryId }, 'zavření 1 ks ze 3'), 'první zavření');
       need(await until(() => net() === 2 && working('stop')[0]?.quantity === 2 && working('target')[0]?.quantity === 2), `po prvním: ${brief(cur())}`);
       await wait(1_500);
-      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym }, 'zavření 1 ks ze 2'), 'druhé zavření');
+      ok(await send({ op: 'reduce', clientId: cid(), symbol: sym, expectedEntryId: (cur() as unknown as { brackets: Array<{ entryId: string; symbol: string }> }).brackets.find((b) => b.symbol === sym)?.entryId }, 'zavření 1 ks ze 2'), 'druhé zavření');
       need(await until(() => net() === 1 && working('stop')[0]?.quantity === 1 && working('target')[0]?.quantity === 1), `po druhém: ${brief(cur())}`);
       await wait(1_300);
       need(!cur().blocked, `blok: ${cur().blocked}`);

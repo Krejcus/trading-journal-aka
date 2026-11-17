@@ -614,6 +614,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       setClosingUntil(Date.now() + 4_000);
       const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       const reply = rithmicFlattenReply(raw);
+      if (!reply.ok) setClosingUntil(0);
       return finish(reply);
     }
     return blocked('Tuhle akci místní služba zatím neumí.');
@@ -684,6 +685,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       setClosingUntil(Date.now() + 4_000);
       const raw = await send({ op: 'flatten', clientId: newId(), symbol: sym });
       const reply = rithmicFlattenReply(raw);
+      if (!reply.ok) setClosingUntil(0);
       if (reply.ok) return { status: 'sent', text: null };
       if (reply.sent === false) return { status: 'blocked', text: reply.error ?? 'Neodesláno.' };
       // Nejistý výsledek od služby (ne jen timeout/výpadek) musí být vidět — brzda nejde přes hlášky obrazovky.

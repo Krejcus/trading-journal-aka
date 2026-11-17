@@ -927,7 +927,7 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
 
   it('2 ks → ochrana na 1 ks → Market 1 ks → pozice 1 ks s ochranou 1 ks, bez incidentu', async () => {
     const { t, entryId } = await twoContracts();
-    const pending = t.run({ op: 'reduce', clientId: 'sp1', symbol: 'ESZ6' });
+    const pending = t.run({ op: 'reduce', clientId: 'sp1', symbol: 'ESZ6', expectedEntryId: entryId });
     await sleep(120);
     // ochrana už je na 1 ks (obě nohy) a čeká výstup 1 ks
     const legs = [...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open');
@@ -954,7 +954,7 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
   it('burza zavření 1 ks odmítne → ochrana kryje 1 ks z 2: incident, vstupy stojí, nic se neopakuje', async () => {
     const { t, entryId } = await twoContracts();
     const frames = t.frames();
-    const pending = t.run({ op: 'reduce', clientId: 'sp2', symbol: 'ESZ6' });
+    const pending = t.run({ op: 'reduce', clientId: 'sp2', symbol: 'ESZ6', expectedEntryId: entryId });
     await sleep(60);
     t.server.controls.rejectNextOrder = 'outside bands';
     const reply = await pending;
@@ -964,13 +964,13 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
     // ochrana je opravdu už jen na 1 ks; další posuny noh a přikoupení stojí do potvrzení
     expect([...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open').map((o) => o.quantity)).toEqual([1, 1]);
-    expect(await t.run({ op: 'reduce', clientId: 'sp2b', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'reduce', clientId: 'sp2b', symbol: 'ESZ6', expectedEntryId: entryId })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
   });
 
   it('výstup doběhne až po lhůtě a zbylý kus mezitím zavře SL → záznam ochrany se dopíše, nic nezůstane viset', async () => {
     const { t, entryId } = await twoContracts();
-    const reply = await t.run({ op: 'reduce', clientId: 'sp5', symbol: 'ESZ6' });
+    const reply = await t.run({ op: 'reduce', clientId: 'sp5', symbol: 'ESZ6', expectedEntryId: entryId });
     expect(reply).toMatchObject({ ok: false, sent: 'unknown', error: expect.stringMatching(/není potvrzené/) });
     const exit = exitOrder(t)!;
     const stop = [...t.server.orders.values()].find((o) => o.parent === entryId && o.priceType !== 1 && o.status === 'open')!;
@@ -993,7 +993,7 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     t.server.fill(entryId, 6990);
     await sleep(150);
     for (const [index, left] of [[1, 2], [2, 1]] as const) {
-      const pending = t.run({ op: 'reduce', clientId: `sp6-${index}`, symbol: 'ESZ6' });
+      const pending = t.run({ op: 'reduce', clientId: `sp6-${index}`, symbol: 'ESZ6', expectedEntryId: entryId });
       await sleep(120);
       t.server.fill(exitOrder(t)!.basketId, 6999);
       expect(await pending).toMatchObject({ ok: true, result: { split: true } });
@@ -1003,13 +1003,13 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
       expect(t.broker.bracketState(t.broker.accountIds()[0], entryId).state).toBe('protected');
     }
     expect(t.exec.state().blocked).toBeNull();
-    expect(await t.run({ op: 'reduce', clientId: 'sp6-3', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'reduce', clientId: 'sp6-3', symbol: 'ESZ6', expectedEntryId: entryId })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
   });
 
   it('Zavřít během částečného zavření: dokud výstup 1 ks pracuje, druhé zavření neodejde (pozice se neobrátí)', async () => {
-    const { t } = await twoContracts();
-    const pending = t.run({ op: 'reduce', clientId: 'sp7', symbol: 'ESZ6' });
+    const { t, entryId } = await twoContracts();
+    const pending = t.run({ op: 'reduce', clientId: 'sp7', symbol: 'ESZ6', expectedEntryId: entryId });
     await sleep(120);
     const exit = exitOrder(t)!;
     const flat = t.run({ op: 'flatten', clientId: 'sp7f', symbol: 'ESZ6' });
@@ -1021,19 +1021,20 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     await pending.catch(() => undefined);
     await flat.catch(() => undefined);
     await sleep(300);
-    const net = t.exec.state().positions[0]?.netQuantity ?? 0;
-    expect(net).toBeGreaterThanOrEqual(0);
+    expect(t.exec.state().positions[0]?.netQuantity ?? 0).toBe(0);
+    // právě jedno zavření zbytku (1 ks), nic navíc
+    expect([...t.server.orders.values()].filter((o) => o.priceType === 2 && !o.userTag.startsWith('ui-red-')).map((o) => o.quantity)).toEqual([1]);
     t.broker.stop();
   });
 
   it('vstup s clientId red-… se odmítne (značka výstupu dělení se nesmí dát zaměnit) a stejné dělení podruhé neprojde', async () => {
-    const { t } = await twoContracts();
+    const { t, entryId } = await twoContracts();
     expect(await t.run(entry({ clientId: 'red-x1', limitPrice: 6985, stopPrice: 6980, targetPrice: 7030 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/vyhrazený/) });
-    const pending = t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6' });
+    const pending = t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6', expectedEntryId: entryId });
     await sleep(120);
     t.server.fill(exitOrder(t)!.basketId, 6999);
     expect(await pending).toMatchObject({ ok: true });
-    expect(await t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'reduce', clientId: 'sp8', symbol: 'ESZ6', expectedEntryId: entryId })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
   });
 

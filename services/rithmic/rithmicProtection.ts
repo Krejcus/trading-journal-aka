@@ -297,9 +297,10 @@ export class RithmicProtection {
   endResize(accountId: number, entryId: string, exitedQuantity: number): void {
     const intent = this.bracketByEntry(accountId, entryId);
     if (!intent) return;
+    // Výstup se připíše jen k OTEVŘENÉMU záměru — opakované volání (hlídač po restartu) nesmí přičíst podruhé.
+    const open = intent.resizing !== undefined;
     delete intent.resizing;
-    // Prokázaný výstup se zapíše i dodatečně (výstup doběhl až po lhůtě).
-    if (exitedQuantity > 0) intent.exitedOutside = (intent.exitedOutside ?? 0) + exitedQuantity;
+    if (open && exitedQuantity > 0) intent.exitedOutside = (intent.exitedOutside ?? 0) + exitedQuantity;
   }
 
   closeBracket(accountId: number, entryId: string): void {
