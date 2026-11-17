@@ -39,7 +39,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
-  const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : null;
+  const linkNote = link !== 'open' ? 'odpojeno' : !trading.helloFresh ? 'připojuji' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : null;
   const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [trading.system, symbol, usable, linkNote]);
   // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
   const rejectionBaseline = useRef<number | null>(null);

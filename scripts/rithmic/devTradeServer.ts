@@ -138,6 +138,37 @@ async function main(): Promise<void> {
     return quote && quote.bid !== null && quote.ask !== null ? (quote.bid + quote.ask) / 2 : null;
   };
   const clients = new Set<WebSocket>();
+  type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number };
+  /** Historie se drží v paměti procesu: dotaz na Rithmic nejvýš jednou za minutu, souběžná připojení sdílí jeden. */
+  let historyCache: { bars: Bar[]; at: number } = { bars: [], at: 0 };
+  let historyLoading: Promise<Bar[]> | null = null;
+  function recentHistory(): Promise<Bar[]> {
+    if (!historyOk) return Promise.resolve(historyCache.bars);
+    if (Date.now() - historyCache.at < 60_000) return Promise.resolve(historyCache.bars);
+    if (historyLoading) return historyLoading;
+    historyLoading = (async () => {
+      try {
+        const toSec = Date.now() / 1_000;
+        // Začátek musí padnout DO obchodní seance: kdyby řada začínala otevřením po víkendu nebo přestávce,
+        // první svíčka by proti starší historii appky skočila (víkendový gap) a ta by se k ní nepřipojila.
+        let fromSec = toSec - HISTORY_HOURS * 3_600;
+        let rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec });
+        for (let attempt = 0; attempt < 3 && rows.length > 0 && rows[0].time - fromSec > 180; attempt += 1) {
+          fromSec -= 24 * 3_600;
+          rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec });
+        }
+        historyCache = { bars: rows.map((bar) => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })), at: Date.now() };
+      } catch (error) {
+        // Selhání nesmí být tiché: poslední známá historie zůstává, další pokus až za minutu.
+        historyCache = { bars: historyCache.bars, at: Date.now() };
+        console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — nechávám poslední známou (${historyCache.bars.length} svíček)`);
+      } finally {
+        historyLoading = null;
+      }
+      return historyCache.bars;
+    })();
+    return historyLoading;
+  }
   const send = (socket: WebSocket, message: unknown): void => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
@@ -149,12 +180,15 @@ async function main(): Promise<void> {
   let feedOpen = false;
   let historyOk = false;
   const restoring = new Set<'ticker' | 'history'>();
+  /** Stejným jménem se přihlásil někdo jiný: od té chvíle se proces k cenám ani historii sám nepřipojuje. */
+  let forcedOut = false;
   /** Po výpadku (uspání počítače, síť) se spojení pro ceny a historii obnoví samo: 5 s, 10 s … nejvýš 60 s. */
   function scheduleFeedRestore(plant: 'ticker' | 'history', delayMs: number): void {
-    if (restoring.has(plant)) return;
+    if (forcedOut || restoring.has(plant)) return;
     restoring.add(plant);
     setTimeout(() => {
       void (async () => {
+        if (forcedOut) { restoring.delete(plant); return; }
         try {
           await ticker.connect([plant]);
           if (plant === 'ticker') {
@@ -170,6 +204,7 @@ async function main(): Promise<void> {
           restoring.delete(plant);
         } catch (error) {
           restoring.delete(plant);
+          if (forcedOut) return;
           console.log(`[ticker] obnova ${plant} selhala (${error instanceof Error ? error.message : String(error)}) — další pokus za ${Math.round(Math.min(delayMs * 2, 60_000) / 1_000)} s`);
           scheduleFeedRestore(plant, Math.min(delayMs * 2, 60_000));
         }
@@ -192,6 +227,7 @@ async function main(): Promise<void> {
         // Vynucené odhlášení = stejným jménem se přihlásil někdo jiný (jiná platforma). O přihlášení se
         // nepřetahujeme: ceny zůstanou stát, dokud obsluha proces nespustí znovu.
         if (info.forcedLogout) {
+          forcedOut = true;
           console.log(`[ticker] spojení ${plant} ukončeno vynuceným odhlášením — jiné přihlášení stejným uživatelem? Znovu se nepřipojuji.`);
           return;
         }
@@ -256,29 +292,16 @@ async function main(): Promise<void> {
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
+    // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
+    const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(at), bars });
+    hello(liveBars(now, -Infinity), now);
+    send(socket, { type: 'state', state: exec!.state() });
     void (async () => {
-      // Dokončené minuty z historie Rithmicu (posledních 7 dní), novější a rozpracovaná svíčka z živých cen.
-      let history: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> = [];
-      if (historyOk) {
-        try {
-          // Začátek musí padnout DO obchodní seance: kdyby řada začínala otevřením po víkendu nebo přestávce,
-          // první svíčka by proti starší historii appky skočila (víkendový gap) a ta by se k ní nepřipojila.
-          let fromSec = now / 1_000 - HISTORY_HOURS * 3_600;
-          let rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec: now / 1_000 });
-          for (let attempt = 0; attempt < 3 && rows.length > 0 && rows[0].time - fromSec > 180; attempt += 1) {
-            fromSec -= 24 * 3_600;
-            rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec: now / 1_000 });
-          }
-          history = rows.map((bar) => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })).sort((a, b) => a.time - b.time);
-        } catch (error) {
-          console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — posílám jen svíčky od startu`);
-        }
-      }
+      const history = await recentHistory();
+      if (!history.length || socket.readyState !== WebSocket.OPEN) return;
       const at = Date.now();
-      const lastHistory = history.length ? history[history.length - 1].time : -Infinity;
-      const live = [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > lastHistory);
-      send(socket, { type: 'hello', readOnly: READ_ONLY, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(at), bars: [...history, ...live] });
-      send(socket, { type: 'state', state: exec!.state() });
+      hello([...history, ...liveBars(at, history[history.length - 1].time)], at);
     })();
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {

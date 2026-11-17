@@ -134,7 +134,7 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(!entryReadyRef\.current\) return \{ \.\.\.base, status: 'blocked'/);
     expect(hook).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);
     // Zavření nezávisí na živé ceně.
-    expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\) && !readOnly;/);
+    expect(hook).toMatch(/const available = link === 'open' && helloFresh && Boolean\(state\?\.connected\) && !readOnly;/);
     expect(hook).toMatch(/const entryReady = available && feedLive && !silent && price !== null;/);
     // Po výpadku je první stav výchozí a čekající příkazy končí „unknown" bez opakování.
     expect(hook).toMatch(/seen\.current = null;/);
@@ -237,7 +237,7 @@ describe('hook místního procesu', () => {
     expect(readOnlyViolation(new Uint8Array([1, 2, 3]))).not.toBeNull();
     expect(server).toMatch(/if \(READ_ONLY\) throw new Error\('účet je připojený jen pro čtení/);
     expect(server).toMatch(/allowedSystems: \['Rithmic Test'\]/);
-    expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\) && !readOnly;/);
+    expect(hook).toMatch(/const available = link === 'open' && helloFresh && Boolean\(state\?\.connected\) && !readOnly;/);
     expect(chart).toMatch(/offerBrake && !trading\.readOnly \? \{ emergencyClose:/);
     expect(chart).toMatch(/trading\.bareLegTrade && !trading\.readOnly \?/);
     // starší historie appky jen na skutečném trhu

@@ -542,8 +542,9 @@ export class RithmicClient {
       time_order: rithmicEnum('RequestTimeBarReplay', 'TimeOrder', 'FORWARDS'),
     });
     const seconds = request.barType === 'MINUTE_BAR' ? request.period * 60 : 0;
-    return response.rows
-      .filter((m) => num(m.fields.open_price) !== null && num(m.fields.marker) !== null)
+    const bars = response.rows
+      // Jen řádky s platným časem a kladnou cenou; cokoli jiného by v grafu udělalo nesmyslnou svíčku.
+      .filter((m) => (num(m.fields.open_price) ?? 0) > 0 && (num(m.fields.marker) ?? 0) > seconds)
       .map((m) => {
         const marker = num(m.fields.marker)!;
         return {
@@ -552,6 +553,10 @@ export class RithmicClient {
           volume: num(m.fields.volume) ?? 0, trades: num(m.fields.num_trades) ?? 0, period: str(m.fields.period), marker,
         };
       });
+    // Vzestupně a od každého času jen poslední řádek (dvě svíčky se stejným časem graf nesnese).
+    const byTime = new Map<number, RithmicHistoryBar>();
+    for (const bar of bars) byTime.set(bar.time, bar);
+    return [...byTime.values()].sort((a, b) => a.time - b.time);
   }
 
   async showBrackets(accountId: string): Promise<Array<{ basketId: string; targetTicks: number | null; targetQuantity: number | null; targetQuantityReleased: number | null }>> {

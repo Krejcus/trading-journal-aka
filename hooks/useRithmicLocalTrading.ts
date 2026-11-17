@@ -152,6 +152,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const [capturedAt, setCapturedAt] = useState(() => Date.now());
   /** Proces žije (tep) a jeho spojení pro ceny taky. Čerstvost se nikdy nevyrábí v prohlížeči. */
   const [feedLive, setFeedLive] = useState(false);
+  /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
+  const [helloFresh, setHelloFresh] = useState(false);
   const lastMessageAt = useRef(0);
   const feedOpen = useRef(false);
   const [events, setEvents] = useState<LiveTradingCopyEvent[]>([]);
@@ -187,6 +189,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
       seen.current = null;
       stateRef.current = null;
       feedOpen.current = false;
+      setHelloFresh(false);
       priceRef.current = null;
       feedBox.reset();
       setFeedLive(false);
@@ -219,6 +222,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
         if (message.type === 'hello') {
           const info = message as unknown as Hello;
           symbolRef.current = info.symbol;
+          setHelloFresh(true);
           feedOpen.current = info.feed === true;
           setFeedLive(feedOpen.current);
           setHello(info);
@@ -293,7 +297,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   // úplném stavu. Nový vstup navíc chce živou cenu; zavření na ceně NEZÁVISÍ (brzda musí fungovat vždy).
   // Účet připojený jen pro čtení: žádný příkaz se nenabízí ani neposílá (služba je odmítá a na spojení je blokuje).
   const readOnly = hello?.readOnly === true;
-  const available = link === 'open' && Boolean(state?.connected) && !readOnly;
+  // Po každém (znovu)připojení platí až NOVÉ `hello`: proces mohl mezitím běžet proti jinému systému nebo režimu.
+  const available = link === 'open' && helloFresh && Boolean(state?.connected) && !readOnly;
   const entryReady = available && feedLive && !silent && price !== null;
   const silentRef = useRef(false);
   silentRef.current = silent;
@@ -539,7 +544,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, readOnly, workingOrders: orders.filter((order) => order.status === 'working').length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, workingOrders: orders.filter((order) => order.status === 'working').length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
