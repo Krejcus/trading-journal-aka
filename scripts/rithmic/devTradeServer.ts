@@ -169,7 +169,7 @@ async function main(): Promise<void> {
     tickDirty = false;
     const now = Date.now();
     broadcast({ type: 'tick', symbol: CONTRACT, price: displayPrice(now), bar: candles.current(CONTRACT, now), at: now });
-  }, 80).unref();
+  }, 16).unref();
   /** Poslední obchod; když dlouho žádný nebyl, střed nabídky a poptávky. Jen pro zobrazení. */
   const displayPrice = (now: number): number | null => {
     const last = candles.lastPrice(CONTRACT, now, 3_600_000);
@@ -274,8 +274,9 @@ async function main(): Promise<void> {
         const bar = candles.current(CONTRACT, Date.now()) as Bar | null;
         if (lastBar && bar && bar.time !== lastBar.time && tickDirty) broadcast({ type: 'tick', symbol: CONTRACT, price: lastBar.close, bar: lastBar, at: Date.now() });
         lastBar = bar ? { ...bar } : lastBar;
-        // Na živém trhu chodí stovky ticků za sekundu; stránce stačí poslední stav nejvýš každých 80 ms
-        // (zpráva nese celou rozpracovanou svíčku, takže vynecháním mezikroků se nic neztrácí).
+        // Na živém trhu chodí stovky ticků za sekundu. Stránka dostane poslední stav jednou za snímek obrazovky
+        // (16 ms ≈ 60× za sekundu — víc monitor neukáže). Zpráva nese poslední cenu a celou rozpracovanou svíčku,
+        // takže se žádný tick neztrácí: high, low, close i objem v ní jsou.
         tickDirty = true;
       },
       onPlantClosed: (plant, info) => {
