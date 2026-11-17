@@ -434,6 +434,22 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
     t.broker.stop();
   });
 
+  it('dva požadavky na druhou nohu současně → právě jeden pár, žádný třetí výstup; vstup během výměny neprojde', async () => {
+    const { t } = await bareWithStop();
+    const [a, b, c] = await Promise.all([
+      t.run(protect({ kind: 'target', price: 7010 })),
+      t.run(protect({ kind: 'target', price: 7012 })),
+      t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030 })),
+    ]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect(c).toMatchObject({ ok: false, sent: false });
+    await sleep(80);
+    const open = [...t.server.orders.values()].filter((o) => o.status === 'open');
+    expect(open).toHaveLength(2);
+    expect(new Set(open.map((o) => o.oco)).size).toBe(1);
+    t.broker.stop();
+  });
+
   it('cena mezitím u stávající ochrany → nic se neruší ani nezadává', async () => {
     const { t, stopId } = await bareWithStop();
     t.setPrice(6979);

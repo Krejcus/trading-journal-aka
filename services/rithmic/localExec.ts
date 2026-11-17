@@ -748,6 +748,8 @@ export class LocalExec {
               : 'pozice už má pracující příkazy (SL/TP ze vstupu nebo čekající vstup) — další ochranu nezadávám');
           }
           if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');
+          // Běžící výměna ochrany (nebo posun noh) má knihu na okamžik prázdnou — další ochrana by byla třetí, nesvázaný výstup.
+          if (this.legsMoving.has(symbol)) return refuse('změna ochrany na tomto kontraktu právě běží — počkej na výsledek');
           // Vstup s ochranou, jehož nohy ještě nedorazily (nebo se neví): nohy jsou výstup → další by byl druhý.
           if (this.broker.listBrackets(accountId).some((bracket) => bracket.symbol === symbol && !bracket.closed)) {
             return refuse('pozice patří ke vstupu s ochranou (jeho SL/TP se právě zakládají nebo hlídají) — další ochranu nezadávám');
@@ -776,6 +778,8 @@ export class LocalExec {
             if (this.legsUncertain.has(symbol) || this.legsMoving.has(symbol)) return refuse('změna ochrany na tomto kontraktu právě běží nebo skončila nejistě — ověř stav a potvrď incident');
             this.seenClientIds.add(clientId);
             this.legsMoving.add(symbol);
+            // Rezervace kontraktu po celou výměnu: vstup, přikoupení ani jiná ochrana mezitím neprojdou.
+            this.reserved.set(tag, { symbol, quantity: 0 });
             const fail = (kindOf: string, message: string): LocalExecResult => {
               // Od zrušení původní ochrany je každý nedokončený krok stav, který musí vidět a potvrdit člověk.
               this.incidents.push({ kind: kindOf, message, at: this.now() });
@@ -786,7 +790,13 @@ export class LocalExec {
             };
             try {
               // 1) Zrušit původní nohu a POČKAT na potvrzení stavem. Bez potvrzení se pár nezadává (hrozily by dvě ochrany).
-              await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
+              try {
+                await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
+              } catch (error) {
+                // Prokazatelně neodesláno = nic se nezměnilo. Cokoli jiného: stará ochrana mohla zmizet → incident.
+                if (error instanceof BrokerRequestNotSentError) throw error;
+                return fail('protect-replace-uncertain', `zrušení původního ${kind === 'stop' ? 'TP' : 'SL'} skončilo nejistě (${error instanceof Error ? error.message : String(error)}) — nový pár nezadávám; ověř u brokera, jakou ochranu pozice má`);
+              }
               const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
               for (;;) {
                 const old = this.orders.get(pairWith.brokerOrderId);
@@ -801,7 +811,8 @@ export class LocalExec {
               const netNow = this.positions.get(symbol)?.netQuantity ?? 0;
               const others = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status));
               const fresh = this.config.serverPrice?.(symbol) ?? null;
-              const stillOk = netNow === net && others.length === 0 && fresh !== null && (long ? stopPrice < fresh && fresh < targetPrice : targetPrice < fresh && fresh < stopPrice);
+              const elsewhere = [...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag !== tag);
+              const stillOk = netNow === net && others.length === 0 && !elsewhere && fresh !== null && (long ? stopPrice < fresh && fresh < targetPrice : targetPrice < fresh && fresh < stopPrice);
               if (!stillOk) return fail('protection-removed', `původní ochrana je zrušená a nový pár SL+TP neodešel (stav se mezitím změnil) — pozice ${netNow === 0 ? 'je zavřená' : 'je BEZ ochrany: přidej SL nebo ji zavři'}`);
               // 3) Jeden zápis: svázaný pár. Neodeslaný i nejistý výsledek = pozice může být bez ochrany → incident, nic se neopakuje.
               const stopTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-s`;
@@ -827,6 +838,7 @@ export class LocalExec {
               }
             } finally {
               this.legsMoving.delete(symbol);
+              this.reserved.delete(tag);
             }
           }
           this.seenClientIds.add(clientId);
@@ -909,6 +921,7 @@ export class LocalExec {
             }
           } else if (order.tag?.startsWith(PROTECT_TAG) && (order.orderType === 'Stop' || order.orderType === 'Limit')) {
             // Samostatná ochrana: jen cena, typ ani množství se nemění. Stejné meze jako při zadání.
+            if (this.legsMoving.has(order.symbol)) return refuse('změna ochrany na tomto kontraktu právě běží — počkej na výsledek');
             const server = this.config.serverPrice?.(order.symbol) ?? null;
             if (server === null) return refuse('služba nemá čerstvou cenu — ochranu neposouvám');
             const closesLong = order.side === 'Sell';
