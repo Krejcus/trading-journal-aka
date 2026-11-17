@@ -76,6 +76,8 @@ export interface RithmicOrderUpdate {
   basketId: string;
   originalBasketId: string;
   linkedBasketIds: string;
+  /** Platnost příkazu podle hlášení (DAY, GTC…); prázdné nebo chybí, když ji zpráva nenese. */
+  duration?: string;
   userTag: string;
   symbol: string;
   exchange: string;
@@ -206,6 +208,7 @@ function orderUpdate(source: 'exchange' | 'rithmic', message: RithmicMessage, re
     basketId: str(f.basket_id),
     originalBasketId: str(f.original_basket_id),
     linkedBasketIds: str(f.linked_basket_ids),
+    duration: typeof f.duration === 'number' ? rithmicEnumName(type, 'Duration', f.duration) : '',
     userTag: str(f.user_tag),
     symbol: str(f.symbol),
     exchange: str(f.exchange),
@@ -427,6 +430,7 @@ export class RithmicClient {
   async placeOcoOrder(request: {
     accountId: string;
     legs: readonly [RithmicOcoLeg, RithmicOcoLeg];
+    duration?: RithmicDuration;
   }): Promise<{ basketIds: string[]; sentAt: number; ackAt: number }> {
     const message = 'RequestOCOOrder';
     const legs = request.legs;
@@ -443,7 +447,7 @@ export class RithmicClient {
       price: legs.map((leg) => (leg.priceType === 'LIMIT' ? leg.price! : 0)),
       trigger_price: legs.map((leg) => (leg.priceType === 'STOP_MARKET' ? leg.triggerPrice! : 0)),
       transaction_type: legs.map((leg) => rithmicEnum(message, 'TransactionType', leg.side)),
-      duration: legs.map(() => rithmicEnum(message, 'Duration', 'DAY')),
+      duration: legs.map(() => rithmicEnum(message, 'Duration', request.duration ?? 'DAY')),
       price_type: legs.map((leg) => rithmicEnum(message, 'PriceType', leg.priceType)),
       trade_route: legs.map((leg) => this.tradeRoute(leg.exchange)),
       manual_or_auto: legs.map(() => rithmicEnum(message, 'OrderPlacement', 'MANUAL')),

@@ -1592,6 +1592,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           priceType: rithmicPriceType(request.orderType),
           price: request.limitPrice,
           triggerPrice: request.stopPrice,
+          ...(request.goodTillCancel ? { duration: 'GTC' as const } : {}),
         });
         // „Přijato" = Rithmic příkaz eviduje. Odmítnutí RMS nebo burzou přijde jako událost `order`.
         return { brokerOrderId: ack.basketId, accepted: true, definitive: true };
@@ -1620,6 +1621,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         const side = rithmicSide(request.side);
         const ack = await active.placeOcoOrder({
           accountId: text,
+          // Svázaný pár je vždy ochrana pozice → platí přes konec seance.
+          duration: 'GTC',
           legs: [
             { userTag: request.stop.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'STOP_MARKET', triggerPrice: request.stop.stopPrice },
             { userTag: request.target.tag, symbol: request.symbol, exchange, side, quantity: request.quantity, priceType: 'LIMIT', price: request.target.limitPrice },
@@ -1692,6 +1695,7 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
           triggerPrice: request.stopPrice,
           stopTicks: request.stopTicks,
           targetTicks: request.targetTicks,
+          ...(request.goodTillCancel ? { duration: 'GTC' as const } : {}),
         });
         const intent = protection.bracketsFor(request.accountId).find((b) => b.tag === request.tag);
         if (intent && !intent.entryId) {

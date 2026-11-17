@@ -906,7 +906,9 @@ export class LocalExec {
             return null;
           };
           const ack = await release(this.broker.placeBracket({
-            ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
+            // Vstup se SL/TP platí i přes konec seance: denní ochranu by burza na konci seance zrušila a pozice by
+            // zůstala bez SL (změřeno 17. 11. 2026). Vstup bez ochrany zůstává denní.
+            ...request, goodTillCancel: true, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
             guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
               ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
@@ -1196,7 +1198,7 @@ export class LocalExec {
           let ack;
           try {
             ack = await this.broker.placeOrder({
-              tag, accountId, symbol, side: long ? 'Sell' : 'Buy', quantity,
+              tag, accountId, symbol, side: long ? 'Sell' : 'Buy', quantity, goodTillCancel: true,
               orderType: kind === 'stop' ? 'Stop' : 'Limit', ...(kind === 'stop' ? { stopPrice: price } : { limitPrice: price }),
             });
           } catch (error) {

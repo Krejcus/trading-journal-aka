@@ -22,6 +22,8 @@ export interface FakeOrder {
   stopTicks?: number;
   targetTicks?: number;
   linked?: string;
+  /** Platnost z požadavku: 1 = do konce dne, 2 = do zrušení (GTC). */
+  duration?: number;
   /** Svázaný pár (OCO): společný klíč obou příkazů. */
   oco?: string;
   /** Rodič nohy bracketu (original_basket_id). */
@@ -196,6 +198,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       exchange: String(fields.exchange),
       side: Number(fields.transaction_type),
       priceType: Number(fields.price_type),
+      duration: typeof fields.duration === 'number' ? fields.duration : undefined,
       quantity: Number(fields.quantity),
       price: fields.price as number | undefined,
       triggerPrice: fields.trigger_price as number | undefined,
@@ -353,7 +356,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
         const pair = [0, 1].map((i) => createOrder({
           account_id: f.account_id, user_tag: list(f.user_tag)[i], symbol: list(f.symbol)[i], exchange: list(f.exchange)[i],
-          transaction_type: list(f.transaction_type)[i], price_type: list(f.price_type)[i], quantity: Number(list(f.quantity_64)[i]),
+          transaction_type: list(f.transaction_type)[i], price_type: list(f.price_type)[i], quantity: Number(list(f.quantity_64)[i]), duration: list(f.duration)[i],
           ...(Number(list(f.price_type)[i]) === 1 ? { price: list(f.price)[i] } : { trigger_price: list(f.trigger_price)[i] }),
         } as RithmicFields));
         const key = `oco${pair[0].basketId}`;

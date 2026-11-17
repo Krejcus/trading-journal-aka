@@ -376,6 +376,33 @@ describe('místní služba: změna čekajícího vstupu se zachováním SL/TP (z
   });
 });
 
+describe('místní služba: ochrana platí přes konec seance (GTC), vstup bez ochrany jen do konce dne', () => {
+  it('vstup se SL/TP, samostatná ochrana i svázaný pár odcházejí jako GTC; holý vstup jako denní', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, protectiveGraceMs: 40, moveConfirmMs: 200 } });
+    const bracket = await t.run(entry());
+    await flush();
+    const bracketId = (bracket as { result: { orderId: string } }).result.orderId;
+    expect(t.server.orders.get(bracketId)!.duration).toBe(2);
+    await t.run({ op: 'cancel', orderId: bracketId });
+    await sleep(80);
+    const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    const bareId = (bare as { result: { orderId: string } }).result.orderId;
+    expect(t.server.orders.get(bareId)!.duration).toBe(1);
+    t.server.fill(bareId, 6990);
+    await sleep(100);
+    const stop = await t.run({ op: 'protect', clientId: 'gtc1', symbol: 'ESZ6', kind: 'stop', price: 6980 });
+    expect(t.server.orders.get((stop as { result: { orderId: string } }).result.orderId)!.duration).toBe(2);
+    await sleep(60);
+    expect((await t.run({ op: 'protect', clientId: 'gtc2', symbol: 'ESZ6', kind: 'target', price: 7010 })).ok).toBe(true);
+    await sleep(60);
+    const pair = [...t.server.orders.values()].filter((o) => o.status === 'open');
+    expect(pair).toHaveLength(2);
+    expect(pair.every((o) => o.duration === 2)).toBe(true);
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: nálezy z review 17. 11. večer (brzda, strop, cizí příkaz, čerstvá cena)', () => {
   it('Zavřít pozici během výměny čekajícího vstupu: nový vstup už neodejde', async () => {
     const t = await setup({ config: { moveConfirmMs: 300 } });
