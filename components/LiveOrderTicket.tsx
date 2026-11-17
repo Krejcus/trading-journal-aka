@@ -1387,7 +1387,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     return {
       label: idle,
       disabled: busy,
-      title: busy ? 'Čeká se na výsledek předchozí změny — zavřít jde hned Flattenem.' : plan.intent.label,
+      title: busy ? (soloLabel ? 'Čeká se na výsledek předchozí změny.' : 'Čeká se na výsledek předchozí změny — zavřít jde hned Flattenem.') : plan.intent.label,
     };
   };
   const guardRender = manageOn ? guardNow() : null;
@@ -1755,7 +1755,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       <button
         type="button"
         disabled={directBlocked != null || directBusy || directLocked}
-        title={directBlocked ?? (directLocked ? 'Výsledek minulého odeslání není známý — zkontroluj leadera v Tradovate. Odeslat jde až po změně návrhu.' : undefined) ?? 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.'}
+        title={directBlocked ?? (directLocked ? (soloLabel ? 'Výsledek minulého odeslání není známý — zkontroluj účet u brokera. Odeslat jde až po změně návrhu.' : 'Výsledek minulého odeslání není známý — zkontroluj leadera v Tradovate. Odeslat jde až po změně návrhu.') : undefined) ?? 'Odešle hned — worker znovu ověří všechny pojistky a při problému nic nepošle.'}
         // Fokus nesmí zůstat na tlačítku: Enter / mezerník by jinak po zkratce (Shift+B/S) poslal
         // nový návrh bez myši — žádná klávesa neodešle vstup (oponentura vlny B).
         onClick={event => { event.currentTarget.blur(); void sendDirect(); }}

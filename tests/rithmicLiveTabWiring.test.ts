@@ -6,6 +6,8 @@ import { LIVE_HOTKEY_BUSY_TEXT_SOLO, LIVE_HOTKEY_SOLO_FLATTEN_TEXT, liveHotkeyHe
 import { rithmicLocalAllowedHere, takeRithmicTokenFromHash } from '../lib/rithmicLocalLink';
 import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
 import { rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
+import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
+import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 
 const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
 const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
@@ -86,6 +88,13 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(busy).toMatchObject({ kind: 'blocked', text: LIVE_HOTKEY_BUSY_TEXT_SOLO });
   });
 
+  it('texty v režimu jednoho účtu nenavádějí na Flatten skupiny; pozice bez SL jde zavřít; žádná ukázková skupina', () => {
+    expect(liveSoloNoticeText(LIVE_MANAGE_BUSY_TEXT)).not.toMatch(/Flatten/);
+    expect(liveSoloNoticeText('Cena SL/TP pozice není jedna nebo není známá — nic se neodeslalo. Sjednoť ji v Tradovate, nebo zavři Flattenem.')).not.toMatch(/Flatten|Tradovate/);
+    expect(screen).toMatch(/if \(solo && line\.kind === 'entry' && summary\?\.kind === 'position'\) \{ void runLiveManage\('close-position', summary\.stop \?\? summary\.entry \?\? 0\); return; \}/);
+    expect(screen).toMatch(/\(solo \? null : workerGroup \?\? \(sample \?/);
+  });
+
   it('× pozice a karty se řídí místní službou; události kopírky se do grafu nepromítnou', () => {
     expect(screen).toMatch(/const closeAllowed = solo \? solo\.available : copier\.available && copier\.status\?\.armed === true && copier\.status\.shadowMode !== true;/);
     expect(screen).toMatch(/solo \? copyEvents \?\? undefined : copyEvents \?\? copier\.status\?\.recentCopyEvents/);
@@ -120,6 +129,12 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/seen\.current = null;/);
     expect(hook).toMatch(/sent: 'unknown', error: 'spojení s místním procesem spadlo/);
     expect(hook.match(/socket\.send\(/g)).toHaveLength(1);
+    // Konec relace maže cenu i stav; vstup chce cenu z aktuálního spojení a mlčící proces pustí jen zavření.
+    expect(hook).toMatch(/const entryReady = available && feedLive && !silent && price !== null;/);
+    expect(hook).toMatch(/if \(silentRef\.current && action !== 'close-position'\) return blocked\(/);
+    expect(hook.match(/resetSession\(\);/g)).toHaveLength(2);
+    // Neznámý stav není „bez pozice".
+    expect(hook).toMatch(/if \(!state\) return \{ key: 'rithmic-unknown'/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
@@ -134,8 +149,10 @@ describe('hook místního procesu', () => {
     const long = { net: 1, avg: 100, entries: new Map(), stop: 95, target: 110 };
     expect(rithmicTradeEvents(empty, long, ctx).map(event => event.kind)).toEqual(['entry', 'bracket-placed']);
     expect(rithmicTradeEvents(long, { ...long, stop: 98 }, ctx).map(event => event.kind)).toEqual(['sl-moved']);
-    expect(rithmicTradeEvents(long, empty, { ...ctx, lastPrice: 94 })[0]).toMatchObject({ kind: 'exit', exitReason: 'sl' });
-    expect(rithmicTradeEvents(long, empty, ctx)[0]).toMatchObject({ kind: 'exit', exitReason: 'manual' });
+    // Důvod zavření se neodhaduje z ceny.
+    const exit = rithmicTradeEvents(long, empty, { ...ctx, lastPrice: 94 })[0] as unknown as Record<string, unknown>;
+    expect(exit.kind).toBe('exit');
+    expect('exitReason' in exit).toBe(false);
     expect(rithmicTradeEvents(empty, empty, ctx)).toEqual([]);
   });
 });

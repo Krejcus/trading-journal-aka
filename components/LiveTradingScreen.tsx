@@ -435,8 +435,9 @@ const LiveTradingScreen: React.FC<Props> = ({
   // Ukázka jen s přepínačem; stav kopírky v ní je pravidlový stav ze skutečné skupiny, jinak neověřený.
   const [sample] = useState(sampleGroupEnabled);
   const group = useMemo<LiveTradeGroup | null>(
-    () => workerGroup ?? (sample ? { ...SAMPLE_LIVE_TRADE_GROUP, armed: null } : null),
-    [sample, workerGroup],
+    // Jeden účet mimo kopírku nemá skupinu nikdy — ani ukázkovou z dev přepínače.
+    () => (solo ? null : workerGroup ?? (sample ? { ...SAMPLE_LIVE_TRADE_GROUP, armed: null } : null)),
+    [sample, workerGroup, solo != null], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Panel je ve výchozím stavu zavřený; otevře ho tlačítko Objednávka, propsání
   // boxu (pravý klik) nebo pravý klik do grafu.
@@ -901,6 +902,8 @@ const LiveTradingScreen: React.FC<Props> = ({
         if (line.kind === 'entry' && summary?.kind === 'pending') void runLiveManage('cancel-entry', summary.leader?.entry);
         // Zavřít obchod: „co jsem viděl“ = SL leadera (+ qty leadera v desku); worker ověří tvar u brokera.
         // Pozice z přikoupení s rozjetými SL: „co jsem viděl“ = nejochrannější SL od workeru (worker ho porovná znovu).
+        // Jeden účet mimo kopírku: zavření nezávisí na SL (pozice bez ochrany musí jít zavřít); služba čte stav sama.
+        if (solo && line.kind === 'entry' && summary?.kind === 'position') { void runLiveManage('close-position', summary.stop ?? summary.entry ?? 0); return; }
         const closeReference = line.groupLimitStateHash ? summary?.leader?.entry ?? summary?.entry : summary?.stop ?? entryScaleIn?.stopLoss;
         if (line.kind === 'entry' && summary?.kind === 'position') void runLiveManage('close-position', closeReference, undefined, undefined, line.groupLimitStateHash);
         return;

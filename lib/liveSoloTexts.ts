@@ -17,6 +17,10 @@ export function liveSoloNoticeText(text: string): string {
   const exact = EXACT[text];
   if (exact) return exact;
   return text
+    // Jediný Flatten v appce patří skupině kopírky — v grafu jednoho účtu se nenabízí.
+    .replace(/ Zavřít jde hned Flattenem(?: \(Shift\+F\))?\./, ' Počkej na výsledek.')
+    .replace(/ Sjednoť ji v Tradovate, nebo zavři Flattenem\./, ' Zkontroluj účet u brokera.')
+    .replace(/zkontroluj leadera, nic neopakuj/, 'zkontroluj účet u brokera, nic neopakuj')
     .replace(/ — kopírka by followerům posun nestihla\./, '.')
     .replace(/zkontroluj leadera v Tradovate/g, 'zkontroluj účet u brokera')
     .replace(/ u leadera/g, '');
