@@ -47,7 +47,7 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
   exec = new LocalExec({
     // `liveEnvironment`: stejný adaptér, jen se hlásí jako skutečné prostředí (zkouška pojistek skutečného účtu).
     broker: options.liveEnvironment ? new Proxy(broker, { get: (target, key) => (key === 'environment' ? 'live' : Reflect.get(target, key)) }) : broker,
-    symbols: { ESZ6: { tickSize: 0.25 } }, maxQuantity: 2, maxPosition: 2, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
+    symbols: { ESZ6: { tickSize: 0.25 } }, maxQuantity: 2, maxPosition: 2, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'], multiPairSwap: true,
     serverPrice: () => price, serverQuote: () => (price === null ? null : { bid: price, ask: price + 0.25 }), ...options.config,
   });
   exec.attach();

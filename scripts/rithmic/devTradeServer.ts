@@ -365,6 +365,7 @@ async function main(): Promise<void> {
     broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: manualCap, quantityLimits: effectiveLimits,
     // Čekající přikoupení Limitem: zatím jen na testovacím účtu (otevřené nálezy z oponentury).
     pendingAdd: SYSTEM === 'Rithmic Test',
+    multiPairSwap: SYSTEM === 'Rithmic Test',
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,
