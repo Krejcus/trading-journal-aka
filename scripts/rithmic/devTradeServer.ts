@@ -11,6 +11,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decodeRithmicFrames } from '../../services/rithmic/rithmicCodec';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
@@ -20,10 +21,20 @@ import { LocalExec, type LocalExecCommand } from '../../services/rithmic/localEx
 import type { ProtectionState, ProtectionStore } from '../../services/rithmic/rithmicProtection';
 import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
 
-const SYSTEM = 'Rithmic Test';
+const cli = (name: string): string | undefined => { const i = process.argv.indexOf(`--${name}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : undefined; };
+const SYSTEM = cli('system') ?? 'Rithmic Test';
+/**
+ * Jen pro čtení: graf a stav účtu, ŽÁDNÉ příkazy. Jiný systém než Rithmic Test jde spustit JEN takto.
+ * Pojistky jsou tři a nezávislé: (1) na drátě — rámce zápisových šablon se vůbec neodešlou,
+ * (2) místní služba příkazy mimo Rithmic Test odmítá, (3) stránka je nenabízí.
+ */
+const READ_ONLY = process.argv.includes('--read-only');
+const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
+/** Šablony, které u Rithmicu něco mění (nový příkaz, změna, zrušení, bracket, úrovně bracketu, zrušit vše, zavřít pozici). */
+const WRITE_TEMPLATES: ReadonlySet<number> = new Set([312, 314, 316, 330, 332, 334, 346, 3504]);
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
-const URL = 'wss://rituz00100.rithmic.com:443';
-const KEYCHAIN_SERVICE = 'alphatrade-rithmic-test';
+const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
+const KEYCHAIN_SERVICE = cli('keychain') ?? (SYSTEM === 'Rithmic Test' ? 'alphatrade-rithmic-test' : 'alphatrade-rithmic-prop');
 const arg = (name: string, fallback: string): string => {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -42,7 +53,7 @@ const ALLOWED_ORIGINS = new Set([
 
 function credentials(): { user: string; password: string } {
   const password = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
-  const user = process.env.RITHMIC_USER;
+  const user = cli('user') ?? process.env.RITHMIC_USER;
   if (!user || !password) throw new Error('Chybí RITHMIC_USER nebo heslo v Klíčence');
   return { user, password };
 }
@@ -71,10 +82,26 @@ function fileProtectionStore(path: string): ProtectionStore {
 }
 
 async function main(): Promise<void> {
-  if (SYSTEM !== 'Rithmic Test') throw new Error('Tenhle proces smí jen na Rithmic Test');
+  if (SYSTEM !== 'Rithmic Test' && !READ_ONLY) throw new Error('Jiný systém než Rithmic Test jde spustit jen s --read-only');
+  if (SYSTEM !== 'Rithmic Test' && !/^rprotocol(-[a-z0-9]+)?\.rithmic\.com$/.test(GATEWAY)) throw new Error(`Neznámá brána ${GATEWAY}`);
   // Název aplikace včetně předpony, kterou Rithmic přidělil pro conformance (mail 17. 11. 2026: „fikr:").
   const creds = { ...credentials(), systemName: SYSTEM, appName: APP_NAME, appVersion: '0.1.0' };
-  const socketFactory = (url: string): RithmicSocketLike => new WebSocket(url, { perMessageDeflate: false }) as unknown as RithmicSocketLike;
+  const socketFactory = (url: string): RithmicSocketLike => {
+    const socket = new WebSocket(url, { perMessageDeflate: false }) as unknown as RithmicSocketLike;
+    if (!READ_ONLY) return socket;
+    // Pojistka na drátě: v režimu jen pro čtení se zápisový rámec nikdy neodešle, ať ho pošle kdokoli.
+    const rawSend = socket.send.bind(socket);
+    socket.send = (data: Uint8Array) => {
+      for (const frame of decodeRithmicFrames(data)) {
+        if (WRITE_TEMPLATES.has(frame.templateId)) {
+          console.log(`[jen čtení] ZABLOKOVÁN zápisový rámec ${frame.templateId} — nic neodešlo`);
+          throw new Error(`režim jen pro čtení: šablona ${frame.templateId} se neodesílá`);
+        }
+      }
+      rawSend(data);
+    };
+    return socket;
+  };
 
   let entries: RithmicAccountRegistryEntry[] = [];
   let revision = 0;
@@ -93,7 +120,8 @@ async function main(): Promise<void> {
   let exec: LocalExec | null = null;
   const broker = createRithmicBroker({
     url: URL, credentials: creds, socketFactory, registry,
-    protectionStore: fileProtectionStore(join(results, 'dev-protection.json')),
+    // Každý systém má vlastní záznam ochrany (záznamy z testu nesmí platit pro skutečný účet a naopak).
+    protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
     onIncident: (incident) => {
       console.log(`[incident] ${incident.kind}: ${incident.message}`);
       exec?.onIncident(incident);
@@ -151,7 +179,7 @@ async function main(): Promise<void> {
   });
   exec.attach();
   await broker.start();
-  if (broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
+  if (!READ_ONLY && broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   exec.subscribe((state) => broadcast({ type: 'state', state }));
 
   // Přístup: Origin (proti cizí webové stránce) A token (proti komukoli jinému v síti — Origin si
@@ -185,7 +213,7 @@ async function main(): Promise<void> {
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
-    send(socket, { type: 'hello', feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
+    send(socket, { type: 'hello', readOnly: READ_ONLY, feed: feedOpen, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: displayPrice(now), bars: [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, now) ? [candles.current(CONTRACT, now)] : [])] });
     send(socket, { type: 'state', state: exec!.state() });
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {
@@ -196,6 +224,7 @@ async function main(): Promise<void> {
           const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand };
           id = message.id ?? null;
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
+          if (READ_ONLY) throw new Error('účet je připojený jen pro čtení — příkazy jsou vypnuté');
           const at = Date.now();
           recent = recent.filter((time) => at - time < 10_000);
           // Brzda (zavření) se neomezuje nikdy.
@@ -212,7 +241,7 @@ async function main(): Promise<void> {
     });
   });
   setInterval(() => console.log(`[ceny] ticků ${tickCount}, poslední cena ${displayPrice(Date.now())}`), 15_000).unref();
-  console.log(`Aplikace u Rithmicu: "${APP_NAME}"`);
+  console.log(`Aplikace u Rithmicu: "${APP_NAME}" · systém "${SYSTEM}"${READ_ONLY ? ' · JEN PRO ČTENÍ (příkazy vypnuté)' : ''}`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
   const stop = (): void => {

@@ -253,6 +253,8 @@ interface Props {
 export interface LiveTradingSolo {
   label: string;
   available: boolean;
+  /** Graf jede na SKUTEČNÉM trhu: starší historie appky se smí připojit (u simulovaného trhu by ceny neseděly). */
+  historyFromApp?: boolean;
   /** Služba umí vstup jen se SL nebo jen s TP. */
   singleLeg?: boolean;
   /** Brzda: zavře pozici hned, mimo zámek jednoho příkazu obrazovky (nečeká na visící příkaz). */
@@ -808,7 +810,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   }), [basePriceAlertBridge, registerBoxFollow, solo != null]); // eslint-disable-line react-hooks/exhaustive-deps
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
-    externalMarketData: marketData != null,
+    externalMarketData: marketData != null && solo?.historyFromApp !== true,
     priceAlerts: priceAlertBridge,
     chartOrderQuantity: draft && quote ? Math.max(1, ticketQuantity(draft, INSTRUMENT, quote)) : liveTicketInitialQuantity(ticketPrefs, entryMaxContracts),
     chartOrderInstant: instantBareReady,
@@ -950,7 +952,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [manageMoveBareEntrySupported, marketData != null, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [manageMoveBareEntrySupported, marketData != null, solo?.historyFromApp, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

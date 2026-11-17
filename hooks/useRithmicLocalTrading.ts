@@ -23,7 +23,7 @@ const REPLY_TIMEOUT_MS = 15_000;
 const BEAT_TIMEOUT_MS = 4_000;
 
 interface Bar { time: number; open: number; high: number; low: number; close: number; volume?: number }
-interface Hello { feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
+interface Hello { readOnly?: boolean; feed?: boolean; system: string; symbol: string; tickSize: number; pointValue: number | null; price: number | null; bars: Bar[] }
 export interface Reply { ok: boolean; sent?: boolean | 'unknown'; error?: string; result?: unknown }
 export type RithmicLocalLinkState = 'off' | 'connecting' | 'open' | 'closed';
 
@@ -291,7 +291,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   // Správa (zrušení, posun, zavření) smí odejít při živém spojení appka ↔ proces ↔ Rithmic a po novém
   // úplném stavu. Nový vstup navíc chce živou cenu; zavření na ceně NEZÁVISÍ (brzda musí fungovat vždy).
-  const available = link === 'open' && Boolean(state?.connected);
+  // Účet připojený jen pro čtení: žádný příkaz se nenabízí ani neposílá (služba je odmítá a na spojení je blokuje).
+  const readOnly = hello?.readOnly === true;
+  const available = link === 'open' && Boolean(state?.connected) && !readOnly;
   const entryReady = available && feedLive && !silent && price !== null;
   const silentRef = useRef(false);
   silentRef.current = silent;
@@ -303,7 +305,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   const IN_POSITION = 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP, nejvýš 2 kontrakty).';
   const NOT_READY = 'Spojení s Rithmicem není připravené — nic se neodeslalo.';
   const inPosition = Boolean(state?.positions.some((item) => item.symbol === hello?.symbol));
-  const entryBlockedReason = entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
+  const entryBlockedReason = readOnly ? 'Účet je připojený jen pro čtení — příkazy jsou vypnuté.' : entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
     : link !== 'open' ? 'Místní proces Rithmicu není připojený.'
     : !state?.connected ? 'Rithmic je odpojený.'
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
@@ -385,7 +387,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   const marketData = useMemo<LiveTradingMarketData | null>(() => (candles.length && symbol ? ({
     candles,
-    quality: { tone: 'info', title: `${hello?.system ?? 'Rithmic'} (simulovaný trh)`, reasons: [], lastCandleAt: candles[candles.length - 1].time * 1_000, capturedAt, missingMinutes: 0, source: symbol },
+    quality: { tone: 'info', title: hello?.system === 'Rithmic Test' ? 'Rithmic Test (simulovaný trh)' : `${hello?.system ?? 'Rithmic'} (živý trh)`, reasons: [], lastCandleAt: candles[candles.length - 1].time * 1_000, capturedAt, missingMinutes: 0, source: symbol },
     loading: false, error: null, liveStatus: link === 'open' && feedLive ? 'live' : 'stale', liveCapturedAt: capturedAt, liveSource: symbol, liveFeed: feedBox.feed,
   } as unknown as LiveTradingMarketData) : null), [candles, capturedAt, symbol, feedBox, link, feedLive, hello?.system]);
 
@@ -537,7 +539,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
 
   return {
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, entryReady, entryBlockedReason, silent,
+    available, readOnly, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,

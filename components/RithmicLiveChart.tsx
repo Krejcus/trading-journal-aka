@@ -39,8 +39,8 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
-  const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : null;
-  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true }), [trading.system, symbol, usable, linkNote]);
+  const linkNote = link !== 'open' ? 'odpojeno' : !state?.connected ? 'Rithmic odpojen' : trading.silent ? 'neodpovídá' : trading.readOnly ? 'jen čtení' : null;
+  const soloBase = useMemo(() => ({ label: `${trading.system ?? 'Rithmic'} · ${symbol}${linkNote ? ` · ${linkNote}` : ''}`, available: usable, singleLeg: true, historyFromApp: trading.system !== null && trading.system !== 'Rithmic Test' }), [trading.system, symbol, usable, linkNote]);
   // Karta jen pro odmítnutí, které přišlo za tohoto spojení — starší z historie služby se neohlašují znovu.
   const rejectionBaseline = useRef<number | null>(null);
   if (!state) rejectionBaseline.current = null;
@@ -90,7 +90,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
   const offerBrake = trading.mayHaveExposure || uncertainList.length > 0;
-  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy]);
+  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });
@@ -123,7 +123,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         copier={copier} disarm={disarm} {...(onDisarm ? { onDisarm } : {})} group={null}
         position={trading.position} marketData={trading.marketData} solo={solo} copyEvents={trading.events} extraToasts={extraToasts}
         onPlaceEntry={trading.onPlaceEntry} onManageEntry={trading.onManageEntry}
-        {...(trading.bareLegTrade ? { bareLegTrade: trading.bareLegTrade, onBareLeg: trading.onBareLeg } : {})}
+        {...(trading.bareLegTrade && !trading.readOnly ? { bareLegTrade: trading.bareLegTrade, onBareLeg: trading.onBareLeg } : {})}
         manageEntryAvgPrice={trading.averagePrice} manageCloseSupported entryMarketSupported
         entryBareSupported entryBarePendingSupported manageMoveLimitSupported manageMoveBareEntrySupported
         entryScaleIn={trading.scaleIn}

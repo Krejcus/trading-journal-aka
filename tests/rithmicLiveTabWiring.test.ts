@@ -117,7 +117,7 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\{!solo && <LivePcAlertDialogs/);
     expect(screen).toMatch(/disabled: marketData != null/);
     // Starší historie appky (skutečný MNQ) se k cizímu zdroji svíček nepřipojuje; kanál TV se neodebírá.
-    expect(screen).toMatch(/externalMarketData: marketData != null,/);
+    expect(screen).toMatch(/externalMarketData: marketData != null && solo\?\.historyFromApp !== true,/);
     expect(readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8')).toMatch(/const htf = externalMarketData \? EXTERNAL_HTF : htfRead;/);
     expect(readFileSync('hooks/useDayChartData.ts', 'utf8')).toMatch(/useTvLiveCandleFeed\(candleWindow\.needsLive && !disabled && now < candleWindow\.dayEnd,/);
     expect(screen).toMatch(/layoutScope=\{solo \? 'live-trading-rithmic' : 'live-trading'\}/);
@@ -131,7 +131,8 @@ describe('hook místního procesu', () => {
     expect(hook).toMatch(/if \(!entryReadyRef\.current\) return \{ \.\.\.base, status: 'blocked'/);
     expect(hook).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);
     // Zavření nezávisí na živé ceně.
-    expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\);/);
+    expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\) && !readOnly;/);
+    expect(hook).toMatch(/const entryReady = available && feedLive && !silent && price !== null;/);
     // Po výpadku je první stav výchozí a čekající příkazy končí „unknown" bez opakování.
     expect(hook).toMatch(/seen\.current = null;/);
     expect(hook).toMatch(/sent: 'unknown', error: 'spojení s místním procesem spadlo/);
@@ -152,7 +153,7 @@ describe('hook místního procesu', () => {
     expect(close).toMatch(/if \(closingNow\.current\) return \{ status: 'blocked'/);
     expect(hook).toMatch(/addUncertain = \(next: RithmicUncertainCommand\) => publishUncertain\(\[\.\.\.uncertainCommands\.filter\(item => item\.id !== next\.id\), next\]\.slice\(-5\)\)/);
     expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
-    expect(chart).toMatch(/link === 'open' && offerBrake \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
+    expect(chart).toMatch(/link === 'open' && offerBrake && !trading\.readOnly \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
     expect(close).toMatch(/if \(raw\.ok\) addUncertain\(\{ id: `close-now:/);
@@ -214,6 +215,20 @@ describe('hook místního procesu', () => {
     // obě cesty posunu (panel/klávesa i čára) jdou při více nohách přes move-legs s výčtem noh
     expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: legs\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\) \}\)/g)).toHaveLength(2);
     expect(chart).toMatch(/entryScaleIn=\{trading\.scaleIn\}/);
+  });
+
+  it('režim jen pro čtení: jiný systém než Rithmic Test jen s --read-only, zápisy blokované na spojení, ve službě i na obrazovce', () => {
+    expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY\) throw new Error\(/);
+    expect(server).toMatch(/const WRITE_TEMPLATES: ReadonlySet<number> = new Set\(\[312, 314, 316, 330, 332, 334, 346, 3504\]\);/);
+    expect(server).toMatch(/if \(WRITE_TEMPLATES\.has\(frame\.templateId\)\) \{/);
+    expect(server).toMatch(/if \(READ_ONLY\) throw new Error\('účet je připojený jen pro čtení/);
+    expect(server).toMatch(/allowedSystems: \['Rithmic Test'\]/);
+    expect(hook).toMatch(/const available = link === 'open' && Boolean\(state\?\.connected\) && !readOnly;/);
+    expect(chart).toMatch(/offerBrake && !trading\.readOnly \? \{ emergencyClose:/);
+    expect(chart).toMatch(/trading\.bareLegTrade && !trading\.readOnly \?/);
+    // starší historie appky jen na skutečném trhu
+    expect(screen).toMatch(/externalMarketData: marketData != null && solo\?\.historyFromApp !== true,/);
+    expect(chart).toMatch(/historyFromApp: trading\.system !== null && trading\.system !== 'Rithmic Test'/);
   });
 
   it('jiný kontrakt než MNQ obrazovka odmítne', () => {
