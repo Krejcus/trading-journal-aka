@@ -1,6 +1,7 @@
 # Rithmic v záložce LIVE — návrh zapojení (17. 11. 2026)
 
-Stav: NÁVRH k oponentuře. Větev `claude/rithmic-20261116`, nic nenasazeno.
+Stav: POSTAVENO podle v2 (níže), ověřeno ve vývojové appce 17. 11. Větev `claude/rithmic-20261116`, nic nenasazeno.
+Oddíl „Návrh" a „Známé slabiny" je původní v1 — oponentura (critic i Codex) ji vrátila; platí „v2 po oponentuře".
 
 ## Cíl
 
@@ -73,3 +74,33 @@ C. **Kopírka ARMED + Rithmic graf současně.** Nezakazuji (jsou to oddělené 
 D. **Token v localStorage** originu appky (stejně jako dnes na zkušební stránce). Proces
    poslouchá jen na 127.0.0.1, kontroluje Origin + token, smí jen „Rithmic Test".
 E. Karty obchodů se dál skládají v prohlížeči ze změn stavu (důvod zavření jen odhadem, bez P&L).
+
+## v2 po oponentuře (17. 11.) — takhle je to postavené
+
+Critic i Codex: „OPRAVIT PŘED STAVBOU" (10 nálezů). Co se změnilo proti v1:
+
+1. **Žádný vyrobený stav kopírky.** Obrazovka má prop `solo { label, available }`; `copier`, `disarm`
+   a `onDisarm` dostává SKUTEČNÉ ze desku. Incident kopírky, čip Worker, „Kopírka Tradovate" a
+   tlačítko OFF jsou v Rithmic grafu vidět dál. × pozice a karty řídí `solo.available`; události
+   kopírky se do Rithmic grafu nepromítají.
+2. **Shift+F** v režimu jednoho účtu neotevře Flatten skupiny (jen karta s vysvětlením); hláška
+   zámku a nápověda kláves Shift+F nenabízejí.
+3. **Brána:** jen vývojová appka (`import.meta.env.DEV`) na `localhost`/`127.0.0.1`, ne nativní,
+   s tokenem. Produkční build cestu nemá ani s tokenem. Místní proces nemá produkční origin.
+4. **Pád:** `onCrash={noteChartCrash}` + vnější boundary → nouzová lišta jako u LIVE grafu.
+   Paměť pádů je sdílená s Tradovate grafem vědomě (po pádu se LIVE otevře na přehledu).
+5. **Alerty** jsou v režimu jednoho účtu vypnuté (tlačítko, dialogy, čáry, karty, zvuky).
+6. **Kontrakt:** jiný než MNQ (krok 0,25, bod 2 USD) → prázdný stav s důvodem; vlastní rozvržení
+   grafu `live-trading-rithmic`.
+7. **Čerstvost:** místní proces posílá tep každou sekundu (`beat`, s příznakem spojení pro ceny);
+   prohlížeč si čerstvost nevyrábí, po 4 s ticha je cena stará. Nový vstup chce živou cenu;
+   zrušení, posun a zavření jen živé spojení příkazů (brzda nezávisí na ceně). Po výpadku je první
+   stav výchozí, rozpracované příkazy končí „unknown" bez opakování.
+8. `useDayChartData` se při cizím zdroji dat vypíná (`disabled`).
+9. Hlídací testy: `tests/rithmicLiveTabWiring.test.ts`; dva stávající hlídací testy rozšířeny
+   o výslovnou výjimku pro `hooks/useRithmicLocalTrading.ts`.
+10. `RithmicLiveChart` je importován staticky (desk nesmí nic líně načítat — studený start).
+
+Vědomě přijato: token v `localStorage` vývojové appky (jen Rithmic Test); karty obchodů se
+skládají v prohlížeči ze změn stavu (důvod zavření odhadem, bez P&L); blokace po incidentu má
+vedle karty zvláštní tlačítko „Potvrdit incident".
