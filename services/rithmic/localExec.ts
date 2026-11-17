@@ -123,6 +123,8 @@ export type LocalExecCommand =
   | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit' | 'Stop'; limitPrice?: number; triggerPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number }
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
+  /** SL i TP k pozici BEZ příkazů jedním zápisem jako svázaný pár (OCO). Jen 1 kontrakt. */
+  | { op: 'protect-pair'; clientId: string; symbol: string; stopPrice: number; targetPrice: number }
   | { op: 'move'; orderId: string; price: number }
   /** Posune VŠECHNY pracující nohy jedné role (pozice s víc ochranami) na jednu cenu; `expect` = nohy a ceny, které appka znala při odeslání (služba ověří, že se od té chvíle nezměnily — ne to, co uživatel viděl při kliku). */
   | { op: 'move-legs'; symbol: string; role: 'stop' | 'target'; price: number; expect: Array<{ orderId: string; price: number }> }
@@ -736,6 +738,76 @@ export class LocalExec {
             guard: () => consentNow() ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
+        }
+        case 'protect-pair': {
+          // Ochrana snižuje riziko → smí i při zastavených vstupech. Jeden zápis: dva příkazy svázané burzou.
+          const symbol = typeof command.symbol === 'string' ? command.symbol : '';
+          const spec = this.config.symbols[symbol];
+          if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
+          const clientId = typeof command.clientId === 'string' ? command.clientId : '';
+          if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
+          const stopTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-s`;
+          const targetTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-t`;
+          if (this.seenClientIds.has(clientId) || [...this.orders.values()].some((order) => order.tag === stopTag || order.tag === targetTag)) refuse('příkaz s tímto clientId už byl přijat');
+          const stopPrice = command.stopPrice;
+          const targetPrice = command.targetPrice;
+          if (!finite(stopPrice) || !finite(targetPrice) || stopPrice <= 0 || targetPrice <= 0) return refuse('pár SL+TP bez platných cen');
+          if (!this.onGrid(stopPrice, spec.tickSize) || !this.onGrid(targetPrice, spec.tickSize)) refuse(`ceny neleží na kroku ceny ${spec.tickSize}`);
+          const net = this.positions.get(symbol)?.netQuantity ?? 0;
+          if (net === 0) return refuse('není otevřená pozice — ochranu není k čemu přidat');
+          if (Math.abs(net) !== 1) return refuse('SL i TP najednou jde zatím přidat jen k pozici 1 kontraktu');
+          if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status))) return refuse('pozice už má pracující příkazy — pár SL+TP jde přidat jen k pozici bez příkazů');
+          if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');
+          if (this.legsMoving.has(symbol)) return refuse('změna ochrany na tomto kontraktu právě běží — počkej na výsledek');
+          if (this.legsUncertain.has(symbol)) return refuse('poslední změna ochrany skončila nejistě — ověř u brokera, co na pozici pracuje, a potvrď incident');
+          if (this.broker.listBrackets(accountId).some((bracket) => bracket.symbol === symbol && !bracket.closed)) return refuse('pozice patří ke vstupu s ochranou — další ochranu nezadávám');
+          const filledAt = this.lastFillAt.get(symbol);
+          if (filledAt !== undefined && ((this.lastPositionAt.get(symbol) ?? 0) < filledAt || this.now() - filledAt < (this.config.positionSettleMs ?? 1_000))) {
+            return refuse('pozice se právě mění (čerstvé vyplnění) — ochranu zadej za okamžik');
+          }
+          const server = this.config.serverPrice?.(symbol) ?? null;
+          if (server === null) return refuse('služba nemá čerstvou cenu — ochranu nezadávám');
+          const long = net > 0;
+          if (long ? !(stopPrice < server && server < targetPrice) : !(targetPrice < server && server < stopPrice)) return refuse('SL musí být na ztrátové a TP na ziskové straně trhu');
+          const limit = this.config.maxProtectionTicks ?? 400;
+          for (const price of [stopPrice, targetPrice]) {
+            if (Math.round(Math.abs(price - server) / spec.tickSize) > limit) return refuse(`ochrana je dál než povolených ${limit} ticků od trhu`);
+          }
+          this.seenClientIds.add(clientId);
+          this.legsMoving.add(symbol);
+          this.reserved.set(stopTag, { symbol, quantity: 0 });
+          try {
+            let pair;
+            try {
+              pair = await this.broker.placeExitPair({ accountId, symbol, side: long ? 'Sell' : 'Buy', quantity: 1, stop: { tag: stopTag, stopPrice }, target: { tag: targetTag, limitPrice: targetPrice } });
+            } catch (error) {
+              if (error instanceof BrokerRequestNotSentError) throw error; // nic neodešlo, pozice je ve stejném stavu jako předtím
+              // Výsledek není znám: na burze může pracovat pár, o kterém služba neví → další ochrana až po potvrzení.
+              const message = `výsledek zadání páru SL+TP není znám (${error instanceof Error ? error.message : String(error)}) — ověř u brokera, jakou ochranu pozice má`;
+              this.incidents.push({ kind: 'protect-pair-uncertain', message, at: this.now() });
+              this.blocked = `protect-pair-uncertain: ${message}`.slice(0, 240);
+              this.legsUncertain.add(symbol);
+              this.changed();
+              return { ok: false, sent: 'unknown', error: message };
+            }
+            const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+            for (;;) {
+              const byTag = (wanted: string) => [...this.orders.values()].find((order) => order.tag === wanted && [pair.stopOrderId, pair.targetOrderId].includes(order.brokerOrderId));
+              const stop = byTag(stopTag);
+              const target = byTag(targetTag);
+              if (stop?.status === 'working' && target?.status === 'working' && stop.orderType === 'Stop' && target.orderType === 'Limit') {
+                return { ok: true, result: { stopOrderId: stop.brokerOrderId, targetOrderId: target.brokerOrderId, quantity: 1, paired: true } };
+              }
+              if (this.now() >= deadline || (stop && TERMINAL.has(stop.status)) || (target && TERMINAL.has(target.status))) {
+                this.legsUncertain.add(symbol);
+                return { ok: false, sent: 'unknown', error: 'pár SL+TP není potvrzený stavem (nebo ho burza nepřijala) — ověř u brokera, jakou ochranu pozice má' };
+              }
+              await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+          } finally {
+            this.legsMoving.delete(symbol);
+            this.reserved.delete(stopTag);
+          }
         }
         case 'protect': {
           // Ochrana snižuje riziko → smí i při zastavených vstupech. Vždy JEN jeden výstupní příkaz na pozici.

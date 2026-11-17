@@ -389,6 +389,32 @@ describe('místní služba: druhá noha k pozici = svázaný pár SL+TP (OCO)', 
     t.broker.stop();
   });
 
+  it('SL i TP najednou k pozici bez příkazů: jeden zápis, svázaný pár; špatné ceny a pozice s příkazem ne', async () => {
+    const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20, moveConfirmMs: 200 } });
+    const both = (extra: Record<string, unknown> = {}) => ({ op: 'protect-pair', clientId: `b${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', stopPrice: 6980, targetPrice: 7010, ...extra });
+    expect(await t.run(both())).toMatchObject({ ok: false, sent: false }); // bez pozice
+    const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    t.server.fill((bare as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(80);
+    const frames = t.frames();
+    expect(await t.run(both({ stopPrice: 7005 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(both({ targetPrice: 6995 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(both({ stopPrice: 6980.1 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    expect(await t.run(both())).toMatchObject({ ok: true, result: { paired: true } });
+    expect(t.frames()).toBe(frames + 1);
+    await sleep(60);
+    const open = [...t.server.orders.values()].filter((o) => o.status === 'open');
+    expect(open).toHaveLength(2);
+    expect(new Set(open.map((o) => o.oco)).size).toBe(1);
+    expect(t.exec.state().orders.map((o) => o.role).sort()).toEqual(['stop', 'target']);
+    // druhý pár ani další ochrana k pozici s párem ne
+    expect(await t.run(both())).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(protect())).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
   it('TP a potom SL funguje stejně', async () => {
     const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20, moveConfirmMs: 200 } });
     const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
