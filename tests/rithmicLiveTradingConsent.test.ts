@@ -33,16 +33,21 @@ describe('souhlas s obchodováním na skutečném účtu', () => {
 
   it('server: výchozí stav je vypnuto, souhlas se ověřuje před přihlášením, po něm a před každým vstupem', () => {
     const server = readFileSync('scripts/rithmic/devTradeServer.ts', 'utf8');
-    expect(server).toMatch(/const LIVE_TRADING = process\.argv\.includes\('--live-trading'\);/);
+    expect(server).toMatch(/const LIVE_TRADING = process\.argv\.includes\('--live-trading'\) \|\| CLOSE_ONLY;/);
+    // režim jen pro zavírání: bez souhlasu, ale služba v něm odmítá každý vstup
+    expect(server).toMatch(/if \(CLOSE_ONLY\) return 'služba běží jen pro zavírání a správu ochrany \(--close-only\)';/);
+    // kontroly příkazů na skutečném trhu chtějí čerstvou cenu ze živého spojení
+    expect(server).toMatch(/serverPrice: \(symbol\) => \(symbol === CONTRACT \? checkPrice\(Date\.now\(\)\) : null\),/);
+    expect(server).toMatch(/if \(!feedOpen\) return null;\n    const last = candles\.lastPrice\(CONTRACT, now, 30_000\);/);
     expect(server).toMatch(/if \(LIVE_TRADING && READ_ONLY\) throw new Error\(/);
     expect(server).toMatch(/if \(SYSTEM !== 'Rithmic Test' && !READ_ONLY && !LIVE_TRADING\) throw new Error\(/);
     expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
-    expect(server.match(/liveTradingConsentProblem\(/g)).toHaveLength(2);
+    expect(server.match(/liveTradingConsentProblem\(/g)).toHaveLength(3);
     // spuštění jen z terminálu, s opsáním věty po přihlášení; soubor sám nestačí
     expect(server).toMatch(/if \(!process\.stdin\.isTTY \|\| !process\.stdout\.isTTY\) throw new Error\('--live-trading jde spustit jen z interaktivního terminálu/);
     expect(server).toMatch(/if \(typed !== phrase\) \{ broker\.stop\(\); throw new Error\(/);
     expect(server).toMatch(/startConsent = early as LiveTradingConsent;/);
-    expect(server).toMatch(/if \(problem\) \{ broker\.stop\(\); throw new Error\(`Obchodování na skutečném účtu není povolené/);
+    expect(server).toMatch(/if \(problem\) \{ broker\.stop\(\); throw new Error\(`\$\{CLOSE_ONLY \? 'Režim jen pro zavírání nejde spustit' : 'Obchodování na skutečném účtu není povolené'\}/);
     // souhlas vydává jen člověk v terminálu
     const grant = readFileSync('scripts/rithmic/grantLiveTrading.ts', 'utf8');
     expect(grant).toMatch(/if \(!process\.stdin\.isTTY \|\| !process\.stdout\.isTTY\) \{/);

@@ -226,10 +226,20 @@ export class LocalExec {
     const entryAvg = trip.inValue / trip.inQty;
     const exitAvg = trip.outValue / trip.outQty;
     const reason = this.exitReasonOf(fill);
-    this.closes.push({
+    const close: LocalExecClose = {
       id: `${fill.symbol}:${fill.fillId}`, at: this.now(), symbol: fill.symbol, side: trip.sign > 0 ? 'long' : 'short', quantity: trip.inQty,
       entryAvg, exitAvg, pointsTotal: (trip.outValue - trip.inValue) * trip.sign, ...(reason ? { reason } : {}),
-    });
+    };
+    // Výsledek jde ven, až když nulovou pozici potvrdí i zpráva o pozici: buď přišla těsně před tímto vyplněním,
+    // nebo přijde vzápětí. Jinak vyplnění nepatřilo k obchodu, jak ho služba složila (např. začátek neviděla).
+    const book = this.positions.get(fill.symbol)?.netQuantity ?? 0;
+    if (book === 0 && this.now() - (this.lastPositionAt.get(fill.symbol) ?? 0) < 2_000) this.publishClose(close);
+    else this.pendingClose.set(fill.symbol, { close, until: this.now() + 5_000 });
+  }
+
+  private readonly pendingClose = new Map<string, { close: LocalExecClose; until: number }>();
+  private publishClose(close: LocalExecClose): void {
+    this.closes.push(close);
     if (this.closes.length > 5) this.closes.shift();
   }
 
@@ -267,6 +277,11 @@ export class LocalExec {
       // Nula může být opožděná zpráva z doby před vyplněním — ta nic neuvolní; zbytek vyprší časem.
       if (event.position.netQuantity !== 0) this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
       this.lastPositionAt.set(event.position.symbol, this.now());
+      const waiting = this.pendingClose.get(event.position.symbol);
+      if (waiting) {
+        this.pendingClose.delete(event.position.symbol);
+        if (event.position.netQuantity === 0 && this.now() <= waiting.until) this.publishClose(waiting.close);
+      }
       this.positions.set(event.position.symbol, {
         netQuantity: event.position.netQuantity,
         ...(event.displayAveragePrice !== undefined ? { averagePrice: event.displayAveragePrice } : {}),
@@ -278,6 +293,7 @@ export class LocalExec {
         this.orders.clear();
         this.positions.clear();
         this.fillsAhead = [];
+        this.pendingClose.clear();
         this.trips.clear(); // v mezeře mohla uniknout vyplnění → výsledek by nebyl pravdivý
         this.resyncAt = this.now();
         for (const order of event.resync.orders) this.orders.set(order.brokerOrderId, order);
@@ -311,6 +327,12 @@ export class LocalExec {
   private readonly protectiveMismatchSince = new Map<string, number>();
   private readonly protectiveReported = new Set<string>();
   private protectiveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Stav souhlasu; chyba při zjišťování = souhlas neplatí (nikdy výjimka — ta by zablokovala i zavření). */
+  private consentProblem(): string | null {
+    if (!this.config.liveTrading) return null;
+    try { return this.config.liveTrading.problem(); } catch (error) { return `souhlas nejde ověřit (${error instanceof Error ? error.message : String(error)})`; }
+  }
+
   private isLive(): boolean {
     return this.config.liveTrading !== undefined || this.config.systemName !== 'Rithmic Test' || this.broker.environment !== 'demo';
   }
@@ -319,7 +341,7 @@ export class LocalExec {
   /** Souhlas se skutečným účtem skončil a vlastní vstupy dál čekají: ohlásit (jednou), nic nerušit — rozhoduje člověk. */
   private watchConsent(): void {
     if (!this.config.liveTrading) return;
-    if (this.config.liveTrading.problem() === null) { this.consentEndedReported = false; return; }
+    if (this.consentProblem() === null) { this.consentEndedReported = false; return; }
     const accountId = this.broker.accountIds()[0];
     const legIds = new Set(accountId === undefined ? [] : this.broker.listBrackets(accountId).flatMap((bracket) => bracket.legs.map((leg) => leg.orderId)));
     const waiting = [...this.orders.values()].filter((order) => !TERMINAL.has(order.status) && order.tag?.startsWith('ui-') === true && !legIds.has(order.brokerOrderId));
@@ -552,7 +574,7 @@ export class LocalExec {
       let consentProblem: string | null = null;
       if (live) {
         if (!this.config.liveTrading) refuse('místní služba je povolená jen pro testovací prostředí');
-        consentProblem = this.config.liveTrading!.problem();
+        consentProblem = this.consentProblem();
         if (consentProblem !== null && command.op === 'entry') refuse(`obchodování na skutečném účtu je vypnuté: ${consentProblem}`);
       }
       const accountId = this.broker.accountIds()[0];
@@ -677,13 +699,17 @@ export class LocalExec {
             throw error;
           });
           const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}), ...(orderType === 'Stop' ? { stopPrice: command.triggerPrice as number } : {}) };
+          // Souhlas se skutečným účtem se ověřuje znovu těsně před zápisem (mezitím mohl vypršet nebo být odvolán).
+          const consentNow = (): string | null => { const problem = live ? this.consentProblem() : null; return problem === null ? null : `obchodování na skutečném účtu je vypnuté: ${problem}`; };
           if (stopTicks === undefined && targetTicks === undefined) {
+            const late = consentNow();
+            if (late) { this.reserved.delete(tag); return refuse(late); }
             const ack = await release(this.broker.placeOrder(request));
             return { ok: true, result: { orderId: ack.brokerOrderId } };
           }
           const ack = await release(this.broker.placeBracket({
             ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
-            ...(adding ? { guard: () => this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) } : {}),
+            guard: () => consentNow() ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
@@ -773,7 +799,12 @@ export class LocalExec {
             // Čekající vlastní vstup s ochranou (Limit i Stop) a vlastní holý Stop: mění se jen jeho cena.
             // SL/TP jsou vzdálenosti od vyplnění, posunou se s ním.
             const stopEntry = order.stopPrice !== undefined;
+            // Typ se nemění: Stop má jen spoušť, Limit jen limitní cenu. Cokoli jiného (např. Stop Limit po zásahu jinde) neposouvám.
             const bracketed = this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === orderId);
+            // (Vstup s ochranou má v knize typ „bracket"; holý vstup svůj skutečný typ.)
+            if ((order.stopPrice !== undefined && order.limitPrice !== undefined) || order.orderType !== (bracketed ? 'Unsupported' : stopEntry ? 'Stop' : 'Limit')) {
+              return refuse('vstup má jiný typ, než s jakým vznikl — neposouvám ho (zruš ho a zadej znovu)');
+            }
             if (order.filledQuantity > 0) return refuse('vstup se už plní — cenu neměním');
             // Částečné plnění během změny není změřené → zatím jen 1 kontrakt (ten se částečně nevyplní).
             if (order.quantity !== 1) return refuse('posun čekajícího vstupu jde zatím jen u 1 kontraktu');
@@ -934,7 +965,13 @@ export class LocalExec {
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
           if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
           this.flattenSentAt.set(symbol, this.now());
-          const result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol });
+          let result;
+          try { result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol }); } catch (error) {
+            // Zavření prokazatelně neodešlo → pozdější vyplnění se mu nepřipíše jako „ručně".
+            if (error instanceof BrokerRequestNotSentError) this.flattenSentAt.delete(symbol);
+            throw error;
+          }
+          if ((result as { status?: string }).status === 'rejected') this.flattenSentAt.delete(symbol);
           return { ok: true, result };
         }
         case 'reduce': {

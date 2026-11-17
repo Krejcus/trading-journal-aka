@@ -279,6 +279,27 @@ describe('místní služba: skutečný účet je vypnutý, dokud ho nezapne plat
     t.broker.stop();
   });
 
+  it('souhlas odvolaný během ukládání záměru vstup zastaví; chyba při čtení souhlasu nezablokuje zavření', async () => {
+    const base = memoryProtectionStore();
+    let delay = 0;
+    const slow: ProtectionStore = { load: () => base.load(), save: async (state) => { if (delay) await sleep(delay); await base.save(state); } };
+    let problem: (() => string | null) = () => null;
+    const t = await setup({ liveEnvironment: true, protectionStore: slow, config: { liveTrading: { problem: () => problem(), requireStop: true } } });
+    const frames = t.frames();
+    delay = 150;
+    const pending = t.run(entry());
+    await sleep(40);
+    problem = () => 'souhlas odvolán';
+    expect(await pending).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/souhlas odvolán/) });
+    delay = 0;
+    expect(t.frames()).toBe(frames);
+    // čtení souhlasu vyhodí chybu → vstup ne, zavření ano
+    problem = () => { throw new Error('soubor zmizel'); };
+    expect(await t.run(entry({ limitPrice: 6985 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/nejde ověřit/) });
+    expect((await t.run({ op: 'flatten', clientId: 'f2', symbol: 'ESZ6' })).ok).toBe(true);
+    t.broker.stop();
+  });
+
   it('se souhlasem bez povinného SL projde i holý vstup', async () => {
     const t = await setup({ liveEnvironment: true, config: { liveTrading: { problem: () => null, requireStop: false } } });
     expect((await t.run(entry({ stopPrice: undefined, targetPrice: undefined }))).ok).toBe(true);
@@ -299,6 +320,24 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
     await sleep(120);
     expect(t.exec.state().closes).toHaveLength(1);
     expect(t.exec.state().closes[0]).toMatchObject({ symbol: 'ESZ6', side: 'long', quantity: 1, entryAvg: 6990, exitAvg: 6980, pointsTotal: -10, reason: 'sl' });
+    t.broker.stop();
+  });
+});
+
+describe('místní služba: výsledek zavření jen s potvrzenou nulovou pozicí', () => {
+  it('vyplnění, které nulovou pozici nepotvrdí, kartu nevyrobí (začátek obchodu služba neviděla)', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    // Zprávy o pozici nechodí: služba vidí jen vyplnění, nulu jí nikdo nepotvrdí.
+    t.server.controls.muteLivePositions = true;
+    const placed = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    const stop = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open')!;
+    await sleep(2_100); // poslední zpráva o pozici je starší než 2 s
+    t.server.fill(stop.basketId, 6980);
+    await sleep(150);
+    expect(t.exec.state().closes).toEqual([]);
     t.broker.stop();
   });
 });
