@@ -13,6 +13,11 @@ export interface BacktestChartOrderLine {
   ownerType: 'order' | 'position';
   kind: BacktestChartOrderLineKind;
   price: number;
+  /**
+   * Čára návrhu Market: cena trhu, ze které byla `price` spočtena. Vrstva čar ji mezi překresleními obrazovky
+   * posouvá o rozdíl proti živé ceně, aby šla s trhem hned a ne až s dalším překreslením. Jen zobrazení.
+   */
+  marketBase?: number;
   color: string;
   label: string;
   draggable: boolean;

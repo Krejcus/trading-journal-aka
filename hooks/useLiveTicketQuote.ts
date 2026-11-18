@@ -20,10 +20,12 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
     let pending = false;
     // Čas příchodu ceny, ne vykreslení: iOS může čekající `flush` uspat a pustit až po návratu z pozadí.
     let receivedAt = 0;
+    let flushedAt = 0;
     const flush = () => {
       timer = null;
       if (!pending) return;
       pending = false;
+      flushedAt = Date.now();
       // Poslední cena zprávy bez přehrání ticků: animace grafu se umí zaseknout (2. 11.) a close na přelomu minuty nese minulou minutu.
       const price = feed.lastPrice(root);
       const ref = referenceRef.current;
@@ -37,7 +39,10 @@ export function useLiveTicketQuote(feed: LiveCandleFeed | null, root: string, re
     const unsubscribe = feed.subscribe(() => {
       pending = true;
       receivedAt = Date.now();
-      if (timer == null) timer = window.setTimeout(flush, 100);
+      if (timer != null) return;
+      // První pohyb po klidu jde hned, další nejdřív 100 ms po posledním vykreslení (pořád nejvýš 10× za sekundu).
+      const wait = 100 - (receivedAt - flushedAt);
+      if (wait <= 0) flush(); else timer = window.setTimeout(flush, wait);
     });
     return () => {
       unsubscribe();

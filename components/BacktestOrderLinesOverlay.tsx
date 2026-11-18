@@ -37,6 +37,12 @@ interface Props {
    * Jen zobrazení; 0 = vypnuto (Backtest mění cenu hned).
    */
   holdMoveMs?: number;
+  /**
+   * Živá cena trhu (jen zobrazení): čáry s `marketBase` se podle ní posouvají přímo, bez čekání na překreslení
+   * obrazovky. Nic z toho nejde do příkazu — ten bere cenu z návrhu a ze služby.
+   */
+  marketPrice?: () => number | null;
+  subscribeMarket?: (listener: () => void) => () => void;
 }
 
 const sameCoordinates = (left: Record<string, number>, right: Record<string, number>) => {
@@ -212,7 +218,7 @@ export function liveLineClick(state: LiveLineClickState, line: Pick<BacktestChar
   return { fire: step.send, next: { ...state, last: step.next } };
 }
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, holdMoveMs = 0 }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, holdMoveMs = 0, marketPrice, subscribeMarket }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Klepnutí mimo vybraný štítek výběr zruší (jen telefonní režim).
   useEffect(() => {
@@ -293,6 +299,23 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
   // Po potvrzení (cena čáry = puštěná cena) drží ještě do chvíle, než se přepočítá poloha — jinak by na jeden
   // snímek probliknula stará souřadnice.
   const heldRef = useRef<{ lineId: string; price: number } | null>(null);
+  // Čára návrhu Market jde s živou cenou: zobrazená cena = cena čáry + (trh teď − trh při výpočtu čáry).
+  const marketPriceRef = useRef(marketPrice);
+  marketPriceRef.current = marketPrice;
+  const positionNowRef = useRef<(() => void) | null>(null);
+  const livePrice = (line: BacktestChartOrderLine): number => {
+    if (line.marketBase === undefined) return line.price;
+    const market = marketPriceRef.current?.();
+    if (market == null || !Number.isFinite(market)) return line.price;
+    const delta = market - line.marketBase;
+    // Skok o desítky bodů není pohyb trhu mezi dvěma překresleními, ale jiný zdroj ceny — čára zůstane, kde je.
+    return Math.abs(delta) > 50 ? line.price : line.price + delta;
+  };
+  const livePriceRef = useRef(livePrice);
+  livePriceRef.current = livePrice;
+  useEffect(() => subscribeMarket?.(() => {
+    if (linesRef.current.some(line => line.marketBase !== undefined)) positionNowRef.current?.();
+  }), [subscribeMarket]);
   const [heldMove, setHeldMove] = useState<{ lineId: string; price: number; from: number; until: number } | null>(null);
   const heldLine = heldMove ? lines.find(item => item.id === heldMove.lineId) : undefined;
   const heldConfirmed = heldMove !== null && heldLine !== undefined && heldLine.price === heldMove.price;
@@ -354,7 +377,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       frame = 0;
       const next: Record<string, number> = {};
       linesRef.current.forEach(line => {
-        const coordinate = series.priceToCoordinate(line.price);
+        const coordinate = series.priceToCoordinate(livePriceRef.current(line));
         if (coordinate !== null) next[line.id] = Math.round(coordinate * 2) / 2;
       });
       setCoordinates(current => sameCoordinates(current, next) ? current : next);
@@ -375,11 +398,12 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         if (dragRef.current && !dragRef.current.bracketKind && dragRef.current.id === line.id) return;
         const element = lineElementsRef.current.get(line.id);
         if (!element) return;
-        const coordinate = series.priceToCoordinate(heldRef.current?.lineId === line.id ? heldRef.current.price : line.price);
+        const coordinate = series.priceToCoordinate(heldRef.current?.lineId === line.id ? heldRef.current.price : livePriceRef.current(line));
         if (coordinate !== null) element.style.top = `${Math.round(coordinate * 2) / 2}px`;
       });
     };
     refreshRef.current = schedule;
+    positionNowRef.current = positionNow;
     const rangeHandler = () => {
       positionNow();
       schedule();
@@ -392,6 +416,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     update();
     return () => {
       refreshRef.current = null;
+      positionNowRef.current = null;
       if (frame) window.cancelAnimationFrame(frame);
       observer.disconnect();
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler);
@@ -597,7 +622,9 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       })}
       {lines.map(line => {
         const dragged = dragOverride?.lineId === line.id;
-        const top = dragged ? dragOverride.top : coordinates[line.id];
+        // Čára návrhu Market: poloha přímo z živé ceny, jinak by ji každé překreslení vrátilo o krok zpět.
+        const marketTop = !dragged && line.marketBase !== undefined ? api.controller.getSeries().priceToCoordinate(livePrice(line)) : null;
+        const top = dragged ? dragOverride.top : marketTop !== null && Number.isFinite(marketTop) ? Math.round(marketTop * 2) / 2 : coordinates[line.id];
         const shownPrice = dragged ? dragOverride.price : line.price;
         if (!Number.isFinite(top)) return null;
         return (

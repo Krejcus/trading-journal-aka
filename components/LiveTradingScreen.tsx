@@ -429,6 +429,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   // Rychlá cena = čáry návrhu a Market jdou s trhem (dřív svíčka stará i desítky sekund).
   const candleClose = chart.candles.at(-1)?.close ?? null;
   const tick = useLiveTicketQuote(chart.liveFeed, ROOT, candleClose);
+  const liveFeed = chart.liveFeed ?? null;
   const lastPrice = tick?.price ?? candleClose;
   const quoteInfo = {
     source: chart.liveSource,
@@ -761,8 +762,11 @@ const LiveTradingScreen: React.FC<Props> = ({
 
   const picked = group ? targetAccount(group, target) : null;
   const orderLines = useMemo(
-    () => [...liveLines, ...(draft && quote && ticketOpen ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short) : []), ...attachLines],
-    [attachLines, draft, liveLines, picked?.short, quote, ticketOpen],
+    () => [...liveLines, ...(draft && quote && ticketOpen
+      // Návrh Market jde s trhem: čáry nesou cenu trhu, ze které vznikly, a vrstva je posouvá s živou cenou (jen zobrazení).
+      ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short).map(line => (draft.type === 'market' && tick != null ? { ...line, marketBase: quote.bid } : line))
+      : []), ...attachLines],
+    [attachLines, draft, liveLines, picked?.short, quote, ticketOpen, tick != null],
   );
 
   // Pravé tlačítko = okamžitý holý Limit/Stop (Filip 7. 11.): sólo DEMO (capability), bez pozice, čekajícího vstupu a návrhu.
@@ -901,6 +905,8 @@ const LiveTradingScreen: React.FC<Props> = ({
       });
     },
     onOrderLineSwallowed: () => setLineNotice({ at: Date.now(), tone: 'warn', text: LIVE_ACTION_CHANGED_TEXT }),
+    marketPrice: () => { const last = liveFeed?.lastPrice(ROOT); return last == null || !Number.isFinite(last) ? null : snapToTick(last, INSTRUMENT.tickSize); },
+    ...(liveFeed ? { subscribeMarket: (listener: () => void) => liveFeed.subscribe(listener) } : {}),
     onOrderLineCancel: line => {
       if (isLiveDisplayOnlyLine(line)) return;
       if (line.ownerId === LIVE_POSITION_OWNER && chartReplay) { replayNotice(); return; }
@@ -961,7 +967,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [manageMoveBareEntrySupported, marketData != null, solo?.historyFromApp, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [liveFeed, manageMoveBareEntrySupported, marketData != null, solo?.historyFromApp, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

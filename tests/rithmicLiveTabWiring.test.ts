@@ -284,11 +284,24 @@ describe('hook místního procesu', () => {
     const overlay = readFileSync(new URL('../components/BacktestOrderLinesOverlay.tsx', import.meta.url), 'utf8');
     const workspace = readFileSync(new URL('../components/AlphaTradeChartWorkspace.tsx', import.meta.url), 'utf8');
     expect(workspace).toMatch(/holdMoveMs=\{liveOrderEntry && orderLineSource === liveOrderEntry \? 2500 : 0\}/);
-    expect(overlay).toMatch(/holdMoveMs = 0 \}\) => \{/);
+    expect(overlay).toMatch(/holdMoveMs = 0, marketPrice, subscribeMarket \}\) => \{/);
     expect(overlay).toMatch(/if \(holdMoveMs > 0 && dragging\.lastPrice !== line\.price\) setHeldMove\(/);
     // Drží jen dokud čára stojí na původní ceně (nebo už na puštěné) — jiná cena od brokera podržení ruší.
     expect(overlay).toMatch(/heldLine\.price === heldMove\.from \|\| heldConfirmed/);
     expect(overlay).toMatch(/Math\.max\(0, heldMove\.until - Date\.now\(\)\)/);
+  });
+
+  it('čáry návrhu Market jdou s živou cenou přímo (jen zobrazení), ne až s překreslením obrazovky', () => {
+    const overlay = readFileSync(new URL('../components/BacktestOrderLinesOverlay.tsx', import.meta.url), 'utf8');
+    const screen = readFileSync(new URL('../components/LiveTradingScreen.tsx', import.meta.url), 'utf8');
+    const quote = readFileSync(new URL('../hooks/useLiveTicketQuote.ts', import.meta.url), 'utf8');
+    // Jen návrh Market a jen s živou cenou z kanálu; skutečné čáry pozice a příkazů `marketBase` nemají.
+    expect(screen).toMatch(/draft\.type === 'market' && tick != null \? \{ \.\.\.line, marketBase: quote\.bid \} : line/);
+    expect(overlay).toMatch(/if \(line\.marketBase === undefined\) return line\.price;/);
+    // Skok ceny o desítky bodů čáru neposune (jiný zdroj ceny).
+    expect(overlay).toMatch(/return Math\.abs\(delta\) > 50 \? line\.price : line\.price \+ delta;/);
+    // První pohyb po klidu hned, dál nejvýš 10× za sekundu.
+    expect(quote).toMatch(/const wait = 100 - \(receivedAt - flushedAt\);/);
   });
 
   it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {

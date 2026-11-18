@@ -336,6 +336,9 @@ export interface LiveOrderEntryBridge {
   onOrderLineAction?: (line: BacktestChartOrderLine, actionId: string) => void;
   /** Klik na čáru spolkla právě změněná nabídka: obrazovka to řekne. */
   onOrderLineSwallowed?: () => void;
+  /** Živá cena trhu pro čáry návrhu Market (jen zobrazení): aktuální hodnota a odběr změn. */
+  marketPrice?: () => number | null;
+  subscribeMarket?: (listener: () => void) => () => void;
   /** Id vlastníka čar živé pozice: kreslí se i bez přepínače „čáry příkazů“, jen na grafu exekučního instrumentu. */
   livePositionOwnerId?: string;
   /**
@@ -1306,6 +1309,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onAction={orderLineSource?.onOrderLineAction}
               onClickSwallowed={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.onOrderLineSwallowed : undefined}
               holdMoveMs={liveOrderEntry && orderLineSource === liveOrderEntry ? 2500 : 0}
+              marketPrice={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.marketPrice : undefined}
+              subscribeMarket={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.subscribeMarket : undefined}
             />
           ) : null}
           {chartApi && liveDisplayOrders && (liveDisplayOrders.lines.length > 0 || liveDisplayOrders.badges.length > 0) ? (
