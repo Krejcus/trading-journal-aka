@@ -75,6 +75,8 @@ function createFeed() {
  */
 export interface RithmicUncertainCommand { id: string; at: number; label: string; reason: string; confirmed?: boolean }
 const NO_UNCERTAIN: readonly RithmicUncertainCommand[] = [];
+// Vlastní výstupní Market částečného zavření (značka ui-red-) pracuje jen zlomek sekundy — není to cizí příkaz (jen zobrazení).
+const isOwnExit = (order: { tag?: string; orderType?: string }): boolean => order.orderType === 'Market' && order.tag?.startsWith('ui-red-') === true;
 const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { 'move-legs': 'Posun SL/TP', protect: 'Přidání SL/TP', 'protect-pair': 'Přidání SL a TP', 'replace-entry': 'Změna čekajícího vstupu', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', reduce: 'Částečné zavření', ack: 'Potvrzení incidentu' };
 
 /**
@@ -502,7 +504,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   // ani rušit a nic z nich nejde do příkazu. Co už kreslí pozice (vlastní vstup, SL, TP), se nekreslí podruhé.
   const workingView = useMemo<LiveChartWorkingOrders | null>(() => {
     if (!state || !symbol) return null;
-    const foreign = orders.filter((order) => order.role === 'other' && order.status === 'working');
+    const foreign = orders.filter((order) => order.role === 'other' && order.status === 'working' && !isOwnExit(order));
     if (!foreign.length) return null;
     const view = liveWorkingOrderView({
       orders: foreign.map((order) => ({
@@ -740,7 +742,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     legsRemovable,
     reducible, reduceOne,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other').length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !isOwnExit(order)).length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
