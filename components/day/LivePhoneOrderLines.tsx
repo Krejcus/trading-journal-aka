@@ -288,6 +288,10 @@ export function LivePhoneOrderLines({
       lines={lines}
       isDark={isDark}
       selectToDrag
+      // Filip 18. 11. 2026: SL/TP táhnout hned, bez předchozího výběru; po puštění čára drží novou cenu do
+      // potvrzení brokerem (jinak by na okamžik problikla stará poloha).
+      dragOnFirstTouch
+      holdMoveMs={2500}
       onClickSwallowed={() => onNotice(LIVE_ACTION_CHANGED_TEXT)}
       onChange={(line, kind, price, startLine) => {
         // Pracující příkazy jsou jen zobrazení: žádný posun, žádný návrh (pojistka nad overlayem).

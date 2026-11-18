@@ -32,6 +32,11 @@ interface Props {
    */
   selectToDrag?: boolean;
   /**
+   * Telefon, živé obchodování: štítek se táhne hned prvním dotykem (výběr se nastaví zároveň). Náhodný posun
+   * prstem přes graf ho nespustí — tah začíná jen na štítku a až po mrtvé zóně (`dragDeadZonePx`).
+   */
+  dragOnFirstTouch?: boolean;
+  /**
    * Živý graf: po puštění čára zůstane na nové ceně (tlumeně), dokud zdroj nepotvrdí změnu, čára nezmizí,
    * nebo neuplyne tato doba — jinak by mezi puštěním a potvrzením brokera probliknula původní poloha.
    * Jen zobrazení; 0 = vypnuto (Backtest mění cenu hned).
@@ -218,7 +223,7 @@ export function liveLineClick(state: LiveLineClickState, line: Pick<BacktestChar
   return { fire: step.send, next: { ...state, last: step.next } };
 }
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, holdMoveMs = 0, marketPrice, subscribeMarket }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, dragOnFirstTouch = false, holdMoveMs = 0, marketPrice, subscribeMarket }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Klepnutí mimo vybraný štítek výběr zruší (jen telefonní režim).
   useEffect(() => {
@@ -651,7 +656,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 if (!line.draggable || (event.target as HTMLElement).closest('[data-order-line-control]')) return;
                 event.preventDefault();
                 event.stopPropagation();
-                if (selectToDrag && selectedId !== line.id) { setSelectedId(line.id); return; }
+                if (selectToDrag && selectedId !== line.id) { setSelectedId(line.id); if (!dragOnFirstTouch) return; }
                 dragRef.current = { id: line.id, startY: event.clientY, startLine: line };
                 if (line.kind !== 'entry') {
                   const anchor = linesRef.current.find(item =>
