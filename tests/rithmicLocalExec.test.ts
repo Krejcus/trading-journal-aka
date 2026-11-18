@@ -203,6 +203,64 @@ describe('místní služba: opakované přikoupení (víc než dvě části) a p
     t.broker.stop();
   });
 
+  it('restart služby se třemi částmi: všechny zůstanou „chráněno", posun i další přikoupení fungují', async () => {
+    const protectionStore = memoryProtectionStore();
+    const config = { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10, maxProtectedParts: 6 };
+    const t = await setup({ config, protectionStore });
+    await fillOf(t, await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 })), 6990);
+    for (let i = 0; i < 2; i += 1) await fillOf(t, await t.run(protectedAdd()), 7000);
+    t.exec.detach();
+    t.broker.stop();
+    const after = await setup({ server: t.server, registryStore: t.registryStore, protectionStore, config });
+    try {
+      // Po restartu služba ochranu vyhodnotí „chráněno" až s první ŽIVOU zprávou o pozici (u Rithmicu chodí s P&L);
+      // do té doby je stav „pozice není známá" a přikoupení ani dělení služba nepustí.
+      await sleep(80);
+      expect(after.exec.state().brackets.every((b) => b.state === 'unknown')).toBe(true);
+      for (const socket of after.server.sockets.filter((s) => s.readyState === 1 && s.infra === 4)) socket.push(450, { account_id: 'ACC1', symbol: 'ESZ6', exchange: 'CME', net_quantity: 3 });
+      await sleep(150);
+      const state = after.exec.state();
+      expect(state.positions).toEqual([expect.objectContaining({ netQuantity: 3 })]);
+      expect(state.brackets.filter((b) => b.state === 'protected')).toHaveLength(3);
+      expect(working(after, 'stop')).toHaveLength(3);
+      expect(working(after, 'target')).toHaveLength(3);
+      expect(state.blocked).toBeNull();
+      const stops = working(after, 'stop');
+      expect(await after.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: stops.map((o) => ({ orderId: o.orderId, price: o.price })) })).toMatchObject({ ok: true });
+      await sleep(60);
+      expect(await after.run(protectedAdd({ stopPrice: 6985 }))).toMatchObject({ ok: true });
+    } finally { after.exec.detach(); after.broker.stop(); }
+  });
+
+  it('brzda se čtyřmi částmi: zruší všech osm noh, zavře celou pozici a nic nezůstane viset', async () => {
+    const t = await parts(4, { maxProtectedParts: 6 });
+    expect(working(t, 'stop').length + working(t, 'target').length).toBe(8);
+    expect(await t.run({ op: 'flatten', clientId: 'flat-many', symbol: 'ESZ6' })).toMatchObject({ ok: true });
+    await sleep(700);
+    const state = t.exec.state();
+    expect(state.orders.filter((o) => o.status === 'working')).toHaveLength(0);
+    expect([...t.server.orders.values()].filter((o) => o.status === 'open')).toHaveLength(0);
+    expect(state.positions.filter((p) => p.netQuantity !== 0)).toHaveLength(0);
+    expect(state.blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('nejistý výsledek přikoupení bez SL/TP: po potvrzení obsluhou jde pozici ochránit (rezervace se uvolní)', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10, bareAdd: true } });
+    await fillOf(t, await t.run(entry({ stopPrice: undefined, targetPrice: undefined })), 6990);
+    const original = t.broker.placeOrder.bind(t.broker);
+    t.broker.placeOrder = (async () => { throw new Error('spojení spadlo po odeslání'); }) as typeof original;
+    const lost = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }));
+    expect(lost).toMatchObject({ ok: false });
+    expect((lost as { sent?: unknown }).sent).not.toBe(false);
+    t.broker.placeOrder = original;
+    const pair = () => t.run({ op: 'protect-pair', clientId: `pp${Math.random().toString(36).slice(2, 8)}`, symbol: 'ESZ6', stopPrice: 6980, targetPrice: 7010 });
+    expect(await pair()).toMatchObject({ ok: false, sent: false });
+    expect(await t.run({ op: 'ack' })).toMatchObject({ ok: true });
+    expect(await pair()).toMatchObject({ ok: true, result: { paired: true } });
+    t.broker.stop();
+  });
+
   it('holá pozice: přikoupit jde jen bez SL/TP; pár SL+TP pak kryje celou zvětšenou pozici', async () => {
     const t = await setup({ config: { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10, bareAdd: true } });
     await fillOf(t, await t.run(entry({ stopPrice: undefined, targetPrice: undefined })), 6990);

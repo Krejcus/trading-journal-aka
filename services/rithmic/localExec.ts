@@ -910,10 +910,11 @@ export class LocalExec {
       switch (command.op) {
         case 'ack':
           this.blocked = null;
-          // Nejistý zápis ochrany, který se v knize neobjevil, nesmí blokovat další ochranu navždy:
-          // obsluha potvrzením říká, že stav u brokera zkontrolovala.
+          // Nejistý zápis (ochrany i vstupu), který se v knize neobjevil, nesmí blokovat další ochranu navždy:
+          // obsluha potvrzením říká, že stav u brokera zkontrolovala. Rezervace vstupu by jinak do restartu služby
+          // bránila zadat ochranu holé pozici („na cestě je jiný příkaz").
           for (const [reservedTag] of this.reserved) {
-            if (reservedTag.startsWith(PROTECT_TAG) && ![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
+            if (![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
           }
           this.legsUncertain.clear();
           this.legWriteUnknown = false;
