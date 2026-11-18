@@ -37,6 +37,8 @@ export interface RithmicLocalTradingOptions {
   url: string | null;
   /** Spojení se drží jen dokud je true (otevřená záložka Graf). */
   enabled: boolean;
+  /** Spárované zařízení (telefon): odkud vzít klíč zařízení pro přihlášení ke službě. Na PC se nepoužívá. */
+  auth?: (() => Promise<string | null> | string | null) | null;
   /** Jen pro měření klik → čára na zkušební stránce. */
   onMeasure?: (label: string, done: (state: LocalExecState) => boolean) => void;
 }
@@ -170,7 +172,11 @@ export function rithmicTradeEvents(before: Seen, now: Seen, context: { symbol: s
   return out;
 }
 
-export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocalTradingOptions) {
+export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }: RithmicLocalTradingOptions) {
+  const authRef = useRef(auth);
+  authRef.current = auth;
+  /** Služba zařízení odmítla (nespárované / odvolané) — obrazovka nabídne nové spárování. */
+  const [authFailed, setAuthFailed] = useState<string | null>(null);
   const [hello, setHello] = useState<Hello | null>(null);
   const [state, setState] = useState<LocalExecState | null>(null);
   const [price, setPrice] = useState<number | null>(null);
@@ -255,6 +261,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     }
     const connection = new RithmicLocalConnection({
       url,
+      ...(authRef.current ? { auth: () => authRef.current?.() ?? null } : {}),
       reconnectMs: RECONNECT_MS, replyTimeoutMs: REPLY_TIMEOUT_MS, beatTimeoutMs: BEAT_TIMEOUT_MS, newId,
       handlers: {
         beforeSend: (id, command) => {
@@ -265,7 +272,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
             ...(command.op === 'cancel' && typeof command.orderId === 'string' ? { orderId: command.orderId } : {}) });
         },
         onCertain: id => journal?.remove(id),
-        onLink: setLink,
+        onLink: (next) => { if (next === 'open') setAuthFailed(null); setLink(next); },
+        onAuthFailed: setAuthFailed,
         onUncertain: item => {
           addUncertain({ ...item, label: COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op });
           if (!connection.isOpen() || !identity) return;
@@ -759,6 +767,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
     liveFills,
     legsRemovable,
     reducible, reduceOne,
+    authFailed,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
     available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !hideOwnExit(order, state?.blocked)).length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */

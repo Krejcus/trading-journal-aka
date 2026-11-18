@@ -29,10 +29,17 @@ export interface RithmicLinkHandlers {
   onSilent(silent: boolean): void;
   /** Příkaz, jehož výsledek není znám (kromě `ack`). */
   onUncertain(item: { id: string; at: number; op: string; reason: string }): void;
+  /** Služba zařízení odmítla (není spárované, bylo odvoláno). Spojení se pak samo NEobnovuje. */
+  onAuthFailed?(reason: string): void;
 }
 
 export interface RithmicLinkOptions {
   url: string;
+  /**
+   * Spárované zařízení (telefon): klíč zařízení se pošle jako PRVNÍ zpráva po otevření spojení — ne v adrese.
+   * Dokud služba neodpoví, že zařízení zná, spojení se nehlásí jako otevřené a nic se neposílá.
+   */
+  auth?: () => Promise<string | null> | string | null;
   handlers: RithmicLinkHandlers;
   socketFactory?: (url: string) => RithmicLinkSocket;
   now?: () => number;
@@ -53,6 +60,7 @@ export class RithmicLocalConnection {
   private beat: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeatAt = 0;
   private silent = false;
+  private authenticated = false;
   private counter = 0;
   private readonly replies = new Map<string, { op: string; resolve: (reply: RithmicLinkReply) => void }>();
   private readonly now: () => number;
@@ -67,6 +75,13 @@ export class RithmicLocalConnection {
     this.reconnectMs = options.reconnectMs ?? 2_000;
     this.replyTimeoutMs = options.replyTimeoutMs ?? 15_000;
     this.beatTimeoutMs = options.beatTimeoutMs ?? 4_000;
+  }
+
+  /** Odmítnuté zařízení: konec bez dalších pokusů (opakování by jen bušilo na službu se špatným klíčem). */
+  private refuse(socket: RithmicLinkSocket, reason: string): void {
+    this.stopped = true;
+    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    try { this.options.handlers.onAuthFailed?.(reason); } finally { try { socket.close(); } catch { /* už zavřené */ } }
   }
 
   start(): void {
@@ -98,13 +113,13 @@ export class RithmicLocalConnection {
     closing?.close();
   }
 
-  isOpen(): boolean { return this.socket?.readyState === OPEN; }
+  isOpen(): boolean { return this.socket?.readyState === OPEN && this.authenticated; }
 
   /** Odešle příkaz právě jednou. Bez spojení se neodešle; bez odpovědi je výsledek „unknown". */
   send(command: { op: string } & Record<string, unknown>): Promise<RithmicLinkReply> {
     return new Promise((resolve) => {
       const socket = this.socket;
-      if (!socket || socket.readyState !== OPEN) { resolve({ ok: false, sent: false, error: 'místní proces není připojený' }); return; }
+      if (!socket || socket.readyState !== OPEN || !this.authenticated) { resolve({ ok: false, sent: false, error: 'místní proces není připojený' }); return; }
       // Timers and React may still be suspended when a click arrives after sleep.
       if (command.op !== 'flatten' && command.op !== 'lookup' && this.now() - this.lastHeartbeatAt > this.beatTimeoutMs) {
         resolve({ ok: false, sent: false, error: 'Místní služba neodpovídá — počkej na obnovení stavu účtu.' });
@@ -160,11 +175,18 @@ export class RithmicLocalConnection {
     mine.onopen = () => {
       if (this.socket !== mine) return;
       this.lastHeartbeatAt = this.now();
-      this.options.handlers.onLink('open');
+      if (!this.options.auth) { this.authenticated = true; this.options.handlers.onLink('open'); return; }
+      this.authenticated = false;
+      void Promise.resolve().then(() => this.options.auth!()).then((key) => {
+        if (this.socket !== mine) return;
+        if (!key) { this.refuse(mine, 'V tomto zařízení chybí klíč spárování.'); return; }
+        try { mine.send(JSON.stringify({ auth: key })); } catch { mine.close(); }
+      }, () => { if (this.socket === mine) this.refuse(mine, 'Klíč spárování se nepodařilo načíst.'); });
     };
     mine.onclose = () => {
       if (this.socket !== mine) return;
       this.socket = null;
+      this.authenticated = false;
       this.failPending();
       this.silent = false;
       // Po obnově je první stav výchozí, ne událost; starý stav se nesmí tvářit jako živý.
@@ -177,6 +199,13 @@ export class RithmicLocalConnection {
       let message: Record<string, unknown>;
       try { message = JSON.parse(String(event.data)) as Record<string, unknown>; } catch { return; }
       if (!message || typeof message !== 'object') return;
+      if (!this.authenticated) {
+        // Před ověřením zařízení se čeká jen na verdikt služby; cokoli jiného se zahodí.
+        if (message.type !== 'auth') return;
+        if (message.ok === true) { this.authenticated = true; this.lastHeartbeatAt = this.now(); this.options.handlers.onLink('open'); }
+        else this.refuse(mine, typeof message.error === 'string' ? message.error : 'Služba toto zařízení odmítla.');
+        return;
+      }
       const receivedAt = this.now();
       if (receivedAt - this.lastHeartbeatAt > RESYNC_GAP_MS) { mine.close(); return; }
       if (message.type === 'beat' || message.type === 'tick') {

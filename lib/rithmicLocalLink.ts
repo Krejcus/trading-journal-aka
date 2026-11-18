@@ -2,6 +2,8 @@
 // Bez tokenu v tomto prohlížeči je cesta vypnutá: žádná záložka, žádné spojení (INV-DEFAULT-02).
 // Adresa je napevno místní smyčka — appka se nikdy nepřipojuje jinam.
 
+import { readRithmicDeviceKey, readRithmicDeviceLink, rithmicDeviceLinkAllowed } from './rithmicDeviceLink';
+import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 
 export const RITHMIC_LOCAL_TOKEN_KEY = 'at:rithmic:local-token';
@@ -69,11 +71,24 @@ export function rithmicLocalToken(): string | null {
   } catch { return null; }
 }
 
-/** Adresa místního procesu s tokenem, nebo null, když token chybí. */
+/**
+ * Adresa služby: na PC místní proces s tokenem; ve spárovaném zařízení (telefon) adresa Macu v síti Tailscale —
+ * bez klíče (ten jde první zprávou, viz `rithmicLocalAuth`). Null = cesta tu není nastavená.
+ */
 export function rithmicLocalUrl(): string | null {
   const token = rithmicLocalToken();
-  return token ? `${RITHMIC_LOCAL_ENDPOINT}/?token=${encodeURIComponent(token)}` : null;
+  if (token) return `${RITHMIC_LOCAL_ENDPOINT}/?token=${encodeURIComponent(token)}`;
+  return readRithmicDeviceLink()?.endpoint ?? null;
 }
 
-/** Záložka Graf s Rithmicem se nabízí jen tady: vývojová appka na místní adrese s uloženým tokenem. */
-export const rithmicLocalAvailable = (): boolean => rithmicLocalToken() !== null;
+/** Přihlášení spárovaného zařízení klíčem z Klíčenky; null = PC cesta s tokenem v adrese (nebo nic). */
+export function rithmicLocalAuth(): (() => Promise<string | null>) | null {
+  if (rithmicLocalToken()) return null;
+  return readRithmicDeviceLink() ? () => readRithmicDeviceKey() : null;
+}
+
+/** Záložka Graf s Rithmicem se nabízí: vývojová appka na místní adrese s tokenem, nebo spárované zařízení. */
+export const rithmicLocalAvailable = (): boolean => rithmicLocalToken() !== null || readRithmicDeviceLink() !== null;
+
+/** Smí se tu vůbec nabídnout spárování s Macem (nativní appka, nebo vývojový režim)? */
+export const rithmicPairingOffered = (): boolean => rithmicDeviceLinkAllowed({ dev: import.meta.env?.DEV === true, native: isNativeBuild });
