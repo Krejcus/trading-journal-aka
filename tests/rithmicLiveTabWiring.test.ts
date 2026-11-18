@@ -24,10 +24,10 @@ const server = readFileSync('scripts/rithmic/devTradeServer.ts', 'utf8');
 const link = readFileSync('lib/rithmicLocalLink.ts', 'utf8');
 
 describe('Rithmic graf v desku LIVE', () => {
-  const branch = desk.slice(desk.indexOf('<ErrorBoundary name="RithmicLiveChart"'), desk.indexOf(') : phoneChartAvailable && tab === \'chart\' && phoneChart ? ('));
+  const branch = desk.slice(desk.indexOf('<ErrorBoundary name="RithmicLiveChart"'), desk.indexOf(') : rithmicPhoneChartAvailable && tab === \'chart\' && rithmicPhoneSlot ? ('));
 
   it('dostupnost: jen když Tradovate graf neexistuje, a záložka Graf je v desku právě dvakrát', () => {
-    expect(desk).toMatch(/const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !narrow && rithmicConfigured;/);
+    expect(desk).toMatch(/const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !rithmicPhoneChartAvailable && !narrow && rithmicConfigured;/);
     expect(desk).toMatch(/const \[rithmicConfigured\] = useState\(rithmicLocalAvailable\);/);
     expect(desk.match(/id: 'chart' as const, label: 'Graf'/g)).toHaveLength(2);
   });
@@ -304,6 +304,27 @@ describe('hook místního procesu', () => {
     expect(quote).toMatch(/const wait = 100 - \(receivedAt - flushedAt\);/);
   });
 
+  it('telefon: spárování s Macem — klíč zařízení první zprávou, incident z telefonu potvrdit nejde, odmítnuté zařízení nabídne nové spárování', () => {
+    const phone = readFileSync(new URL('../components/RithmicPhoneChart.tsx', import.meta.url), 'utf8');
+    const link = readFileSync(new URL('../lib/rithmicLocalLink.ts', import.meta.url), 'utf8');
+    const server = readFileSync(new URL('../scripts/rithmic/devTradeServer.ts', import.meta.url), 'utf8');
+    // Klíč zařízení nejde do adresy: adresa spárovaného zařízení je holý endpoint, klíč dodává `auth`.
+    expect(link).toMatch(/return readRithmicDeviceLink\(\)\?\.endpoint \?\? null;/);
+    expect(link).toMatch(/return readRithmicDeviceLink\(\) \? \(\) => readRithmicDeviceKey\(\) : null;/);
+    expect(phone).toMatch(/const deviceAuth = useMemo\(\(\) => \(simulationUrl \? null : rithmicLocalAuth\(\)\)/);
+    // Potvrzení incidentu se ze spárovaného zařízení neposílá a služba ho odmítá.
+    expect(phone).toMatch(/if \(deviceAuth\) \{ setAckNote\(/);
+    expect(server).toMatch(/if \(rawCommand\.op === 'ack' && !access\.local\) throw new Error\(/);
+    // Správa zařízení jen z Macu; rozsah zařízení je první síto před službou.
+    expect(server).toMatch(/if \(!access\.local\) throw new Error\('správa zařízení jde jen z Macu, kde služba běží'\);/);
+    expect(server).toMatch(/const denied = scopeProblem\(access\.scope, rawCommand\.op\);/);
+    // Port pro zařízení jen s výslovným přepínačem a jen na 127.0.0.1; klíč ze souboru (PC) na něm neplatí.
+    expect(server).toMatch(/process\.argv\.includes\('--mobile'\)/);
+    expect(server).toMatch(/new WebSocketServer\(\{ host: '127\.0\.0\.1', port: MOBILE_PORT,/);
+    // Nespárováno nebo odmítnuto → panel spárování.
+    expect(phone).toMatch(/if \(!simulationUrl && rithmicPairingOffered\(\) && \(!url \|\| trading\.authFailed\)\) \{/);
+  });
+
   it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {
     expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working' && !hideOwnExit\(order, state\.blocked\)\);/);
     // Visící výstup se skrývat nesmí: jen krátce a jen dokud služba není zablokovaná.
@@ -378,5 +399,92 @@ describe('hook místního procesu', () => {
     const unknown = rithmicTradeEvents(long, { ...empty, close: { ...close, id: 'MNQZ6:F2', reason: undefined }, at: 2_000 }, ctx)[0] as unknown as Record<string, unknown>;
     expect('exitReason' in unknown).toBe(false);
     expect(hook).toMatch(/plainExitTimer\.current = setTimeout\(/);
+  });
+});
+
+describe('Rithmic graf na telefonu', () => {
+  const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
+  const wrapper = readFileSync('components/RithmicPhoneChart.tsx', 'utf8');
+  const fullscreen = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
+  const phoneBranch = desk.slice(desk.indexOf('<ErrorBoundary name="RithmicPhoneChart"'), desk.indexOf(') : phoneChartAvailable && tab === \'chart\' && phoneChart ? ('));
+
+  it('desk: větev pro úzký displej a nativní appku, nezávislá na vypínači grafu Tradovate', () => {
+    expect(desk).toMatch(/const rithmicPhoneChartAvailable = !chartAvailable && !phoneChartAvailable && \(rithmicConfigured \|\| rithmicPairingHere\) && \(narrow \|\| isNativeShell\(\)\) && Boolean\(rithmicPhoneSlot\);/);
+    // Slot bere přímo z props (vlastní zavřená proměnná), ne přes `LIVE_CHART_ENABLED ? phoneChartSlot : undefined`.
+    expect(desk).toMatch(/const rithmicPhoneSlot = phoneChartSlot;/);
+    expect(phoneBranch).toContain('phoneChart={rithmicPhoneSlot}');
+    expect(desk).toMatch(/\.\.\.\(rithmicChartAvailable \|\| rithmicPhoneChartAvailable \? \[\{ id: 'chart' as const, label: 'Graf'/);
+    expect(desk).toMatch(/if \(tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable && !rithmicPhoneChartAvailable\) setTab\('overview'\);/);
+    expect(desk).toMatch(/rithmicLocalAvailable\(\) && \(!rithmicPhoneLayoutNow\(\) \|\| Boolean\(rithmicPhoneSlot\)\)/);
+    expect(desk).toMatch(/\{\(phoneChartAvailable \|\| rithmicPhoneChartAvailable\) && tab !== 'chart' && \(/);
+  });
+
+  it('desk: větev nedostane zámek, příkazy ani data grafu kopírky; skutečný stav kopírky zůstává v hlavičce', () => {
+    expect(phoneBranch.length).toBeGreaterThan(200);
+    for (const forbidden of ['liveCommandLockRef', 'phoneTrade', 'placeLeaderEntry', 'manageLeaderEntry', 'previewLeaderEntry', 'closeBareLeader', 'attachBrackets', 'runStaticSafetyAction', 'chartWorkingOrders', 'phoneFills', 'chartPositionShown', 'chartLive'])
+      expect(phoneBranch).not.toContain(forbidden);
+    expect(phoneBranch).toContain('controller: agentStatus?.controller');
+    expect(phoneBranch).toContain('rememberLiveChartCrash(); noteChartCrash();');
+    // Čtení kopírky ani data grafu Tradovate se pro Rithmic graf nezapínají (viz i test výše).
+    expect(desk).not.toMatch(/enabled: \([^)]*rithmicPhoneChartAvailable/);
+    expect(desk).not.toMatch(/chartOpenRef\.current = \([^)]*rithmicPhoneChartAvailable/);
+    expect(desk).toMatch(/if \(!phoneChartAvailable \|\| !workerGroup\) return null;/);
+  });
+
+  it('telefonní graf: se zdrojem ze slotu jdou svíčky, kotace i kontrakt ze slotu, ne z IBKR', () => {
+    expect(phone).toMatch(/const marketSlot = slots\.market \?\? null;/);
+    expect(phone).toMatch(/chartDataDisabled: marketSlot != null/);
+    for (const field of ['candles', 'quality', 'loading', 'error', 'liveStatus', 'liveCapturedAt', 'liveSource', 'liveFeed'])
+      expect(phone).toMatch(new RegExp(`${field}: marketSlot\\.data\\.${field}\\b`));
+    expect(phone).toMatch(/<DayFullscreenChart\s+ctl=\{ctl\}/);
+    // Kanál ceny appky: bez odběru, bez zájmu o P&L a bez ticku IBKR.
+    expect(phone).toMatch(/watchingPositionPrice && !ownMarket \? tvPriceChannel\.addPnlInterest\(\) : undefined/);
+    expect(phone).toMatch(/useSyncExternalStore\(ownMarket \? NO_PRICE_SUBSCRIPTION : tvPriceStore\.subscribe,/);
+    expect(phone).toMatch(/ownMarket \? null : independentIbkrTick\(/);
+    expect(phone).toMatch(/const liveTickAt = ownMarket \? marketQuote\?\.at \?\? null : independentTick\?\.at \?\? null;/);
+    expect(phone).toMatch(/const contract = ownMarket \? marketSlot\.contract : independentTick\?\.symbol/);
+    // Kotace pro odeslání: ve větvi slotu se vrací dřív, než se sáhne na tick IBKR.
+    const quoteMemo = phone.slice(phone.indexOf('const quote = useMemo<LivePhoneQuote | null>'), phone.indexOf('const slotMark = useMemo'));
+    expect(quoteMemo.indexOf('if (ownMarket) {')).toBeGreaterThan(0);
+    expect(quoteMemo.indexOf('if (ownMarket) {')).toBeLessThan(quoteMemo.indexOf('independentTick.symbol'));
+    // Pojistka utažení SL / BE a P&L štítku: se slotem jeho kotace, tick IBKR jen bez slotu.
+    expect(phone.match(/slotMark \?\? \{ source: independentTick\?\.source \?\? null,/g)).toHaveLength(2);
+    expect(phone).toMatch(/ownMarket \? 'Kontrakt není ověřený — nic se neodeslalo\.'/);
+    expect(phone).toMatch(/ownMarket \? 'Živá cena teď není dostupná'/);
+    // Cizí trh (Rithmic Test): starší historie appky se nepřipojuje.
+    expect(phone).toMatch(/marketSlot\?\.appHistory === false \? \{ externalHistory: true \} : \{\}/);
+    expect(fullscreen).toMatch(/const htf = externalHistory \? EXTERNAL_HTF : htfRead;/);
+    expect(readFileSync('components/day/useDayController.ts', 'utf8')).toMatch(/useDayChartData\(day, dayTrades, allTrades, now, chartDataDisabled \? \{ disabled: true \} : undefined\)/);
+  });
+
+  it('obal: spojení jen s otevřenou záložkou, účet jen pro čtení bez mostu příkazů, žádný stav kopírky', () => {
+    expect(wrapper).toMatch(/useRithmicLocalTrading\(\{ url, enabled: open, auth: deviceAuth \}\)/);
+    expect(wrapper).toMatch(/trade: trading\.readOnly \? null : trade,/);
+    expect(wrapper).toContain('copierArmed: false');
+    expect(wrapper).not.toMatch(/armed:\s*true/);
+    expect(wrapper).not.toContain('commandLockRef');
+    expect(wrapper).not.toContain('tvPriceStore');
+    expect(wrapper).toMatch(/workingOrders: trading\.workingView,/);
+    expect(wrapper).toMatch(/market,\n\s+position: trading\.position,/);
+  });
+
+  it('obal: zavření pozice je dosažitelné i při incidentu, mlčící službě a schované hlavičce; incident jde potvrdit', () => {
+    // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
+    expect(wrapper).toMatch(/const offerBrake = link === 'open' && !trading\.readOnly && \(trading\.mayHaveExposure \|\| trading\.uncertain\.length > 0\);/);
+    expect(wrapper).toMatch(/closeNow: runClose,/);
+    expect(wrapper).toMatch(/const result = await closeNow\(\);/);
+    // Karty a brzda: v hlavičce, a když je hlavička schovaná, nad grafem; i v prázdném stavu.
+    expect(wrapper).toMatch(/\{header\(\{ group, account \}\)\}\{status\(false\)\}/);
+    expect(wrapper).toMatch(/overlay: <>\{overlay\}\{!headerShown && status\(true\)\}<\/>/);
+    expect(wrapper.slice(wrapper.indexOf('data-rithmic-phone-empty'))).toContain('{status(false)}');
+    expect(wrapper).toMatch(/if \(card\.action\?\.kind === 'ack'\) void confirmIncident\(\);/);
+    expect(wrapper).toMatch(/else if \(card\.action\?\.kind === 'verified'\) dismissUncertain\(\);/);
+    // Dvojí klepnutí: první jen připraví, druhý nejdřív po 350 ms.
+    expect(wrapper).toMatch(/if \(now - closeArmedAt < CLOSE_SECOND_TAP_MIN_MS\) return;/);
+  });
+
+  it('obal: v hlavičce je účet, systém a štítek režimu', () => {
+    expect(wrapper).toMatch(/\[trading\.system \?\? 'Rithmic', trading\.accountName \?\? 'účet neznámý'\]/);
+    expect(wrapper).toMatch(/rithmicPhoneModeLabel\(\{ system: trading\.system, readOnly: trading\.readOnly, closeOnly: trading\.closeOnly === true, liveAccount: trading\.liveAccount,/);
   });
 });

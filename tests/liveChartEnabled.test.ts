@@ -14,8 +14,12 @@ describe('vypínač LIVE grafu', () => {
     expect(desk).toMatch(/const liveChartAvailableNow = \(\) => LIVE_CHART_ENABLED && typeof window !== 'undefined'/);
     expect(desk).toMatch(/const chartAvailable = LIVE_CHART_ENABLED && !narrow && !isNativeShell\(\);/);
     expect(desk).toMatch(/const phoneChart = LIVE_CHART_ENABLED \? phoneChartSlot : undefined;/);
-    // Telefonní slot se nesmí číst jinudy než přes zavřenou proměnnou.
-    expect(desk.match(/phoneChartSlot/g)).toHaveLength(2);
+    // Telefonní slot se nesmí číst jinudy než přes zavřené proměnné: graf Tradovate přes vypínač,
+    // Rithmic graf telefonu (místní služba mimo kopírku, 18. 11. 2026) přes vlastní — a jen ve své větvi.
+    expect(desk).toMatch(/const rithmicPhoneSlot = phoneChartSlot;/);
+    expect(desk.match(/phoneChartSlot/g)).toHaveLength(3);
+    expect(desk.match(/rithmicPhoneSlot/g)).toHaveLength(5);
+    expect(desk).toMatch(/const rithmicPhoneChartAvailable = !chartAvailable && !phoneChartAvailable && \(rithmicConfigured \|\| rithmicPairingHere\) && \(narrow \|\| isNativeShell\(\)\) && Boolean\(rithmicPhoneSlot\);/);
   });
 
   it('záložka Graf a oba sloty grafu visí jen na dostupnosti', () => {

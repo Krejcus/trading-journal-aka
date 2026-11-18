@@ -45,12 +45,14 @@ export function usePragueNow(tickMs = 30_000) {
   return now;
 }
 
-export function useDayController({ trades, allTrades, sessions, initialDate, onUpdateTrade }: {
+export function useDayController({ trades, allTrades, sessions, initialDate, onUpdateTrade, chartDataDisabled = false }: {
   trades: readonly Trade[];
   allTrades: readonly Trade[];
   sessions: readonly SessionConfig[];
   initialDate?: string;
   onUpdateTrade: (id: string | number, updates: Partial<Trade>) => unknown;
+  /** Svíčky dodává jiný zdroj (telefonní graf nad Rithmicem): deník dne nic nenačítá ani neodebírá. */
+  chartDataDisabled?: boolean;
 }) {
   const now = usePragueNow();
   const today = pragueDayKey(now);
@@ -86,7 +88,7 @@ export function useDayController({ trades, allTrades, sessions, initialDate, onU
 
   const { journal, status: journalStatus, error: journalError, failed, pending, addNote, updateNote, retryNote, removeNote, savePrep: persistPrep, saveClose: persistClose, reload } = useDayJournal(day);
   const dayTrades = useMemo(() => tradesForDay(trades, day), [trades, day]);
-  const chart = useDayChartData(day, dayTrades, allTrades, now);
+  const chart = useDayChartData(day, dayTrades, allTrades, now, chartDataDisabled ? { disabled: true } : undefined);
 
   const [mode, setMode] = useState<DayMode>('day');
   const [modeSession, setModeSession] = useState<DaySession>(() => prepTargetSession(now, windows));

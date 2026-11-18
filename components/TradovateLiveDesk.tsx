@@ -177,9 +177,11 @@ import { isNativeBuild } from '../utils/runtimeConfig';
 import { isNativeShell } from '../utils/nativeShell';
 // Živý graf s panelem objednávky; těžký workspace se načte líně uvnitř obálky.
 import { LIVE_CHART_ENABLED } from '../lib/liveChartEnabled';
-import { rithmicLocalAvailable } from '../lib/rithmicLocalLink';
+import { rithmicLocalAvailable, rithmicPairingOffered } from '../lib/rithmicLocalLink';
 // Staticky (desk nesmí nic líně načítat — studený start); mimo vývojovou appku se nikdy nevykreslí.
 import RithmicLiveChart from './RithmicLiveChart';
+import RithmicPhoneChart from './RithmicPhoneChart';
+import type { LivePhoneChartSlots } from './day/LivePhoneChart';
 import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash } from './LiveTradingScreenSlot';
 
 /** Desktop mimo nativní aplikaci (stejná hranice jako `useCompactViewport`). */
@@ -187,6 +189,9 @@ const liveChartAvailableNow = () => LIVE_CHART_ENABLED && typeof window !== 'und
   && typeof window.matchMedia === 'function'
   && !window.matchMedia('(max-width: 1023px)').matches
   && !isNativeShell();
+/** Úzký displej nebo nativní appka: Rithmic graf tam existuje jen jako telefonní (stejná hranice jako výše). */
+const rithmicPhoneLayoutNow = () => typeof window !== 'undefined'
+  && (isNativeShell() || (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1023px)').matches));
 import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
 import { copierAgentCommandAllowedWhileRestored, copierCommandAllowedWithoutFreshStatus, selectCopierSafetyRoute } from '../lib/copierSafetyControls';
 import {
@@ -217,8 +222,11 @@ interface TradovateLiveDeskProps {
    * Telefon: `header(group)` = hlavička s P&L skupiny místo názvu; `position` = stejný read model jako PC graf (jen zobrazení); `trade` = obchodování přes relay.
    * U5/U8 (3. 11. 2026): `workingOrders` = pracující příkazy jako čáry jen pro zobrazení (nikdy do `trade`); `userId` = jen klíč knihovny šablon SL/TP na zařízení.
    */
-  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; fillsSymbol?: string; alertWatch?: string | null; workingOrders?: LiveChartWorkingOrders | null; userId?: string | null; liveExposurePaint?: React.ComponentProps<typeof LiveTradingScreenSlot>['liveExposurePaint'] }) => React.ReactNode;
+  phoneChart?: (slots: { header: (group?: React.ReactNode) => React.ReactNode; overlay?: React.ReactNode; position: LiveChartPosition; onLeave: () => void; trade?: LivePhoneTradeBridge | null; copyEvents?: LocalCopierAgentStatus['controller']['recentCopyEvents']; copierArmed?: boolean; fills?: readonly LiveFillMarker[]; fillsOpen?: boolean; fillsSymbol?: string; alertWatch?: string | null; workingOrders?: LiveChartWorkingOrders | null; userId?: string | null; liveExposurePaint?: React.ComponentProps<typeof LiveTradingScreenSlot>['liveExposurePaint']; /** Jiný zdroj trhu (Rithmic na telefonu); Tradovate cesta ho nikdy neposílá. */ market?: LivePhoneChartSlots['market'] }) => React.ReactNode;
 }
+
+/** Co desk předává telefonnímu grafu (slot `phoneChart`). */
+export type LiveDeskPhoneChartSlots = Parameters<NonNullable<TradovateLiveDeskProps['phoneChart']>>[0];
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 4 });
@@ -405,6 +413,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
 }) => {
   // Vypnutý LIVE graf: telefonní slot se vůbec nepřipojí (viz `LIVE_CHART_ENABLED`).
   const phoneChart = LIVE_CHART_ENABLED ? phoneChartSlot : undefined;
+  // Rithmic na telefonu (místní služba, jeden účet mimo kopírku) smí tentýž slot použít i s vypnutým grafem
+  // Tradovate: nic z kopírky nedostane a existuje jen se spárovanou službou (`rithmicConfigured`).
+  const rithmicPhoneSlot = phoneChartSlot;
   // Desktop: klik na LIVE otevře rovnou živý graf přes celou obrazovku
   // (Filip 29. 10.); deep link s konkrétní záložkou má přednost. Telefon
   // a nativní aplikace zůstávají na přehledu.
@@ -414,7 +425,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // Po pádu grafu v této session LIVE otevře přehled (žádné kolo pádů).
     // Telefon: LIVE se při obchodování otevírá rovnou na grafu (Filip 1. 11.).
     // Rithmic graf (místní služba): LIVE se otevře rovnou na něm i po znovunačtení stránky.
-    chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart) || rithmicLocalAvailable()) && !liveChartCrashedThisSession(),
+    // Na úzkém displeji a v nativní appce jen s telefonním grafem (jinak by záložka hned spadla na přehled).
+    chartAvailable: (liveChartAvailableNow() || Boolean(phoneChart) || (rithmicLocalAvailable() && (!rithmicPhoneLayoutNow() || Boolean(rithmicPhoneSlot)))) && !liveChartCrashedThisSession(),
   }));
   const { compact: mobileLayout, narrow } = useLiveLayout();
   // Jediný zámek full-group Flattenu pro lištu, zkratku i těžký přehled.
@@ -431,12 +443,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const phoneChartAvailable = !chartAvailable && Boolean(phoneChart);
   // Rithmic graf: jen když Tradovate graf neexistuje. Čtení kopírky (chartOpenRef, poll) na něm NEvisí.
   const [rithmicConfigured] = useState(rithmicLocalAvailable);
-  const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !narrow && rithmicConfigured;
+  // Telefon a nativní appka: stávající telefonní graf nad místní službou Rithmicu. Nezávisí na `LIVE_CHART_ENABLED`
+  // (ten vypíná jen graf Tradovate), ale Tradovate telefonní graf má přednost, pokud existuje — jako na PC.
+  // Telefon: záložka Graf existuje i PŘED spárováním (nabídne „Spárovat s Macem") — ale jen tam, kde spárování smí být.
+  const [rithmicPairingHere] = useState(rithmicPairingOffered);
+  const rithmicPhoneChartAvailable = !chartAvailable && !phoneChartAvailable && (rithmicConfigured || rithmicPairingHere) && (narrow || isNativeShell()) && Boolean(rithmicPhoneSlot);
+  const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !rithmicPhoneChartAvailable && !narrow && rithmicConfigured;
   const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
   useEffect(() => {
-    if (tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable) setTab('overview');
+    if (tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable && !rithmicPhoneChartAvailable) setTab('overview');
     if (tab !== 'chart') setPhoneMenuOpen(false);
-  }, [chartAvailable, phoneChartAvailable, rithmicChartAvailable, tab]);
+  }, [chartAvailable, phoneChartAvailable, rithmicChartAvailable, rithmicPhoneChartAvailable, tab]);
   // Načítá se jen panel aktivní záložky, souběžně se stavem LIVE. Desktop míří
   // rovnou do grafu a vedlejší panely do té doby vůbec nepotřebuje.
   useEffect(() => {
@@ -2092,7 +2109,7 @@ acceptAgentStatus((await executeAgent({
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     ...(chartAvailable || phoneChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
-    ...(rithmicChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
+    ...(rithmicChartAvailable || rithmicPhoneChartAvailable ? [{ id: 'chart' as const, label: 'Graf', icon: CandlestickChart }] : []),
     { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'risk', label: 'Risk', icon: Shield },
@@ -2216,7 +2233,7 @@ acceptAgentStatus((await executeAgent({
     <div className={`mx-auto max-w-[1500px] space-y-4 ${arrivingFromChart ? 'live-tab-arrive' : ''}`} style={{ paddingBottom: 'var(--live-safety-height, 0px)' }}>
       {/* Na grafu Rithmicu se hláška o kapacitě Tradovate neukazuje: s tímto účtem nesouvisí a překrývala lištu grafu.
           Stav kopírky Tradovate zůstává vidět v čipech hlavičky (Worker, Kopírka Tradovate). */}
-      {!(rithmicChartAvailable && tab === 'chart') && <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable) && tab === 'chart'} />}
+      {!((rithmicChartAvailable || rithmicPhoneChartAvailable) && tab === 'chart') && <TradovateRequestHealthNotice rows={agentStatus?.requestHealth} now={freshnessNow} floating={(chartAvailable || phoneChartAvailable) && tab === 'chart'} />}
       {/* Běžně se lišta nekreslí (Filip 5. 11.), jediná instance drží dialog Shift+F a hlášky. */}
       <LiveSafetyControls hideBar={!liveSafetyBarVisible(safetyBarNeed, safetyBarGraceElapsed)} target={safetyTarget} externalNotices={[flattenNotice, deskSafetyNotice]} onAction={runStaticSafetyAction} flattenCoordinator={flattenCoordinator} copierArmed={agentStatusFresh && !agentStatusRestored && agentStatus?.controller.armed === true}
       // C7: „Zrušit čekající“ vedle Flatten (PC) — sdílený zámek grafu; Flatten zůstává mimo zámek.
@@ -2315,6 +2332,39 @@ acceptAgentStatus((await executeAgent({
               onDisarm={disarmFromChart}
             />
         </ErrorBoundary>
+      ) : rithmicPhoneChartAvailable && tab === 'chart' && rithmicPhoneSlot ? (
+        // Rithmic na telefonu: stávající telefonní graf, trh, pozice i příkazy z místní služby. Zámek, příkazy
+        // ani data grafu kopírky sem nejdou; hlavička dál ukazuje skutečný stav kopírky Tradovate (INV-UI-02).
+        <ErrorBoundary name="RithmicPhoneChart" onError={() => { rememberLiveChartCrash(); noteChartCrash(); }} fallback={<LiveSlotFailure label="Rithmic graf" />}>
+          <RithmicPhoneChart
+            open
+            isDark={theme !== 'light'}
+            onLeave={() => navigateToTab('overview')}
+            phoneChart={rithmicPhoneSlot}
+            userId={userId}
+            header={({ group, account }) => <LivePhoneHeader
+              groupName={null}
+              group={group}
+              account={account}
+              copier={livePhoneCopierChip({
+                pending: !agentStatusResolved,
+                fresh: agentStatusFresh && !agentStatusRestored,
+                controller: agentStatus?.controller,
+                attention: liveAttentionReasons(
+                  buildLiveStatusStrip({ status: agentStatus?.controller ?? null, available: runtimeAvailable, pending: !agentStatusResolved, transport: agentTransport, journalHealth: agentStatus?.journalHealth }),
+                  agentStatus?.controller ?? null,
+                  runtimeAvailable,
+                ),
+              })}
+              onMenu={() => setPhoneMenuOpen(true)}
+            />}
+            overlay={phoneMenuOpen ? <LivePhoneMenu
+              tabs={tabs.filter(item => item.id !== 'chart')}
+              onPick={id => { setPhoneMenuOpen(false); navigateToTab(id); }}
+              onClose={() => setPhoneMenuOpen(false)}
+            /> : null}
+          />
+        </ErrorBoundary>
       ) : phoneChartAvailable && tab === 'chart' && phoneChart ? (
         <ErrorBoundary name="LivePhoneChart" onError={() => { rememberLiveChartCrash(); noteChartCrash(); }} fallback={<LiveSlotFailure label="LIVE graf" />}>
           {phoneChart({
@@ -2359,7 +2409,7 @@ acceptAgentStatus((await executeAgent({
           })}
         </ErrorBoundary>
       ) : null}
-      {phoneChartAvailable && tab !== 'chart' && (
+      {(phoneChartAvailable || rithmicPhoneChartAvailable) && tab !== 'chart' && (
         // Zpátky na graf z jakékoli záložky (nad nativní lištou a BottomNav, případně nad nouzovou lištou).
         <button type="button" onClick={() => navigateToTab('chart')} className="native-fixed-above-tab-bar fixed right-4 z-[360] flex h-11 items-center gap-2 rounded-full bg-gradient-to-b from-blue-500 to-blue-600 px-4 text-sm font-black text-white shadow-[0_10px_24px_-10px_#2563eb]" style={{ bottom: 'calc(var(--live-safety-height, var(--live-bottom-clear)) + 6px)' }}>
           <CandlestickChart size={16} />Graf

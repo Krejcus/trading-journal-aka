@@ -219,10 +219,15 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
       const allowed = file === 'hooks/useDayChartData.ts'
         ? /useTvLiveCandleFeed\(|^liveFeed,$|liveFeed`: rozpracovaná/
         : file === 'components/LiveTradingScreen.tsx'
-          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$/
+          // + poloha čar NÁVRHU Market v grafu (18. 11. 2026): jen zobrazení, do příkazu ani do lístku nejde.
+          ? /^liveCandles=\{chart\.liveFeed\}$|^const tick = useLiveTicketQuote\(chart\.liveFeed, ROOT, candleClose\);$|^const liveFeed = chart\.liveFeed \?\? null;$|^marketPrice: \(\) => \{ const last = liveFeed\?\.lastPrice\(ROOT\);|^\.\.\.\(liveFeed \? \{ subscribeMarket:|^\}\), \[liveFeed, /
           // Telefon čte ověřený podepsaný tick samostatně; svíčkový feed pouze kreslí.
           : file === 'components/day/LivePhoneChart.tsx'
-            ? /liveCandles=\{ctl\.chart\.liveFeed\}/
+            // Zdroj trhu ze slotu (Rithmic na telefonu, 18. 11. 2026): vlastní svíčka služby jen do překreslení grafu.
+            ? /liveCandles=\{ctl\.chart\.liveFeed\}|^liveFeed: marketSlot\.data\.liveFeed,$/
+          // Rithmic na telefonu: cena lišty a listu z vlastního zdroje služby (stejná výjimka jako panel na PC), žádný kanál TV.
+          : file === 'components/RithmicPhoneChart.tsx'
+            ? /^const tick = useLiveTicketQuote\(marketData\?\.liveFeed \?\? null, 'MNQ', candleClose\);$/
           // Rithmic graf (jen vývojová appka): vlastní zdroj svíčky z místního procesu, žádný kanál TV.
           : file === 'hooks/useRithmicLocalTrading.ts'
             ? /liveFeed: feedBox\.feed,$/
@@ -257,7 +262,8 @@ describe('kanál ceny z TV na klientovi — jen zobrazení (INV-UI-04)', () => {
     const finalReaders = allSources.filter(file => /\b(?:feed|liveFeed|liveCandles)\.final\(/.test(readFileSync(join(root, file), 'utf8')));
     expect(finalReaders).toEqual(['hooks/useTvLiveCandleFeed.ts']);
     // Telefon už nesvazuje samostatný podepsaný tick s minutovým snapshotem.
-    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx']);
+    // RithmicPhoneChart: cena telefonní lišty z vlastního zdroje místní služby Rithmicu (ne z kanálu TV).
+    expect(importersOf('hooks/useLiveTicketQuote.ts')).toEqual(['components/LiveTradingScreen.tsx', 'components/RithmicPhoneChart.tsx']);
     const hook = readFileSync(join(root, 'hooks/useTvLiveCandleFeed.ts'), 'utf8').split('\n').filter(line => /\.(current|lastPrice)\(/.test(line)).map(line => line.trim());
     expect(hook).toEqual(['current: root => feed.current(root),', 'lastPrice: root => feed.lastPrice(root),']);
     const dayData = readFileSync(join(root, 'hooks/useDayChartData.ts'), 'utf8');

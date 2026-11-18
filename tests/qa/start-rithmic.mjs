@@ -27,5 +27,5 @@ if (simulate) {
   await attachSimulation(server.httpServer, port);
 }
 await server.listen();
-if (simulate) console.log(`Lokální simulace: http://127.0.0.1:${port}/tests/qa/rithmic-simulation.html`);
+if (simulate) console.log(`Lokální simulace: http://127.0.0.1:${port}/tests/qa/rithmic-simulation.html\nTelefon (úzké okno): http://127.0.0.1:${port}/tests/qa/rithmic-phone-simulation.html`);
 else console.log('Rithmic klik → čára: http://127.0.0.1:4185/tests/qa/rithmic-live.html');

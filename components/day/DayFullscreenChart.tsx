@@ -60,6 +60,9 @@ type DrawingEngine = NonNullable<ChartViewApi['drawing']>['engine'];
 type MarketCandleLike = { time: number; open: number; high: number; low: number; close: number; volume: number };
 
 const TOOL_BY_ID = new Map(ALPHATRADE_DRAWING_TOOLS.map(tool => [tool.id, tool]));
+/** Cizí zdroj svíček (Rithmic Test): starší historie appky se nenačítá ani nepřipojuje. */
+const NO_HTF_TIMEFRAMES: readonly MarketTimeframe[] = [];
+const EXTERNAL_HTF: ReturnType<typeof useHtfHistory> = { candles: [], minuteBridge: [], arrived: 0, loading: false, error: null, startMs: null, loadOlder: async () => undefined };
 // Všechny nástroje pro oblíbené: virtuální Šipka (cesta) + nástroje motoru.
 const ALL_TOOL_IDS: readonly string[] = [DAY_PATH_TOOL, ...ALPHATRADE_DRAWING_TOOLS.map(tool => tool.id)];
 const toolIcon = (tool: string) => (tool === DAY_PATH_TOOL ? TOOL_BY_ID.get('Arrow')?.icon : TOOL_BY_ID.get(tool as DrawingToolId)?.icon);
@@ -181,6 +184,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     onPositionOrder?: (drawing: PositionDrawing, info: LiveChartInfo) => void;
     /** Čáry živé pozice (vstup, SL, TP) z read modelu — jen zobrazení, mimo přehrávání. */
     priceLines?: LivePriceLinesFeed;
+    /** Svíčky jsou z cizího trhu (Rithmic Test): starší historie appky se k nim nepřipojuje. */
+    externalHistory?: boolean;
   };
 }) {
   // Jednotný zdroj: deník dne z controlleru, jinde ze `source`.
@@ -432,7 +437,9 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
     () => [timeframe, ...paneTimeframes.slice(0, Math.max(0, paneCount - 1))],
     [paneCount, paneTimeframes, timeframe],
   );
-  const htf = useHtfHistory('MNQ', shownTimeframes, raw[0]?.time);
+  const externalHistory = live?.externalHistory === true;
+  const htfRead = useHtfHistory('MNQ', externalHistory ? NO_HTF_TIMEFRAMES : shownTimeframes, raw[0]?.time);
+  const htf = externalHistory ? EXTERNAL_HTF : htfRead;
   const htfHistory = htf.candles;
   const recentWithBridge = useMemo(() => htf.minuteBridge?.length && raw.length ? [...htf.minuteBridge.filter(c => c.time < raw[0].time), ...raw] : raw, [htf.minuteBridge, raw]);
   const completeWithBridge = useMemo(() => htf.minuteBridge?.length && fullRaw.length ? [...htf.minuteBridge.filter(c => c.time < fullRaw[0].time), ...fullRaw] : fullRaw, [htf.minuteBridge, fullRaw]);
