@@ -764,9 +764,13 @@ const LiveTradingScreen: React.FC<Props> = ({
   const orderLines = useMemo(
     () => [...liveLines, ...(draft && quote && ticketOpen
       // Návrh Market jde s trhem: čáry nesou cenu trhu, ze které vznikly, a vrstva je posouvá s živou cenou (jen zobrazení).
-      ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short).map(line => (draft.type === 'market' && tick != null ? { ...line, marketBase: quote.bid } : line))
+      ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short)
+        // Přikoupení převezme SL a TP pozice: jeho návrhové čáry by ležely přesně na skutečných a zakrývaly jejich štítky.
+        .filter(line => !(line.kind !== 'entry' && entryScaleIn != null && entryScaleIn.side === draft.side
+          && (line.kind === 'stopLoss' ? entryScaleIn.stopLoss : entryScaleIn.targetPrice) === line.price))
+        .map(line => (draft.type === 'market' && tick != null ? { ...line, marketBase: quote.bid } : line))
       : []), ...attachLines],
-    [attachLines, draft, liveLines, picked?.short, quote, ticketOpen, tick != null],
+    [attachLines, draft, liveLines, picked?.short, quote, ticketOpen, tick != null, entryScaleIn?.side, entryScaleIn?.stopLoss, entryScaleIn?.targetPrice],
   );
 
   // Pravé tlačítko = okamžitý holý Limit/Stop (Filip 7. 11.): sólo DEMO (capability), bez pozice, čekajícího vstupu a návrhu.
