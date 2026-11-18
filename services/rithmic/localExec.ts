@@ -36,7 +36,22 @@ export interface LocalExecConfig {
   positionSettleMs?: number;
   /** Jak dlouho musí nesoulad samostatné ochrany s pozicí vydržet, než se ohlásí (výchozí 3 s). */
   protectiveGraceMs?: number;
-  /** Posun dvou noh: druhá se pošle jen když první stihla tento čas (výchozí 2 s) — jinak by se nestihla odpověď. */
+  /**
+   * Kolik částí s vlastní ochranou smí pozice mít (první vstup + přikoupení). Výchozí 2. Každá část je vlastní vstup
+   * s ochranou na své množství, takže posun SL nebo TP znamená tolik zápisů po sobě, kolik je částí — během nich
+   * má ochrana krátce dvě ceny a selhání uprostřed je incident. Vyšší strop zapíná spouštěč (zatím jen Rithmic Test).
+   */
+  maxProtectedParts?: number;
+  /**
+   * Přikoupení Marketem BEZ SL/TP do pozice, která žádnou ochranu ani příkaz nemá. Výchozí VYPNUTO; zapíná spouštěč
+   * (zatím jen Rithmic Test — proti brokerovi neověřeno).
+   */
+  bareAdd?: boolean;
+  /** O kolik ticků se smí lišit SL (a TP) mezi částmi pozice, aby šlo dál přikupovat (výchozí 8) — skluz při vyplnění. */
+  scaleInSpreadTicks?: number;
+  /** Celková mez posunu více noh (výchozí 10 s — pod lhůtou odpovědi appky); po ní se zbytek neposílá. */
+  moveLegsTotalMs?: number;
+  /** Posun více noh: další se pošle jen když předchozí noha stihla tento čas (výchozí 2 s). */
   moveLegsBudgetMs?: number;
   /** Jak dlouho čekat na potvrzení posunu vstupu s ochranou stavem (výchozí 1,5 s). */
   moveConfirmMs?: number;
@@ -122,6 +137,10 @@ export interface LocalExecState {
   rejections: Array<{ orderId: string; tag?: string; reason: string; at: number }>;
   /** Kritický incident zastavil nové vstupy; uvolní ho jen výslovné potvrzení obsluhou (`ack`). */
   blocked: string | null;
+  /** Strop částí pozice s vlastní ochranou — jen aby appka uměla říct předem, proč už přikoupit nejde. */
+  maxParts: number;
+  /** Smí se přikoupit Marketem bez SL/TP do pozice bez ochrany? Jen pro nabídku v appce. */
+  bareAdd: boolean;
   /** Poslední zavřené obchody spočítané z vyplnění brokera — JEN zobrazení (karta zavření), nic neautorizuje. */
   closes: LocalExecClose[];
   /** Vyplnění posledního (nebo právě otevřeného) obchodu pro šipky vstupu a výstupu v grafu — JEN zobrazení. */
@@ -726,6 +745,8 @@ export class LocalExec {
       marks: [...this.marks].map(([symbol, mark]) => ({ symbol, open: mark.open, fills: [...mark.fills] })),
       rejections: [...this.rejections],
       blocked: this.blocked,
+      maxParts: this.maxParts(),
+      bareAdd: this.config.bareAdd === true,
     };
   }
 
@@ -763,11 +784,12 @@ export class LocalExec {
   }
 
   /**
-   * Proč teď NEJDE přikoupit (null = jde). První verze: jen do pozice, kterou CELOU kryjí vlastní
-   * vstupy s ochranou (každý ve stavu „chráněno"), se SL i TP na jedné ceně, a přikoupení nese
-   * přesně tytéž ceny. Nic se po vyplnění nesrovnává — každá část má vlastní ochranu na své množství.
+   * Proč teď NEJDE přikoupit (null = jde). Jen do pozice, kterou CELOU kryjí vlastní vstupy s ochranou (každý ve
+   * stavu „chráněno"), se SL i TP částí nejvýš o skluz od sebe, a přikoupení nese jednu z těchto cen. Nic se po
+   * vyplnění nesrovnává — každá část má vlastní ochranu na své množství. Zvlášť (vypínač `bareAdd`): pozice bez
+   * jakékoli ochrany a příkazu jde zvětšit Marketem bez SL/TP.
    */
-  private scaleInProblem(accountId: number, symbol: string, side: OrderSide, stopPrice: number | undefined, targetPrice: number | undefined, ownTag: string | null): string | null {
+  private scaleInProblem(accountId: number, symbol: string, side: OrderSide, stopPrice: number | undefined, targetPrice: number | undefined, ownTag: string | null, orderType: string = 'Market'): string | null {
     const net = this.positions.get(symbol)?.netQuantity ?? 0;
     if (net === 0) return 'pozice se mezitím zavřela — přikoupení neodesílám';
     if ((side === 'Buy') !== (net > 0)) return 'vstup proti otevřené pozici nejde — pozici zavři';
@@ -781,15 +803,31 @@ export class LocalExec {
     // Jiný vstup s ochranou, o kterém broker ještě nedal vědět (i z doby před restartem služby).
     if (this.broker.unresolvedBracketTags(accountId, symbol).some((pendingTag) => pendingTag !== ownTag)) return 'jiný vstup s ochranou ještě není potvrzený — přikoupení teď nejde';
     if (this.legsUncertain.has(symbol)) return 'poslední posun SL/TP skončil nejistě — nejdřív ověř ceny u brokera a potvrď incident';
+    // Posun více noh trvá u víc částí i sekundy: nová část by vznikla na staré ceně a posun by skončil incidentem.
+    if (this.legsMoving.has(symbol)) return 'posun SL/TP právě běží — přikup, až doběhne';
     const legs = this.legsOf(accountId, symbol);
     if (!legs) return 'na kontraktu pracuje příkaz, který služba nezná — přikoupení nejde';
-    if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
     // Dřívější obchody, které už skončily (jen ještě nejsou trvale uzavřené), se nepočítají. Při zkoušce výměny
     // čekajícího přikoupení se nepočítá ani nahrazovaný vstup (do skutečného zápisu bude zrušený).
     legs.brackets = legs.brackets.filter((bracket) => bracket.entryId !== this.replaceDryRun && this.broker.bracketState(accountId, bracket.entryId).state !== 'done');
-    if (legs.brackets.length === 0) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
-    // Nejvýš dvě části (každá s vlastní ochranou): posun SL/TP pak znamená nejvýš dva zápisy.
-    if (legs.brackets.length >= 2) return 'pozice už má dvě části — další přikoupení služba nepustí';
+    if (legs.brackets.length === 0) {
+      // Holá pozice (žádný pracující příkaz na kontraktu — to už ověřil `legsOf`): přikoupení bez SL/TP ji jen zvětší.
+      // Ochrana se pak zadává na CELOU pozici (pár SL+TP), takže není co srovnávat. Se SL/TP by vznikla pozice
+      // chráněná jen zčásti — to služba nepustí.
+      if (this.config.bareAdd !== true) return 'pozice nemá SL a TP ze vstupu — přikoupit jde jen do pozice se SL i TP';
+      if (stopPrice !== undefined || targetPrice !== undefined) return 'pozice nemá SL a TP — přikoupit do ní jde jen bez SL/TP (ochranu pak přidej na celou pozici)';
+      // Čekající přikoupení bez ochrany služba zatím neumí vyměnit ani posunout → jen Market.
+      if (orderType !== 'Market') return 'do pozice bez SL/TP jde přikoupit jen Marketem';
+      if (legs.stops.length > 0 || legs.targets.length > 0
+        || [...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status) && order.brokerOrderId !== this.replaceDryRun && (ownTag === null || order.tag !== ownTag))) {
+        return 'na kontraktu pracují příkazy — přikoupit bez SL/TP jde jen do pozice bez příkazů';
+      }
+      if (this.broker.executionNet(accountId, symbol) !== net) return 'pozice zatím nesouhlasí s vyplněními — přikup za okamžik';
+      return null;
+    }
+    // Strop částí (každá s vlastní ochranou): posun SL/TP znamená tolik zápisů po sobě, kolik je částí.
+    const maxParts = this.maxParts();
+    if (legs.brackets.length >= maxParts) return `pozice už má ${legs.brackets.length} ${legs.brackets.length === 1 ? 'část' : legs.brackets.length < 5 ? 'části' : 'částí'} — další přikoupení služba nepustí (strop ${maxParts})`;
     for (const bracket of legs.brackets) {
       if (bracket.stopTicks === undefined || bracket.targetTicks === undefined) return 'pozice nemá SL i TP — přikoupit jde jen do pozice se SL i TP';
       const state = this.broker.bracketState(accountId, bracket.entryId).state;
@@ -804,11 +842,24 @@ export class LocalExec {
     if (open(legs.stops) !== Math.abs(net) || open(legs.targets) !== Math.abs(net)) return 'SL/TP nekryjí celou pozici — přikoupení nejde';
     const stopAt = new Set(legs.stops.map((order) => order.stopPrice));
     const targetAt = new Set(legs.targets.map((order) => order.limitPrice));
-    if (stopAt.size !== 1 || targetAt.size !== 1) return 'SL nebo TP pozice má víc cen — nejdřív je srovnej posunem';
+    // Ochrana části se u burzy počítá od ceny VYPLNĚNÍ, takže přikoupení Marketem skončí o skluz vedle (změřeno).
+    // Malý rozptyl cen mezi částmi proto další přikoupení nezastaví; větší rozdíl ano (nejdřív srovnat posunem).
+    const tolerance = (this.config.scaleInSpreadTicks ?? 8) * (this.config.symbols[symbol]?.tickSize ?? 0) + 1e-9;
+    const tight = (set: Set<number | undefined>): boolean => {
+      const values = [...set].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      return values.length === set.size && values.length > 0 && Math.max(...values) - Math.min(...values) <= tolerance;
+    };
+    if (!tight(stopAt) || !tight(targetAt)) return 'SL nebo TP částí pozice se liší víc, než dovoluje skluz — nejdřív je srovnej posunem';
     if (stopPrice === undefined || targetPrice === undefined || !stopAt.has(stopPrice) || !targetAt.has(targetPrice)) {
-      return `přikoupení musí mít SL a TP pozice (SL ${[...stopAt][0]}, TP ${[...targetAt][0]})`;
+      return `přikoupení musí mít SL a TP pozice (SL ${[...stopAt].join(' / ')}, TP ${[...targetAt].join(' / ')})`;
     }
     return null;
+  }
+
+  /** Strop částí pozice s vlastní ochranou (viz `maxProtectedParts`). */
+  private maxParts(): number {
+    const value = this.config.maxProtectedParts;
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? Math.min(value, 50) : 2;
   }
 
   /** Cena musí ležet na mřížce kroku kontraktu — nic se tiše nezaokrouhluje. */
@@ -999,7 +1050,7 @@ export class LocalExec {
           const adding = net !== 0;
           if (adding) {
             if (orderType === 'Stop') return refuse('přikoupení jde Marketem nebo Limitem');
-            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null);
+            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null, orderType);
             if (problem) return refuse(problem);
           }
           // Čekající přikoupení musí nést značku vazby na pozici (a nic jiného ji nést nesmí) — podle ní se po zavření
@@ -1042,7 +1093,7 @@ export class LocalExec {
             // zůstaly pracovat bez pozice a v další seanci by mohly otevřít nový obchod (oponentura 17. 11.).
             ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
             guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
-              ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag) : null),
+              ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag, orderType) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
@@ -1482,7 +1533,8 @@ export class LocalExec {
           const list = legsNow();
           if (!list) return refuse('na kontraktu pracuje příkaz, který služba nezná — posun neodesílám');
           if (list.length === 0) return refuse(`pozice nemá ${role === 'stop' ? 'SL' : 'TP'}`);
-          if (list.length > 2) return refuse('víc než dvě ochrany — posun neodesílám');
+          // Posun existujících noh nezávisí na stropu pro NOVÉ části (strop se mohl po restartu snížit) — jen na pevné mezi.
+          if (list.length > 50) return refuse(`příliš mnoho ochran (${list.length}) — posun neodesílám`);
           if (list.some((order) => order.status !== 'working')) return refuse('některá noha ještě není potvrzená burzou — posun neodesílám');
           // „Co jsem viděl": přesně tyto nohy na těchto cenách (ne jen jedna cena — změna druhé nohy by se schovala).
           const expected = Array.isArray(command.expect) ? command.expect as Array<{ orderId?: unknown; price?: unknown }> : null;
@@ -1494,6 +1546,7 @@ export class LocalExec {
           const startedAt = this.now();
           const budget = this.config.moveLegsBudgetMs ?? 2_000;
           const moved: string[] = [];
+          let legStartedAt = startedAt;
           const stop = (sent: false | 'unknown', why: string): LocalExecResult => {
             // Nejistý výsledek zastaví další změny noh i přikoupení, dokud ho obsluha nepotvrdí.
             if (sent === 'unknown') {
@@ -1515,7 +1568,9 @@ export class LocalExec {
                 || netNow !== net0 || this.lastFillAt.get(symbol) !== fillMark) {
                 return stop(moved.length ? 'unknown' : false, 'pozice nebo ochrana se během posunu změnila');
               }
-              if (moved.length > 0 && this.now() - startedAt > budget) return stop('unknown', 'první noha trvala příliš dlouho');
+              // Mez na JEDNU nohu (předchozí nesmí trvat déle než rozpočet) a celková mez pod lhůtou odpovědi appky.
+              if (moved.length > 0 && (this.now() - legStartedAt > budget || this.now() - startedAt > (this.config.moveLegsTotalMs ?? 10_000))) return stop('unknown', 'posun předchozích noh trval příliš dlouho');
+              legStartedAt = this.now();
               // Trh se mezi nohami hýbe: stranu a vzdálenost ověřit znovu z čerstvé ceny, jinak by zápis mohl ochranu hned spustit.
               const fresh = this.config.serverPrice?.(symbol) ?? null;
               const freshBelow = fresh !== null && price < fresh;

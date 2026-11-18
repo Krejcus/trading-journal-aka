@@ -111,7 +111,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     // Krátká karta (stav se mění s každým posunem; trvalá by ukazovala staré ceny).
     // Jen pro čtení: příkazy z jiné platformy graf neumí věrně ukázat (role jen odhaduje) → říct to nahlas.
     ...(trading.workingOrders > 0 ? [{ ...card(`rithmic-foreign:${trading.workingOrders}`, 'amber', 'Info', `Na účtu pracuje ${trading.workingOrders} ${trading.workingOrders === 1 ? 'příkaz zadaný' : 'příkazů zadaných'} jinde`, 'Graf je ukazuje tlumenou čarou jen pro zobrazení — z této appky je nejde posunout ani zrušit.'), sticky: false, ms: 10_000 }] : []),
-    ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Dvě ochrany na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš obě.`), sticky: false, ms: 9_000 }] : []),
+    ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Části pozice mají ochranu na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš všechny.`), sticky: false, ms: 9_000 }] : []),
     ...(blocked ? [trading.readOnly
       ? card(`rithmic-blocked:${blocked}`, 'amber', 'Info', 'Služba hlásí stav účtu', `${blocked} Účet je připojený jen pro čtení — nic se neposílá.`)
       : card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),

@@ -900,7 +900,8 @@ const LiveOrderTicket: React.FC<Props> = ({
   // Přikoupení: návrh na stranu otevřené pozice drží SL/TP pozice (čáry návrhu se k nim vrátí).
   const scaleIn = entryScaleIn && draft && draft.side === entryScaleIn.side ? entryScaleIn : null;
   useEffect(() => {
-    if (!scaleIn || !draft || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return;
+    // Buď pozice SL i TP má (přikoupení je převezme), nebo nemá nic (přikoupení jde bez nich). Jedna noha = neřeší se tady.
+    if (!scaleIn || !draft || (scaleIn.stopLoss == null) !== (scaleIn.targetPrice == null)) return;
     if (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) {
       onDraft({ ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice });
     }
@@ -981,6 +982,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     maxContracts: entryMaxContracts,
     quote: bareQuote,
     positionOpen: barePosition.open,
+    bareAddOffered: scaleIn != null && scaleIn.stopLoss == null && scaleIn.targetPrice == null && scaleIn.canAdd,
     now,
   });
   const bareEntryDraft = bareDraft && draft && quote && bareQuote && previewSymbol
@@ -1009,7 +1011,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : entryScaleIn && draft.side !== entryScaleIn.side ? 'V pozici jde jen přikoupit na její stranu — zmenšit / otočit ji z panelu nejde (zavři ×).'
     : scaleIn && soloLabel && draft.type !== 'market' ? 'Přikoupit lze Marketem. Čekající příkaz by po zavření pozice mohl otevřít nový obchod.'
     : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
-    : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.'
+    : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? (scaleIn.stopLoss == null && scaleIn.targetPrice == null ? 'Pozice nemá SL/TP — přikoupit jde jen bez nich; ochranu pak přidej na celou pozici.' : 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.')
     : scaleIn && draft.type !== 'market' && m && m.quantity > 1 ? 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.'
     : quantityLimits && draft && m && (scaleIn?.quantity ?? 0) + m.quantity > quantityLimits[draft.side] ? `Pozice by přesáhla limit ${quantityLimits[draft.side]} kontraktů pro ${draft.side === 'buy' ? 'long' : 'short'}.`
     : !quantityLimits && scaleIn && m && scaleIn.quantity + m.quantity > entryMaxContracts ? `Pozice by měla ${scaleIn.quantity + m.quantity} kontraktů — strop účtu je ${entryMaxContracts}.`
@@ -1176,7 +1178,7 @@ const LiveOrderTicket: React.FC<Props> = ({
   const templateSaveBlocked = !userId ? 'Šablony se ukládají jen přihlášenému uživateli.'
     : !templates.writable ? (templates.status === 'newer-version' ? 'Šablony uložila novější verze appky — tady je jen čtu.' : 'Úložiště šablon teď nejde přečíst.')
       : null;
-  const templateApplyBlocked = scaleIn ? 'Přikoupení drží SL/TP pozice — šablona se nepoužije.' : null;
+  const templateApplyBlocked = scaleIn ? (scaleIn.stopLoss == null && scaleIn.targetPrice == null ? 'Přikoupení do pozice bez SL/TP jde jen bez nich — šablona se nepoužije.' : 'Přikoupení drží SL/TP pozice — šablona se nepoužije.') : null;
   const applyTemplate = (template: LiveBracketTemplate) => {
     if (!draft || !quote) return;
     const applied = applyLiveBracketTemplate(draft, template, instrument, quote, { scaleIn: entryScaleIn, maxContracts: entryMaxContracts });
@@ -1530,7 +1532,7 @@ const LiveOrderTicket: React.FC<Props> = ({
       <h3 className={`m-0 flex-1 truncate text-[12.5px] font-black ${tone.ink}`}>
         {headerTitle}<small className={`ml-1.5 font-bold ${tone.muted}`}>{instrument.symbol}</small>
         {fromBox && <span className="ml-1.5 rounded border border-blue-500/45 px-1 align-[1px] text-[8.5px] font-black uppercase tracking-[0.06em] text-blue-500">z position boxu</span>}
-        {scaleIn && <span className="ml-1.5 rounded border border-emerald-500/45 px-1 align-[1px] text-[8.5px] font-black uppercase tracking-[0.06em] text-emerald-500">přikoupení · SL/TP pozice</span>}
+        {scaleIn && <span className="ml-1.5 rounded border border-emerald-500/45 px-1 align-[1px] text-[8.5px] font-black uppercase tracking-[0.06em] text-emerald-500">{scaleIn.stopLoss == null && scaleIn.targetPrice == null ? 'přikoupení · bez SL/TP' : 'přikoupení · SL/TP pozice'}</span>}
       </h3>
       <button type="button" onClick={onClose} title="Skrýt panel" aria-label="Skrýt panel objednávky" className={`flex h-7 w-7 items-center justify-center rounded-lg ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-500 hover:bg-white/70 hover:text-slate-900'}`}><X size={14} /></button>
     </div>

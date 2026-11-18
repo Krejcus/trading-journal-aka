@@ -59,6 +59,178 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
 
 const entry = (extra: Record<string, unknown> = {}) => ({ op: 'entry', clientId: `c${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 6990, stopPrice: 6980, targetPrice: 7010, ...extra });
 
+describe('místní služba: opakované přikoupení (víc než dvě části) a přikoupení do pozice bez SL/TP', () => {
+  const fillOf = async (t: Awaited<ReturnType<typeof setup>>, reply: unknown, price: number) => {
+    await flush();
+    t.server.fill((reply as { result: { orderId: string } }).result.orderId, price);
+    await sleep(170);
+  };
+  const protectedAdd = (extra: Record<string, unknown> = {}) => entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: 6980, targetPrice: 7030, ...extra });
+  async function parts(count: number, config: Record<string, unknown> = {}) {
+    const t = await setup({ config: { positionSettleMs: 20, reduceConfirmMs: 300, maxQuantity: 10, maxPosition: 10, ...config } });
+    await fillOf(t, await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 })), 6990);
+    for (let i = 1; i < count; i += 1) {
+      const added = await t.run(protectedAdd());
+      expect(added).toMatchObject({ ok: true });
+      await fillOf(t, added, 7000);
+    }
+    return t;
+  }
+  const working = (t: Awaited<ReturnType<typeof setup>>, role: string) => t.exec.state().orders.filter((o) => o.role === role && o.status === 'working');
+
+  it('výchozí strop jsou dvě části: třetí přikoupení služba odmítne a nic neodešle', async () => {
+    const t = await parts(2);
+    expect(t.exec.state().maxParts).toBe(2);
+    const frames = t.frames();
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/strop 2/) });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('se zvýšeným stropem jdou čtyři části; každá má vlastní SL i TP na své množství; pátou strop 4 nepustí', async () => {
+    const t = await parts(4, { maxProtectedParts: 4 });
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 4 })]);
+    expect(working(t, 'stop')).toHaveLength(4);
+    expect(working(t, 'target')).toHaveLength(4);
+    expect(working(t, 'stop').every((o) => o.quantity === 1 && o.price === 6980)).toBe(true);
+    const frames = t.frames();
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/strop 4/) });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('posun SL u čtyř částí přepíše všechny čtyři nohy na novou cenu; zavření části pak nechá tři chráněné', async () => {
+    const t = await parts(4, { maxProtectedParts: 6 });
+    const stops = working(t, 'stop');
+    const moved = await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: stops.map((o) => ({ orderId: o.orderId, price: o.price })) });
+    expect(moved).toMatchObject({ ok: true, result: { unchanged: 0 } });
+    expect((moved as { result: { moved: string[] } }).result.moved).toHaveLength(4);
+    await sleep(60);
+    expect(working(t, 'stop').map((o) => o.price)).toEqual([6985, 6985, 6985, 6985]);
+    expect(t.exec.state().blocked).toBeNull();
+    // Zavření jedné části: zbudou tři, každá se svou ochranou.
+    const targets = working(t, 'target');
+    const pending = t.run({ op: 'reduce', clientId: 'many1', symbol: 'ESZ6' });
+    await sleep(60);
+    // Právě jeden TP jde za trh (7000 − 8 ticků = 6998) a vyplní se; ostatní tři zůstávají.
+    const through = targets.map((o) => t.server.orders.get(o.orderId)!).filter((o) => o.price === 6998);
+    expect(through).toHaveLength(1);
+    t.server.fill(through[0].basketId, 6999.75);
+    expect(await pending).toMatchObject({ ok: true, result: { quantity: 1 } });
+    await sleep(200);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 3 })]);
+    expect(working(t, 'stop')).toHaveLength(3);
+    expect(working(t, 'target')).toHaveLength(3);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('když posun SL selže uprostřed, služba se zastaví s incidentem a zbylé nohy nechá být (nic neopakuje)', async () => {
+    const t = await parts(3, { maxProtectedParts: 6, moveConfirmMs: 150 });
+    const stops = working(t, 'stop');
+    // Druhá noha se u brokera nezmění: potvrzení stavem nepřijde.
+    let modifies = 0;
+    const original = t.broker.modifyOrder.bind(t.broker);
+    t.broker.modifyOrder = (async (...args: Parameters<typeof original>) => { modifies += 1; if (modifies === 2) return undefined; return original(...args); }) as typeof original;
+    const moved = await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: stops.map((o) => ({ orderId: o.orderId, price: o.price })) });
+    expect(moved).toMatchObject({ ok: false, sent: 'unknown' });
+    expect(modifies).toBe(2); // třetí noha už neodešla
+    expect(t.exec.state().blocked).toMatch(/move-legs-uncertain/);
+    expect(working(t, 'stop').map((o) => o.price).sort()).toEqual([6980, 6980, 6985]);
+    // Dokud obsluha nepotvrdí, další přikoupení ani posun nejdou.
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
+  it('přikoupení bez SL/TP je ve výchozím stavu vypnuté (skutečný účet): holá pozice zvětšit nejde a nic neodejde', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10 } });
+    await fillOf(t, await t.run(entry({ stopPrice: undefined, targetPrice: undefined })), 6990);
+    expect(t.exec.state().bareAdd).toBe(false);
+    const frames = t.frames();
+    expect(await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('během běžícího posunu SL/TP přikoupení neprojde (nová část by vznikla na staré ceně)', async () => {
+    const t = await parts(3, { maxProtectedParts: 6, moveConfirmMs: 400 });
+    const stops = working(t, 'stop');
+    // První změna nohy u brokera „visí" 250 ms — posun mezitím běží.
+    const original = t.broker.modifyOrder.bind(t.broker);
+    let first = true;
+    t.broker.modifyOrder = (async (...args: Parameters<typeof original>) => { if (first) { first = false; await sleep(250); } return original(...args); }) as typeof original;
+    const moving = t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: stops.map((o) => ({ orderId: o.orderId, price: o.price })) });
+    await sleep(80);
+    const frames = t.frames();
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/posun SL\/TP právě běží/) });
+    expect(t.frames()).toBe(frames);
+    expect(await moving).toMatchObject({ ok: true });
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('posun existujících noh nezávisí na stropu nových částí (strop se po restartu snížil)', async () => {
+    const t = await parts(3, { maxProtectedParts: 6 });
+    (t.exec as unknown as { config: { maxProtectedParts: number } }).config.maxProtectedParts = 2;
+    const stops = working(t, 'stop');
+    expect(await t.run({ op: 'move-legs', symbol: 'ESZ6', role: 'stop', price: 6985, expect: stops.map((o) => ({ orderId: o.orderId, price: o.price })) })).toMatchObject({ ok: true });
+    expect(await t.run(protectedAdd({ stopPrice: 6985 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/strop 2/) });
+    t.broker.stop();
+  });
+
+  it('skluz při vyplnění posune SL/TP části o pár ticků — další přikoupení jde; větší rozdíl ho zastaví', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10, maxProtectedParts: 6 } });
+    await fillOf(t, await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 })), 6990);
+    // Přikoupení se vyplní o 2 ticky výš, než kde služba počítala vzdálenosti → jeho SL/TP leží o 2 ticky výš.
+    await fillOf(t, await t.run(protectedAdd()), 7000.5);
+    expect(working(t, 'stop').map((o) => o.price).sort()).toEqual([6980, 6980.5]);
+    const third = await t.run(protectedAdd());
+    expect(third).toMatchObject({ ok: true });
+    // Třetí část skončí o 12 ticků vedle (víc než dovolený rozptyl 8) → čtvrté přikoupení čeká na srovnání posunem.
+    await fillOf(t, third, 7003);
+    expect(working(t, 'stop').map((o) => o.price).sort()).toEqual([6980, 6980.5, 6983]);
+    const frames = t.frames();
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/srovnej posunem/) });
+    expect(t.frames()).toBe(frames);
+    // Posun všech SL na jednu cenu to srovná (TP mají dál rozptyl 12 ticků → nejdřív i ty).
+    const align = async (role: 'stop' | 'target', price: number) => t.run({ op: 'move-legs', symbol: 'ESZ6', role, price, expect: working(t, role).map((o) => ({ orderId: o.orderId, price: o.price })) });
+    expect(await align('stop', 6985)).toMatchObject({ ok: true });
+    await sleep(60);
+    expect(await align('target', 7035)).toMatchObject({ ok: true });
+    await sleep(60);
+    expect(await t.run(protectedAdd({ stopPrice: 6985, targetPrice: 7035 }))).toMatchObject({ ok: true });
+    t.broker.stop();
+  });
+
+  it('holá pozice: přikoupit jde jen bez SL/TP; pár SL+TP pak kryje celou zvětšenou pozici', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, maxQuantity: 10, maxPosition: 10, bareAdd: true } });
+    await fillOf(t, await t.run(entry({ stopPrice: undefined, targetPrice: undefined })), 6990);
+    const frames = t.frames();
+    expect(t.exec.state().bareAdd).toBe(true);
+    // Čekající přikoupení bez ochrany služba neumí vyměnit ani posunout → jen Market.
+    expect(await t.run(entry({ clientId: 'add-barelimit', limitPrice: 6985, stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    expect(await t.run(protectedAdd())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/jen bez SL\/TP/) });
+    expect(t.frames()).toBe(frames);
+    for (const price of [6995, 7000]) {
+      const added = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }));
+      expect(added).toMatchObject({ ok: true });
+      await fillOf(t, added, price);
+    }
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 3 })]);
+    expect(t.exec.state().orders.filter((o) => o.status === 'working')).toHaveLength(0);
+    expect(await t.run({ op: 'protect-pair', clientId: 'bare-pair', symbol: 'ESZ6', stopPrice: 6980, targetPrice: 7010 })).toMatchObject({ ok: true, result: { paired: true } });
+    await sleep(80);
+    const open = [...t.server.orders.values()].filter((o) => o.status === 'open');
+    expect(open).toHaveLength(2);
+    expect(open.every((o) => o.quantity === 3)).toBe(true);
+    // Jakmile má pozice samostatnou ochranu, bez SL/TP už přikoupit nejde (vznikla by část bez ochrany).
+    expect(await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: limity RMS nejsou právě známé (čtou se řídce kvůli limitu dotazů Rithmicu)', () => {
   it('nový vstup se odmítne, ale pár SL+TP k holé pozici projde — pozice musí jít ochránit', async () => {
     let known = true;

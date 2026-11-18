@@ -87,6 +87,8 @@ export interface LiveBareMarketGate {
   quote: LiveBareQuote | null;
   /** Leader má na symbolu pozici nebo čekající vstup — holý Market jen z flat (worker `account-not-flat`). */
   positionOpen: boolean;
+  /** Pozice bez SL/TP a bez příkazů, do které služba dovolí přikoupit Marketem bez SL/TP (jen nabídka; ověří služba). */
+  bareAddOffered?: boolean;
   now: number;
 }
 
@@ -105,7 +107,7 @@ export function liveBareMarketBlockReason(gate: LiveBareMarketGate, quantity: nu
   if (!gate.bareSupported) return 'Worker zatím neumí Market bez SL/TP.';
   if (!Number.isSafeInteger(quantity) || quantity < 1) return 'Neplatný počet kontraktů.';
   if (quantity > gate.maxContracts) return `Strop ručního vstupu je ${gate.maxContracts} ${contractsWord(gate.maxContracts)}.`;
-  if (gate.positionOpen) return 'V pozici holý Market nejde — přikoupení jen se SL a TP pozice, jinak zavři ×.';
+  if (gate.positionOpen && gate.bareAddOffered !== true) return 'V pozici holý Market nejde — přikoupení jen se SL a TP pozice, jinak zavři ×.';
   return null;
 }
 
@@ -131,7 +133,7 @@ export function liveBarePendingBlockReason(gate: LiveBareMarketGate, quantity: n
   if (!gate.quote.symbol) return 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.';
   if (!Number.isSafeInteger(quantity) || quantity < 1) return 'Neplatný počet kontraktů.';
   if (quantity > gate.maxContracts) return `Strop ručního vstupu je ${gate.maxContracts} ${contractsWord(gate.maxContracts)}.`;
-  if (gate.positionOpen) return 'V pozici Limit ani Stop bez SL/TP nejdou — jen z flat.';
+  if (gate.positionOpen) return gate.bareAddOffered === true ? 'Do pozice bez SL/TP jde přikoupit jen Marketem.' : 'V pozici Limit ani Stop bez SL/TP nejdou — jen z flat.';
   return null;
 }
 

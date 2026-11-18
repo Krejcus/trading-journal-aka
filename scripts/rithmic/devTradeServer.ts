@@ -411,6 +411,8 @@ async function main(): Promise<void> {
     pendingAdd: SYSTEM === 'Rithmic Test',
     multiPairSwap: SYSTEM === 'Rithmic Test',
     entrySplit: SYSTEM === 'Rithmic Test',
+    // Víc než dvě části pozice (opakované přikoupení): zatím jen na testovacím účtu — proti brokerovi neověřeno.
+    ...(SYSTEM === 'Rithmic Test' ? { maxProtectedParts: 20, bareAdd: true } : {}),
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,

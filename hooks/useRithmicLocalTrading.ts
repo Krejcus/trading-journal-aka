@@ -464,22 +464,28 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure }: RithmicLocal
   // Režim přikoupení v lístku: jen pozice se SL i TP ze vstupů (ne samostatná ochrana). Jestli opravdu jde, ověří služba.
   // Čekající vstupy (i přikoupení) jako klíč: jejich příchod nebo zmizení musí pohled přikoupení přepočítat.
   const waitingEntriesKey = orders.filter((order) => order.role === 'entry' && order.status === 'working').map((order) => `${order.orderId}@${order.price}`).join('|');
+  const maxParts = state?.maxParts ?? 2;
   const scaleIn = useMemo<LiveTicketScaleIn | null>(() => {
     if (!net) return null;
     const quantity = Math.abs(net.netQuantity);
     const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
     const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+    // Holá pozice bez jakéhokoli příkazu: přikoupit jde jen bez SL/TP (ochrana se pak přidá na celou pozici).
+    const bare = state?.bareAdd === true && !stopOrder && !targetOrder && legView.stops.length === 0 && legView.targets.length === 0 && !orders.some((order) => order.status === 'working');
+    if (bare) {
+      const reason = quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.' : null;
+      return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: null, targetPrice: null, canAdd: reason === null, reason, pendingAdd: null };
+    }
     if (!own(legView.stops) || !own(legView.targets) || !stopOrder || !targetOrder) return null;
     // Čekající přikoupení (Limit do otevřené pozice): vlastní čára s ×; po zavření pozice ho služba sama zruší.
     const waitingAdd = orders.find((order) => order.role === 'entry' && order.status === 'working' && order.tag?.startsWith('ui-add-') && order.price !== undefined);
     const reason = waitingAdd ? 'Čeká přikoupení — další jde až po jeho vyplnění nebo zrušení.'
-      : legView.note ? `${legView.note} — nejdřív je srovnej posunem.`
-      : legView.stops.length >= 2 ? 'Pozice už má dvě části — další přikoupení služba nepustí.'
+      : legView.stops.length >= maxParts ? `Pozice už má ${legView.stops.length} částí — další přikoupení služba nepustí.`
       : quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.'
       : open(legView.stops) !== quantity || open(legView.targets) !== quantity ? 'SL/TP nekryjí celou pozici — přikoupení nejde.' : null;
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason,
       pendingAdd: waitingAdd ? { price: waitingAdd.price ?? null, quantity: waitingAdd.quantity, orderType: 'Limit' } : null };
-  }, [waitingEntriesKey, limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state?.bareAdd, maxParts, orders.some((order) => order.status === 'working'), waitingEntriesKey, limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
   scaleInRef.current = scaleIn;
 
   const position = useMemo<LiveChartPosition | null>(() => {
