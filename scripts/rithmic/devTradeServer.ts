@@ -12,8 +12,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
+import { RMS_LIMITS_MAX_AGE_MS, RMS_LOGINS_PER_HOUR_CAP, RMS_QUERY_WEEKLY_CAP, rmsLimitsReadDue, rmsLoginAllowed, spendRmsQuery } from '../../services/rithmic/rmsQueryBudget';
 import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
@@ -151,7 +153,37 @@ async function main(): Promise<void> {
   const results = join(dirname(fileURLToPath(import.meta.url)), 'results');
   // Odkaz na službu se doplní hned po vytvoření adaptéru; incidenty do té doby nevznikají.
   let exec: LocalExec | null = null;
+  let budgetWarned = false;
+  // Mimo worktree: služba spuštěná z jiného checkoutu musí počítat do TÉHOŽ rozpočtu.
+  const budgetFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'rms-query-budget-' + Buffer.from(JSON.stringify([SYSTEM, creds.user])).toString('base64url') + '.json');
+  /** Zapíše jeden dotaz do trvalého rozpočtu; false = strop vyčerpán nebo stav nejde uložit (pak se nečte). */
+  const spendBudget = (): boolean => {
+    let stored: unknown = undefined;
+    try { stored = JSON.parse(readFileSync(budgetFile, 'utf8')); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') stored = 'unreadable'; }
+    const spent = spendRmsQuery(stored, Date.now());
+    if (!spent.allowed) {
+      if (!budgetWarned) console.error(`[limity] Týdenní strop ${RMS_QUERY_WEEKLY_CAP} dotazů na účty a limity u Rithmicu je vyčerpán (nebo jeho záznam ${budgetFile} nejde přečíst) — limity se už nečtou a služba se po výpadku sama nepřihlásí; nové vstupy odmítne, až limity zestárnou.`);
+      budgetWarned = true;
+      return false;
+    }
+    try {
+      mkdirSync(dirname(budgetFile), { recursive: true });
+      writeFileSync(`${budgetFile}.tmp`, JSON.stringify(spent.state), { mode: 0o600 });
+      renameSync(`${budgetFile}.tmp`, budgetFile);
+    } catch { return false; }
+    return true;
+  };
+  // Každé přihlášení k příkazům posílá dotaz na seznam účtů: hodinový strop proti kmitajícímu spojení + týdenní rozpočet.
+  let recentLogins: number[] = [];
+  const loginAllowed = (): boolean => {
+    const hourly = rmsLoginAllowed(recentLogins, Date.now());
+    recentLogins = hourly.recent;
+    if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
+    return spendBudget();
+  };
   const broker = createRithmicBroker({
+    loginAllowed,
     url: URL, credentials: creds, socketFactory, registry,
     // Každý systém má vlastní záznam ochrany (záznamy z testu nesmí platit pro skutečný účet a naopak).
     protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
@@ -338,7 +370,11 @@ async function main(): Promise<void> {
   let rmsAt = 0;
   let rmsEpoch: number | undefined;
   let loadingLimits = false;
-  const effectiveLimits = () => broker.isConnected() && broker.routeEpoch?.(broker.accountIds()[0]) === rmsEpoch && Date.now() - rmsAt < 15_000 ? rms : null;
+  // Čtení limitů se počítá do tvrdého limitu dotazů Rithmicu (viz services/rithmic/rmsQueryBudget.ts) — žádné čtení ve smyčce.
+  let limitsAttemptAt: number | null = null;
+  let limitsAttemptOk = false;
+  let limitsAttemptEpoch: number | undefined;
+  const effectiveLimits = () => broker.isConnected() && broker.routeEpoch?.(broker.accountIds()[0]) === rmsEpoch && Date.now() - rmsAt < RMS_LIMITS_MAX_AGE_MS ? rms : null;
   let publishedLimits: ReturnType<typeof effectiveLimits> = null;
   function publishLimits() {
     const next = effectiveLimits();
@@ -348,17 +384,25 @@ async function main(): Promise<void> {
   }
   async function refreshLimits() {
     if (loadingLimits || !broker.isConnected()) return;
+    const epochNow = broker.routeEpoch?.(broker.accountIds()[0]);
+    if (!rmsLimitsReadDue({ now: Date.now(), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch })) return;
     const account = broker.accountIds()[0];
     const product = typeof ref?.raw.product_code === 'string' ? ref.raw.product_code : CONTRACT.match(/^([A-Z0-9]+)[FGHJKMNQUVXZ]\d{1,2}$/)?.[1];
     if (account === undefined || !product) return;
+    // Pokus se zapíše PŘED dotazem: i neúspěch a pád uprostřed se počítají (do rozpočtu i do rozestupu).
+    limitsAttemptAt = Date.now();
+    limitsAttemptOk = false;
+    limitsAttemptEpoch = epochNow;
+    if (!spendBudget()) return;
     loadingLimits = true;
-    const epoch = broker.routeEpoch?.(broker.accountIds()[0]);
+    const epoch = epochNow;
     try {
       const limits = await broker.readQuantityLimits(account, product);
       rms = limits && { buy: Math.min(manualCap, limits.buy), sell: Math.min(manualCap, limits.sell), order: Math.min(manualCap, limits.order) };
       rmsEpoch = epoch;
       rmsAt = Date.now();
-    } catch { rms = null; } finally { loadingLimits = false; }
+      limitsAttemptOk = limits !== null;
+    } catch { /* poslední známé limity doběhnou do stáří; další pokus nejdřív za 5 min */ } finally { loadingLimits = false; }
     publishLimits();
   }
   exec = new LocalExec({
@@ -413,7 +457,8 @@ async function main(): Promise<void> {
     // A stalled RMS refresh can expire even while the market feed remains active.
     publishLimits();
   }, 1_000).unref();
-  setInterval(() => void refreshLimits(), 5_000).unref();
+  // Jen kontrola, ZDA je čas číst (rozestupy a strop hlídá refreshLimits) — samotný dotaz odejde nejvýš jednou za hodinu.
+  setInterval(() => void refreshLimits(), 15_000).unref();
   if (!READ_ONLY && !LIVE_TRADING && broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   if (LIVE_TRADING) {
     // Až teď je znám účet přihlášení. Bez platného souhlasu služba vůbec nepoběží (ne „poběží a uvidí se").

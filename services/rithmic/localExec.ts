@@ -1135,7 +1135,9 @@ export class LocalExec {
           const pairQuantity = Math.abs(net);
           if (pairQuantity > (this.config.maxPosition ?? this.config.maxQuantity)) return refuse(`pozice ${pairQuantity} je nad stropem služby — ochranu nezadávám`);
           const pairLimits = this.config.quantityLimits?.();
-          if (this.config.quantityLimits && (!pairLimits || pairQuantity > pairLimits.order)) return refuse(pairLimits ? `ochrana na ${pairQuantity} ks přesahuje limit RMS ${pairLimits.order} ks na příkaz` : 'limity účtu a produktu RMS nejsou ověřené');
+          // Ochrana jen snižuje expozici: když limity právě nejsou známé (čtou se řídce kvůli limitu dotazů Rithmicu),
+          // pár se NEODMÍTÁ — jinak by holá pozice nešla ochránit. Limit na příkaz vynutí RMS u Rithmicu.
+          if (pairLimits && pairQuantity > pairLimits.order) return refuse(`ochrana na ${pairQuantity} ks přesahuje limit RMS ${pairLimits.order} ks na příkaz`);
           if (this.broker.executionNet(accountId, symbol) !== net) return refuse('pozice zatím nesouhlasí s vyplněními — ochranu zadej za okamžik');
           if ([...this.orders.values()].some((order) => order.symbol === symbol && !TERMINAL.has(order.status))) return refuse('pozice už má pracující příkazy — pár SL+TP jde přidat jen k pozici bez příkazů');
           if ([...this.reserved.values()].some((item) => item.symbol === symbol)) return refuse('na cestě je jiný příkaz tohoto kontraktu — ochranu teď nezadávám');

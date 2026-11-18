@@ -104,6 +104,17 @@ export interface RithmicBrokerConfig {
   heartbeatWindowMs?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
+  /**
+   * Prodleva obnovy se vrací na minimum až po relaci, která vydržela aspoň takto dlouho (výchozí 60 s).
+   * Spojení, které se přihlásí a hned spadne, by jinak zkoušelo každé 2 s — a každé přihlášení posílá
+   * dotaz na účty, který Rithmic počítá do tvrdého limitu (18. 11. 2026 vypnul uživatele po 2000 dotazech).
+   */
+  stableSessionMs?: number;
+  /**
+   * Zavolá se PŘED každým přihlášením k příkazům. `false` = rozpočet přihlášení je vyčerpán: adaptér se
+   * zastaví s incidentem a sám se už nepřipojí (ruční spuštění). Bez této volby se přihlášení nepočítají.
+   */
+  loginAllowed?: () => boolean;
   /** Kolikrát se adaptér smí sám odpojit kvůli stavu během `selfDropWindowMs` (výchozí 5 za 10 min). */
   maxSelfDrops?: number;
   selfDropWindowMs?: number;
@@ -234,6 +245,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   let epoch = 0;
   let everConnected = false;
   let reconnectDelay = config.reconnectMinMs ?? 2_000;
+  /** Kdy se naposledy povedlo složit relaci; null = od té doby už byla prodleva vyhodnocena. */
+  let connectedAt: number | null = null;
   let reconnectFailures = 0;
   let transportFailures = 0;
   let selfDrops: number[] = [];
@@ -612,6 +625,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
 
   function scheduleReconnect(): void {
     if (state !== 'down' || reconnectTimer) return;
+    if (connectedAt !== null) {
+      if (now() - connectedAt >= (config.stableSessionMs ?? 60_000)) reconnectDelay = config.reconnectMinMs ?? 2_000;
+      connectedAt = null;
+    }
     const delay = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, config.reconnectMaxMs ?? 30_000);
     reconnectTimer = setTimeout(() => {
@@ -766,6 +783,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   async function connectOnce(): Promise<void> {
     if (state === 'halted') throw new Error('Rithmic: adaptér je zastavený');
     if (client) throw new Error('Rithmic: připojování už běží');
+    if (config.loginAllowed && !config.loginAllowed()) {
+      incident('state-undetermined', 'rozpočet přihlášení k Rithmicu je vyčerpán (ochrana před tvrdým limitem dotazů) — adaptér je zastavený, je nutné ruční spuštění');
+      halt();
+      throw new Error('Rithmic: rozpočet přihlášení je vyčerpán');
+    }
     const created: RithmicClient = new RithmicClient({
       url: config.url,
       credentials: config.credentials,
@@ -930,7 +952,8 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       bookWasReset = false;
       reconnectFailures = 0;
       transportFailures = 0;
-      reconnectDelay = config.reconnectMinMs ?? 2_000;
+      // Prodleva se na minimum vrátí až po relaci, která vydržela (viz scheduleReconnect).
+      connectedAt = now();
       emit({
         type: 'connection', connected: true, at: now(),
         ...(reconnected ? { reconnected: true, resynced: true } : {}),

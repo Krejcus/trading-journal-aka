@@ -107,6 +107,37 @@ describe('RithmicBroker — výchozí stav a spojení', () => {
     broker.stop();
   });
 
+  // 18. 11. 2026: Rithmic vypnul uživatele po 2000 dotazech na účty. Každé přihlášení k příkazům jeden posílá.
+  it('rozpočet přihlášení: po vyčerpání se adaptér po pádu spojení sám nepřihlásí a zastaví se s incidentem', async () => {
+    let logins = 0;
+    const { server, broker, incidents } = await setup({ config: { loginAllowed: () => (logins += 1) <= 1 } });
+    expect(broker.isConnected()).toBe(true);
+    const socketsBefore = server.sockets.length;
+    server.sockets.filter((s) => s.readyState === 1)[0].drop();
+    await sleep(150);
+    expect(broker.isConnected()).toBe(false);
+    expect(broker.isHalted()).toBe(true);
+    expect(server.sockets.length).toBe(socketsBefore); // žádné nové spojení, tedy ani dotaz na účty
+    expect(incidents.some((i) => i.kind === 'state-undetermined' && /rozpočet přihlášení/.test(i.message))).toBe(true);
+    await sleep(150);
+    expect(logins).toBe(2); // po zastavení už se ani neptá
+    broker.stop();
+  });
+
+  it('spojení, které se přihlásí a hned spadne, zkouší čím dál řidčeji (prodleva se vrací až po stabilní relaci)', async () => {
+    const drop = (server: ReturnType<typeof createFakeRithmicServer>) => server.sockets.filter((s) => s.readyState === 1)[0].drop();
+    const flaky = await setup({ config: { reconnectMinMs: 40, reconnectMaxMs: 4_000 } });
+    drop(flaky.server); await sleep(120); expect(flaky.broker.isConnected()).toBe(true); // 40 ms
+    drop(flaky.server); await sleep(200); expect(flaky.broker.isConnected()).toBe(true); // 80 ms
+    drop(flaky.server); await sleep(90); expect(flaky.broker.isConnected()).toBe(false); // teď už 160 ms
+    await sleep(250); expect(flaky.broker.isConnected()).toBe(true);
+    flaky.broker.stop();
+    // Relace, která vydržela, vrací prodlevu na minimum.
+    const stable = await setup({ config: { reconnectMinMs: 40, reconnectMaxMs: 4_000, stableSessionMs: 0 } });
+    for (let i = 0; i < 3; i += 1) { drop(stable.server); await sleep(120); expect(stable.broker.isConnected()).toBe(true); }
+    stable.broker.stop();
+  });
+
   it('pád spojení: connected:false, vyšší routeEpoch, obnova s resynced a shodným stavem', async () => {
     const { server, broker, events, account } = await setup();
     await broker.placeOrder(limit(account, 'tag-keep'));

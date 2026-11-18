@@ -59,6 +59,24 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
 
 const entry = (extra: Record<string, unknown> = {}) => ({ op: 'entry', clientId: `c${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 6990, stopPrice: 6980, targetPrice: 7010, ...extra });
 
+describe('místní služba: limity RMS nejsou právě známé (čtou se řídce kvůli limitu dotazů Rithmicu)', () => {
+  it('nový vstup se odmítne, ale pár SL+TP k holé pozici projde — pozice musí jít ochránit', async () => {
+    let known = true;
+    const t = await setup({ config: { positionSettleMs: 20, quantityLimits: () => (known ? { buy: 2, sell: 2, order: 2 } : null) } });
+    const bare = await t.run(entry({ stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    t.server.fill((bare as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    known = false;
+    expect(await t.run(entry({ clientId: 'nolimits' }))).toMatchObject({ ok: false, sent: false });
+    const frames = t.frames();
+    expect(await t.run({ op: 'protect-pair', clientId: 'pp-nolimits', symbol: 'ESZ6', stopPrice: 6980, targetPrice: 7010 })).toMatchObject({ ok: true, result: { paired: true } });
+    expect(t.frames()).toBe(frames + 1);
+    // Známý limit dál platí: ochrana nad limit na příkaz se odmítne.
+    t.broker.stop();
+  });
+});
+
 describe('místní služba: validace vstupu', () => {
   it('platný Limit se SL/TP odejde jako vstup s ochranou ve správných tickách', async () => {
     const t = await setup();
