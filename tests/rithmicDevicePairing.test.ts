@@ -92,8 +92,9 @@ describe('párování zařízení s místní službou', () => {
     for (const op of ['entry', 'replace-entry', 'flatten', 'move', 'cancel', 'ack']) expect(scopeProblem('full', op)).toBeNull();
     expect(scopeProblem('read', 'lookup')).toBeNull();
     for (const op of ['entry', 'flatten', 'move', 'ack']) expect(scopeProblem('read', op)).toMatch(/jen pro čtení/);
-    for (const op of ['flatten', 'reduce', 'cancel', 'move', 'move-legs', 'protect', 'protect-pair', 'ack', 'lookup']) expect(scopeProblem('close', op)).toBeNull();
-    for (const op of ['entry', 'replace-entry', 'neznámý']) expect(scopeProblem('close', op)).toMatch(/jen zavírat/);
+    for (const op of ['flatten', 'reduce', 'protect', 'protect-pair', 'lookup']) expect(scopeProblem('close', op)).toBeNull();
+    // Posun umí čekající vstup přitáhnout k trhu nebo SL oddálit, rušení umí odstranit SL → do „jen zavírání" nepatří.
+    for (const op of ['entry', 'replace-entry', 'move', 'move-legs', 'cancel', 'ack', 'neznámý', 'FLATTEN']) expect(scopeProblem('close', op)).toMatch(/jen zavřít pozici/);
     expect(scopeProblem('full', undefined)).toMatch(/bez názvu/);
   });
 

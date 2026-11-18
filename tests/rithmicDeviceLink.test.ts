@@ -120,6 +120,35 @@ describe('spojení spárovaného zařízení: klíč první zprávou', () => {
     expect(t.connection.isOpen()).toBe(false);
   });
 
+  it('Klíčenku nejde přečíst (zamčený telefon): není to odmítnutí — spojení se zavře a zkouší se dál', async () => {
+    let locked = true;
+    const t = link(async () => { if (locked) throw new Error('errSecInteractionNotAllowed'); return KEY; });
+    t.connection.start();
+    t.sockets[0].onopen?.({});
+    await tick();
+    expect(t.sent).toHaveLength(0);
+    expect(t.failures).toEqual([]); // žádná výzva k novému spárování
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(t.sockets.length).toBeGreaterThanOrEqual(2); // zkouší znovu
+    locked = false;
+    t.sockets.at(-1)!.onopen?.({});
+    await tick();
+    expect(JSON.parse(t.sent[0])).toEqual({ auth: KEY });
+    t.connection.stop();
+  });
+
+  it('služba hlásí vlastní potíž (retry): zařízení se neodmítne a zkouší se dál', async () => {
+    const t = link(async () => KEY);
+    t.connection.start();
+    t.sockets[0].onopen?.({});
+    await tick();
+    t.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'auth', ok: false, retry: true, error: 'služba nemá čitelný seznam zařízení' }) });
+    expect(t.failures).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(t.sockets.length).toBeGreaterThanOrEqual(2);
+    t.connection.stop();
+  });
+
   it('chybí klíč v Klíčence: nic se službě nepošle a spojení se neobnovuje', async () => {
     const t = link(async () => null);
     t.connection.start();

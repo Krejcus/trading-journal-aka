@@ -16,7 +16,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-/** `full` = vše, co dovolí režim služby; `close` = jen zavírat, rušit a spravovat ochranu; `read` = jen číst. */
+/** `full` = vše, co dovolí režim služby; `close` = jen zavřít pozici a přidat ochranu; `read` = jen číst. */
 export type DeviceScope = 'full' | 'close' | 'read';
 
 export interface PairedDevice {
@@ -127,8 +127,12 @@ export function touchDevice(state: DeviceRegistryState, id: string, now: number)
   return { devices: state.devices.map((device) => (device.id === id ? { ...device, lastSeenAt: now } : device)) };
 }
 
-/** Příkazy, které zařízení s rozsahem `close` smí: nic, co otevírá nebo zvětšuje pozici. */
-const CLOSE_SCOPE_OPS = new Set(['flatten', 'reduce', 'cancel', 'move', 'move-legs', 'protect', 'protect-pair', 'ack', 'lookup']);
+/**
+ * Příkazy, které zařízení s rozsahem `close` smí: jen to, co riziko NEMŮŽE zvýšit — zavřít pozici (celou nebo část)
+ * a přidat ochranu. Posun a rušení tu záměrně NEJSOU: posunem jde čekající vstup přitáhnout k trhu (otevře pozici)
+ * nebo SL oddálit, rušením jde odstranit SL otevřené pozice. Kdo je potřebuje, má rozsah `full`.
+ */
+const CLOSE_SCOPE_OPS = new Set(['flatten', 'reduce', 'protect', 'protect-pair', 'lookup']);
 
 /** Proč zařízení příkaz NESMÍ (null = smí). Služba pak příkaz ještě ověří po svém. */
 export function scopeProblem(scope: DeviceScope, op: unknown): string | null {
@@ -136,7 +140,7 @@ export function scopeProblem(scope: DeviceScope, op: unknown): string | null {
   if (scope === 'full') return null;
   if (op === 'lookup') return null;
   if (scope === 'read') return 'toto zařízení je spárované jen pro čtení';
-  return CLOSE_SCOPE_OPS.has(op) ? null : 'toto zařízení smí jen zavírat a spravovat ochranu';
+  return CLOSE_SCOPE_OPS.has(op) ? null : 'toto zařízení smí jen zavřít pozici a přidat ochranu';
 }
 
 /** Načtený soubor se zařízeními: cokoli neplatného = chyba (neznámý seznam zařízení se nesmí brát jako prázdný). */

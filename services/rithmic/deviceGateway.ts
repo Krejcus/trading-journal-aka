@@ -42,11 +42,15 @@ export function fileDeviceStore(file: string): DeviceStore {
 export interface GatewaySocket {
   send(data: string): void;
   close(code?: number, reason?: string): void;
+  /** Okamžité ukončení bez čekání na druhou stranu (odvolané zařízení). */
+  terminate?(): void;
   on(event: 'close', listener: () => void): unknown;
   once(event: 'message', listener: (raw: unknown) => void): unknown;
 }
 
-export const DEVICE_AUTH_TIMEOUT_MS = 5_000;
+export const DEVICE_AUTH_TIMEOUT_MS = 3_000;
+/** Kolik spojení smí mít jedno zařízení naráz (další = nejstarší končí). */
+export const MAX_SOCKETS_PER_DEVICE = 2;
 export const MAX_UNAUTHENTICATED = 4;
 
 const PAIRING_ERRORS: Record<string, string> = {
@@ -68,6 +72,13 @@ export function createDeviceGateway<S extends GatewaySocket>(options: {
   now?: () => number;
   randomBytes?: (size: number) => Uint8Array;
   authTimeoutMs?: number;
+  /**
+   * Přihlašovací jméno Tailscale, které smí port použít (hlavička `Tailscale-User-Login`, kterou přidává Tailscale
+   * Serve). Když je zadané, spojení bez ní nebo s jiným jménem se neotevře vůbec — odřízne to ostatní uzly v síti
+   * i omylem zapnutý Funnel (ten hlavičku nepřidává). Věřit jí jde jen proto, že port poslouchá na 127.0.0.1.
+   * Klíč zařízení se ověřuje vždy; tohle je pojistka navíc. Bez hodnoty (simulace) se nekontroluje.
+   */
+  tailscaleLogin?: string | null;
 }) {
   const now = options.now ?? Date.now;
   const random = options.randomBytes ?? ((size: number) => nodeRandomBytes(size));
@@ -84,7 +95,15 @@ export function createDeviceGateway<S extends GatewaySocket>(options: {
 
   return {
     /** Smí se spojení vůbec otevřít? (Počet neověřených a původ stránky; skutečné ověření je až klíč.) */
-    verify: (origin: string | undefined): boolean => unauthenticated < MAX_UNAUTHENTICATED && (origin === undefined || options.origins.has(origin)),
+    verify: (origin: string | undefined, headers: Record<string, string | string[] | undefined> = {}): boolean => {
+      if (unauthenticated >= MAX_UNAUTHENTICATED) return false;
+      if (origin !== undefined && !options.origins.has(origin)) return false;
+      if (options.tailscaleLogin) {
+        const login = headers['tailscale-user-login'];
+        if (typeof login !== 'string' || login.trim().toLowerCase() !== options.tailscaleLogin.trim().toLowerCase()) return false;
+      }
+      return true;
+    },
     active,
     summary: (): string => (broken ? `SEZNAM ZAŘÍZENÍ NEJDE PŘEČÍST: ${broken}` : `spárováno ${state.devices.filter((device) => device.revokedAt === null).length}`),
 
@@ -99,7 +118,8 @@ export function createDeviceGateway<S extends GatewaySocket>(options: {
         let hello: { auth?: unknown; pair?: { code?: unknown; name?: unknown } } = {};
         try { hello = JSON.parse(String(raw)) as typeof hello; } catch { /* neplatná zpráva = odmítnout níže */ }
         if (!hello || typeof hello !== 'object') hello = {};
-        if (broken) { send(socket, { type: 'auth', ok: false, error: 'služba nemá čitelný seznam zařízení' }); socket.close(4002, 'registry'); return; }
+        // `retry`: potíž je na straně služby, ne zařízení — klient má zkoušet dál, ne nabízet nové spárování.
+        if (broken) { send(socket, { type: 'auth', ok: false, retry: true, error: 'služba nemá čitelný seznam zařízení' }); socket.close(4002, 'registry'); return; }
         if (hello.pair && typeof hello.pair === 'object' && typeof hello.pair.code === 'string' && typeof hello.pair.name === 'string') {
           const attempt = attemptPairing({ pending, state, code: hello.pair.code, name: hello.pair.name, now: now(), randomBytes: random });
           pending = attempt.pending;
@@ -123,6 +143,9 @@ export function createDeviceGateway<S extends GatewaySocket>(options: {
         const device = deviceForKey(state, typeof hello.auth === 'string' ? hello.auth : null);
         if (!device) { send(socket, { type: 'auth', ok: false, error: 'zařízení není spárované nebo bylo odvoláno' }); socket.close(4003, 'unknown device'); return; }
         settle();
+        // Zařízení smí mít jen pár spojení naráz (jinak by jedno zařízení šlo zneužít k zahlcení): nejstarší končí.
+        const mine = [...sockets].filter(([, id]) => id === device.id).map(([other]) => other);
+        for (const old of mine.slice(0, Math.max(0, mine.length - (MAX_SOCKETS_PER_DEVICE - 1)))) { sockets.delete(old); old.close(4004, 'too many connections'); }
         sockets.set(socket, device.id);
         try { save(touchDevice(state, device.id, now())); } catch { /* čas posledního použití není podstatný */ }
         send(socket, { type: 'auth', ok: true, deviceId: device.id, scope: device.scope });
@@ -143,10 +166,22 @@ export function createDeviceGateway<S extends GatewaySocket>(options: {
       if (command.op === 'revoke-device') {
         const id = typeof command.deviceId === 'string' ? command.deviceId : '';
         if (!active(id)) throw new Error('takové aktivní zařízení neznám');
-        save(revokeDevice(state, id, now()));
-        // Otevřená spojení odvolaného zařízení končí hned.
-        for (const [socket, deviceId] of [...sockets]) if (deviceId === id) socket.close(4003, 'device revoked');
+        // Nejdřív odvolat V PAMĚTI a odpojit, teprve pak ukládat: kdyby zápis selhal (plný disk), ztracený telefon
+        // nesmí zůstat připojený s platným klíčem.
+        const next = revokeDevice(state, id, now());
+        state = next;
+        for (const [socket, deviceId] of [...sockets]) {
+          if (deviceId !== id) continue;
+          sockets.delete(socket);
+          if (socket.terminate) socket.terminate(); else socket.close(4003, 'device revoked');
+        }
+        let persisted = true;
+        try { options.store.save(next); } catch (error) {
+          persisted = false;
+          log(`odvolání ${id} se NEPODAŘILO ULOŽIT (${error instanceof Error ? error.message : String(error)}) — platí jen do restartu služby`);
+        }
         log(`odvoláno ${id}`);
+        return { devices: list(), persisted, ...(persisted ? {} : { warning: 'Odvoláno, ale nepodařilo se to uložit — po restartu služby by zařízení zase platilo. Uvolni místo na disku a odvolej ho znovu.' }) };
       }
       return { devices: list() };
     },

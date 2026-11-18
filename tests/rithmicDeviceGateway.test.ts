@@ -104,10 +104,54 @@ describe('brána pro spárovaná zařízení', () => {
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect((t.gateway.manage({ op: 'devices' }) as { devices: Array<{ online: boolean }> }).devices[0].online).toBe(true);
     t.gateway.manage({ op: 'revoke-device', deviceId: paired.deviceId });
-    expect(await closed).toBe(4003);
+    expect([1006, 4003]).toContain(await closed); // odvolané zařízení se odpojí natvrdo, bez čekání na druhou stranu
     expect(t.gateway.active(paired.deviceId)).toBeNull();
     expect((await t.talk({ auth: paired.key })).closed).toBe(4003);
     expect(() => t.gateway.manage({ op: 'revoke-device', deviceId: paired.deviceId })).toThrow();
+  });
+
+  it('odvolání platí hned i když ho nejde uložit (plný disk): zařízení je odpojeno a klíč do restartu neplatí', async () => {
+    let saved: DeviceRegistryState = { devices: [] };
+    let diskFull = false;
+    const t = await setup({ store: { load: () => saved, save: (state) => { if (diskFull) throw new Error('ENOSPC'); saved = structuredClone(state); } } });
+    const paired = await t.pair();
+    const live = new WebSocket(t.url, { origin: 'capacitor://localhost' });
+    open.push(live);
+    const closed = new Promise<number>((resolve) => live.on('close', (code) => resolve(code)));
+    live.on('open', () => live.send(JSON.stringify({ auth: paired.key })));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    diskFull = true;
+    const result = t.gateway.manage({ op: 'revoke-device', deviceId: paired.deviceId }) as { persisted: boolean; warning?: string };
+    expect(result.persisted).toBe(false);
+    expect(result.warning).toMatch(/po restartu služby/);
+    await closed;
+    expect(t.gateway.active(paired.deviceId)).toBeNull();
+    expect((await t.talk({ auth: paired.key })).closed).toBe(4003);
+  });
+
+  it('zadané jméno Tailscale: spojení bez hlavičky nebo s jiným jménem se neotevře vůbec', () => {
+    const gateway = createDeviceGateway<WebSocket>({ store: { load: () => ({ devices: [] }), save: () => undefined }, origins: new Set(['capacitor://localhost']), tailscaleLogin: 'Filip@Example.com', serve: () => undefined });
+    expect(gateway.verify('capacitor://localhost', {})).toBe(false);
+    expect(gateway.verify('capacitor://localhost', { 'tailscale-user-login': 'nekdo@jinde.cz' })).toBe(false);
+    expect(gateway.verify(undefined, { 'tailscale-user-login': ['filip@example.com'] })).toBe(false);
+    expect(gateway.verify('capacitor://localhost', { 'tailscale-user-login': 'filip@example.com' })).toBe(true);
+    expect(gateway.verify(undefined, { 'tailscale-user-login': ' Filip@Example.com ' })).toBe(true);
+  });
+
+  it('jedno zařízení smí mít jen dvě spojení naráz — třetí odpojí nejstarší', async () => {
+    const t = await setup();
+    const paired = await t.pair();
+    const connect = () => new Promise<{ socket: WebSocket; closed: Promise<number> }>((resolve) => {
+      const socket = new WebSocket(t.url, { origin: 'capacitor://localhost' });
+      open.push(socket);
+      const closed = new Promise<number>((done) => socket.on('close', (code) => done(code)));
+      socket.on('open', () => { socket.send(JSON.stringify({ auth: paired.key })); setTimeout(() => resolve({ socket, closed }), 80); });
+    });
+    const first = await connect();
+    const second = await connect();
+    await connect();
+    expect(await first.closed).toBe(4004);
+    expect(second.socket.readyState).toBe(WebSocket.OPEN);
   });
 
   it('seznam zařízení nikdy neobsahuje klíč ani jeho otisk', async () => {
@@ -121,7 +165,7 @@ describe('brána pro spárovaná zařízení', () => {
   it('nečitelný seznam zařízení: nikdo neprojde a správa hlásí chybu (neznámý seznam není prázdný seznam)', async () => {
     const t = await setup({ store: { load: () => { throw new Error('poškozený soubor'); }, save: () => undefined } });
     const reply = await t.talk({ auth: 'x'.repeat(43) });
-    expect(reply.messages).toEqual([{ type: 'auth', ok: false, error: 'služba nemá čitelný seznam zařízení' }]);
+    expect(reply.messages).toEqual([{ type: 'auth', ok: false, retry: true, error: 'služba nemá čitelný seznam zařízení' }]);
     expect(() => t.gateway.manage({ op: 'pair-start' })).toThrow(/nejde přečíst/);
     expect(t.gateway.summary()).toMatch(/NEJDE PŘEČÍST/);
   });

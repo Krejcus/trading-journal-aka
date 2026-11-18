@@ -63,6 +63,11 @@ const PORT = Number(arg('port', '3311'));
 const QA_PORT = arg('qa-port', '4185');
 /** Port pro spárovaná zařízení (telefon přes Tailscale Serve). Bez `--mobile` se neotevírá. */
 const MOBILE_PORT: number | null = process.argv.includes('--mobile') ? Number(arg('mobile-port', '3313')) : null;
+/**
+ * Přihlašovací jméno Tailscale (e-mail účtu), které smí port pro zařízení použít — viz `tailscaleLogin` v bráně.
+ * Doporučeno vždy; bez něj port přijme spojení od kohokoli, kdo se k němu v síti Tailscale dostane (a ověřuje jen klíč).
+ */
+const TAILSCALE_LOGIN: string | null = cli('tailscale-login') ?? null;
 /** Původ stránky v nativní appce (Capacitor) a v prohlížeči přes Tailscale; skutečné ověření je klíč zařízení. */
 const MOBILE_ORIGINS = new Set(['capacitor://localhost', ...(process.env.RITHMIC_DEV_ORIGINS ?? '').split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean)]);
 // Další povolené adresy stránky (např. https://<mac>.<tailnet>.ts.net přes Tailscale Serve):
@@ -124,7 +129,10 @@ async function main(): Promise<void> {
   if (heldBy !== null && heldBy !== process.pid && alive(heldBy)) {
     throw new Error(`služba pro ${SYSTEM} už běží (proces ${heldBy}) — druhou nespouštím. Když neběží, smaž ${lockFile}`);
   }
-  writeFileSync(lockFile, String(process.pid), { mode: 0o600 });
+  // Zápis zámku je ATOMICKÝ (vytvořit jen když neexistuje): dva starty ve stejný okamžik neprojdou oba.
+  if (heldBy !== null) rmSync(lockFile, { force: true }); // starý zámek po procesu, který už neběží
+  try { writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' }); }
+  catch { throw new Error(`službu pro ${SYSTEM} právě spouští jiný proces — druhou nespouštím. Když neběží, smaž ${lockFile}`); }
   process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
   let startConsent: LiveTradingConsent | null = null;
   if (LIVE_TRADING) {
@@ -203,12 +211,14 @@ async function main(): Promise<void> {
   try {
     const stored: unknown = JSON.parse(readFileSync(loginWindowFile, 'utf8'));
     // Nečitelný záznam = jako by bylo okno plné (neznámý počet přihlášení → nepřihlašovat naslepo).
-    recentLogins = Array.isArray(stored) && stored.every((at) => Number.isFinite(at)) ? stored as number[] : Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now());
+    // Značky z budoucnosti (posun hodin) se zahodí — jinak by okno blokovalo přihlášení natrvalo.
+    recentLogins = Array.isArray(stored) && stored.every((at) => Number.isFinite(at)) ? (stored as number[]).filter((at) => at <= Date.now()) : Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now());
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') recentLogins = Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now()); }
   const loginAllowed = (): boolean => {
     const hourly = rmsLoginAllowed(recentLogins, Date.now());
     recentLogins = hourly.recent;
-    try { writeFileSync(`${loginWindowFile}.tmp`, JSON.stringify(recentLogins), { mode: 0o600 }); renameSync(`${loginWindowFile}.tmp`, loginWindowFile); } catch { return false; }
+    try { writeFileSync(`${loginWindowFile}.tmp`, JSON.stringify(recentLogins), { mode: 0o600 }); renameSync(`${loginWindowFile}.tmp`, loginWindowFile); }
+    catch (error) { console.error(`[limity] Počet přihlášení nejde uložit (${error instanceof Error ? error.message : String(error)}; ${loginWindowFile}) — bez záznamu se k Rithmicu nepřihlašuji.`); return false; }
     if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
     return spendBudget();
   };
@@ -581,6 +591,8 @@ async function main(): Promise<void> {
             recent.push(at);
           }
           const rawCommand = message.command as unknown as Record<string, unknown>;
+          // Odvolané zařízení: nic dalšího — ani dohledání u brokera, ani příkaz, který byl už na cestě ke službě.
+          if (access.deviceId && !activeDevice(access.deviceId)) { socket.terminate(); return; }
           if (rawCommand.op === 'lookup') {
             const result = await commandStatus(broker, rawCommand, CONTRACT);
             send(socket, { type: 'reply', id, ok: true, result });
@@ -592,8 +604,6 @@ async function main(): Promise<void> {
             send(socket, { type: 'reply', id, ok: true, result: manageDevices(rawCommand) });
             return;
           }
-          // Odvolané zařízení: i příkaz, který už byl na cestě, se zastaví tady.
-          if (access.deviceId && !activeDevice(access.deviceId)) { socket.close(4003, 'device revoked'); throw new Error('zařízení bylo odvoláno'); }
           const denied = scopeProblem(access.scope, rawCommand.op);
           if (denied) throw new Error(denied);
           // Potvrzení incidentu uvolňuje blokaci, rezervace i nejistotu noh najednou → jen u Macu, ne z telefonu.
@@ -614,10 +624,11 @@ async function main(): Promise<void> {
   // vystavením tohoto portu se neotevře cesta pro kohokoli, kdo by znal starý sdílený klíč. Poslouchá dál jen
   // na 127.0.0.1 — do sítě ho pouští až Tailscale (šifrovaně, jen zařízením ve Filipově síti).
   const devicesFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'devices.json');
-  const mobileServer = MOBILE_PORT === null ? null : new WebSocketServer({ host: '127.0.0.1', port: MOBILE_PORT, maxPayload: 16 * 1024, verifyClient: (info: { origin?: string }) => gateway!.verify(info.origin) });
+  const mobileServer = MOBILE_PORT === null ? null : new WebSocketServer({ host: '127.0.0.1', port: MOBILE_PORT, maxPayload: 16 * 1024, verifyClient: (info: { origin?: string; req: { headers: Record<string, string | string[] | undefined> } }) => gateway!.verify(info.origin, info.req.headers) });
   const gateway = createDeviceGateway({
     store: fileDeviceStore(devicesFile),
     origins: MOBILE_ORIGINS,
+    tailscaleLogin: TAILSCALE_LOGIN,
     serve: (socket, device) => serveClient(socket as WebSocket, { scope: device.scope, local: false, label: device.name, deviceId: device.id }),
     log: (text) => console.log(`[zařízení] ${text}`),
   });
@@ -631,7 +642,7 @@ async function main(): Promise<void> {
   console.log(`Aplikace u Rithmicu: "${APP_NAME}" · systém "${SYSTEM}"${READ_ONLY ? ' · JEN PRO ČTENÍ (příkazy vypnuté)' : ''}`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
-  if (MOBILE_PORT !== null) console.log(`Zařízení (telefon): ws://127.0.0.1:${MOBILE_PORT} — ven jen přes Tailscale Serve; ${gateway.summary()}`);
+  if (MOBILE_PORT !== null) console.log(`Zařízení (telefon): ws://127.0.0.1:${MOBILE_PORT} — ven jen přes Tailscale Serve; ${gateway.summary()}${TAILSCALE_LOGIN ? ` · jen pro ${TAILSCALE_LOGIN}` : ' · POZOR: bez --tailscale-login port ověřuje jen klíč zařízení'}`);
   const stop = (): void => {
     console.log('Končím (příkazy u Rithmicu zůstávají, jak jsou).');
     server.close();

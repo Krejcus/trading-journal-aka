@@ -459,7 +459,9 @@ describe('Rithmic graf na telefonu', () => {
 
   it('obal: spojení jen s otevřenou záložkou, účet jen pro čtení bez mostu příkazů, žádný stav kopírky', () => {
     expect(wrapper).toMatch(/useRithmicLocalTrading\(\{ url, enabled: open, auth: deviceAuth \}\)/);
-    expect(wrapper).toMatch(/trade: trading\.readOnly \? null : trade,/);
+    // Bez mostu příkazů: účet jen pro čtení i zařízení spárované jen pro čtení.
+    expect(wrapper).toMatch(/const viewOnly = trading\.readOnly \|\| deviceScope === 'read';/);
+    expect(wrapper).toMatch(/trade: viewOnly \|\| !trade \? null : deviceScope === 'close' \?/);
     expect(wrapper).toContain('copierArmed: false');
     expect(wrapper).not.toMatch(/armed:\s*true/);
     expect(wrapper).not.toContain('commandLockRef');
@@ -470,7 +472,7 @@ describe('Rithmic graf na telefonu', () => {
 
   it('obal: zavření pozice je dosažitelné i při incidentu, mlčící službě a schované hlavičce; incident jde potvrdit', () => {
     // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
-    expect(wrapper).toMatch(/const offerBrake = link === 'open' && !trading\.readOnly && \(trading\.mayHaveExposure \|\| trading\.uncertain\.length > 0\);/);
+    expect(wrapper).toMatch(/const offerBrake = link === 'open' && !viewOnly && \(trading\.mayHaveExposure \|\| trading\.uncertain\.length > 0\);/);
     expect(wrapper).toMatch(/closeNow: runClose,/);
     expect(wrapper).toMatch(/const result = await closeNow\(\);/);
     // Karty a brzda: v hlavičce, a když je hlavička schovaná, nad grafem; i v prázdném stavu.
@@ -485,6 +487,6 @@ describe('Rithmic graf na telefonu', () => {
 
   it('obal: v hlavičce je účet, systém a štítek režimu', () => {
     expect(wrapper).toMatch(/\[trading\.system \?\? 'Rithmic', trading\.accountName \?\? 'účet neznámý'\]/);
-    expect(wrapper).toMatch(/rithmicPhoneModeLabel\(\{ system: trading\.system, readOnly: trading\.readOnly, closeOnly: trading\.closeOnly === true, liveAccount: trading\.liveAccount,/);
+    expect(wrapper).toMatch(/rithmicPhoneModeLabel\(\{ system: trading\.system, readOnly: viewOnly, closeOnly: closeOnlyHere, liveAccount: trading\.liveAccount,/);
   });
 });

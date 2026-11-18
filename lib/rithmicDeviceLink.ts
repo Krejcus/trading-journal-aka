@@ -86,13 +86,21 @@ async function nativeVault(): Promise<RithmicKeyVault | null> {
   return alphaTradeNativePlugin as unknown as RithmicKeyVault;
 }
 
-/** Klíč zařízení pro přihlášení ke službě; null = není spárováno (nebo Klíčenka není dostupná). */
+/** Úložiště prohlížeče smí klíč držet JEN při vývoji (zkušební stránka); produkční web nikdy. */
+const browserStore = (): Storage => {
+  if (!env().dev) throw new Error('Klíč zařízení tu není kam bezpečně uložit.');
+  return window.localStorage;
+};
+
+/**
+ * Klíč zařízení pro přihlášení ke službě. `null` = klíč tu NENÍ (nespárováno). Když Klíčenku nejde přečíst
+ * (zamčený telefon, chyba systému), VYHODÍ chybu — to je přechodný stav, ne důvod k novému párování.
+ */
 export async function readRithmicDeviceKey(vault?: RithmicKeyVault | null): Promise<string | null> {
-  try {
-    const store = vault === undefined ? await nativeVault() : vault;
-    const value = store ? (await store.secureGet({ key: RITHMIC_DEVICE_SECRET_KEY })).value : window.localStorage.getItem(RITHMIC_DEVICE_SECRET_KEY);
-    return value && KEY_SHAPE.test(value) ? value : null;
-  } catch { return null; }
+  if (!rithmicDeviceLinkAllowed(env())) return null;
+  const store = vault === undefined ? await nativeVault() : vault;
+  const value = store ? (await store.secureGet({ key: RITHMIC_DEVICE_SECRET_KEY })).value : browserStore().getItem(RITHMIC_DEVICE_SECRET_KEY);
+  return value && KEY_SHAPE.test(value) ? value : null;
 }
 
 export async function forgetRithmicDevice(vault?: RithmicKeyVault | null): Promise<void> {
@@ -100,7 +108,7 @@ export async function forgetRithmicDevice(vault?: RithmicKeyVault | null): Promi
   try {
     const store = vault === undefined ? await nativeVault() : vault;
     if (store) await store.secureRemove({ key: RITHMIC_DEVICE_SECRET_KEY });
-    else window.localStorage.removeItem(RITHMIC_DEVICE_SECRET_KEY);
+    else browserStore().removeItem(RITHMIC_DEVICE_SECRET_KEY);
   } catch { /* klíč už není */ }
 }
 
@@ -127,6 +135,7 @@ export function pairRithmicDevice(input: {
   timeoutMs?: number;
   now?: () => number;
 }): Promise<RithmicPairResult> {
+  if (!rithmicDeviceLinkAllowed(env())) return Promise.resolve({ ok: false, error: 'Spárování s Macem tu není dostupné.' });
   const endpoint = normalizeRithmicEndpoint(input.endpoint, env().dev);
   if (!endpoint) return Promise.resolve({ ok: false, error: 'Adresa Macu není platná — čekám jméno ze sítě Tailscale, např. macbook-air.tail1234.ts.net.' });
   const code = input.code.replace(/[\s-]/g, '').toUpperCase();
@@ -160,7 +169,7 @@ export function pairRithmicDevice(input: {
         try {
           const store = input.vault === undefined ? await nativeVault() : input.vault;
           if (store) await store.secureSet({ key: RITHMIC_DEVICE_SECRET_KEY, value: key });
-          else window.localStorage.setItem(RITHMIC_DEVICE_SECRET_KEY, key);
+          else browserStore().setItem(RITHMIC_DEVICE_SECRET_KEY, key);
           (input.storage ?? window.localStorage).setItem(RITHMIC_DEVICE_LINK_KEY, JSON.stringify(link));
           finish({ ok: true, link });
         } catch {

@@ -81,6 +81,7 @@ export class RithmicLocalConnection {
   private refuse(socket: RithmicLinkSocket, reason: string): void {
     this.stopped = true;
     if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    if (this.beat) { clearInterval(this.beat); this.beat = null; }
     try { this.options.handlers.onAuthFailed?.(reason); } finally { try { socket.close(); } catch { /* už zavřené */ } }
   }
 
@@ -181,7 +182,9 @@ export class RithmicLocalConnection {
         if (this.socket !== mine) return;
         if (!key) { this.refuse(mine, 'V tomto zařízení chybí klíč spárování.'); return; }
         try { mine.send(JSON.stringify({ auth: key })); } catch { mine.close(); }
-      }, () => { if (this.socket === mine) this.refuse(mine, 'Klíč spárování se nepodařilo načíst.'); });
+        // Klíčenku nejde přečíst (zamčený telefon, chyba systému): přechodný stav — spojení zavřít a zkoušet dál,
+        // NE nabízet nové spárování. Po odemčení se připojí samo.
+      }, () => { if (this.socket === mine) mine.close(); });
     };
     mine.onclose = () => {
       if (this.socket !== mine) return;
@@ -203,6 +206,8 @@ export class RithmicLocalConnection {
         // Před ověřením zařízení se čeká jen na verdikt služby; cokoli jiného se zahodí.
         if (message.type !== 'auth') return;
         if (message.ok === true) { this.authenticated = true; this.lastHeartbeatAt = this.now(); this.options.handlers.onLink('open'); }
+        // `retry`: potíž je na straně služby (např. nečitelný seznam zařízení) — zkoušet dál, ne párovat znovu.
+        else if (message.retry === true) mine.close();
         else this.refuse(mine, typeof message.error === 'string' ? message.error : 'Služba toto zařízení odmítla.');
         return;
       }

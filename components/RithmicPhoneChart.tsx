@@ -9,6 +9,7 @@ import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmi
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
 import { rithmicLocalAuth, rithmicLocalUrl, rithmicPairingOffered } from '../lib/rithmicLocalLink';
 import RithmicPairingPanel from './RithmicPairingPanel';
+import { readRithmicDeviceLink } from '../lib/rithmicDeviceLink';
 import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import {
   rithmicPhoneBridge, rithmicPhoneCards, rithmicPhoneCloseText, rithmicPhoneModeLabel, rithmicPhoneQuote, rithmicPhoneWaiting,
@@ -92,6 +93,11 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   // Spárované zařízení (telefon) se službě prokazuje klíčem z Klíčenky; PC a simulace klíč zařízení nemají.
   const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });
+  // Rozsah tohoto zařízení (určila ho služba při spárování a sama ho vynucuje): obrazovka podle něj jen NENABÍZÍ,
+  // co by služba stejně odmítla — aby se o odmítnutí člověk nedozvěděl až po klepnutí v nouzi.
+  const deviceScope = useMemo(() => (deviceAuth ? readRithmicDeviceLink()?.scope ?? 'full' : 'full'), [deviceAuth]);
+  const viewOnly = trading.readOnly || deviceScope === 'read';
+  const closeOnlyHere = trading.closeOnly === true || deviceScope === 'close';
   const { link, state, symbol, marketData } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const blocked = state?.blocked ?? null;
@@ -184,7 +190,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
 
   // Brzda se nabízí při otevřeném spojení se službou — i při incidentu, stojící ceně nebo mlčící službě — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Účet jen pro čtení ji nemá.
-  const offerBrake = link === 'open' && !trading.readOnly && (trading.mayHaveExposure || trading.uncertain.length > 0);
+  const offerBrake = link === 'open' && !viewOnly && (trading.mayHaveExposure || trading.uncertain.length > 0);
   const brake = useMemo(() => (offerBrake ? { armed: closeArmedAt != null, busy: closeBusy, onTap: tapClose } : null), [offerBrake, closeArmedAt, closeBusy, tapClose]);
 
   // Most příkazů: účet jen pro čtení ho nemá (graf jen zobrazuje). „Zavřít" z lišty grafu = stejná brzda služby.
@@ -194,7 +200,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
     onPlaceEntry: trading.onPlaceEntry, onManageEntry: trading.onManageEntry, onBareLeg: trading.onBareLeg, closeNow: runClose,
   }), [trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
 
-  const mode = rithmicPhoneModeLabel({ system: trading.system, readOnly: trading.readOnly, closeOnly: trading.closeOnly === true, liveAccount: trading.liveAccount, simulation: Boolean(simulationUrl) });
+  const mode = rithmicPhoneModeLabel({ system: trading.system, readOnly: viewOnly, closeOnly: closeOnlyHere, liveAccount: trading.liveAccount, simulation: Boolean(simulationUrl) });
   const account = (
     <>
       <span data-rithmic-phone-account title={[trading.system, trading.accountName, symbol].filter(Boolean).join(' · ')} style={{ ...chip, border: '1px solid var(--dj-line, rgba(148,163,184,.3))', background: 'var(--dj-chip, transparent)', color: 'var(--dj-text, inherit)', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', lineHeight: '26px', maxWidth: '60vw' }}>
@@ -216,7 +222,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   if (!simulationUrl && rithmicPairingOffered() && (!url || trading.authFailed)) {
     return (
       <div data-rithmic-phone-pairing className={`grid gap-3 rounded-xl p-3 ${isDark ? 'bg-[#0b0f16]' : 'bg-slate-50'}`}>
-        <RithmicPairingPanel isDark={isDark} notice={trading.authFailed ? `Mac toto zařízení odmítl: ${trading.authFailed}` : null} onChanged={() => setLinkVersion((version) => version + 1)} />
+        <RithmicPairingPanel isDark={isDark} notice={trading.authFailed ? `Mac toto zařízení odmítl: ${trading.authFailed}. Máš-li otevřenou pozici, zavři ji v platformě propky nebo na Macu.` : null} onChanged={() => setLinkVersion((version) => version + 1)} />
         <button type="button" onClick={onLeave} className={`mx-auto rounded-lg border px-3 py-2 text-[12px] font-bold opacity-80 ${isDark ? 'border-white/20 text-slate-300' : 'border-slate-300 text-slate-700'}`}>Zpět na Live Dashboard</button>
       </div>
     );
@@ -240,7 +246,8 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
         position: trading.position,
         onLeave,
         // Účet jen pro čtení: žádný most příkazů — graf a účet jen k nahlédnutí.
-        trade: trading.readOnly ? null : trade,
+        // Zařízení „jen zavírání": most zůstává (ochrana, zavření), ale nový vstup se nenabízí jako možný.
+        trade: viewOnly || !trade ? null : deviceScope === 'close' ? { ...trade, blockedReason: trade.blockedReason ?? 'Toto zařízení smí jen zavřít pozici a přidat ochranu.' } : trade,
         copyEvents: trading.events,
         copierArmed: false,
         fills: trading.liveFills.fills,
