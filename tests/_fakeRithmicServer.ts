@@ -37,6 +37,8 @@ export interface FakeRithmicOptions {
   password?: string;
   tickSize?: number;
   exitPrice?: () => number;
+  /** Čas zpráv o příkazech v sekundách (výchozí pevná hodnota kvůli opakovatelným testům). */
+  nowSeconds?: () => number;
 }
 
 export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
@@ -165,7 +167,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
       bracket_type: order.bracketType,
       total_fill_size: order.filled,
       total_unfilled_size: order.quantity - order.filled,
-      ssboe: 1_800_000_000,
+      ssboe: options.nowSeconds?.() ?? 1_800_000_000,
       usecs: 0,
     };
     if (snapshotTo) {
@@ -185,7 +187,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   function rithmicFields(order: FakeOrder): RithmicFields {
     return {
       account_id: order.accountId, basket_id: order.basketId, user_tag: order.userTag, symbol: order.symbol, exchange: order.exchange,
-      quantity: order.quantity, price: order.price, transaction_type: order.side, price_type: order.priceType, ssboe: 1_800_000_000, usecs: 0,
+      quantity: order.quantity, price: order.price, transaction_type: order.side, price_type: order.priceType, ssboe: options.nowSeconds?.() ?? 1_800_000_000, usecs: 0,
     };
   }
 

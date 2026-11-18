@@ -24,7 +24,7 @@ function executable(order: FakeOrder, mark: number) {
 }
 export async function attachSimulation(http: Server, port: number) {
   let price = priceAt(Date.now());
-  const market = createFakeRithmicServer({ accounts: ['LOCAL-SIM'], exitPrice: () => price });
+  const market = createFakeRithmicServer({ accounts: ['LOCAL-SIM'], exitPrice: () => price, nowSeconds: () => Math.floor(Date.now() / 1000) });
   let entries: RithmicAccountRegistryEntry[] = [];
   let revision = 0;
   const registry = new RithmicAccountRegistry({
