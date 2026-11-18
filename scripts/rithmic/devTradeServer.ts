@@ -238,6 +238,15 @@ async function main(): Promise<void> {
   // Ceny: zvláštní spojení na ticker (adaptér ho nepoužívá). Jen pro zobrazení.
   const candles = new RithmicCandleBuilder();
   let tickCount = 0;
+  // Měření (jen čísla do výpisu, nic neřídí): zpoždění ceny burza → Mac a odezva spárovaných zařízení.
+  const quantiles = (values: number[]): string => {
+    if (!values.length) return 'bez vzorků';
+    const sorted = [...values].sort((a, b) => a - b);
+    const at = (p: number) => Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]);
+    return `p50 ${at(0.5)} ms · p95 ${at(0.95)} ms · max ${Math.round(sorted[sorted.length - 1])} ms (${sorted.length} vzorků)`;
+  };
+  let exchangeLag: number[] = [];
+  let gatewayLag: number[] = [];
   let tickDirty = false;
   let lastBar: { time: number; open: number; high: number; low: number; close: number; volume: number } | null = null;
   setInterval(() => {
@@ -347,6 +356,11 @@ async function main(): Promise<void> {
       onTick: (tick) => {
         if (tick.symbol !== CONTRACT) return;
         tickCount += 1;
+        // Čas burzy a brány Rithmicu proti hodinám Macu (hodiny Macu se synchronizují přes síť; chyba v jednotkách ms).
+        if (!tick.isSnapshot && tick.kind === 'trade') {
+          if (tick.exchangeAt != null && exchangeLag.length < 20_000) exchangeLag.push(tick.receivedAt - tick.exchangeAt);
+          if (tick.gatewayAt != null && gatewayLag.length < 20_000) gatewayLag.push(tick.receivedAt - tick.gatewayAt);
+        }
         if (!candles.onTick(tick)) return;
         // Dokončená svíčka musí odejít celá: když tick otevřel novou minutu, pošle se ještě poslední stav té předchozí.
         const bar = candles.current(CONTRACT, Date.now()) as Bar | null;
@@ -560,6 +574,20 @@ async function main(): Promise<void> {
   interface ClientAccess { scope: DeviceScope; local: boolean; label: string; deviceId?: string }
   const serveClient = (socket: WebSocket, access: ClientAccess): void => {
     clients.add(socket);
+    if (!access.local) {
+      // Odezva zařízení: služba pošle WebSocket ping, telefon odpoví sám (na úrovni protokolu — appka o tom neví).
+      // Čas tam a zpět; jedna cesta je zhruba polovina. Jen do výpisu.
+      let sentAt = 0;
+      let samples: number[] = [];
+      socket.on('pong', () => { if (sentAt) { samples.push(performance.now() - sentAt); sentAt = 0; } });
+      const pinger = setInterval(() => { if (socket.readyState === WebSocket.OPEN && !sentAt) { sentAt = performance.now(); try { socket.ping(); } catch { sentAt = 0; } } }, 1_000);
+      const reporter = setInterval(() => {
+        console.log(`[měření] ${access.label}: odezva tam a zpět ${quantiles(samples)}${sentAt && performance.now() - sentAt > 3_000 ? ' · POSLEDNÍ PING BEZ ODPOVĚDI' : ''}`);
+        samples = [];
+      }, 20_000);
+      socket.on('close', () => { clearInterval(pinger); clearInterval(reporter); console.log(`[zařízení] ${access.label} odpojeno`); });
+      console.log(`[zařízení] ${access.label} připojeno`);
+    }
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
@@ -639,6 +667,11 @@ async function main(): Promise<void> {
   }
   const activeDevice = (id: string) => gateway.active(id);
   setInterval(() => console.log(`[ceny] ticků ${tickCount}, poslední cena ${displayPrice(Date.now())}`), 15_000).unref();
+  setInterval(() => {
+    if (exchangeLag.length || gatewayLag.length) console.log(`[měření] cena burza → Mac: ${quantiles(exchangeLag)} · brána Rithmicu → Mac: ${quantiles(gatewayLag)}`);
+    exchangeLag = [];
+    gatewayLag = [];
+  }, 60_000).unref();
   console.log(`Aplikace u Rithmicu: "${APP_NAME}" · systém "${SYSTEM}"${READ_ONLY ? ' · JEN PRO ČTENÍ (příkazy vypnuté)' : ''}`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
