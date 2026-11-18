@@ -32,7 +32,7 @@ Přihlášení do appky (Supabase) zůstává, jak je; ke spárování se zatím
 | Rozsah zařízení | Smí |
 |---|---|
 | `full` | vše, co dovolí režim služby (na skutečném účtu jen s místně vydaným souhlasem) |
-| `close` | zavřít pozici, zrušit příkaz, spravovat SL/TP |
+| `close` | zavřít pozici (celou nebo část) a PŘIDAT ochranu — posun a rušení ne (posunem jde čekající vstup přitáhnout k trhu nebo SL oddálit, rušením odstranit SL) |
 | `read` | jen číst |
 
 - **Potvrzení incidentu jde jen na Macu**, z telefonu nikdy (uvolňuje blokaci, rezervace i nejistotu najednou).
@@ -81,11 +81,27 @@ Přihlášení do appky (Supabase) zůstává, jak je; ke spárování se zatím
    Zatím se služba pouští ručně.
 6. **Deník z Rithmicu:** služba obchody ukazuje, ale neukládá; poplatky a víc účtů neřeší.
 
+## Oponentura (critic, 18. 11.) — verdikt „blokuje nasazení na skutečný účet", opraveno v `31d3ce2f`
+
+Obejití ověření nenašel. Opraveno: odvolání platí hned i při selhání zápisu; rozsah `close` už neumí posun ani
+rušení; zamčená Klíčenka a potíž na straně služby jsou přechodné (žádná výzva k novému spárování); volitelná
+kontrola identity Tailscale (`--tailscale-login`); nejvýš dvě spojení na zařízení; telefon nenabízí, co mu rozsah
+zakazuje; atomický zámek instance. Konečnou verzi oponent znovu neprocházel.
+
+Zůstává otevřené:
+- kdokoli v síti Tailscale může port zahltit neověřenými spojeními (telefon se pak nepřipojí) — `--tailscale-login`
+  to zužuje na Filipův účet; **neověřeno**, že Tailscale Serve podvrženou hlavičku `Tailscale-User-Login` zahazuje;
+- adresa `*.ts.net` neznamená „Filipova síť" (cizí služba přes Funnel): překlep = spárování s cizí službou a klam,
+  ne příkazy na účet. Připíchnutí přípony sítě po prvním spárování postavené není;
+- `serveClient` ve spouštěči nemá vlastní test (pravidla jsou v simulaci zkopírovaná ručně);
+- logika zámku instance a okna přihlášení je uvnitř `main()` bez testů;
+- chování na skutečném iPhonu (časovače po zamčení, Origin, mobilní data).
+
 ## Co je potřeba od Filipa
 
 - Tailscale zapnutý na Macu i v iPhonu pod stejným účtem; v síti Tailscale povolené HTTPS (certifikáty).
 - Na Macu jednou: `tailscale serve --bg --https=443 http://127.0.0.1:3313` (vystaví port pro zařízení jen do
   soukromé sítě) a zjistit jméno Macu (`tailscale status`, tvar `macbook-air.tailXXXX.ts.net`).
-- Službu pouštět s `--mobile`.
+- Službu pouštět s `--mobile --tailscale-login <e-mail účtu Tailscale>`.
 - iPhone připojený k Macu a odemčený na instalaci appky.
 - Rozhodnutí: rozsah telefonu (`full` × `close`), holý Market na skutečném účtu ano/ne, a vyjádření Lucidu.
