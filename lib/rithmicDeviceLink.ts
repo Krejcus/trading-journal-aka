@@ -83,7 +83,16 @@ export function readRithmicDeviceLink(storage: Pick<Storage, 'getItem'> | null =
 async function nativeVault(): Promise<RithmicKeyVault | null> {
   if (!isNativeBuild) return null;
   const { alphaTradeNativePlugin } = await import('../services/alphaTradeNativePlugin');
-  return alphaTradeNativePlugin as unknown as RithmicKeyVault;
+  // POZOR: zástupce nativního pluginu (Capacitor) se NESMÍ vracet z async funkce přímo. Na dotaz po jakékoli
+  // vlastnosti vrací funkci — i na `then` — takže by ho `await` vzal za příslib a zavolal nativní metodu „then",
+  // která neexistuje: uložení klíče pak nikdy nedoběhne (18. 11. 2026 na iPhonu: spárováno na Macu, klíč v telefonu
+  // nikde). Proto obyčejný objekt se třemi metodami.
+  const plugin = alphaTradeNativePlugin as unknown as RithmicKeyVault;
+  return {
+    secureGet: (options) => plugin.secureGet(options),
+    secureSet: (options) => plugin.secureSet(options),
+    secureRemove: (options) => plugin.secureRemove(options),
+  };
 }
 
 /** Úložiště prohlížeče smí klíč držet JEN při vývoji (zkušební stránka); produkční web nikdy. */

@@ -36,6 +36,20 @@ describe('spárování zařízení: adresa služby', () => {
   });
 });
 
+describe('spárování zařízení: nativní Klíčenka', () => {
+  it('zástupce nativního pluginu se nevrací z async funkce přímo (vypadal by jako příslib a uložení by nedoběhlo)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const source = readFileSync(new URL('../lib/rithmicDeviceLink.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/return alphaTradeNativePlugin\b/);
+    expect(source).toMatch(/secureSet: \(options\) => plugin\.secureSet\(options\),/);
+    // Stejná past v malém: objekt, který na `then` vrací funkci, `await` nikdy nedokončí hodnotou.
+    const proxy = new Proxy({}, { get: () => () => new Promise(() => undefined) });
+    const wrapped = { secureGet: (options: { key: string }) => (proxy as { secureGet: (o: { key: string }) => unknown }).secureGet(options) };
+    expect(await Promise.race([Promise.resolve(wrapped).then(() => 'hodnota'), new Promise((resolve) => setTimeout(() => resolve('visí'), 30))])).toBe('hodnota');
+    expect(await Promise.race([(async () => proxy)().then(() => 'hodnota'), new Promise((resolve) => setTimeout(() => resolve('visí'), 30))])).toBe('visí');
+  });
+});
+
 describe('spárování zařízení: průběh', () => {
   it('pošle kód a název, klíč uloží JEN do Klíčenky a do běžného úložiště dá jen netajné údaje', async () => {
     const vault = memoryVault();
