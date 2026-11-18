@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
+import { attemptPairing, deviceForKey, parseDeviceRegistry, revokeDevice, scopeProblem, startPairing, touchDevice, type DeviceRegistryState, type DeviceScope, type PendingPairing } from '../../services/rithmic/devicePairing';
 import { RMS_LIMITS_MAX_AGE_MS, RMS_LOGINS_PER_HOUR_CAP, RMS_QUERY_WEEKLY_CAP, rmsLimitsReadDue, rmsLoginAllowed, spendRmsQuery } from '../../services/rithmic/rmsQueryBudget';
 import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -59,6 +60,10 @@ const arg = (name: string, fallback: string): string => {
 const requestedContract = arg('contract', 'ESZ6').toUpperCase();
 const PORT = Number(arg('port', '3311'));
 const QA_PORT = arg('qa-port', '4185');
+/** Port pro spárovaná zařízení (telefon přes Tailscale Serve). Bez `--mobile` se neotevírá. */
+const MOBILE_PORT: number | null = process.argv.includes('--mobile') ? Number(arg('mobile-port', '3313')) : null;
+/** Původ stránky v nativní appce (Capacitor) a v prohlížeči přes Tailscale; skutečné ověření je klíč zařízení. */
+const MOBILE_ORIGINS = new Set(['capacitor://localhost', ...(process.env.RITHMIC_DEV_ORIGINS ?? '').split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean)]);
 // Další povolené adresy stránky (např. https://<mac>.<tailnet>.ts.net přes Tailscale Serve):
 // RITHMIC_DEV_ORIGINS=https://a.ts.net,https://b.ts.net. Proces dál poslouchá jen na 127.0.0.1.
 const ALLOWED_ORIGINS = new Set([
@@ -106,6 +111,20 @@ async function main(): Promise<void> {
   if (SYSTEM !== 'Rithmic Test' && !/^rprotocol(-[a-z0-9]+)?\.rithmic\.com$/.test(GATEWAY)) throw new Error(`Neznámá brána ${GATEWAY}`);
   // Název aplikace včetně předpony, kterou Rithmic přidělil pro conformance (mail 17. 11. 2026: „fikr:").
   const creds = { ...credentials(), systemName: SYSTEM, appName: APP_NAME, appVersion: '0.1.0' };
+  // Jediná instance na systém a uživatele — a to DŘÍV než první přihlášení k Rithmicu. Druhá instance (omylem, nebo
+  // správce procesů ve smyčce) by jinak utratila přihlášení a dotaz na účty dřív, než zjistí obsazený port.
+  const stateDir = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic');
+  const instanceKey = Buffer.from(JSON.stringify([SYSTEM, creds.user])).toString('base64url');
+  const lockFile = join(stateDir, `service-${instanceKey}.lock`);
+  mkdirSync(stateDir, { recursive: true });
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+  let heldBy: number | null = null;
+  try { const pid = Number(readFileSync(lockFile, 'utf8').trim()); heldBy = Number.isInteger(pid) && pid > 0 ? pid : null; } catch { heldBy = null; }
+  if (heldBy !== null && heldBy !== process.pid && alive(heldBy)) {
+    throw new Error(`služba pro ${SYSTEM} už běží (proces ${heldBy}) — druhou nespouštím. Když neběží, smaž ${lockFile}`);
+  }
+  writeFileSync(lockFile, String(process.pid), { mode: 0o600 });
+  process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
   let startConsent: LiveTradingConsent | null = null;
   if (LIVE_TRADING) {
     // Obchodování na skutečném účtu spouští jen člověk u terminálu: po přihlášení opíše větu s číslem účtu.
@@ -177,10 +196,18 @@ async function main(): Promise<void> {
     return true;
   };
   // Každé přihlášení k příkazům posílá dotaz na seznam účtů: hodinový strop proti kmitajícímu spojení + týdenní rozpočet.
+  // Hodinové okno je TRVALÉ: restart služby (i opakovaný, ve smyčce) ho nenuluje.
+  const loginWindowFile = join(dirname(budgetFile), `login-window-${instanceKey}.json`);
   let recentLogins: number[] = [];
+  try {
+    const stored: unknown = JSON.parse(readFileSync(loginWindowFile, 'utf8'));
+    // Nečitelný záznam = jako by bylo okno plné (neznámý počet přihlášení → nepřihlašovat naslepo).
+    recentLogins = Array.isArray(stored) && stored.every((at) => Number.isFinite(at)) ? stored as number[] : Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now());
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') recentLogins = Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now()); }
   const loginAllowed = (): boolean => {
     const hourly = rmsLoginAllowed(recentLogins, Date.now());
     recentLogins = hourly.recent;
+    try { writeFileSync(`${loginWindowFile}.tmp`, JSON.stringify(recentLogins), { mode: 0o600 }); renameSync(`${loginWindowFile}.tmp`, loginWindowFile); } catch { return false; }
     if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
     return spendBudget();
   };
@@ -515,8 +542,15 @@ async function main(): Promise<void> {
     verifyClient: ({ origin, req }: { origin?: string; req: { url?: string } }) =>
       Boolean(origin && ALLOWED_ORIGINS.has(origin)) && tokenOk(new globalThis.URL(req.url ?? '/', 'http://x').searchParams.get('token')),
   });
-  server.on('connection', (socket) => {
+  /**
+   * Kdo je na druhém konci: tento Mac (klíč ze souboru, vše včetně správy zařízení), nebo spárované zařízení
+   * (telefon) se svým rozsahem. Rozsah je jen PRVNÍ síto — každý příkaz dál ověřuje služba.
+   */
+  interface ClientAccess { scope: DeviceScope; local: boolean; label: string; deviceId?: string }
+  const deviceSockets = new Map<WebSocket, string>();
+  const serveClient = (socket: WebSocket, access: ClientAccess): void => {
     clients.add(socket);
+    if (access.deviceId) deviceSockets.set(socket, access.deviceId);
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
     const now = Date.now();
@@ -531,7 +565,7 @@ async function main(): Promise<void> {
       const at = Date.now();
       hello([...history, ...liveBars(at, history[history.length - 1].time)], at);
     })();
-    socket.on('close', () => clients.delete(socket));
+    socket.on('close', () => { clients.delete(socket); deviceSockets.delete(socket); });
     socket.on('message', (raw) => {
       void (async () => {
         const receivedAt = performance.now();
@@ -553,6 +587,18 @@ async function main(): Promise<void> {
             send(socket, { type: 'reply', id, ok: true, result });
             return;
           }
+          // Správa zařízení: jen z tohoto Macu (nikdy ze spárovaného zařízení) a nikam k brokerovi.
+          if (rawCommand.op === 'pair-start' || rawCommand.op === 'devices' || rawCommand.op === 'revoke-device') {
+            if (!access.local) throw new Error('správa zařízení jde jen z Macu, kde služba běží');
+            send(socket, { type: 'reply', id, ok: true, result: manageDevices(rawCommand) });
+            return;
+          }
+          // Odvolané zařízení: i příkaz, který už byl na cestě, se zastaví tady.
+          if (access.deviceId && !activeDevice(access.deviceId)) { socket.close(4003, 'device revoked'); throw new Error('zařízení bylo odvoláno'); }
+          const denied = scopeProblem(access.scope, rawCommand.op);
+          if (denied) throw new Error(denied);
+          // Potvrzení incidentu uvolňuje blokaci, rezervace i nejistotu noh najednou → jen u Macu, ne z telefonu.
+          if (rawCommand.op === 'ack' && !access.local) throw new Error('incident jde potvrdit jen na Macu, kde služba běží — z telefonu jde pozici zavřít');
           if (READ_ONLY) throw new Error('účet je připojený jen pro čtení — příkazy jsou vypnuté');
           const result = await exec!.execute(message.command);
           send(socket, { type: 'reply', id, ...result, serverMs: Math.round(performance.now() - receivedAt) });
@@ -561,14 +607,97 @@ async function main(): Promise<void> {
         }
       })();
     });
+  };
+  server.on('connection', (socket) => serveClient(socket, { scope: 'full', local: true, label: 'tento Mac' }));
+
+  // ── Spárovaná zařízení (telefon) ────────────────────────────────────────────────────────────────────────────
+  // Vlastní port JEN pro spárovaná zařízení: sem míří Tailscale Serve. Klíč ze souboru (PC) tu neplatí, takže
+  // vystavením tohoto portu se neotevře cesta pro kohokoli, kdo by znal starý sdílený klíč. Poslouchá dál jen
+  // na 127.0.0.1 — do sítě ho pouští až Tailscale (šifrovaně, jen zařízením ve Filipově síti).
+  const devicesFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'devices.json');
+  let registryState: DeviceRegistryState = { devices: [] };
+  let registryBroken: string | null = null;
+  try { registryState = parseDeviceRegistry(JSON.parse(readFileSync(devicesFile, 'utf8'))); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') registryBroken = error instanceof Error ? error.message : String(error); }
+  const saveRegistry = (next: DeviceRegistryState): void => {
+    mkdirSync(dirname(devicesFile), { recursive: true });
+    writeFileSync(`${devicesFile}.tmp`, JSON.stringify(next), { mode: 0o600 });
+    renameSync(`${devicesFile}.tmp`, devicesFile);
+    registryState = next;
+  };
+  const activeDevice = (id: string) => registryState.devices.find((device) => device.id === id && device.revokedAt === null) ?? null;
+  let pendingPairing: PendingPairing | null = null;
+  function manageDevices(command: Record<string, unknown>): unknown {
+    if (registryBroken) throw new Error(`seznam zařízení nejde přečíst (${registryBroken}) — oprav nebo smaž ${devicesFile}`);
+    if (MOBILE_PORT === null) throw new Error('služba běží bez portu pro zařízení — spusť ji s --mobile');
+    const publicList = () => registryState.devices.map(({ keyHash: _hidden, ...device }) => ({ ...device, online: [...deviceSockets.values()].includes(device.id) }));
+    if (command.op === 'pair-start') {
+      const scope = command.scope === 'close' || command.scope === 'read' ? command.scope : 'full';
+      pendingPairing = startPairing(Date.now(), (size) => randomBytes(size), scope);
+      console.log(`[zařízení] vydán párovací kód (rozsah ${scope}), platí do ${new Date(pendingPairing.expiresAt).toTimeString().slice(0, 8)}`);
+      return { code: pendingPairing.code, expiresAt: pendingPairing.expiresAt, scope };
+    }
+    if (command.op === 'revoke-device') {
+      const id = typeof command.deviceId === 'string' ? command.deviceId : '';
+      if (!activeDevice(id)) throw new Error('takové aktivní zařízení neznám');
+      saveRegistry(revokeDevice(registryState, id, Date.now()));
+      // Otevřená spojení odvolaného zařízení končí hned.
+      for (const [socket, deviceId] of deviceSockets) if (deviceId === id) socket.close(4003, 'device revoked');
+      console.log(`[zařízení] odvoláno ${id}`);
+    }
+    return { devices: publicList() };
+  }
+  let unauthenticated = 0;
+  const mobileServer = MOBILE_PORT === null ? null : new WebSocketServer({
+    host: '127.0.0.1', port: MOBILE_PORT, maxPayload: 16 * 1024,
+    // Origin tu není pojistka (nativní klient si ho nastaví sám) — jen se odmítá prohlížečová stránka odjinud.
+    // Skutečné ověření je klíč zařízení v první zprávě. Neověřených spojení smí být naráz jen pár.
+    verifyClient: ({ origin }: { origin?: string }) => unauthenticated < 4 && (origin === undefined || MOBILE_ORIGINS.has(origin)),
+  });
+  mobileServer?.on('connection', (socket) => {
+    unauthenticated += 1;
+    let settled = false;
+    const settle = (): void => { if (!settled) { settled = true; unauthenticated -= 1; } };
+    // Do ověření neodchází NIC (ani účet, ani cena). Kdo se do 5 s neprokáže, je odpojen.
+    const timer = setTimeout(() => socket.close(4001, 'auth timeout'), 5_000);
+    socket.on('close', () => { clearTimeout(timer); settle(); });
+    socket.once('message', (raw) => {
+      clearTimeout(timer);
+      let hello: { auth?: unknown; pair?: { code?: unknown; name?: unknown } } = {};
+      try { hello = JSON.parse(String(raw)) as typeof hello; } catch { /* neplatná zpráva = odmítnout níže */ }
+      if (registryBroken) { send(socket, { type: 'auth', ok: false, error: 'služba nemá čitelný seznam zařízení' }); socket.close(4002, 'registry'); return; }
+      if (hello.pair && typeof hello.pair.code === 'string' && typeof hello.pair.name === 'string') {
+        const attempt = attemptPairing({ pending: pendingPairing, state: registryState, code: hello.pair.code, name: hello.pair.name, now: Date.now(), randomBytes: (size) => randomBytes(size) });
+        pendingPairing = attempt.pending;
+        if (attempt.ok) {
+          saveRegistry(attempt.state);
+          console.log(`[zařízení] spárováno „${attempt.device.name}" (${attempt.device.id}, rozsah ${attempt.device.scope})`);
+          send(socket, { type: 'paired', ok: true, deviceId: attempt.device.id, key: attempt.key, scope: attempt.device.scope, name: attempt.device.name });
+        } else {
+          const text: Record<string, string> = { 'no-pairing': 'na Macu není vydaný párovací kód', expired: 'kód vypršel — vydej na Macu nový', 'too-fast': 'příliš rychle po sobě — zkus to za chvilku', 'wrong-code': 'kód nesouhlasí', locked: 'příliš mnoho špatných pokusů — vydej na Macu nový kód', 'bad-name': 'název zařízení není platný', 'too-many-devices': 'je spárováno příliš mnoho zařízení — některé na Macu odvolej' };
+          console.log(`[zařízení] párování odmítnuto: ${attempt.reason}`);
+          send(socket, { type: 'paired', ok: false, error: text[attempt.reason] ?? 'párování se nepovedlo' });
+        }
+        socket.close(1000, 'pairing done');
+        return;
+      }
+      const device = deviceForKey(registryState, typeof hello.auth === 'string' ? hello.auth : null);
+      if (!device) { send(socket, { type: 'auth', ok: false, error: 'zařízení není spárované nebo bylo odvoláno' }); socket.close(4003, 'unknown device'); return; }
+      settle();
+      try { saveRegistry(touchDevice(registryState, device.id, Date.now())); } catch { /* čas posledního použití není podstatný */ }
+      send(socket, { type: 'auth', ok: true, deviceId: device.id, scope: device.scope });
+      serveClient(socket, { scope: device.scope, local: false, label: device.name, deviceId: device.id });
+    });
   });
   setInterval(() => console.log(`[ceny] ticků ${tickCount}, poslední cena ${displayPrice(Date.now())}`), 15_000).unref();
   console.log(`Aplikace u Rithmicu: "${APP_NAME}" · systém "${SYSTEM}"${READ_ONLY ? ' · JEN PRO ČTENÍ (příkazy vypnuté)' : ''}`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
+  if (MOBILE_PORT !== null) console.log(`Zařízení (telefon): ws://127.0.0.1:${MOBILE_PORT} — ven jen přes Tailscale Serve; spárováno ${registryState.devices.filter((device) => device.revokedAt === null).length}${registryBroken ? ` · SEZNAM ZAŘÍZENÍ NEJDE PŘEČÍST: ${registryBroken}` : ''}`);
   const stop = (): void => {
     console.log('Končím (příkazy u Rithmicu zůstávají, jak jsou).');
     server.close();
+    mobileServer?.close();
     broker.stop();
     ticker.close();
     setTimeout(() => process.exit(0), 200);
