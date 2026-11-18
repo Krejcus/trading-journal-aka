@@ -281,7 +281,9 @@ describe('hook místního procesu', () => {
   });
 
   it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {
-    expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working'\);/);
+    expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working' && !isOwnExit\(order\)\);/);
+    // Jediná výjimka: vlastní výstupní Market částečného zavření (značka ui-red-), jen zobrazení.
+    expect(hook).toMatch(/const isOwnExit = \(order: \{ tag\?: string; orderType\?: string \}\): boolean => order\.orderType === 'Market' && order\.tag\?\.startsWith\('ui-red-'\) === true;/);
     expect(hook).toMatch(/const view = liveWorkingOrderView\(\{/);
     expect(chart).toMatch(/workingOrders=\{trading\.workingView\}/);
   });
