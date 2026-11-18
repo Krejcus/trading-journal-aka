@@ -68,6 +68,16 @@ uprostřed pozice, souběh s R Traderem, týden rollu.
 - Příkazy jsou DENNÍ. Na konci seance (23:00 SEČ, 22:00 v létě podle USA) burza zruší čekající vstupy i SL/TP a pozice
   zůstane bez ochrany — appka na to 15 minut předem upozorní a potom ohlásí incident. Po otevření trhu ochranu zadej znovu.
 - Čekající přikoupení Limitem je zatím jen na Rithmic Test; na skutečném účtu služba přikoupí jen Marketem.
-- Nové k vyzkoušení: zavření 1 ks z pozice otevřené jedním příkazem („Zavřít 1 ks"), šipky vstupu a výstupu v grafu,
-  tažení čekajícího vstupu s víc kontrakty.
+- Nové k vyzkoušení: šipky vstupu a výstupu v grafu, tažení čekajícího vstupu s víc kontrakty.
+- VYPNUTO na skutečném účtu (zapíná jen spouštěč, zatím pouze Rithmic Test; rozhodne Filip po oponentuře):
+  - „Zavřít 1 ks" z pozice otevřené JEDNÍM příkazem s víc kusy (`entrySplit`) — služba odmítne s vysvětlením,
+    tlačítko se v grafu přesto ukáže. Zavření celé pozice a zavření kusu u pozice složené z víc vstupů funguje.
+  - výměna samotného SL nebo TP za svázaný pár u víc kusů (`multiPairSwap`). U 1 ks a při zadání SL i TP najednou funguje.
+- Otevřené nálezy oponentury (Codex, 4 kola; stav po `a11b0fba`), proč jsou ty dvě věci vypnuté:
+  - A1: když výsledek výstupního Marketu 1 ks zůstane neznámý déle než 12 s, brzda „Zavřít" už projde — pozdě
+    doručené plnění by pak mohlo pozici obrátit o 1 ks. Do 12 s brzda odmítá („zkus to za pár sekund").
+  - A3: dělení se odmítá při blokaci a po zápisu SL/TP s neznámým výsledkem — opraveno, páté kolo oponentury neproběhlo.
+  - B2: při výměně nohy za pár nejde z dat Rithmicu vyloučit pozdní dílčí plnění rušené nohy; výměna navíc nechá
+    pozici ~400 ms bez té nohy.
+  - Kompromis: během dělení je brzda až 2,5 s (čekání) + až 12 s (neznámý výstup) nedostupná.
 - Sada `scripts/rithmic/nightSuite.ts` je JEN pro Rithmic Test (proti jinému systému se nespustí).
