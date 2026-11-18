@@ -114,6 +114,15 @@ export class RithmicLocalConnection {
     closing?.close();
   }
 
+  /**
+   * Appka se vrátila do popředí: nečekat na časovač dalšího pokusu a připojit se hned. Když spojení běží, nedělá nic.
+   */
+  kick(): void {
+    if (this.stopped || this.socket) return;
+    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    this.connect();
+  }
+
   isOpen(): boolean { return this.socket?.readyState === OPEN && this.authenticated; }
 
   /** Odešle příkaz právě jednou. Bez spojení se neodešle; bez odpovědi je výsledek „unknown". */

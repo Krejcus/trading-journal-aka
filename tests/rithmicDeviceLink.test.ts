@@ -175,6 +175,25 @@ describe('spojení spárovaného zařízení: klíč první zprávou', () => {
     t.connection.stop();
   });
 
+  it('návrat do appky: po rozpadu spojení se připojí hned, nečeká na časovač; běžící spojení nechá být', async () => {
+    const t = link(async () => KEY);
+    t.connection.start();
+    t.sockets[0].onopen?.({});
+    await tick();
+    t.sockets[0].onmessage?.({ data: JSON.stringify({ type: 'auth', ok: true }) });
+    t.connection.kick();
+    expect(t.sockets).toHaveLength(1); // spojení běží → nic
+    t.sockets[0].close();
+    expect(t.sockets).toHaveLength(1); // další pokus čeká na časovač (10 ms v testu)
+    t.connection.kick();
+    expect(t.sockets).toHaveLength(2); // hned
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(t.sockets).toHaveLength(2); // časovač už druhé spojení neotevře
+    t.connection.stop();
+    t.connection.kick();
+    expect(t.sockets).toHaveLength(2); // po zastavení nic
+  });
+
   it('chybí klíč v Klíčence: nic se službě nepošle a spojení se neobnovuje', async () => {
     const t = link(async () => null);
     t.connection.start();

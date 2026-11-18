@@ -64,7 +64,8 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
     }}>
       {brake && (
         <button type="button" data-rithmic-phone-close disabled={brake.busy} onClick={brake.onTap} style={{
-          pointerEvents: 'auto', justifySelf: 'start', minHeight: 36, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 800, cursor: 'pointer',
+          // Vpravo (vedle cenové osy): vlevo nahoře je popisek grafu.
+          pointerEvents: 'auto', justifySelf: 'end', marginRight: 64, minHeight: 36, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 800, cursor: 'pointer',
           border: '1px solid #e11d48', color: brake.armed ? '#fff' : '#fb7185', background: brake.armed ? '#e11d48' : 'rgba(244,63,94,.12)', opacity: brake.busy ? 0.6 : 1,
         }}>{brake.busy ? 'Zavírám…' : brake.armed ? 'Opravdu zavřít? Klepni znovu' : 'Zavřít pozici'}</button>
       )}
@@ -85,6 +86,9 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
     </div>
   );
 }
+
+/** Jak dlouho po rozpadu spojení držet poslední známý obraz, než obrazovka ohlásí výpadek. */
+const RECONNECT_GRACE_MS = 4_000;
 
 const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl }) => {
   // Spárování se čte znovu po každé změně (nové spárování, zrušení) — jinak by obrazovka držela starou adresu.
@@ -177,10 +181,29 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   const hasPendingEntry = Boolean(state?.orders.some(order => order.symbol === symbol && order.role === 'entry' && order.status === 'working'));
   const sessionWarning = link === 'open' ? cmeSessionCloseWarning(clock, { position: hasPosition, pendingEntry: hasPendingEntry }) : null;
 
+  // Krátký výpadek spojení (návrat do appky, přepnutí sítě): pár sekund se drží poslední známý obraz — karta
+  // „odpojeno" ani „stav není znám" neprobliknou a graf s hlavičkou neposkočí. Příkazy se po tu dobu NEposílají
+  // (spojení není otevřené a služba by je nedostala); po uplynutí lhůty obrazovka řekne pravdu naplno.
+  // Jen zobrazení — stejný princip jako lhůta u stavové lišty LIVE (INV-UI-01/03).
+  const [grace, setGrace] = useState(false);
+  const hadState = useRef(false);
+  const stateKnown = state != null;
+  useEffect(() => {
+    if (stateKnown) { hadState.current = true; setGrace(false); return undefined; }
+    if (!hadState.current) return undefined;
+    setGrace(true);
+    const timer = window.setTimeout(() => { hadState.current = false; setGrace(false); }, RECONNECT_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [stateKnown]);
+  const lastPosition = useRef(trading.position);
+  if (trading.position && trading.position.issueKind !== 'unknown') lastPosition.current = trading.position;
+  const shownPosition = grace && trading.position?.issueKind === 'unknown' && lastPosition.current ? lastPosition.current : trading.position;
+  const shownLink = grace ? 'open' as const : link;
+
   const cards = useMemo(() => rithmicPhoneCards({
-    link, helloFresh: trading.helloFresh, rithmicConnected: Boolean(state?.connected), silent: trading.silent, readOnly: trading.readOnly, blocked,
+    link: shownLink, helloFresh: trading.helloFresh || grace, rithmicConnected: Boolean(state?.connected) || grace, silent: trading.silent && !grace, readOnly: trading.readOnly, blocked,
     uncertain: trading.uncertain, closeNote, ackNote, rejection: rejection ? { at: rejection.at, reason: rejection.reason } : null, sessionWarning, foreignOrders: trading.workingOrders,
-  }), [link, trading.helloFresh, state?.connected, trading.silent, trading.readOnly, blocked, trading.uncertain, closeNote, ackNote, rejection?.at, rejection?.reason, sessionWarning, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [shownLink, grace, trading.helloFresh, state?.connected, trading.silent, trading.readOnly, blocked, trading.uncertain, closeNote, ackNote, rejection?.at, rejection?.reason, sessionWarning, trading.workingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
   const onCardAction = useCallback((card: RithmicPhoneCard) => {
     if (card.action?.kind === 'ack') void confirmIncident();
     else if (card.action?.kind === 'verified') dismissUncertain();
@@ -190,7 +213,10 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
 
   // Brzda se nabízí při otevřeném spojení se službou — i při incidentu, stojící ceně nebo mlčící službě — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Účet jen pro čtení ji nemá.
-  const offerBrake = link === 'open' && !viewOnly && (trading.mayHaveExposure || trading.uncertain.length > 0);
+  // Během lhůty po výpadku se nabídka zavření řídí posledním známým stavem (neznámý stav by ji jinak na pár
+  // sekund ukázal i na účtu bez pozice a zase schoval).
+  const exposureShown = grace ? lastPosition.current?.summary != null : trading.mayHaveExposure;
+  const offerBrake = (link === 'open' || grace) && !viewOnly && (exposureShown || trading.uncertain.length > 0);
   const brake = useMemo(() => (offerBrake ? { armed: closeArmedAt != null, busy: closeBusy, onTap: tapClose } : null), [offerBrake, closeArmedAt, closeBusy, tapClose]);
 
   // Most příkazů: účet jen pro čtení ho nemá (graf jen zobrazuje). „Zavřít" z lišty grafu = stejná brzda služby.
@@ -240,10 +266,19 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   return (
     <>
       {phoneChart({
-        header: group => <div ref={headerRef} data-rithmic-phone-header>{header({ group, account })}{status(false)}</div>,
+        // Stavové karty a brzda PLAVOU pod hlavičkou nad grafem (nulová výška v toku): když se karta objeví nebo zmizí
+        // (výpadek spojení po návratu do appky), graf pod ní neposkočí.
+        header: group => (
+          <div ref={headerRef} data-rithmic-phone-header style={{ position: 'relative' }}>
+            {header({ group, account })}
+            <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 44, pointerEvents: 'none' }}>
+              <div style={{ pointerEvents: 'auto' }}>{status(false)}</div>
+            </div>
+          </div>
+        ),
         overlay: <>{overlay}{!headerShown && status(true)}</>,
         market,
-        position: trading.position,
+        position: shownPosition,
         onLeave,
         // Účet jen pro čtení: žádný most příkazů — graf a účet jen k nahlédnutí.
         // Zařízení „jen zavírání": most zůstává (ochrana, zavření), ale nový vstup se nenabízí jako možný.

@@ -467,16 +467,20 @@ describe('Rithmic graf na telefonu', () => {
     expect(wrapper).not.toContain('commandLockRef');
     expect(wrapper).not.toContain('tvPriceStore');
     expect(wrapper).toMatch(/workingOrders: trading\.workingView,/);
-    expect(wrapper).toMatch(/market,\n\s+position: trading\.position,/);
+    expect(wrapper).toMatch(/market,\n\s+position: shownPosition,/);
   });
 
   it('obal: zavření pozice je dosažitelné i při incidentu, mlčící službě a schované hlavičce; incident jde potvrdit', () => {
     // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
-    expect(wrapper).toMatch(/const offerBrake = link === 'open' && !viewOnly && \(trading\.mayHaveExposure \|\| trading\.uncertain\.length > 0\);/);
+    expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\);/);
+    // Krátký výpadek (návrat do appky): poslední známý obraz se drží jen pár sekund, pak obrazovka hlásí pravdu.
+    expect(wrapper).toMatch(/const RECONNECT_GRACE_MS = 4_000;/);
+    expect(wrapper).toMatch(/window\.setTimeout\(\(\) => \{ hadState\.current = false; setGrace\(false\); \}, RECONNECT_GRACE_MS\);/);
     expect(wrapper).toMatch(/closeNow: runClose,/);
     expect(wrapper).toMatch(/const result = await closeNow\(\);/);
     // Karty a brzda: v hlavičce, a když je hlavička schovaná, nad grafem; i v prázdném stavu.
-    expect(wrapper).toMatch(/\{header\(\{ group, account \}\)\}\{status\(false\)\}/);
+    // Pod hlavičkou PLAVOU (nulová výška v toku), aby graf při výpadku spojení neposkočil.
+    expect(wrapper).toMatch(/\{header\(\{ group, account \}\)\}\n\s+<div style=\{\{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 44, pointerEvents: 'none' \}\}>/);
     expect(wrapper).toMatch(/overlay: <>\{overlay\}\{!headerShown && status\(true\)\}<\/>/);
     expect(wrapper.slice(wrapper.indexOf('data-rithmic-phone-empty'))).toContain('{status(false)}');
     expect(wrapper).toMatch(/if \(card\.action\?\.kind === 'ack'\) void confirmIncident\(\);/);

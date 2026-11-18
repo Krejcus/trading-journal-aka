@@ -2,6 +2,7 @@
 // LiveTradingScreen: spojení, stav, cena a svíčky, karty obchodů a příkazy.
 // Stav v prohlížeči slouží JEN k zobrazení — každý příkaz ověřuje místní proces (LocalExec).
 // Žádné opakování: příkaz bez odpovědi končí „unknown" a nikdy se neposílá znovu.
+import { mergeSeedCandles } from '../lib/rithmicCandleSeed';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LiveTradingCopyEvent, LiveTradingMarketData } from '../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
@@ -173,6 +174,7 @@ export function rithmicTradeEvents(before: Seen, now: Seen, context: { symbol: s
 }
 
 export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }: RithmicLocalTradingOptions) {
+  const candleScopeRef = useRef<string | null>(null);
   const authRef = useRef(auth);
   authRef.current = auth;
   /** Služba zařízení odmítla (nespárované / odvolané) — obrazovka nabídne nové spárování. */
@@ -342,7 +344,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             const bars = info.bars.map(candle);
             // Graf potřebuje aspoň jednu svíčku; testovací trh často stojí.
             if (!bars.length && typeof info.price === 'number') bars.push({ time: Math.floor(Date.now() / 60_000) * 60, open: info.price, high: info.price, low: info.price, close: info.price, volume: 0 });
-            setCandles(bars);
+            // Stejný zdroj → spojit se stávajícími svíčkami (po návratu do appky graf nepřeskočí); jiný → nahradit.
+            const sameSource = candleScopeRef.current === scope;
+            candleScopeRef.current = scope;
+            setCandles((current) => mergeSeedCandles(current, bars, sameSource));
             if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
           } else if (message.type === 'tick') {
             const bar = message.bar ? candle(message.bar as Bar) : null;
@@ -380,9 +385,15 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     });
     connectionRef.current = connection;
     connection.start();
+    // Návrat do appky (telefon): iOS spojení na pozadí uspí a zavře. Nečekat na časovač dalšího pokusu — připojit hned.
+    const wake = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') connection.kick(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake);
+    if (typeof window !== 'undefined') { window.addEventListener('pageshow', wake); window.addEventListener('online', wake); }
     return () => {
       connectionRef.current = null;
       connection.stop();
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
+      if (typeof window !== 'undefined') { window.removeEventListener('pageshow', wake); window.removeEventListener('online', wake); }
     };
   }, [url, enabled, feedBox, flushUiTick]);
 
