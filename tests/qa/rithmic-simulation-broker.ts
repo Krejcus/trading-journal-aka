@@ -7,6 +7,8 @@ import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
 import { memoryProtectionStore } from '../../services/rithmic/rithmicProtection';
 import { LocalExec } from '../../services/rithmic/localExec';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
+import { createDeviceGateway, type DeviceStore } from '../../services/rithmic/deviceGateway';
+import { scopeProblem, type DeviceRegistryState, type DeviceScope } from '../../services/rithmic/devicePairing';
 
 const symbol = 'MNQZ6';
 const path = '/local-simulation';
@@ -58,7 +60,8 @@ export async function attachSimulation(http: Server, port: number) {
   const send = (client: WebSocket, data: unknown) => {
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(data));
   };
-  const broadcast = (message: unknown) => { for (const client of ws.clients) send(client, message); };
+  const served = new Set<WebSocket>();
+  const broadcast = (message: unknown) => { for (const client of served) send(client, message); };
   http.on('upgrade', (req, socket, head) => {
     if (![path, path + '?drop=1', path + '?drop=cancel'].includes(req.url ?? '')) return;
     if (req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) { socket.destroy(); return; }
@@ -72,8 +75,25 @@ export async function attachSimulation(http: Server, port: number) {
   const now = Date.now();
   for (let at = Math.floor(now / minute) * minute - 360 * minute; at < now; at += 10_000) record(at);
   record(now);
+  // Brána pro spárovaná zařízení jako ve skutečné službě (stejný modul), na vlastním portu vedle stránky:
+  // tak jde v prohlížeči vyzkoušet párování kódem, přihlášení klíčem i rozsah oprávnění — bez brokera.
+  let devices: DeviceRegistryState = { devices: [] };
+  const deviceStore: DeviceStore = { load: () => devices, save: (next) => { devices = structuredClone(next); } };
+  const devicePort = port + 1;
+  const gateway = createDeviceGateway<WebSocket>({
+    store: deviceStore, origins: new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, 'capacitor://localhost']),
+    serve: (client, device) => serve(client, { scope: device.scope, local: false, dropOp: null }),
+    log: (text) => console.log(`[simulace · zařízení] ${text}`),
+  });
+  const deviceServer = new WebSocketServer({ host: '127.0.0.1', port: devicePort, maxPayload: 16 * 1024, verifyClient: (info: { origin?: string }) => gateway.verify(info.origin) });
+  deviceServer.on('connection', (client) => gateway.accept(client));
   ws.on('connection', (client, request) => {
-    let dropOp = request.url === path + '?drop=1' ? 'entry' : request.url === path + '?drop=cancel' ? 'cancel' : null;
+    serve(client, { scope: 'full', local: true, dropOp: request.url === path + '?drop=1' ? 'entry' : request.url === path + '?drop=cancel' ? 'cancel' : null });
+  });
+  function serve(client: WebSocket, access: { scope: DeviceScope; local: boolean; dropOp: string | null }) {
+    let dropOp = access.dropOp;
+    served.add(client);
+    client.on('close', () => served.delete(client));
     const current = candles.current(symbol, Date.now());
     send(client, { type: 'hello', system: 'Rithmic Test', account: 'LOCAL-SIM', limits, readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
     send(client, { type: 'state', state: exec.state() });
@@ -86,12 +106,26 @@ export async function attachSimulation(http: Server, port: number) {
         send(client, { type: 'reply', id: message.id, ok: true, result });
         return;
       }
+      // Stejná pravidla jako skutečná služba: správa zařízení jen místně, rozsah zařízení, incident jen z Macu.
+      try {
+        if (['pair-start', 'devices', 'revoke-device'].includes(message.command.op)) {
+          if (!access.local) throw new Error('správa zařízení jde jen z Macu, kde služba běží');
+          send(client, { type: 'reply', id: message.id, ok: true, result: gateway.manage(message.command) });
+          return;
+        }
+        const denied = scopeProblem(access.scope, message.command.op);
+        if (denied) throw new Error(denied);
+        if (message.command.op === 'ack' && !access.local) throw new Error('incident jde potvrdit jen na Macu, kde služba běží — z telefonu jde pozici zavřít');
+      } catch (error) {
+        send(client, { type: 'reply', id: message.id, ok: false, sent: false, error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
       const reply = await exec.execute(message.command);
       if (dropOp === message.command.op && reply.ok) { dropOp = null; client.terminate(); return; }
       send(client, { type: 'reply', id: message.id, ...reply });
     });
     client.on('error', () => client.terminate());
-  });
+  }
   const unsubscribe = exec.subscribe(state => broadcast({ type: 'state', state }));
   const ticks = setInterval(() => {
     const at = Date.now();
@@ -103,6 +137,6 @@ export async function attachSimulation(http: Server, port: number) {
   }, 250);
   const beats = setInterval(() => broadcast({ type: 'beat', feed: true, at: Date.now() }), 1000);
   http.once('close', () => {
-    clearInterval(ticks); clearInterval(beats); unsubscribe(); exec.detach(); broker.stop(); ws.close();
+    clearInterval(ticks); clearInterval(beats); unsubscribe(); exec.detach(); broker.stop(); ws.close(); deviceServer.close();
   });
 }

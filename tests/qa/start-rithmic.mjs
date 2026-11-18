@@ -19,7 +19,7 @@ const server = await createServer({
     if (/(?:^|\/)supabase(?:\.ts)?$/.test(source)) return path.join(dir, 'rithmic-supabase.ts');
   } }, react({ exclude: [/node_modules/] }), tailwindcss()],
   server: { host: '127.0.0.1', port, strictPort: true, hmr: false, allowedHosts: ['.ts.net', 'macbook-air'], headers: {
-    'Content-Security-Policy': simulate ? `default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:${port} ws://localhost:${port}; img-src 'self' data: blob:; font-src 'self' data:` : "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:4185 ws://127.0.0.1:3311 ws://*.ts.net:8080 ws://macbook-air:8080; img-src 'self' data: blob:; font-src 'self' data:;",
+    'Content-Security-Policy': simulate ? `default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:${port} ws://localhost:${port} ws://127.0.0.1:${port + 1}; img-src 'self' data: blob:; font-src 'self' data:` : "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:4185 ws://127.0.0.1:3311 ws://*.ts.net:8080 ws://macbook-air:8080; img-src 'self' data: blob:; font-src 'self' data:;",
   } },
 });
 if (simulate) {

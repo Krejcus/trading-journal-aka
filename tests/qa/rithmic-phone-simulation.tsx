@@ -11,12 +11,15 @@ import '../../index.css';
 // Stejné přepínače výpadků jako PC simulace (?drop=1, ?drop=cancel).
 const query = ['?drop=1', '?drop=cancel'].includes(location.search) ? location.search : '';
 const note = (text: string) => { document.title = text; };
+// `?device=1`: stránka se chová jako spárované zařízení — bez předané adresy simulace, přes párování kódem
+// a přihlášení klíčem zařízení (brána pro zařízení běží na portu o jedna výš než stránka).
+const asDevice = location.search === '?device=1';
 
 createRoot(document.getElementById('root')!).render(
   <RithmicPhoneChart
     open isDark
     onLeave={() => note('Zpět na Live Dashboard (ve zkušební stránce nikam nevede)')}
-    simulationUrl={`ws://${location.host}/local-simulation${query}`}
+    {...(asDevice ? {} : { simulationUrl: `ws://${location.host}/local-simulation${query}` })}
     header={({ group, account }) => <LivePhoneHeader groupName={null} group={group} account={account}
       copier={{ label: 'Kopírka: zkušební stránka', tone: 'muted', armed: false }} onMenu={() => note('LIVE menu (ve zkušební stránce není)')} />}
     phoneChart={slots => <LivePhoneChart trades={[]} allTrades={[]} sessions={[]} isDark onUpdateTrade={() => undefined} slots={slots} onLeave={slots.onLeave} />}
