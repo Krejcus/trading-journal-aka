@@ -75,10 +75,24 @@ describe('telefon: Koupit / Prodat z lišty v pozici', () => {
     expect(draft).toEqual({ symbol: 'MNQZ6', side: 'Buy', quantity: 1, orderType: 'Market', referencePrice: 100.25, quoteReceivedAt: 1000, stopLoss: 90, takeProfit: 130 });
     expect(withScaleInIntent(draft as never, status([position()]))).toMatchObject({ position: { mode: 'add', quantity: 2 } });
   });
-  it('nikdy holý Market v pozici: bez SL/TP, opačná strana, strop i čekající přikoupení jen důvod', () => {
-    expect(livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position({ stopPrice: null })), 5)).toEqual({ error: expect.stringContaining('se SL i TP') });
+  it('pozice jen s jednou nohou, opačná strana, strop i čekající přikoupení: jen důvod, nic neodejde', () => {
+    // Jen TP bez SL: přikoupení by vytvořilo část bez stejné ochrany.
+    expect(livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position({ stopPrice: null })), 5)).toEqual({ error: expect.stringContaining('jen SL nebo jen TP') });
     expect(livePhonePillScaleIn('sell', 1, quote, liveTicketScaleIn(position()), 5)).toEqual({ error: expect.stringContaining('jen přikoupit') });
     expect(livePhonePillScaleIn('buy', 4, quote, liveTicketScaleIn(position()), 5)).toEqual({ error: expect.stringContaining('strop účtu') });
     expect(livePhonePillScaleIn('buy', 1, quote, liveTicketScaleIn(position({ canAdd: false, addBlockedReason: 'Ne teď.' })), 5)).toEqual({ error: 'Ne teď.' });
+  });
+
+  // Filip 18. 11. 2026: dokupovat lištou i do pozice bez SL/TP (Rithmic). Odejde Market BEZ SL/TP; ochrana se pak
+  // přidá na celou pozici. Jestli to jde, říká nabídka (`canAdd`) a nakonec služba.
+  it('pozice bez SL i TP: lišta přikoupí Marketem bez SL/TP; strop, opačná strana a zákaz služby platí dál', () => {
+    const bare = { side: 'buy' as const, quantity: 2, stopLoss: null, targetPrice: null, canAdd: true, reason: null, pendingAdd: null };
+    const sent = livePhonePillScaleIn('buy', 1, quote, bare, 5);
+    expect(sent).toMatchObject({ side: 'Buy', quantity: 1, orderType: 'Market' });
+    expect(sent).not.toHaveProperty('stopLoss');
+    expect(sent).not.toHaveProperty('takeProfit');
+    expect(livePhonePillScaleIn('sell', 1, quote, bare, 5)).toEqual({ error: expect.stringContaining('jen přikoupit') });
+    expect(livePhonePillScaleIn('buy', 4, quote, bare, 5)).toEqual({ error: expect.stringContaining('strop účtu') });
+    expect(livePhonePillScaleIn('buy', 1, quote, { ...bare, canAdd: false, reason: 'Pozice dosáhla limitu.' }, 5)).toEqual({ error: 'Pozice dosáhla limitu.' });
   });
 });

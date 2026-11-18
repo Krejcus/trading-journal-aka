@@ -164,7 +164,12 @@ export function livePhoneScaleInBlocked(draft: TicketDraft, quantity: number, sc
   if (scaleIn.pendingAdd) return 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.';
   // Upravené SL/TP se nikdy tiše nepřepíšou na SL/TP pozice (P1-B) — nic neodejde.
   const tick = (value: number | null) => (value == null ? null : snapToTick(value, 0.25));
-  if (scaleIn.stopLoss == null || scaleIn.targetPrice == null || tick(draft.stopLoss) !== scaleIn.stopLoss || tick(draft.takeProfit) !== scaleIn.targetPrice) {
+  // Pozice BEZ SL i TP (a bez jakéhokoli příkazu): přikoupit jde jen Marketem bez SL/TP — ochrana se pak přidá
+  // na celou zvětšenou pozici. Jestli to služba dovolí, říká `canAdd` (nabídka) a nakonec služba sama.
+  if (scaleIn.stopLoss == null && scaleIn.targetPrice == null) {
+    if (draft.stopLoss != null || draft.takeProfit != null) return 'Pozice nemá SL/TP — přikoupit jde jen bez nich; ochranu pak přidej na celou pozici.';
+    if (draft.type !== 'market') return 'Do pozice bez SL/TP jde přikoupit jen Marketem.';
+  } else if (scaleIn.stopLoss == null || scaleIn.targetPrice == null || tick(draft.stopLoss) !== scaleIn.stopLoss || tick(draft.takeProfit) !== scaleIn.targetPrice) {
     return `Přikoupení musí mít SL a TP pozice (SL ${scaleIn.stopLoss?.toFixed(2) ?? '?'}, TP ${scaleIn.targetPrice?.toFixed(2) ?? '?'}) — vrať je, nic se neodeslalo.`;
   }
   if (draft.type !== 'market' && quantity > 1) return 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.';
@@ -255,11 +260,14 @@ export function livePhonePillScaleIn(
 ): LiveEntryPreviewDraft | { error: string } {
   if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
   if (!Number.isSafeInteger(quantity) || quantity < 1) return { error: 'Neplatný počet kontraktů.' };
-  if (side === scaleIn.side && (scaleIn.stopLoss == null || scaleIn.targetPrice == null)) {
-    return { error: 'Přikoupit jde jen k pozici se SL i TP — nejdřív je nastav, nic se neodeslalo.' };
+  // Pozice jen s jednou nohou (jen SL, nebo jen TP): přikoupení by vytvořilo část bez stejné ochrany.
+  if (side === scaleIn.side && (scaleIn.stopLoss == null) !== (scaleIn.targetPrice == null)) {
+    return { error: 'Pozice má jen SL nebo jen TP — nejdřív doplň druhou nohu, nic se neodeslalo.' };
   }
   const blocked = livePhoneScaleInBlocked({ side, type: 'market', stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice } as TicketDraft, quantity, scaleIn, maxContracts);
   if (blocked) return { error: blocked };
+  // Pozice bez SL/TP: lišta přikoupí Marketem bez SL/TP (Filip 18. 11. 2026: dokupovat i bez SL/TP).
+  if (scaleIn.stopLoss == null && scaleIn.targetPrice == null) return livePhoneBareMarket(side, quantity, quote);
   return {
     symbol: quote.symbol, side: side === 'buy' ? 'Buy' : 'Sell', quantity, orderType: 'Market',
     referencePrice: side === 'buy' ? quote.ask : quote.bid, quoteReceivedAt: Math.round(quote.at),

@@ -469,6 +469,9 @@ async function main(): Promise<void> {
     entrySplit: SYSTEM === 'Rithmic Test',
     // Víc než dvě části pozice (opakované přikoupení): zatím jen na testovacím účtu — proti brokerovi neověřeno.
     ...(SYSTEM === 'Rithmic Test' ? { maxProtectedParts: 20, bareAdd: true } : {}),
+    // Skutečný účet: přikoupení bez SL/TP jen když souhlas vydaný na Macu SL NEVYŽADUJE (`--allow-no-stop`) — pak
+    // už jde i první vstup bez SL, takže přikoupení bez SL/TP nic nového nepovoluje.
+    ...(LIVE_TRADING && !CLOSE_ONLY && startConsent?.requireStop === false ? { bareAdd: true } : {}),
     systemName: SYSTEM, allowedSystems: LIVE_TRADING ? [SYSTEM] : ['Rithmic Test'],
     ...(LIVE_TRADING ? { liveTrading: {
       requireStop: startConsent?.requireStop !== false,
