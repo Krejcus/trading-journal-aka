@@ -54,4 +54,20 @@ export const RITHMIC_PROTO_EXTRA: Record<string, unknown> = {
       usecs: { rule: 'repeated', type: 'int32', id: 150101, options: { packed: false } },
     },
   },
+  /**
+   * AccountAndUserUpdate (šablona 358): Rithmic ji posílá sám na spojení k příkazům, když se změní účet nebo
+   * uživatel (stav, limity RMS…). Server ji posílal už 16. 11. 2026 (měření proveditelnosti). Tady se bere JEN jako
+   * signál „účet se změnil → přečti limity znovu", proto jsou zapsaná jen pole totožnosti, jejichž čísla jsou
+   * společná všem zprávám naší sady; ostatní pole se při čtení přeskočí. Číslo šablony a názvy dalších polí
+   * (buy_limit, sell_limit, max_limit_quantity, account_status…) jsou známé jen z knihovny rithmic-rs 3.3.0 —
+   * dokud nebudou ověřené proti oficiálnímu dev kitu, limity se z této zprávy NEČTOU.
+   */
+  AccountAndUserUpdate: {
+    fields: {
+      template_id: { rule: 'required', type: 'int32', id: 154467 },
+      fcm_id: { type: 'string', id: 154013 },
+      ib_id: { type: 'string', id: 154014 },
+      account_id: { type: 'string', id: 154008 },
+    },
+  },
 };

@@ -115,6 +115,11 @@ export interface RithmicBrokerConfig {
    * zastaví s incidentem a sám se už nepřipojí (ruční spuštění). Bez této volby se přihlášení nepočítají.
    */
   loginAllowed?: () => boolean;
+  /**
+   * Rithmic oznámil změnu účtu (šablona 358) na spojení této relace. Jen signál: volající si limity přečte znovu
+   * (se svým rozestupem a rozpočtem). Zpráva pro jiný účet, než má tato relace, se nepředává.
+   */
+  onAccountUpdate?: () => void;
   /** Kolikrát se adaptér smí sám odpojit kvůli stavu během `selfDropWindowMs` (výchozí 5 za 10 min). */
   maxSelfDrops?: number;
   selfDropWindowMs?: number;
@@ -796,6 +801,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       requestTimeoutMs: config.requestTimeoutMs,
       events: {
         onOrderUpdate: (update) => handleOrderUpdate(created, update),
+        onAccountUpdate: (update) => {
+          if (client !== created) return;
+          if (update.accountId && !created.accounts.some((account) => account.accountId === update.accountId)) return;
+          config.onAccountUpdate?.();
+        },
         onInstrumentPosition: (position) => handlePosition(created, position),
         onAccountPnl: (pnl) => handleAccountPnl(created, pnl),
         onAlive: (plant, at) => handleAlive(created, plant, at),

@@ -51,10 +51,10 @@ describe('rithmicCodec', () => {
   });
 
   it('neznámou šablonu vrátí bez názvu a nespadne', () => {
-    // pole template_id (154467, varint) = 358
-    const body = [0x98, 0xb6, 0x4b, 0xe6, 0x02];
+    // pole template_id (154467, varint) = 359
+    const body = [0x98, 0xb6, 0x4b, 0xe7, 0x02];
     const frame = new Uint8Array([0, 0, 0, body.length, ...body]);
-    expect(decodeRithmicFrames(frame)).toEqual([{ templateId: 358, name: null, fields: {} }]);
+    expect(decodeRithmicFrames(frame)).toEqual([{ templateId: 359, name: null, fields: {} }]);
   });
 
   it('odmítne poškozený rámec a pole, které zpráva nemá', () => {

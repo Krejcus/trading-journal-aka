@@ -107,6 +107,20 @@ describe('RithmicBroker — výchozí stav a spojení', () => {
     broker.stop();
   });
 
+  it('odběr změn účtu: zpráva 358 pro účet relace (nebo bez účtu) dá signál, pro cizí účet ne', async () => {
+    let signals = 0;
+    const { server, broker } = await setup({ config: { onAccountUpdate: () => { signals += 1; } } });
+    const order = server.sockets.filter((s) => s.readyState === 1 && s.infra === 2)[0];
+    const own = server.sockets.length ? [...broker.accountIds()].map((id) => broker.accountName(id))[0]! : '';
+    order.push(358, { account_id: own });
+    order.push(358, {});
+    order.push(358, { account_id: 'CIZI-UCET' });
+    await flush();
+    expect(signals).toBe(2);
+    expect(broker.isConnected()).toBe(true);
+    broker.stop();
+  });
+
   // 18. 11. 2026: Rithmic vypnul uživatele po 2000 dotazech na účty. Každé přihlášení k příkazům jeden posílá.
   it('rozpočet přihlášení: po vyčerpání se adaptér po pádu spojení sám nepřihlásí a zastaví se s incidentem', async () => {
     let logins = 0;

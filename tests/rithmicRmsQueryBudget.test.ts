@@ -55,7 +55,7 @@ describe('rozpočet dotazů na limity účtu (RMS)', () => {
     expect(RMS_QUERY_WEEKLY_CAP * 4).toBeLessThanOrEqual(2000);
   });
 
-  it('čte se poprvé hned, pak nejdřív za hodinu; neúspěch se opakuje nejdřív za 5 minut', () => {
+  it('čte se poprvé hned, bez oznámení změny pak jen pojistně za 6 hodin; neúspěch se opakuje nejdřív za 5 minut', () => {
     expect(rmsLimitsReadDue({ now: T0, lastAttemptAt: null, lastOk: false, epochChanged: true })).toBe(true);
     expect(rmsLimitsReadDue({ now: T0 + 5_000, lastAttemptAt: T0, lastOk: true, epochChanged: false })).toBe(false);
     expect(rmsLimitsReadDue({ now: T0 + RMS_LIMITS_REFRESH_MS - 1, lastAttemptAt: T0, lastOk: true, epochChanged: false })).toBe(false);
@@ -64,18 +64,33 @@ describe('rozpočet dotazů na limity účtu (RMS)', () => {
     expect(rmsLimitsReadDue({ now: T0 + RMS_LIMITS_RETRY_MS, lastAttemptAt: T0, lastOk: false, epochChanged: false })).toBe(true);
   });
 
+  it('oznámení změny účtu od Rithmicu (šablona 358) spustí nové čtení — série oznámení nejvýš jedno za minutu', () => {
+    // Oznámení starší než poslední čtení nic nespustí.
+    expect(rmsLimitsReadDue({ now: T0 + 10 * 60_000, lastAttemptAt: T0, lastOk: true, epochChanged: false, signalAt: T0 - 1 })).toBe(false);
+    // Oznámení po posledním čtení: číst, jakmile od čtení uplynula minuta.
+    expect(rmsLimitsReadDue({ now: T0 + 20_000, lastAttemptAt: T0, lastOk: true, epochChanged: false, signalAt: T0 + 10_000 })).toBe(false);
+    expect(rmsLimitsReadDue({ now: T0 + RMS_LIMITS_RECONNECT_MIN_MS, lastAttemptAt: T0, lastOk: true, epochChanged: false, signalAt: T0 + 10_000 })).toBe(true);
+    // Oznámení každou sekundu po celou hodinu = nejvýš 60 čtení (a týdenní strop to zastaví dřív).
+    let at: number | null = T0;
+    let sent = 0;
+    for (let now = T0; now < T0 + 3_600_000; now += 1_000) {
+      if (rmsLimitsReadDue({ now, lastAttemptAt: at, lastOk: true, epochChanged: false, signalAt: now })) { sent += 1; at = now; }
+    }
+    expect(sent).toBeLessThanOrEqual(60);
+  });
+
   it('nové přihlášení čte brzy, ale kmitající spojení nejvýš jednou za minutu', () => {
     expect(rmsLimitsReadDue({ now: T0 + 2_000, lastAttemptAt: T0, lastOk: true, epochChanged: true })).toBe(false);
     expect(rmsLimitsReadDue({ now: T0 + RMS_LIMITS_RECONNECT_MIN_MS, lastAttemptAt: T0, lastOk: true, epochChanged: true })).toBe(true);
   });
 
-  it('za den běhu bez výpadku odejde nejvýš 25 dotazů (dřív 17 280)', () => {
+  it('za den běhu bez výpadku a bez změn účtu odejde nejvýš 5 dotazů (dřív 17 280)', () => {
     let at: number | null = null;
     let sent = 0;
     for (let now = T0; now < T0 + 86_400_000; now += 15_000) {
       if (rmsLimitsReadDue({ now, lastAttemptAt: at, lastOk: true, epochChanged: false })) { sent += 1; at = now; }
     }
-    expect(sent).toBeLessThanOrEqual(25);
+    expect(sent).toBeLessThanOrEqual(5);
   });
 
   it('limity platí déle než rozestup čtení, takže mezi čteními nezestárnou', () => {
@@ -85,7 +100,9 @@ describe('rozpočet dotazů na limity účtu (RMS)', () => {
   it('spouštěč: žádné čtení limitů ve smyčce, pokus se počítá před dotazem a strop je trvalý', () => {
     const server = readFileSync(new URL('../scripts/rithmic/devTradeServer.ts', import.meta.url), 'utf8');
     expect(server).not.toMatch(/setInterval\(\(\) => void refreshLimits\(\), 5_000\)/);
-    expect(server).toMatch(/if \(!rmsLimitsReadDue\(\{ now: Date\.now\(\), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch \}\)\) return;/);
+    expect(server).toMatch(/if \(!rmsLimitsReadDue\(\{ now: Date\.now\(\), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch, signalAt: accountSignalAt \}\)\) return;/);
+    // Odběr změn účtu je napojený: oznámení od Rithmicu jen nastaví příznak, dotaz hlídá rozestup a rozpočet.
+    expect(server).toMatch(/onAccountUpdate: \(\) => \{ accountSignalAt = Date\.now\(\);/);
     // Pořadí: rozestup → zápis pokusu → rozpočet → teprve pak dotaz na Rithmic.
     const due = server.indexOf('if (!rmsLimitsReadDue(');
     const mark = server.indexOf('limitsAttemptAt = Date.now();');

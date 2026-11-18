@@ -154,6 +154,8 @@ async function main(): Promise<void> {
   // Odkaz na službu se doplní hned po vytvoření adaptéru; incidenty do té doby nevznikají.
   let exec: LocalExec | null = null;
   let budgetWarned = false;
+  let accountSignalAt: number | null = null;
+  let accountSignals = 0;
   // Mimo worktree: služba spuštěná z jiného checkoutu musí počítat do TÉHOŽ rozpočtu.
   const budgetFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'rms-query-budget-' + Buffer.from(JSON.stringify([SYSTEM, creds.user])).toString('base64url') + '.json');
   /** Zapíše jeden dotaz do trvalého rozpočtu; false = strop vyčerpán nebo stav nejde uložit (pak se nečte). */
@@ -184,6 +186,8 @@ async function main(): Promise<void> {
   };
   const broker = createRithmicBroker({
     loginAllowed,
+    // Odběr změn účtu: Rithmic sám pošle zprávu, když se účet změní → limity se přečtou znovu (ne dotazováním v čase).
+    onAccountUpdate: () => { accountSignalAt = Date.now(); accountSignals += 1; console.log(`[účet] Rithmic oznámil změnu účtu (${accountSignals}×) — limity přečtu znovu`); },
     url: URL, credentials: creds, socketFactory, registry,
     // Každý systém má vlastní záznam ochrany (záznamy z testu nesmí platit pro skutečný účet a naopak).
     protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
@@ -385,7 +389,7 @@ async function main(): Promise<void> {
   async function refreshLimits() {
     if (loadingLimits || !broker.isConnected()) return;
     const epochNow = broker.routeEpoch?.(broker.accountIds()[0]);
-    if (!rmsLimitsReadDue({ now: Date.now(), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch })) return;
+    if (!rmsLimitsReadDue({ now: Date.now(), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch, signalAt: accountSignalAt })) return;
     const account = broker.accountIds()[0];
     const product = typeof ref?.raw.product_code === 'string' ? ref.raw.product_code : CONTRACT.match(/^([A-Z0-9]+)[FGHJKMNQUVXZ]\d{1,2}$/)?.[1];
     if (account === undefined || !product) return;
@@ -459,7 +463,7 @@ async function main(): Promise<void> {
     // A stalled RMS refresh can expire even while the market feed remains active.
     publishLimits();
   }, 1_000).unref();
-  // Jen kontrola, ZDA je čas číst (rozestupy a strop hlídá refreshLimits) — samotný dotaz odejde nejvýš jednou za hodinu.
+  // Jen kontrola, ZDA je čas číst (rozestupy a strop hlídá refreshLimits) — samotný dotaz odejde po přihlášení, po oznámení změny účtu od Rithmicu a jinak jen jako pojistka jednou za 6 hodin.
   setInterval(() => void refreshLimits(), 15_000).unref();
   if (!READ_ONLY && !LIVE_TRADING && broker.environment !== 'demo') throw new Error('Adaptér není v demo prostředí — končím');
   if (LIVE_TRADING) {

@@ -7,7 +7,8 @@
  * (2000 × 5 s ≈ 2 h 47 min od spuštění).
  *
  * Pravidla:
- *  - limity se čtou po (znovu)připojení a pak nejvýš jednou za `RMS_LIMITS_REFRESH_MS`;
+ *  - limity se čtou po (znovu)připojení a pak, když Rithmic sám oznámí změnu účtu (šablona 358 — odběr změn místo
+ *    dotazování, doporučení podpory Rithmicu 18. 11. 2026); pojistné čtení bez signálu jen jednou za `RMS_LIMITS_REFRESH_MS`;
  *  - neúspěšné čtení se opakuje nejdřív za `retryMs` (žádná rychlá smyčka);
  *  - počítadlo je TRVALÉ (přežije restart služby) a drží se po kalendářních týdnech UTC — Rithmic svůj čítač
  *    nuluje jen při plánovaném restartu, jehož čas neznáme, proto je týdenní strop hluboko pod 2000;
@@ -26,11 +27,11 @@ export interface RmsQueryBudgetState { week: string; count: number }
 export const RMS_QUERY_WEEKLY_CAP = 400;
 /** Nejvýš tolik přihlášení k příkazům za hodinu (kmitající spojení); pak se adaptér zastaví. */
 export const RMS_LOGINS_PER_HOUR_CAP = 20;
-export const RMS_LIMITS_REFRESH_MS = 60 * 60_000;
+export const RMS_LIMITS_REFRESH_MS = 6 * 60 * 60_000;
 export const RMS_LIMITS_RETRY_MS = 5 * 60_000;
 export const RMS_LIMITS_RECONNECT_MIN_MS = 60_000;
 /** Jak dlouho smí služba pracovat s naposledy přečtenými limity (pak vstupy odmítá, dokud je nepřečte znovu). */
-export const RMS_LIMITS_MAX_AGE_MS = 90 * 60_000;
+export const RMS_LIMITS_MAX_AGE_MS = 7 * 60 * 60_000;
 
 /** Týden UTC začínající pondělím, jako `YYYY-MM-DD` jeho pondělí. */
 export function rmsBudgetWeek(now: number): string {
@@ -58,9 +59,11 @@ export function spendRmsQuery(stored: unknown, now: number, cap: number = RMS_QU
 }
 
 /** Je čas číst limity? `lastAttemptAt` = poslední pokus (úspěšný i ne), `lastOk` = jak dopadl. */
-export function rmsLimitsReadDue(input: { now: number; lastAttemptAt: number | null; lastOk: boolean; epochChanged: boolean }): boolean {
+export function rmsLimitsReadDue(input: { now: number; lastAttemptAt: number | null; lastOk: boolean; epochChanged: boolean; signalAt?: number | null }): boolean {
   if (input.lastAttemptAt === null) return true;
   const since = input.now - input.lastAttemptAt;
+  // Rithmic oznámil změnu účtu po posledním čtení: číst znovu, ale série oznámení nejvýš jedno čtení za minutu.
+  if (input.signalAt != null && input.signalAt > input.lastAttemptAt && since >= RMS_LIMITS_RECONNECT_MIN_MS) return true;
   // Nové přihlášení čte brzy (jinak by po krátkém výpadku stály vstupy), ale kmitající spojení nejvýš jednou za minutu;
   // čtení i samotná přihlášení pak zastaví týdenní strop.
   if (input.epochChanged) return since >= RMS_LIMITS_RECONNECT_MIN_MS;

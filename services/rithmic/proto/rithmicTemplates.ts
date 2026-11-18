@@ -89,6 +89,8 @@ export const RITHMIC_TEMPLATES: Readonly<Record<number, string>> = {
   351: 'RithmicOrderNotification',
   352: 'ExchangeOrderNotification',
   353: 'BracketUpdates',
+  // 358: doplněk mimo knihovnu async_rithmic — viz rithmicProtoExtra.ts.
+  358: 'AccountAndUserUpdate',
   400: 'RequestPnLPositionUpdates',
   401: 'ResponsePnLPositionUpdates',
   402: 'RequestPnLPositionSnapshot',

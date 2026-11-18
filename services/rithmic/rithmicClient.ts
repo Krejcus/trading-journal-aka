@@ -162,6 +162,11 @@ export interface RithmicClientEvents {
   onAccountPnl?: (pnl: RithmicAccountPnl) => void;
   onPlantClosed?: (plant: RithmicPlantName, info: RithmicCloseInfo) => void;
   onUnknownTemplate?: (plant: RithmicPlantName, templateId: number) => void;
+  /**
+   * Rithmic oznámil změnu účtu nebo uživatele (šablona 358). `accountId` je prázdné, když zpráva účet nenese.
+   * Jen signál — obsah (limity, stav) se z ní nečte; kdo ho potřebuje, přečte si RMS.
+   */
+  onAccountUpdate?: (update: { accountId: string; receivedAt: number }) => void;
   /** Zpráva, kterou klient zahodil, protože jí nejde věřit (cizí identita účtu apod.). */
   onAttention?: (message: string) => void;
   /** Důkaz živého spojení daného plantu. */
@@ -731,6 +736,9 @@ export class RithmicClient {
       case 352:
         if (!this.trustedAccount(f, 'notifikace příkazu')) return;
         events.onOrderUpdate?.(orderUpdate('exchange', message, receivedAt));
+        return;
+      case 358:
+        events.onAccountUpdate?.({ accountId: str(f.account_id), receivedAt });
         return;
       case 353:
         if (!this.trustedAccount(f, 'změna bracketu')) return;
