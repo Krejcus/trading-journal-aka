@@ -490,7 +490,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
     const open = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
     // Holá pozice bez jakéhokoli příkazu: přikoupit jde jen bez SL/TP (ochrana se pak přidá na celou pozici).
-    const bare = state?.bareAdd === true && !stopOrder && !targetOrder && legView.stops.length === 0 && legView.targets.length === 0 && !orders.some((order) => order.status === 'working');
+    // Vlastní tržní vstup na cestě (rychlé klepání na lištu) nabídku neruší — službě nevadí.
+    const bare = state?.bareAdd === true && !stopOrder && !targetOrder && legView.stops.length === 0 && legView.targets.length === 0
+      && !orders.some((order) => order.status === 'working' && !(order.role === 'entry' && order.orderType === 'Market'));
     if (bare) {
       const reason = quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.' : null;
       return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: null, targetPrice: null, canAdd: reason === null, reason, pendingAdd: null };

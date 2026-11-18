@@ -219,7 +219,7 @@ export class LocalExec {
   private connected = false;
   private blocked: string | null = null;
   /** Množství vstupů, které odešly (nebo právě odcházejí) a kniha je ještě nezná: značka → kontrakt a kusy. */
-  private readonly reserved = new Map<string, { symbol: string; quantity: number }>();
+  private readonly reserved = new Map<string, { symbol: string; quantity: number; bareMarket?: boolean }>();
   /** Vyplnění vlastních vstupů, která zpráva o pozici ještě nepotvrdila (pořadí událostí). */
   private fillsAhead: Array<{ symbol: string; quantity: number; at: number }> = [];
   private seq = 0;
@@ -789,10 +789,12 @@ export class LocalExec {
    * vyplnění nesrovnává — každá část má vlastní ochranu na své množství. Zvlášť (vypínač `bareAdd`): pozice bez
    * jakékoli ochrany a příkazu jde zvětšit Marketem bez SL/TP.
    */
-  private scaleInProblem(accountId: number, symbol: string, side: OrderSide, stopPrice: number | undefined, targetPrice: number | undefined, ownTag: string | null, orderType: string = 'Market'): string | null {
+  private scaleInProblem(accountId: number, symbol: string, side: OrderSide, stopPrice: number | undefined, targetPrice: number | undefined, ownTag: string | null, orderType: string = 'Market', bareRun = false): string | null {
     const net = this.positions.get(symbol)?.netQuantity ?? 0;
     if (net === 0) return 'pozice se mezitím zavřela — přikoupení neodesílám';
     if ((side === 'Buy') !== (net > 0)) return 'vstup proti otevřené pozici nejde — pozici zavři';
+    // Rychlá řada tržních vstupů bez SL/TP (viz `onlyBareMarkets`): nečeká se na usazení pozice ani na předchozí příkaz.
+    if (bareRun) return this.onlyBareMarkets(symbol, ownTag) ? null : 'na kontraktu mezitím přibyl jiný příkaz — přikoupení neodesílám';
     if ([...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag !== ownTag)) return 'na cestě je jiný příkaz tohoto kontraktu — přikoupení teď nejde';
     this.fillsAhead = this.fillsAhead.filter((fill) => this.now() - fill.at < 5_000);
     if (this.fillsAhead.some((fill) => fill.symbol === symbol)) return 'pozice se právě mění (čerstvé vyplnění) — přikup za okamžik';
@@ -854,6 +856,23 @@ export class LocalExec {
       return `přikoupení musí mít SL a TP pozice (SL ${[...stopAt].join(' / ')}, TP ${[...targetAt].join(' / ')})`;
     }
     return null;
+  }
+
+  /**
+   * Je na kontraktu jen řada vlastních tržních vstupů bez SL/TP (nebo vůbec nic)? Žádná ochrana, žádný čekající
+   * Limit/Stop, žádný cizí příkaz, žádná výměna ochrany na cestě. Jen tehdy smí další takový vstup odejít hned.
+   */
+  private onlyBareMarkets(symbol: string, ownTag: string | null = null): boolean {
+    if (this.legsMoving.has(symbol) || this.legsUncertain.has(symbol)) return false;
+    for (const order of this.orders.values()) {
+      if (order.symbol !== symbol || TERMINAL.has(order.status)) continue;
+      if (order.orderType !== 'Market' || !order.tag?.startsWith('ui-') || order.tag.startsWith(ADD_TAG) || order.tag.startsWith('ui-red-')) return false;
+    }
+    for (const [tag, item] of this.reserved) {
+      if (item.symbol !== symbol || tag === ownTag) continue;
+      if (item.bareMarket !== true) return false;
+    }
+    return true;
   }
 
   /** Strop částí pozice s vlastní ochranou (viz `maxProtectedParts`). */
@@ -1046,12 +1065,18 @@ export class LocalExec {
           // a znovu těsně před zápisem (adaptér mezitím čeká na uložení záměru).
           // Jeden vlastní vstup najednou: při čekajícím nebo právě odesílaném vstupu další nejde (jinak by se
           // čekající vstup později vyplnil do cizí pozice, nebo po jejím zavření otevřel nezamýšlený obchod).
-          if (waiting + onTheWay > 0) return refuse('čeká jiný vstup — další jde až po jeho vyplnění nebo zrušení');
+          // Výjimka — rychlé vstupy Marketem BEZ SL/TP za sebou (lišta, Filip 18. 11. 2026): když na kontraktu není
+          // nic jiného než takové tržní příkazy (žádná ochrana, žádný čekající vstup), další smí odejít hned, i když
+          // předchozí ještě není vyplněný nebo se pozice teprve hlásí. Tržní příkaz nečeká a nemá ochranu, kterou by
+          // šlo rozhodit; stropy (pozice, RMS) výše počítají i příkazy na cestě.
+          const bareRun = this.config.bareAdd === true && orderType === 'Market' && stopPrice === undefined && targetPrice === undefined
+            && this.onlyBareMarkets(symbol);
+          if (waiting + onTheWay > 0 && !bareRun) return refuse('čeká jiný vstup — další jde až po jeho vyplnění nebo zrušení');
           // Přikoupení = jakákoli existující nebo právě vznikající expozice (i vyplnění, které pozice ještě nehlásí).
           const adding = net !== 0;
           if (adding) {
             if (orderType === 'Stop') return refuse('přikoupení jde Marketem nebo Limitem');
-            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null, orderType);
+            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null, orderType, bareRun);
             if (problem) return refuse(problem);
           }
           // Čekající přikoupení musí nést značku vazby na pozici (a nic jiného ji nést nesmí) — podle ní se po zavření
@@ -1065,7 +1090,7 @@ export class LocalExec {
           if (this.replaceDryRun !== null) return { ok: true, result: { dryRun: true } };
           this.seenClientIds.add(clientId);
           // Rezervace PŘED prvním čekáním; drží i při neznámém výsledku, padá jen když zápis prokazatelně neodešel.
-          this.reserved.set(tag, { symbol, quantity });
+          this.reserved.set(tag, { symbol, quantity, bareMarket: orderType === 'Market' && stopPrice === undefined && targetPrice === undefined });
           const release = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
             if (error instanceof BrokerRequestNotSentError) this.reserved.delete(tag);
             throw error;
@@ -1094,7 +1119,7 @@ export class LocalExec {
             // zůstaly pracovat bez pozice a v další seanci by mohly otevřít nový obchod (oponentura 17. 11.).
             ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
             guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
-              ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag, orderType) : null),
+              ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag, orderType, bareRun) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
