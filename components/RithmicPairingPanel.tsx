@@ -35,7 +35,7 @@ const RithmicPairingPanel: React.FC<{
     setError(null);
     const result = await pairRithmicDevice({ endpoint: host, code, name });
     setBusy(false);
-    if (!result.ok) { setError(result.error); return; }
+    if ('error' in result) { setError(result.error); return; }
     try { window.localStorage.setItem(LAST_HOST_KEY, host.trim()); } catch { /* jen pohodlí */ }
     setCode('');
     setLink(result.link);
