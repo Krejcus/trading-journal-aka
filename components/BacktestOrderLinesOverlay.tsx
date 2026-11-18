@@ -231,7 +231,9 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
     return () => window.removeEventListener('pointerdown', clear, true);
   }, [selectToDrag, selectedId]);
   useEffect(() => {
-    if (selectedId && !lines.some(line => line.id === selectedId && line.draggable)) setSelectedId(null);
+    // Výběr zmizí jen se zmizelou čárou. Čára, která je jen na chvíli netáhnutelná (posun právě odešel a čeká na
+    // potvrzení), výběr drží — další posun pak jde hned, bez nového klepnutí (Filip 18. 11. 2026).
+    if (selectedId && !lines.some(line => line.id === selectedId)) setSelectedId(null);
   }, [lines, selectedId]);
   // Čáry živé pozice: první klik odesílá, jen dvojklik a právě změněná nabídka se spolknou.
   const liveClickRef = useRef(LIVE_LINE_CLICK_INITIAL);

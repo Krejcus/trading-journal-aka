@@ -178,7 +178,8 @@ export function LivePhoneOrderLines({
   /** Pozice z přikoupení: nejochrannější SL od workeru — „co jsem viděl“ pro × při rozjetých SL. */
   closeExpect?: number | null;
   isDark: boolean;
-  onNotice: (text: string) => void;
+  /** `ok` = potvrzení úspěchu; karta události (vlevo dole) ho už ukazuje, takže se nehlásí podruhé. */
+  onNotice: (text: string, ok?: boolean) => void;
   /** U5: pracující příkazy jen pro zobrazení (`livePhoneWorkingView`) — netáhnou se, nemají ×. */
   extraLines?: readonly BacktestChartOrderLine[];
   /** U2: čáry návrhu (`livePhoneDraftLines`); tah / × / + SL jen volají `onDraft*`. */
@@ -258,7 +259,7 @@ export function LivePhoneOrderLines({
             : action === 'close-position' ? 'Leader zavřen; kopírka zavírá kopie.' : 'Posunuto u leadera; kopírka posune kopie.')
         : result.status === 'blocked' ? `Neodesláno: ${result.blockers.map(issue => issue.text).join(' ')}`
           : result.status === 'rejected' ? result.reason ?? 'Broker změnu odmítl.'
-            : result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.');
+            : result.reason ?? 'Výsledek neznámý — zkontroluj leadera v Tradovate.', !groupToken && result.status === 'acknowledged');
     } catch (reason) {
       setPendingMove(null);
       // Typ/kód chyby, nikdy text (`lib/liveCommandErrors.ts`).
@@ -275,7 +276,7 @@ export function LivePhoneOrderLines({
       busyRef, send: () => bareLeg(intent), intent, groupLimitStateHash, busyText: LIVE_MANAGE_BUSY_TEXT,
       report: notice => {
         if (intent.kind === 'move') setPendingMove(current => (notice.tone === 'ok' && current ? { ...current, until: Date.now() + 5_000 } : null));
-        onNotice(notice.text);
+        onNotice(notice.text, notice.tone === 'ok');
       },
     });
   }, [bareLeg, busyRef, groupLimitStateHash, onNotice, setPendingMove]);

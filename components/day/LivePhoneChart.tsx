@@ -254,11 +254,19 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   // Zámek je JEDEN pro celý graf i desk (oponentura UI C7/C8 kolo 1): vstup, attach, × / BE / posun
   // z čar, list správy, Zavřít holé pozice i „Zrušit čekající“; s deskem (`trade.commandLockRef`)
   // ho sdílí i Dashboard „Zrušit“. Flatten jím nikdy neprochází (INV-UI-02).
+  // Karta vlevo dole se zakládá níž (`card`); sem jen odkaz, aby `say` šlo volat odkudkoli.
+  const sayCardRef = useRef<(text: string, ok: boolean) => void>(() => undefined);
+  const sayCard = (text: string, ok: boolean) => sayCardRef.current(text, ok);
   const ownLineState = useLivePhoneLineState();
   const lineState = trade?.commandLockRef ? { ...ownLineState, busyRef: trade.commandLockRef } : ownLineState;
   const busyRef = lineState.busyRef;
   const [busy, setBusy] = useState(false);
-  const say = (text: string) => setNotice({ key: Date.now(), text });
+  // Oznámení jen vlevo dole (Filip 18. 11. 2026: ne nahoře a vlevo dole zároveň). Potvrzení úspěchu (`ok`) se
+  // neukazuje vůbec — kartu vlevo dole dá událost od brokera (vyplněno, SL posunut…), druhá by ji jen zdvojila.
+  const say = (text: string, ok = false) => {
+    if (ok && slots.copyEvents) return;
+    sayCard(text, ok);
+  };
   const send = async (draft: LiveEntryPreviewDraft | { error: string }) => {
     if ('error' in draft) { say(draft.error); return; }
     if (!trade) return;
@@ -267,7 +275,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     setBusy(true);
     try {
       const result = await trade.place(draft, livePhoneOperationId());
-      say(livePhonePlacedText(result));
+      say(livePhonePlacedText(result), result.status === 'acknowledged');
     } catch (error) {
       say(`Neodesláno / neznámé: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'} — nic neopakuj, zkontroluj pozici.`);
     } finally {
@@ -393,7 +401,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     trade: () => barTradeRef.current,
     busyRef: lineState.busyRef,
     setPendingMove: lineState.setPendingMove,
-    say: text => setNotice({ key: Date.now(), text }),
+    say: text => sayCard(text, false),
   }), [lineState.busyRef, lineState.setPendingMove]);
   // C8: „Zavřít“ holé pozice = deskový closeBare TÝMŽ zámkem čar; odejde jen nabídka s klíčem,
   // který uživatel potvrdil (akce + entryOperationId). Neaktivní nabídka = jen důvod, nic neodejde.
@@ -401,7 +409,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     close: () => barTradeRef.current?.closeBare,
     busyRef: lineState.busyRef,
     setPendingMove: lineState.setPendingMove,
-    report: notice => setNotice({ key: Date.now(), text: notice.text }),
+    report: notice => { if (!(notice.tone === 'ok' && slots.copyEvents)) sayCard(notice.text, notice.tone === 'ok'); },
   }), [lineState.busyRef, lineState.setPendingMove]);
   // C7: čip schová jen to, co lišta pozice ruší cíleně (`manage` + tentýž jediný vstup);
   // jinak by „Zrušit“ lišty spustilo Flatten a cílené C7 by na grafu chybělo.
@@ -459,6 +467,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     const at = Date.now();
     setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms, ...extra }]);
   }, []);
+  sayCardRef.current = (text: string, ok: boolean) => card(ok ? 'green' : 'amber', ok ? 'OK' : 'Pozor', text, '', 5_000);
   // Upozornění na cenu: přihlášený = server (sdílené s PC, hlídá Mac worker z IBKR), jinak jen zařízení.
   const alertStore = usePriceAlertStore();
   const alertState = useSyncExternalStore(alertStore.subscribe, alertStore.getState, alertStore.getState);
@@ -671,14 +680,14 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         </>,
         onPositionOrder: (drawing, { lastPrice, replay }) => {
           if (replay) { say(REPLAY_NO_TRADE); return; }
-          if (lastPrice == null) { setNotice({ key: Date.now(), text: 'Cena trhu zatím není — objednávku nejde připravit.' }); return; }
+          if (lastPrice == null) { sayCard('Cena trhu zatím není — objednávku nejde připravit.', false); return; }
           try {
             const { draft, quantity } = draftFromPositionBox(drawing, LIVE_PHONE_INSTRUMENT, freshQuote() ?? quoteOf(lastPrice));
             // V pozici na stejnou stranu = přikoupení: list viditelně převezme SL/TP pozice.
             // SL/TP z boxu — výchozí šablona se nepoužije.
             openOrder(livePhoneScaleInDraft({ ...draft, sizing: 'qty', quantity: Math.max(1, quantity) }, trade?.scaleIn), false);
           } catch (error) {
-            setNotice({ key: Date.now(), text: error instanceof Error ? error.message : 'Position box nejde převést na objednávku.' });
+            sayCard(error instanceof Error ? error.message : 'Position box nejde převést na objednávku.', false);
           }
         },
         // Ovládací čáry v každém okně grafu (U3): štítky pozice, BE, ×, tah SL/TP, návrh (U2),
