@@ -1305,6 +1305,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
               onAddBracket={orderLineSource.onOrderLineAddBracket}
               onAction={orderLineSource?.onOrderLineAction}
               onClickSwallowed={liveOrderEntry && orderLineSource === liveOrderEntry ? liveOrderEntry.onOrderLineSwallowed : undefined}
+              holdMoveMs={liveOrderEntry && orderLineSource === liveOrderEntry ? 2500 : 0}
             />
           ) : null}
           {chartApi && liveDisplayOrders && (liveDisplayOrders.lines.length > 0 || liveDisplayOrders.badges.length > 0) ? (

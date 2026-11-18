@@ -78,7 +78,7 @@ describe('LIVE → Graf: živá pozice ve štítcích jako návrh', () => {
     const [entry, stop, target] = lines;
     expect(entry).toMatchObject({ draggable: false, cancellable: false, label: expect.stringMatching(/^SHORT 4  28975\.50 · \+\$12\.00/) });
     expect(entry.actions).toEqual([expect.objectContaining({ id: 'break-even', disabled: false })]);
-    expect(stop).toMatchObject({ draggable: true, dragDeadZonePx: 4, price: 28984.25, label: expect.stringMatching(/^SL  −\$70\.00 · 8\.75 b/) });
+    expect(stop).toMatchObject({ draggable: true, dragDeadZonePx: 4, price: 28984.25, label: expect.stringMatching(/^SL \d+  −\$70\.00 · 8\.75 b/) });
     expect(target).toMatchObject({ draggable: true, price: 28958 });
     // Nespravovatelný obchod (např. pohled followera): jen zobrazení.
     const readOnly = livePositionChartLines(summary(), { ...controls, manageable: false });

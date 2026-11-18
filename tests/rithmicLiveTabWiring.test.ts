@@ -280,6 +280,17 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/historyFromApp: trading\.system !== null && trading\.system !== 'Rithmic Test'/);
   });
 
+  it('puštěná čára drží novou cenu jen v živém grafu, tlumeně a nejvýš po lhůtu (jen zobrazení)', () => {
+    const overlay = readFileSync(new URL('../components/BacktestOrderLinesOverlay.tsx', import.meta.url), 'utf8');
+    const workspace = readFileSync(new URL('../components/AlphaTradeChartWorkspace.tsx', import.meta.url), 'utf8');
+    expect(workspace).toMatch(/holdMoveMs=\{liveOrderEntry && orderLineSource === liveOrderEntry \? 2500 : 0\}/);
+    expect(overlay).toMatch(/holdMoveMs = 0 \}\) => \{/);
+    expect(overlay).toMatch(/if \(holdMoveMs > 0 && dragging\.lastPrice !== line\.price\) setHeldMove\(/);
+    // Drží jen dokud čára stojí na původní ceně (nebo už na puštěné) — jiná cena od brokera podržení ruší.
+    expect(overlay).toMatch(/heldLine\.price === heldMove\.from \|\| heldConfirmed/);
+    expect(overlay).toMatch(/Math\.max\(0, heldMove\.until - Date\.now\(\)\)/);
+  });
+
   it('příkazy zadané jinde se kreslí jen pro zobrazení (ne jako vstup ani nohy této appky)', () => {
     expect(hook).toMatch(/const foreign = orders\.filter\(\(order\) => order\.role === 'other' && order\.status === 'working' && !hideOwnExit\(order, state\.blocked\)\);/);
     // Visící výstup se skrývat nesmí: jen krátce a jen dokud služba není zablokovaná.

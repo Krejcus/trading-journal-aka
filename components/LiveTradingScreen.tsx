@@ -1137,7 +1137,18 @@ const LiveTradingScreen: React.FC<Props> = ({
           // U3-PC pojistka: během přehrávání v grafu se panel neotevře (nic se z něj neodešle).
           disabled={chartReplay}
           title={chartReplay ? (solo ? REPLAY_TICKET_TEXT_SOLO : REPLAY_TICKET_TEXT) : undefined}
-          onClick={() => setTicketOpen(open => !open)}
+          onClick={() => {
+            // Otevření panelu bez pozice a bez návrhu rovnou předvybere Koupit (Limit 10 b pod trhem), aby šel hned
+            // zvolit Market / Limit / Stop. Je to jen návrh — odešle ho až tlačítko panelu.
+            if (!ticketOpen && !draft && !summary && quote) {
+              const next = newDraft('buy', 'limit', quote.ask - 10);
+              if (next) {
+                liveReleaseTicketFocus(typeof document === 'undefined' ? null : document);
+                setDraft(next); setFromBox(false); sourceBoxAcknowledgementRef.current = null;
+              }
+            }
+            setTicketOpen(open => !open);
+          }}
           className={`ml-1 flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-extrabold disabled:cursor-not-allowed disabled:opacity-45 ${ticketOpen
             ? isDark ? 'bg-white/10 text-white' : 'bg-slate-900/[0.06] text-slate-900'
             : 'bg-gradient-to-b from-blue-500 to-blue-600 text-white shadow-[0_6px_16px_-8px_#2563eb]'}`}

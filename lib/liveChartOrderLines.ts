@@ -199,7 +199,7 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
   const scope = summary.scopeLabel ? ` ${summary.scopeLabel}` : '';
   const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string, from: number = entry) => {
     const pnl = (at - from) * dir * summary.quantity * controls.pointValue;
-    return `${kind === 'stopLoss' ? 'SL' : 'TP'}  ${signedUsd(pnl)} · ${Math.abs(at - from).toFixed(2)} b${note ? ` · ${note}` : ''}`;
+    return `${kind === 'stopLoss' ? 'SL' : 'TP'} ${summary.quantity}  ${signedUsd(pnl)} · ${Math.abs(at - from).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   // Holá pozice bez SL nemá co posouvat na BE.
   const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg ?? (legsLive ? entry : null)) : null;

@@ -48,6 +48,8 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
   const orders = new Map<string, FakeOrder>();
   /** `účet|symbol` → čistá pozice */
   const positions = new Map<string, number>();
+  /** Průměrná cena otevřené pozice (vážený průměr vstupů; zmenšení ji nemění) — jako u skutečného brokera. */
+  const averages = new Map<string, number>();
   const sockets: FakeSocket[] = [];
   const received: Array<{ templateId: number; fields: RithmicFields }> = [];
   let basketSeq = 100;
@@ -221,10 +223,17 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
     order.status = 'complete';
     notify(order, 5, 15, { fill_price: price, fill_size: order.quantity, fill_id: `F${basketId}` });
     const posKey = `${order.accountId}|${order.symbol}`;
-    const net = (positions.get(posKey) ?? 0) + (order.side === 1 ? order.quantity : -order.quantity);
+    const before = positions.get(posKey) ?? 0;
+    const net = before + (order.side === 1 ? order.quantity : -order.quantity);
     positions.set(posKey, net);
+    const grows = before === 0 || Math.sign(net) !== Math.sign(before) || Math.abs(net) > Math.abs(before);
+    const average = net === 0 ? price
+      : before === 0 || Math.sign(net) !== Math.sign(before) ? price
+      : grows ? ((averages.get(posKey) ?? price) * Math.abs(before) + price * order.quantity) / Math.abs(net)
+      : averages.get(posKey) ?? price;
+    averages.set(posKey, average);
     for (const s of controls.muteLivePositions ? [] : sockets.filter((x) => x.readyState === 1 && x.infra === 4)) {
-      s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: price });
+      s.push(450, { account_id: order.accountId, symbol: order.symbol, exchange: order.exchange, net_quantity: net, avg_open_fill_price: average });
     }
     // Změřeno: vyplnění jedné nohy bracketu zruší její sestru.
     if ((order.parent || order.oco) && !controls.sisterStaysAfterFill) {

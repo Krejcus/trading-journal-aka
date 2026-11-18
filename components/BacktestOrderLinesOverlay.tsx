@@ -31,6 +31,12 @@ interface Props {
    * v ploše grafu (cena za okrajem by s prstem „ujela“).
    */
   selectToDrag?: boolean;
+  /**
+   * Živý graf: po puštění čára zůstane na nové ceně (tlumeně), dokud zdroj nepotvrdí změnu, čára nezmizí,
+   * nebo neuplyne tato doba — jinak by mezi puštěním a potvrzením brokera probliknula původní poloha.
+   * Jen zobrazení; 0 = vypnuto (Backtest mění cenu hned).
+   */
+  holdMoveMs?: number;
 }
 
 const sameCoordinates = (left: Record<string, number>, right: Record<string, number>) => {
@@ -206,7 +212,7 @@ export function liveLineClick(state: LiveLineClickState, line: Pick<BacktestChar
   return { fire: step.send, next: { ...state, last: step.next } };
 }
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, holdMoveMs = 0 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Klepnutí mimo vybraný štítek výběr zruší (jen telefonní režim).
   useEffect(() => {
@@ -281,8 +287,28 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
   // Tažení čáry žije jen v overlays — commit do enginu (a render celého
   // workspace) proběhne jednou při puštění. Změna stavu enginu na každý pixel
   // znamenala překreslení všech panelů na každý pohyb myši.
-  const [dragOverride, setDragOverride] = useState<{ lineId: string; top: number; price: number } | null>(null);
+  const [liveDrag, setDragOverride] = useState<{ lineId: string; top: number; price: number } | null>(null);
   linesRef.current = lines;
+  // Puštěná čára čeká na potvrzení: drží novou cenu, dokud se cena čáry nezmění, čára nezmizí, nebo nevyprší lhůta.
+  // Po potvrzení (cena čáry = puštěná cena) drží ještě do chvíle, než se přepočítá poloha — jinak by na jeden
+  // snímek probliknula stará souřadnice.
+  const heldRef = useRef<{ lineId: string; price: number } | null>(null);
+  const [heldMove, setHeldMove] = useState<{ lineId: string; price: number; from: number; until: number } | null>(null);
+  const heldLine = heldMove ? lines.find(item => item.id === heldMove.lineId) : undefined;
+  const heldConfirmed = heldMove !== null && heldLine !== undefined && heldLine.price === heldMove.price;
+  const heldActive = heldMove !== null && !liveDrag && heldLine !== undefined && (heldLine.price === heldMove.from || heldConfirmed);
+  const heldTop = heldActive ? api.controller.getSeries().priceToCoordinate(heldMove!.price) : null;
+  const heldSettled = heldConfirmed && heldTop !== null && Math.abs((coordinates[heldMove!.lineId] ?? NaN) - heldTop) < 1;
+  useEffect(() => {
+    if (!heldMove) return undefined;
+    if ((!heldActive && !liveDrag) || heldSettled) { setHeldMove(null); return undefined; }
+    const timer = window.setTimeout(() => setHeldMove(null), Math.max(0, heldMove.until - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [heldMove, heldActive, heldSettled, liveDrag]);
+  const heldPending = heldActive && !heldConfirmed;
+  // Přímý zápis polohy při posunu grafu nesmí držené čáře vrátit starou cenu.
+  heldRef.current = heldActive ? { lineId: heldMove!.lineId, price: heldMove!.price } : null;
+  const dragOverride = liveDrag ?? (heldActive && heldTop !== null && Number.isFinite(heldTop) ? { lineId: heldMove!.lineId, top: Math.round(heldTop * 2) / 2, price: heldMove!.price } : null);
   /**
    * Animace čip ↔ čára (jen zobrazení, nic nerozhoduje ani neposílá). Tah: čip se roztáhne do štítku a
    * čáry. Po puštění ghost drží místo, dokud nepřijde skutečná noha. Zrušení: noha se složí zpět do čipu.
@@ -349,7 +375,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         if (dragRef.current && !dragRef.current.bracketKind && dragRef.current.id === line.id) return;
         const element = lineElementsRef.current.get(line.id);
         if (!element) return;
-        const coordinate = series.priceToCoordinate(line.price);
+        const coordinate = series.priceToCoordinate(heldRef.current?.lineId === line.id ? heldRef.current.price : line.price);
         if (coordinate !== null) element.style.top = `${Math.round(coordinate * 2) / 2}px`;
       });
     };
@@ -423,6 +449,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
         });
         onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice, dragging.startLine);
       } else {
+        if (holdMoveMs > 0 && dragging.lastPrice !== line.price) setHeldMove({ lineId: line.id, price: dragging.lastPrice, from: line.price, until: Date.now() + holdMoveMs });
         onChange(line, line.kind, dragging.lastPrice, dragging.startLine);
       }
     };
@@ -436,7 +463,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
       window.removeEventListener('pointerup', stop, true);
       window.removeEventListener('pointercancel', cancel, true);
     };
-  }, [api, onAddBracket, onChange, selectToDrag]);
+  }, [api, onAddBracket, onChange, selectToDrag, holdMoveMs]);
 
   const draggedEntry = dragOverride ? lines.find(item => item.id === dragOverride.lineId && item.kind === 'entry') : undefined;
   const entryDragLegs = draggedEntry
@@ -581,7 +608,8 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
               else lineElementsRef.current.delete(line.id);
             }}
             className="absolute left-0 h-0"
-            style={{ right: priceScaleWidth, top }}
+            style={{ right: priceScaleWidth, top, ...(dragged && heldPending ? { opacity: 0.6 } : {}) }}
+            {...(dragged && heldPending ? { 'data-order-line-held': '' } : {})}
           >
             <div className="absolute inset-x-0 top-0 border-t border-dashed opacity-90" style={{ borderColor: line.color }} />
             <div
