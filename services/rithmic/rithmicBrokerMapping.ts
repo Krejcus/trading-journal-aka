@@ -113,7 +113,8 @@ export function rithmicSnapshotStatus(row: RithmicOrderUpdate, quantity: number,
   //   pracující: "open", "modified", "trigger pending", "modified, trigger pending"
   //   (stop čekající na spuštění je potvrzený burzou — je to pracující příkaz, ne nepotvrzený);
   //   dokončené: status "complete" + typ posledního hlášení FILL / CANCEL / REJECT,
-  //   u příkazu odmítnutého Rithmicem (RMS) completion_reason "FA", burzou "R", zrušený "C", vyplněný "F".
+  //   u příkazu odmítnutého Rithmicem (RMS) completion_reason "FA", burzou "R", zrušený "C", vyplněný "F";
+  //   příkaz, který k burze nedošel: "complete" + report_type "failure" bez důvodu (viz níže).
   const status = row.status.trim().toLowerCase();
   const reason = row.completionReason.trim().toLowerCase();
   const report = row.reportType.trim().toLowerCase();
@@ -127,6 +128,11 @@ export function rithmicSnapshotStatus(row: RithmicOrderUpdate, quantity: number,
     if (quantity > 0 && filledQuantity >= quantity) return 'filled';
     if (row.notifyType === 'CANCEL' || report === 'cancel' || reason === 'c') return 'canceled';
     if (row.notifyType === 'REJECT' || report === 'reject' || reason === 'r' || reason === 'fa') return 'rejected';
+    // Změřeno 18. 11. 2026 na Rithmic Test: příkaz, který se k burze vůbec nedostal („The exchange gateway is not
+    // connected to the exchange."), má ve snímku status "complete", report_type "failure", obecné hlášení a žádný
+    // důvod dokončení. Za odmítnutý se bere JEN když snímek výslovně říká, že se nevyplnilo nic a nevyplněné je vše —
+    // jinak stav dál nejde určit (a adaptér nenastartuje).
+    if (report === 'failure' && filledQuantity === 0 && row.totalFillSize === 0 && quantity > 0 && row.totalUnfilledSize === quantity) return 'rejected';
     return null;
   }
   return null;
