@@ -1047,6 +1047,25 @@ describe('místní služba: částečné zavření JEDNOHO vstupu s víc kusy (z
     expect(await t.run({ op: 'reduce', clientId: 'sp3', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
     t.broker.stop();
   });
+
+  it('vypnuté dělení vstupu (skutečný účet): odmítne před prvním zápisem — nic neodejde, ochrana zůstane na 2 ks', async () => {
+    const t = await setup({ config: { positionSettleMs: 20, entrySplit: false } });
+    const placed = await t.run(entry({ quantity: 2, limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    t.server.fill(entryId, 6990);
+    await sleep(150);
+    const legsBefore = [...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open').map((o) => `${o.basketId}:${o.quantity}`).sort();
+    const framesBefore = t.frames();
+    expect(await t.run({ op: 'reduce', clientId: 'off1', symbol: 'ESZ6', expectedEntryId: entryId })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/vypnuté/) });
+    await sleep(80);
+    expect(t.frames()).toBe(framesBefore);
+    expect([...t.server.orders.values()].some((o) => o.userTag.startsWith('ui-red-'))).toBe(false);
+    expect([...t.server.orders.values()].filter((o) => o.parent === entryId && o.status === 'open').map((o) => `${o.basketId}:${o.quantity}`).sort()).toEqual(legsBefore);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
 });
 
 describe('místní služba: přikoupení a posun dvou ochran', () => {
