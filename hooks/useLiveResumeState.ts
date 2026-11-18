@@ -61,7 +61,20 @@ export function useLiveNoPriceNotice(enabled: boolean, tickAt: number | null, re
       const stale = now - lastRef.current >= LIVE_NO_PRICE_NOTICE_MS;
       setNotice(stale && liveNoPriceNotice({ lastPriceAt: lastRef.current, now, resuming: resumingRef.current, sessionOpen: cmeFuturesSessionOpen(now) }));
     }, 1_000);
-    return () => clearInterval(timer);
+    // Návrat do appky: poslední cena je z doby před odchodem, ale to není výpadek — spojení se teprve obnovuje.
+    // Lhůta proto běží znovu od návratu; hláška se ukáže, až když cena nepřijde ani potom.
+    const resumed = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      lastRef.current = Math.max(lastRef.current, Date.now());
+      setNotice(false);
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', resumed);
+    if (typeof window !== 'undefined') window.addEventListener('pageshow', resumed);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', resumed);
+      if (typeof window !== 'undefined') window.removeEventListener('pageshow', resumed);
+    };
   }, [enabled]);
   return enabled && notice && !resuming;
 }
