@@ -155,12 +155,17 @@ export function pairRithmicDevice(input: {
     try { socket = (input.socketFactory ?? ((url) => new WebSocket(url) as unknown as RithmicPairSocket))(endpoint); }
     catch { finish({ ok: false, error: 'Spojení s Macem se nepodařilo otevřít.' }); return; }
     socket.onopen = () => { try { socket.send(JSON.stringify({ pair: { code, name } })); } catch { finish({ ok: false, error: 'Kód se nepodařilo odeslat.' }); } };
-    socket.onerror = () => finish({ ok: false, error: 'Mac není dostupný — zkontroluj Tailscale a adresu.' });
-    socket.onclose = () => finish({ ok: false, error: 'Mac spojení ukončil dřív, než párování doběhlo.' });
+    socket.onerror = () => { if (!answered) finish({ ok: false, error: 'Mac není dostupný — zkontroluj Tailscale a adresu.' }); };
+    // Mac po odeslání odpovědi spojení hned zavírá; ukládání klíče do Klíčenky ale ještě běží. Zavření po přijaté
+    // odpovědi proto NENÍ chyba (18. 11. 2026: na iPhonu zavření předběhlo uložení a panel hlásil neúspěch,
+    // přestože spárování proběhlo).
+    let answered = false;
+    socket.onclose = () => { if (!answered) finish({ ok: false, error: 'Mac spojení ukončil dřív, než párování doběhlo.' }); };
     socket.onmessage = (event) => {
       let message: { type?: unknown; ok?: unknown; error?: unknown; key?: unknown; deviceId?: unknown; scope?: unknown; name?: unknown };
       try { message = JSON.parse(String(event.data)) as typeof message; } catch { return; }
       if (message?.type !== 'paired') return;
+      answered = true;
       if (message.ok !== true) { finish({ ok: false, error: typeof message.error === 'string' ? message.error : 'Párování se nepovedlo.' }); return; }
       const key = typeof message.key === 'string' && KEY_SHAPE.test(message.key) ? message.key : null;
       const link = parseLink(JSON.stringify({ endpoint, deviceId: message.deviceId, name: typeof message.name === 'string' ? message.name : name, scope: message.scope, pairedAt: (input.now ?? Date.now)() }), env().dev);

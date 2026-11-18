@@ -56,6 +56,18 @@ describe('spárování zařízení: průběh', () => {
     expect(await readRithmicDeviceKey(vault)).toBeNull();
   });
 
+  it('Mac spojení zavře hned po odpovědi, zatímco se klíč ještě ukládá do Klíčenky — spárování je úspěch, ne chyba', async () => {
+    const vault = memoryVault();
+    const slow: RithmicKeyVault = { ...vault, secureSet: async (options) => { await new Promise((resolve) => setTimeout(resolve, 40)); await vault.secureSet(options); } };
+    const { factory } = fakeSocket((socket) => {
+      socket.onmessage?.({ data: JSON.stringify({ type: 'paired', ok: true, deviceId: 'a1b2c3d4e5f6', key: KEY, scope: 'full', name: 'iPhone' }) });
+      socket.onclose?.({}); // zavření přijde dřív, než doběhne uložení
+    });
+    const result = await pairRithmicDevice({ endpoint: 'mac.tail1.ts.net', code: 'ABCD2345', name: 'iPhone', socketFactory: factory, vault: slow, storage: { setItem: () => undefined } });
+    expect(result).toMatchObject({ ok: true });
+    expect(vault.data.get(RITHMIC_DEVICE_SECRET_KEY)).toBe(KEY);
+  });
+
   it('odmítnutí od Macu, špatná adresa a špatný kód skončí srozumitelnou chybou a nic se neuloží', async () => {
     const vault = memoryVault();
     const refused = fakeSocket((socket) => socket.onmessage?.({ data: JSON.stringify({ type: 'paired', ok: false, error: 'kód nesouhlasí' }) }));
