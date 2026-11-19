@@ -5,18 +5,17 @@ import Darwin
 
 guard CommandLine.arguments.count == 2 else { exit(2) }
 let context = LAContext()
-context.localizedFallbackTitle = ""
 func fail(_ stage: String, _ error: NSError?) -> Never {
     let detail = error.map { "\($0.localizedDescription) [\($0.domain) \($0.code)]" } ?? "macOS důvod neuvedl."
     FileHandle.standardError.write(Data("\(stage) — \(detail)\n".utf8))
     exit(1)
 }
 var reason: NSError?
-guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &reason) else {
-    fail("Touch ID není dostupné", reason)
+guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &reason) else {
+    fail("Systémové ověření není dostupné", reason)
 }
-context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: CommandLine.arguments[1]) { accepted, error in
+context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: CommandLine.arguments[1]) { accepted, error in
     if accepted { exit(0) }
-    fail("Ověření Touch ID skončilo", error as NSError?)
+    fail("Systémové ověření skončilo", error as NSError?)
 }
 dispatchMain()

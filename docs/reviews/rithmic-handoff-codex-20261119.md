@@ -73,4 +73,4 @@ Podrobně v `docs/reviews/rithmic-live-account-runbook-20261117.md`:
 
 ## Doplnění 19. 11. — obnova s platným souhlasem
 
-Na Macu lze po aktualizaci spustit `scripts/rithmic/lucid.sh obnovit` a potvrdit Touch ID. Při prvním přechodu ukonči původní verzi na výzvu pomocí Ctrl+C, až bude účet bez pozice a příkazů. Další předání mezi podporovanými verzemi provede služba sama po kontrole účtu. Vydání nového souhlasu po expiraci vyžaduje původní ruční postup.
+Na Macu lze po aktualizaci spustit `scripts/rithmic/lucid.sh obnovit` a potvrdit obnovení systémovým ověřením macOS (heslo k Macu nebo Touch ID). Při prvním přechodu ukonči původní verzi na výzvu pomocí Ctrl+C, až bude účet bez pozice a příkazů. Další předání mezi podporovanými verzemi provede služba sama po kontrole účtu. Vydání nového souhlasu po expiraci vyžaduje původní ruční postup.

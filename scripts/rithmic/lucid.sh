@@ -2,7 +2,7 @@
 # Služba pro účet Lucid jedním příkazem. Spouští JEN člověk v terminálu (obchodní režim chce opsání věty).
 #
 #   scripts/rithmic/lucid.sh             obchodní režim: vydá souhlas a spustí službu (PC 3311, telefon 3313)
-#   scripts/rithmic/lucid.sh obnovit     existující souhlas, potvrzení přes Touch ID
+#   scripts/rithmic/lucid.sh obnovit     existující souhlas, potvrzení heslem k Macu nebo přes Touch ID
 #   scripts/rithmic/lucid.sh cteni       jen čtení (graf a stav účtu, žádné příkazy)
 #   scripts/rithmic/lucid.sh zavirani    jen zavírání a správa SL/TP (když souhlas vypršel a pozice zůstala)
 #

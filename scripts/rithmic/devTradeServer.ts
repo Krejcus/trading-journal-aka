@@ -154,18 +154,18 @@ async function main(): Promise<void> {
   if (resumeWithTouch) {
     const account = startConsent!.account;
     if (cli('resume-account') !== account) {
-      throw new Error('Obnovení přes Touch ID vyžaduje souhlas pro zvolený účet Lucidu na Macu.');
+      throw new Error('Obnovení po ověření uživatele vyžaduje souhlas pro zvolený účet Lucidu na Macu.');
     }
     const message = `Obnovit obchodování AlphaTrade na ${SYSTEM}, účet ${account}, strop ${startConsent!.maxQuantity}, SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'}, do ${new Date(startConsent!.expiresAt).toLocaleTimeString('cs-CZ')}.`;
     const helper = fileURLToPath(new URL('./confirmResume.swift', import.meta.url));
     const temp = mkdtempSync(join(tmpdir(), 'alphatrade-touch-'));
     const binary = join(temp, 'AlphaTrade');
     const run = promisify(execFile);
-    let stage = 'Příprava ověření Touch ID';
+    let stage = 'Příprava systémového ověření';
     try {
       console.log(stage + '…');
       await run('/usr/bin/swiftc', ['-module-cache-path', join(temp, 'modules'), helper, '-o', binary], { timeout: 120_000 });
-      stage = 'Potvrzení přes Touch ID';
+      stage = 'Potvrď obnovení v systémovém dialogu Macu';
       console.log(stage + '…');
       await run(binary, [message], { timeout: 90_000 });
     } catch (error) {

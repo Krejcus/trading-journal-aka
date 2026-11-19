@@ -288,6 +288,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-19 — Obnova na Macu bez zaregistrovaného otisku
+
+Filipův Mac vrátil biometryNotEnrolled (−7). Režim obnovy používá systémové ověření vlastníka Macu, které umožňuje i místní heslo. Používá pouze již vydaný a dosud platný souhlas.
+
 ### 2026-11-19 — Diagnostika Touch ID
 
 Po opravě URL se Filipův start zastavil u obecné chyby biometrie. Obnova sestaví samostatný lokální program v soukromé dočasné složce a rozliší chybu překladu, nedostupnou biometrii a výsledek ověření včetně chybového kódu macOS. Původní příčina na Macu zatím není známá.
