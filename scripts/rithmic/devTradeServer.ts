@@ -80,8 +80,9 @@ const MOBILE_ORIGINS = new Set(['capacitor://localhost', ...(process.env.RITHMIC
 // RITHMIC_DEV_ORIGINS=https://a.ts.net,https://b.ts.net. Proces dál poslouchá jen na 127.0.0.1.
 const ALLOWED_ORIGINS = new Set([
   `http://127.0.0.1:${QA_PORT}`, `http://localhost:${QA_PORT}`,
-  // Vývojová appka (záložka LIVE). Produkční adresa se sem dostane až s rozhodnutím o nasazení.
-  'http://localhost:3000', 'http://127.0.0.1:3000',
+  // Vývojová appka (záložka LIVE) a produkční appka na Vercelu (rozhodnutí Filipa 19. 11. 2026). Přístup dál
+  // chce i token z tohoto Macu; náhledy Vercelu (jiné adresy) sem nepatří.
+  'http://localhost:3000', 'http://127.0.0.1:3000', 'https://alphatrade-mentor-15.vercel.app',
   ...(process.env.RITHMIC_DEV_ORIGINS ?? '').split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean),
 ]);
 

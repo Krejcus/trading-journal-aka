@@ -21,12 +21,19 @@ export function takeRithmicTokenFromHash(hash: string): { token: string | null; 
   return { token: TOKEN_SHAPE.test(raw) ? raw : null, rest: rest ? `#${rest}` : '' };
 }
 
+/** Produkční adresa appky, kde se graf přes místní službu smí nabídnout (rozhodnutí Filipa 19. 11. 2026). */
+export const RITHMIC_PRODUCTION_HOST = 'alphatrade-mentor-15.vercel.app';
+
 /**
- * Kde smí cesta vůbec existovat: jen vývojová appka na místní adrese a ne nativní appka.
- * Produkční build ji nemá nikdy — ani s tokenem v prohlížeči (rozhodnutí o nasazení přijde zvlášť).
+ * Kde smí cesta vůbec existovat: vývojová appka na místní adrese, nebo produkční appka na své přesné adrese
+ * (ne náhledy Vercelu, ne jiné domény). Nikdy v nativní appce (ta má vlastní cestu přes spárování).
+ * Bez tokenu v tomto prohlížeči je cesta i tak vypnutá a appka se připojuje jen na 127.0.0.1 — služba navíc
+ * hlídá Origin. Token se do produkční appky dostane jen jednorázovým odkazem z Macu (`#rithmic-token=…`).
  */
 export function rithmicLocalAllowedHere(env: { dev: boolean; hostname: string; native: boolean }): boolean {
-  return env.dev && !env.native && (env.hostname === 'localhost' || env.hostname === '127.0.0.1');
+  if (env.native) return false;
+  if (env.dev) return env.hostname === 'localhost' || env.hostname === '127.0.0.1';
+  return env.hostname === RITHMIC_PRODUCTION_HOST;
 }
 
 const allowedHere = (): boolean => {

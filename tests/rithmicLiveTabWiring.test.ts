@@ -56,12 +56,17 @@ describe('Rithmic graf v desku LIVE', () => {
 });
 
 describe('brána dostupnosti', () => {
-  it('jen vývojová appka na místní adrese, ne nativní', () => {
+  it('vývojová appka na místní adrese a produkční appka na své přesné adrese; nikdy nativní', () => {
     expect(rithmicLocalAllowedHere({ dev: true, hostname: 'localhost', native: false })).toBe(true);
     expect(rithmicLocalAllowedHere({ dev: true, hostname: '127.0.0.1', native: false })).toBe(true);
     expect(rithmicLocalAllowedHere({ dev: false, hostname: 'localhost', native: false })).toBe(false);
     expect(rithmicLocalAllowedHere({ dev: true, hostname: 'alphatrade-mentor-15.vercel.app', native: false })).toBe(false);
     expect(rithmicLocalAllowedHere({ dev: true, hostname: 'localhost', native: true })).toBe(false);
+    // produkce (19. 11.): jen přesná adresa, ne náhledy Vercelu ani podobné domény
+    expect(rithmicLocalAllowedHere({ dev: false, hostname: 'alphatrade-mentor-15.vercel.app', native: false })).toBe(true);
+    expect(rithmicLocalAllowedHere({ dev: false, hostname: 'alphatrade-mentor-15-abc123-krejcus-projects.vercel.app', native: false })).toBe(false);
+    expect(rithmicLocalAllowedHere({ dev: false, hostname: 'alphatrade-mentor-15.vercel.app.evil.com', native: false })).toBe(false);
+    expect(rithmicLocalAllowedHere({ dev: false, hostname: 'alphatrade-mentor-15.vercel.app', native: true })).toBe(false);
   });
 
   it('token i převzetí z adresy jdou přes bránu; adresa je napevno místní smyčka', () => {
@@ -77,9 +82,9 @@ describe('brána dostupnosti', () => {
     expect(takeRithmicTokenFromHash('#jine=1')).toEqual({ token: null, rest: '#jine=1' });
   });
 
-  it('místní proces: žádná produkční adresa mezi originy, jen Rithmic Test', () => {
+  it('místní proces: z produkce jen přesná adresa appky (žádné náhledy ani jiné https), jen Rithmic Test bez souhlasu', () => {
     const origins = server.slice(server.indexOf('const ALLOWED_ORIGINS'), server.indexOf(']);', server.indexOf('const ALLOWED_ORIGINS')));
-    expect(origins).not.toMatch(/vercel|https:\/\//);
+    expect(origins.match(/https:\/\/[^'\s]+/g)).toEqual(['https://alphatrade-mentor-15.vercel.app']);
     // Bez přepínače skutečného obchodování (a souhlasu vydaného člověkem) je povolený jen Rithmic Test.
     expect(server).toMatch(/allowedSystems: LIVE_TRADING \? \[SYSTEM\] : \['Rithmic Test'\],/);
   });
