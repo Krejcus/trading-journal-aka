@@ -2,7 +2,7 @@
  * Sada měření proti Rithmic Test (simulované peníze) přes běžící místní službu: jednotlivé druhy příkazů a pozic.
  * Každý scénář začíná i končí na prázdném účtu; výsledek je PROŠEL / SELHAL s důvodem a časy.
  *   RITHMIC_USER=… npx tsx scripts/rithmic/devTradeServer.ts --contract MNQZ6
- *   npx tsx scripts/rithmic/nightSuite.ts [--port 3311] [--only S3,S5]
+ *   npx tsx scripts/rithmic/nightSuite.ts [--port 3321] [--only S3,S5]
  * Odmítne běžet proti čemukoli jinému než Rithmic Test.
  */
 import { readFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
-const PORT = arg('port') ?? '3311';
+const PORT = arg('port') ?? '3321'; // Rithmic Test (skutečný účet je na 3311 a sada ho odmítne)
 const ONLY = arg('only')?.split(',') ?? null;
 const token = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'results', 'dev-token'), 'utf8').trim();
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/?token=${token}`, { origin: 'http://localhost:3000' });

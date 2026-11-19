@@ -67,13 +67,17 @@ uprostřed pozice, souběh s R Traderem, týden rollu.
 - Strop kusů: souhlas bez `--max-quantity` = limit propky (RMS); `--max-quantity N` ho jen zmenší.
 - Příkazy jsou DENNÍ. Na konci seance (23:00 SEČ, 22:00 v létě podle USA) burza zruší čekající vstupy i SL/TP a pozice
   zůstane bez ochrany — appka na to 15 minut předem upozorní a potom ohlásí incident. Po otevření trhu ochranu zadej znovu.
-- Čekající přikoupení Limitem je zatím jen na Rithmic Test; na skutečném účtu služba přikoupí jen Marketem.
-- Nové k vyzkoušení: šipky vstupu a výstupu v grafu, tažení čekajícího vstupu s víc kontrakty.
-- VYPNUTO na skutečném účtu (zapíná jen spouštěč, zatím pouze Rithmic Test; rozhodne Filip po oponentuře):
-  - „Zavřít 1 ks" z pozice otevřené JEDNÍM příkazem s víc kusy (`entrySplit`) — služba odmítne s vysvětlením,
-    tlačítko se v grafu přesto ukáže. Zavření celé pozice a zavření kusu u pozice složené z víc vstupů funguje.
-  - výměna samotného SL nebo TP za svázaný pár u víc kusů (`multiPairSwap`). U 1 ks a při zadání SL i TP najednou funguje.
-- Otevřené nálezy oponentury (Codex, 4 kola; stav po `a11b0fba`), proč jsou ty dvě věci vypnuté:
+- **Od 19. 11. (rozhodnutí Filipa: testujeme na Lucidu)** jsou v obchodním režimu na skutečném účtu zapnuté všechny funkce:
+  čekající přikoupení Limitem (`pendingAdd`), „Zavřít 1 ks" z pozice jednoho příkazu (`entrySplit`), výměna SL nebo TP
+  za svázaný pár (`multiPairSwap`) a až 20 částí pozice. Přikoupení bez SL/TP jen se souhlasem bez povinného SL.
+  Proti brokerovi je z toho ověřený jen základ (vstup se SL/TP, posuny, zavření) — zbytek je první zkouška naostro.
+- Spuštění jedním příkazem: `scripts/rithmic/lucid.sh` (obchod) · `lucid.sh cteni` · `lucid.sh zavirani`;
+  `KS=` strop kusů (výchozí 3), `SL=povinny` vrátí povinný SL. Údaje účtu v `scripts/rithmic/results/lucid.env`.
+- Porty: Lucid 3311 (PC) a 3313 (telefon přes Tailscale Serve); Rithmic Test vedle něj na 3321 / 3323.
+  Seznam spárovaných zařízení má každý systém vlastní (`devices.json` = Lucid, `devices-rithmic-test.json` = Test).
+- Režim jen pro zavírání dál ruší zapomenuté čekající přikoupení po zavření pozice. Když je ale Mac uspaný nebo služba
+  neběží, přikoupení u brokera zůstane — před odchodem od Macu čekající přikoupení zruš.
+- Otevřené nálezy oponentury (Codex, 4 kola; stav po `a11b0fba`) — platí teď i na Lucidu:
   - A1: když výsledek výstupního Marketu 1 ks zůstane neznámý déle než 12 s, brzda „Zavřít" už projde — pozdě
     doručené plnění by pak mohlo pozici obrátit o 1 ks. Do 12 s brzda odmítá („zkus to za pár sekund").
   - A3: dělení se odmítá při blokaci a po zápisu SL/TP s neznámým výsledkem — opraveno, páté kolo oponentury neproběhlo.

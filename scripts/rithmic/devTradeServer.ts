@@ -59,10 +59,16 @@ const arg = (name: string, fallback: string): string => {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 };
 const requestedContract = arg('contract', 'ESZ6').toUpperCase();
-const PORT = Number(arg('port', '3311'));
+/**
+ * Porty podle systému: skutečný účet (Lucid) má stálé místo, kam se připojuje appka na PC (3311) i telefon (3313 přes
+ * Tailscale Serve). Rithmic Test běží VEDLE něj na vlastních portech (3321 / 3323) jen pro zkoušky a sadu měření —
+ * oba systémy mají jiného uživatele Rithmicu, takže se přihlášení nepřetahují.
+ */
+const IS_TEST_SYSTEM = SYSTEM === 'Rithmic Test';
+const PORT = Number(arg('port', IS_TEST_SYSTEM ? '3321' : '3311'));
 const QA_PORT = arg('qa-port', '4185');
 /** Port pro spárovaná zařízení (telefon přes Tailscale Serve). Bez `--mobile` se neotevírá. */
-const MOBILE_PORT: number | null = process.argv.includes('--mobile') ? Number(arg('mobile-port', '3313')) : null;
+const MOBILE_PORT: number | null = process.argv.includes('--mobile') ? Number(arg('mobile-port', IS_TEST_SYSTEM ? '3323' : '3313')) : null;
 /**
  * Přihlašovací jméno Tailscale (e-mail účtu), které smí port pro zařízení použít — viz `tailscaleLogin` v bráně.
  * Doporučeno vždy; bez něj port přijme spojení od kohokoli, kdo se k němu v síti Tailscale dostane (a ověřuje jen klíč).
@@ -466,12 +472,14 @@ async function main(): Promise<void> {
   }
   exec = new LocalExec({
     broker, symbols: { [CONTRACT]: { tickSize } }, maxQuantity: manualCap, quantityLimits: effectiveLimits,
-    // Čekající přikoupení Limitem: zatím jen na testovacím účtu (otevřené nálezy z oponentury).
-    pendingAdd: SYSTEM === 'Rithmic Test',
-    multiPairSwap: SYSTEM === 'Rithmic Test',
-    entrySplit: SYSTEM === 'Rithmic Test',
-    // Víc než dvě části pozice (opakované přikoupení): zatím jen na testovacím účtu — proti brokerovi neověřeno.
-    ...(SYSTEM === 'Rithmic Test' ? { maxProtectedParts: 20, bareAdd: true } : {}),
+    // Všechny funkce (čekající přikoupení Limitem, výměna více párů, rozdělení vstupu, opakované přikoupení) na testu
+    // vždy; na skutečném účtu jen v obchodním režimu, který spustil člověk opsáním věty (rozhodnutí Filipa 19. 11.:
+    // testujeme je na Lucidu). Proti brokerovi je ověřený jen základ — vstup se SL/TP, posuny, zavření.
+    ...(IS_TEST_SYSTEM || (LIVE_TRADING && !CLOSE_ONLY) ? { pendingAdd: true, multiPairSwap: true, entrySplit: true, maxProtectedParts: 20 } : { pendingAdd: false, multiPairSwap: false, entrySplit: false }),
+    // Jen pro zavírání: hlídač čekajících přikoupení musí běžet dál — po zavření pozice zruší zapomenuté přikoupení,
+    // které by jinak otevřelo nový obchod. Nové vstupy tu odmítá souhlas (`problem` níže), takže nic dalšího nepovolí.
+    ...(CLOSE_ONLY ? { pendingAdd: true } : {}),
+    ...(IS_TEST_SYSTEM ? { bareAdd: true } : {}),
     // Skutečný účet: přikoupení bez SL/TP jen když souhlas vydaný na Macu SL NEVYŽADUJE (`--allow-no-stop`) — pak
     // už jde i první vstup bez SL, takže přikoupení bez SL/TP nic nového nepovoluje.
     ...(LIVE_TRADING && !CLOSE_ONLY && startConsent?.requireStop === false ? { bareAdd: true } : {}),
@@ -657,7 +665,10 @@ async function main(): Promise<void> {
   // Vlastní port JEN pro spárovaná zařízení: sem míří Tailscale Serve. Klíč ze souboru (PC) tu neplatí, takže
   // vystavením tohoto portu se neotevře cesta pro kohokoli, kdo by znal starý sdílený klíč. Poslouchá dál jen
   // na 127.0.0.1 — do sítě ho pouští až Tailscale (šifrovaně, jen zařízením ve Filipově síti).
-  const devicesFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'devices.json');
+  // Seznam zařízení je pro každý systém ZVLÁŠŤ: brána drží seznam v paměti a ukládá ho celý, takže sdílený soubor
+  // by druhá instance (Test vedle Lucidu) přepsala svou starou verzí — odvolaný telefon by se vrátil i na skutečný účet.
+  // Skutečný systém si nechává původní `devices.json` (v něm je už spárovaný telefon).
+  const devicesFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', IS_TEST_SYSTEM ? 'devices-rithmic-test.json' : 'devices.json');
   const mobileServer = MOBILE_PORT === null ? null : new WebSocketServer({ host: '127.0.0.1', port: MOBILE_PORT, maxPayload: 16 * 1024, verifyClient: (info: { origin?: string; req: { headers: Record<string, string | string[] | undefined> } }) => gateway!.verify(info.origin, info.req.headers) });
   const gateway = createDeviceGateway({
     store: fileDeviceStore(devicesFile),

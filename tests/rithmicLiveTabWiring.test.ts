@@ -345,11 +345,15 @@ describe('hook místního procesu', () => {
     // šipky vstupu a výstupu: data ze služby (`marks`), do grafu jen jako zobrazení
     expect(hook).toMatch(/const liveFills = useMemo\(\(\) => liveChartFills\(marks && marks\.fills\.length \? \{ fills: marks\.fills, open: marks\.open, symbol \} : null\)/);
     expect(chart).toMatch(/liveFills=\{trading\.liveFills\}/);
-    // čekající přikoupení Limitem: spouštěč ho zapíná jen na Rithmic Test; samočinné zápisy až po potvrzení účtu, nikdy jen pro čtení
-    expect(server).toMatch(/pendingAdd: SYSTEM === 'Rithmic Test',/);
-    // dělení jednoho vstupu a výměna nohy za pár u víc kusů: taky jen Rithmic Test, dokud je Filip neschválí pro skutečný účet
-    expect(server).toMatch(/multiPairSwap: SYSTEM === 'Rithmic Test',/);
-    expect(server).toMatch(/entrySplit: SYSTEM === 'Rithmic Test',/);
+    // čekající přikoupení Limitem, dělení vstupu, výměna nohy za pár a víc částí: Rithmic Test vždy; skutečný účet jen
+    // v obchodním režimu (opsaná věta), nikdy jen pro čtení ani jen pro zavírání — Filip schválil 19. 11. pro test na Lucidu
+    expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| \(LIVE_TRADING && !CLOSE_ONLY\) \? \{ pendingAdd: true, multiPairSwap: true, entrySplit: true, maxProtectedParts: 20 \} : \{ pendingAdd: false, multiPairSwap: false, entrySplit: false \}\)/);
+    // jen pro zavírání: hlídač čekajících přikoupení běží (zruší zapomenuté přikoupení po zavření pozice)
+    expect(server).toMatch(/\.\.\.\(CLOSE_ONLY \? \{ pendingAdd: true \} : \{\}\)/);
+    // zařízení: Test a skutečný účet mají každý svůj seznam (druhá instance nesmí vzkřísit odvolaný telefon)
+    expect(server).toMatch(/IS_TEST_SYSTEM \? 'devices-rithmic-test\.json' : 'devices\.json'/);
+    // přikoupení bez SL/TP na skutečném účtu jen se souhlasem, který SL nevyžaduje
+    expect(server).toMatch(/LIVE_TRADING && !CLOSE_ONLY && startConsent\?\.requireStop === false \? \{ bareAdd: true \}/);
     expect(server).toMatch(/if \(!READ_ONLY\) exec\.enableAutomation\(\);/);
     expect(server.indexOf('exec.enableAutomation()')).toBeGreaterThan(server.indexOf("if (typed !== phrase) { broker.stop();"));
     // ochrana zůstává denní: služba platnost do zrušení neposílá
