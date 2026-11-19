@@ -606,7 +606,7 @@ export class RithmicClient {
       ...(request.maxCount !== undefined ? { user_max_count: request.maxCount } : {}),
       direction: rithmicEnum('RequestTimeBarReplay', 'Direction', 'FIRST'),
       time_order: rithmicEnum('RequestTimeBarReplay', 'TimeOrder', 'FORWARDS'),
-    }, request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {});
+    }, { ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}), settleQuietMs: 1_500 });
     const seconds = request.barType === 'MINUTE_BAR' ? request.period * 60 : 0;
     const bars = response.rows
       // Jen řádky s platným časem a kladnou cenou; cokoli jiného by v grafu udělalo nesmyslnou svíčku.

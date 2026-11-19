@@ -489,6 +489,9 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         // Změřeno: historie pro dnešní den vrací prázdno.
         socket.push(325, { user_msg: userMsg, rp_code: ['7', 'no data'] });
         return;
+      case 202:
+        // Historie: test sám pošle řádky (a případně nic) — jako LucidTrading 19. 11., který závěrečnou odpověď neposlal.
+        return;
       default:
         socket.push(75, { user_msg: userMsg, rp_code: ['1', 'unsupported in fake'] });
     }

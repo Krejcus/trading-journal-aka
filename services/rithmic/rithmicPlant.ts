@@ -66,6 +66,12 @@ export interface RithmicRequestOptions {
    * po RequestShowOrders). Zachycené zprávy se neposílají dál jako živé události.
    */
   collect?: (message: RithmicMessage) => boolean;
+  /**
+   * JEN pro čtení k zobrazení (historie svíček): když přišel aspoň jeden datový řádek a pak `settleQuietMs` nic,
+   * požadavek skončí s dosud přijatými řádky (`terminal: null`). LucidTrading 19. 11. 2026 poslal celý den svíček,
+   * ale závěrečnou odpověď s rp_code ne. Nikdy pro zápisy ani čtení, ze kterých se rozhoduje o příkazech.
+   */
+  settleQuietMs?: number;
 }
 
 export interface RithmicResponse {
@@ -114,6 +120,8 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
   resolve: (value: RithmicResponse) => void;
   reject: (error: RithmicRequestError) => void;
+  settleQuietMs?: number;
+  quietTimer?: ReturnType<typeof setTimeout>;
   /** Diagnostika: odpovědi stejné šablony bez našeho user_msg a ukázka první z nich. */
   strays?: number;
   strayRp?: string;
@@ -257,6 +265,7 @@ export class RithmicPlant {
     return new Promise<RithmicResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         const got = this.pending.get(id);
+        if (got?.quietTimer) clearTimeout(got.quietTimer);
         this.pending.delete(id);
         // Kolik řádků přišlo k tomuto požadavku a kolik odpovědí stejné šablony bez našeho user_msg (diagnostika).
         const detail = got ? ` (řádků ${got.rows.length}, cizích odpovědí ${got.strays ?? 0}${got.strayRp ? ` rp ${got.strayRp}` : ''}${got.strayHint ? ` ukázka ${got.strayHint}` : ''})` : '';
@@ -268,6 +277,7 @@ export class RithmicPlant {
         responseTemplateId: templateId + 1,
         rows: [],
         collect: options.collect,
+        ...(options.settleQuietMs !== undefined ? { settleQuietMs: options.settleQuietMs } : {}),
         sentAt: this.now(),
         timer,
         resolve,
@@ -424,6 +434,16 @@ export class RithmicPlant {
     if (pending && pending.responseTemplateId === message.templateId) {
       if (rpCode.length === 0) {
         pending.rows.push(message);
+        if (pending.settleQuietMs !== undefined) {
+          if (pending.quietTimer) clearTimeout(pending.quietTimer);
+          const settled = pending;
+          settled.quietTimer = setTimeout(() => {
+            if (this.pending.get(settled.id) !== settled) return;
+            clearTimeout(settled.timer);
+            this.pending.delete(settled.id);
+            settled.resolve({ rows: settled.rows, terminal: null, sentAt: settled.sentAt, completedAt: this.now() });
+          }, settled.settleQuietMs);
+        }
         return;
       }
       this.finish(pending, message, rpCode, receivedAt);
@@ -444,6 +464,7 @@ export class RithmicPlant {
 
   private finish(pending: Pending, terminal: RithmicMessage | null, rpCode: string[], completedAt: number): void {
     clearTimeout(pending.timer);
+    if (pending.quietTimer) clearTimeout(pending.quietTimer);
     this.pending.delete(pending.id);
     const code = rpCode[0] ?? '';
     if (terminal && code === '0') {

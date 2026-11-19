@@ -346,6 +346,28 @@ describe('RithmicClient', () => {
     expect(server.received.find((r) => r.templateId === 312)!.fields).toMatchObject({ account_id: 'ACC1', fcm_id: 'FCM', ib_id: 'IB' });
   });
 
+  it('historie: když řádky dorazí a závěrečná odpověď ne, čtení skončí po tichu s přijatými řádky (LucidTrading 19. 11.)', async () => {
+    const { server, client } = setup({}, 10_000);
+    await client.connect(['history']);
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    const started = Date.now();
+    const pending = client.timeBarReplay({ symbol: 'MNQZ6', exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: 1_000, toSec: 2_000 });
+    await flush();
+    const userMsg = server.received.find((r) => r.templateId === 202)!.fields.user_msg as string[];
+    socket.push(203, { user_msg: userMsg, rq_handler_rp_code: ['0'], marker: 1200, open_price: 10, high_price: 11, low_price: 9, close_price: 10.5, volume: 3 });
+    socket.push(203, { user_msg: userMsg, rq_handler_rp_code: ['0'], marker: 1260, open_price: 10.5, high_price: 12, low_price: 10, close_price: 11, volume: 4 });
+    const bars = await pending;
+    expect(bars.map((bar) => bar.time)).toEqual([1140, 1200]);
+    expect(Date.now() - started).toBeLessThan(5_000); // skončilo po tichu, ne až po vypršení
+  });
+
+  it('bez jediného řádku čtení historie po tichu NEskončí — vyprší jako neznámé', async () => {
+    const { client } = setup({}, 2_000);
+    await client.connect(['history']);
+    const result = await client.timeBarReplay({ symbol: 'MNQZ6', exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: 1_000, toSec: 2_000 }).catch((e) => e as RithmicRequestError);
+    expect(result instanceof RithmicRequestError ? `${result.outcome}: ${result.message}` : 'resolved').toMatch(/^unknown: .*bez odpovědi/);
+  });
+
   it('"žádná data" (rp_code 7) je prázdná odpověď, ne chyba', async () => {
     const { server, client } = setup();
     await client.connect(['ticker']);
