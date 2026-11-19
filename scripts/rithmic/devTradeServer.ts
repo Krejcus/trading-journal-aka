@@ -296,20 +296,37 @@ async function main(): Promise<void> {
     if (historyLoading) return historyLoading;
     historyLoading = (async () => {
       try {
-        const toSec = Date.now() / 1_000;
-        // Začátek musí padnout DO obchodní seance: kdyby řada začínala otevřením po víkendu nebo přestávce,
-        // první svíčka by proti starší historii appky skočila (víkendový gap) a ta by se k ní nepřipojila.
-        let fromSec = toSec - HISTORY_HOURS * 3_600;
-        let rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec });
-        for (let attempt = 0; attempt < 3 && rows.length > 0 && rows[0].time - fromSec > 180; attempt += 1) {
-          fromSec -= 24 * 3_600;
-          rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec, toSec });
+        // Po DNECH, od nejnovějšího: jeden velký dotaz (týden) Lucid 19. 11. opakovaně nechal bez odpovědi a graf
+        // pak neměl nic. Po kusech dorazí aspoň poslední dny; selhání staršího kusu nevadí.
+        const toSec = Math.floor(Date.now() / 1_000);
+        const DAY = 24 * 3_600;
+        const byTime = new Map<number, Bar>();
+        let gotAny = false;
+        let failure: unknown = null;
+        for (let day = 0; day < HISTORY_HOURS / 24 + 3; day += 1) {
+          const chunkTo = toSec - day * DAY;
+          const chunkFrom = chunkTo - DAY;
+          let rows: Awaited<ReturnType<typeof ticker.timeBarReplay>>;
+          try {
+            rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: chunkFrom, toSec: chunkTo, timeoutMs: 20_000 });
+          } catch (error) { failure = error; break; }
+          gotAny = true;
+          for (const bar of rows) byTime.set(bar.time, { time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+          // Hotovo, až je pokrytá požadovaná hloubka A začátek padne DO obchodní seance: kdyby řada začínala otevřením
+          // po víkendu nebo přestávce, první svíčka by proti starší historii appky skočila a ta by se k ní nepřipojila.
+          const covered = day + 1 >= HISTORY_HOURS / 24;
+          if (covered && rows.length > 0 && rows[0].time - chunkFrom <= 180) break;
         }
-        historyCache = { bars: rows.map((bar) => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume })), at: Date.now() };
+        const bars = [...byTime.values()].sort((x, y) => x.time - y.time);
+        if (!gotAny) throw failure ?? new Error('historie bez dat');
+        historyCache = { bars: bars.length > 0 ? bars : historyCache.bars, at: Date.now() };
+        if (failure) console.log(`[historie] načteno jen ${bars.length} svíček (starší kus selhal: ${failure instanceof Error ? failure.message : String(failure)})`);
       } catch (error) {
         // Selhání nesmí být tiché: poslední známá historie zůstává, další pokus až za minutu.
         historyCache = { bars: historyCache.bars, at: Date.now() };
-        console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — nechávám poslední známou (${historyCache.bars.length} svíček)`);
+        console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — nechávám poslední známou (${historyCache.bars.length} svíček); spojení pro historii otevřu znovu`);
+        // Plant, který neodpovídá ani na malý dotaz, je nejspíš napůl mrtvý: zavřít → obnova ho za 5 s připojí znovu.
+        ticker.closePlant('history');
       } finally {
         historyLoading = null;
       }
@@ -348,6 +365,11 @@ async function main(): Promise<void> {
           } else {
             historyOk = true;
             console.log('[historie] obnovena');
+            // Stránky, které se připojily bez historie, ji jinak nedostanou: hned načíst a připojit je znovu (jako u cen).
+            if (historyCache.bars.length === 0) {
+              historyCache = { bars: [], at: 0 };
+              void recentHistory().then((bars) => { if (bars.length > 0) for (const socket of clients) socket.close(4000, 'history restored'); });
+            }
           }
           restoring.delete(plant);
         } catch (error) {

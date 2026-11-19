@@ -262,6 +262,17 @@ export class RithmicClient {
     return plant;
   }
 
+  /**
+   * Zavře jeden plant (spojení se odhlásí). Jen pro čtecí planty, které přestaly odpovídat (historie): volající ho
+   * pak připojí znovu přes `connect([name])`. Order plant se tudy nezavírá.
+   */
+  closePlant(name: Exclude<RithmicPlantName, 'order'>): void {
+    const plant = this.plants.get(name);
+    if (!plant) return;
+    this.plants.delete(name);
+    plant.close();
+  }
+
   /** Připojí vybrané planty. Order plant navíc načte identitu, účty a trade routes a přihlásí odběr změn. */
   async connect(plants: RithmicPlantName[] = ['order', 'ticker', 'pnl']): Promise<void> {
     for (const name of plants) {
@@ -584,7 +595,7 @@ export class RithmicClient {
    * `marker` KONEC svíčky v sekundách a vrací se jen DOKONČENÉ minuty (rozpracovaná ne); denní přestávka trhu
    * je v datech jako mezera. Hloubka: aspoň 90 dní zpět u běžícího kontraktu, týden 1m ≈ 6 900 svíček za 0,5 s.
    */
-  async timeBarReplay(request: { symbol: string; exchange: string; barType: 'MINUTE_BAR' | 'DAILY_BAR'; period: number; fromSec: number; toSec: number; maxCount?: number }): Promise<RithmicHistoryBar[]> {
+  async timeBarReplay(request: { symbol: string; exchange: string; barType: 'MINUTE_BAR' | 'DAILY_BAR'; period: number; fromSec: number; toSec: number; maxCount?: number; timeoutMs?: number }): Promise<RithmicHistoryBar[]> {
     const response = await this.plant('history').request(202, {
       symbol: request.symbol,
       exchange: request.exchange,
@@ -595,7 +606,7 @@ export class RithmicClient {
       ...(request.maxCount !== undefined ? { user_max_count: request.maxCount } : {}),
       direction: rithmicEnum('RequestTimeBarReplay', 'Direction', 'FIRST'),
       time_order: rithmicEnum('RequestTimeBarReplay', 'TimeOrder', 'FORWARDS'),
-    });
+    }, request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {});
     const seconds = request.barType === 'MINUTE_BAR' ? request.period * 60 : 0;
     const bars = response.rows
       // Jen řádky s platným časem a kladnou cenou; cokoli jiného by v grafu udělalo nesmyslnou svíčku.
