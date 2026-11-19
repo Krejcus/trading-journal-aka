@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-19 — iPhone: spojení během načítání LIVE a historie z paměti Macu
+
+Na nativním LIVE probíhá připojení po obnově přihlášeného uživatele souběžně s načítáním UI.
+Graf převezme stejnou relaci. Když se graf neotevře, po 10 s předběžný odběr skončí.
+Značka rithmic:phone-chart-live rozlišuje připojení od připojeného panelu s živými daty.
+Služba čte historii jednou po startu; na připojení zařízení hned vydá poslední historii s novými svíčkami.
+Případná nová historie přijde následně. Čtení má stejný společný požadavek a odstup po chybě.
+Aktivace na Macu vyžaduje Filipův restart služby; časy na skutečném zařízení se znovu změří po aktivaci.
+
 ### 2026-11-19 — iPhone: změřený návrat do grafu
 
 Pět návratů na telefonu: staré spojení skončilo za 1–100 ms, nový pokus začal za 2023–2101 ms.

@@ -22,6 +22,7 @@ import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent }
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
+import { mergeRithmicDisplayHistory } from '../../lib/rithmicCandleSeed';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
 import { LocalExec, type LocalExecCommand } from '../../services/rithmic/localExec';
@@ -444,6 +445,7 @@ async function main(): Promise<void> {
   const tickSize = ref?.tickSize ?? 0.25;
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
+  void recentHistory(); // Warm the shared display cache after the live feed is subscribed.
 
   // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
   const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);
@@ -633,12 +635,16 @@ async function main(): Promise<void> {
     const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
-    void (async () => {
-      const history = await recentHistory();
+    const sendHistory = (history: Bar[]) => {
       if (!history.length || socket.readyState !== WebSocket.OPEN) return;
       const at = Date.now();
-      hello([...history, ...liveBars(at, history[history.length - 1].time)], at);
-    })();
+      hello(mergeRithmicDisplayHistory(history, liveBars(at, history[history.length - 1].time - 1)), at);
+    };
+    const cached = historyCache.bars;
+    sendHistory(cached);
+    void recentHistory().then(history => {
+      if (history !== cached) sendHistory(history);
+    });
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {
       void (async () => {

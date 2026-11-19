@@ -14,3 +14,18 @@ export function mergeSeedCandles<T extends SeedCandle>(current: readonly T[], in
   const older = current.filter((bar) => bar.time < from);
   return [...older, ...incoming];
 }
+
+type DisplayBar = SeedCandle & { open: number; high: number; low: number; close: number; volume: number };
+
+/** The replay and the local ticks can both contain the boundary minute. Their volumes overlap. */
+export function mergeRithmicDisplayHistory(history: readonly DisplayBar[], live: readonly DisplayBar[]): DisplayBar[] {
+  const last = history.at(-1);
+  if (!last) return [...live];
+  const tail = live.filter(bar => bar.time >= last.time);
+  const boundary = tail[0];
+  if (boundary?.time !== last.time) return [...history, ...tail];
+  return [...history.slice(0, -1), {
+    ...last, high: Math.max(last.high, boundary.high), low: Math.min(last.low, boundary.low),
+    close: boundary.close, volume: Math.max(last.volume, boundary.volume),
+  }, ...tail.slice(1)];
+}
