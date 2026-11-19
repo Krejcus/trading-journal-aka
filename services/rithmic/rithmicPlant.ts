@@ -114,6 +114,10 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
   resolve: (value: RithmicResponse) => void;
   reject: (error: RithmicRequestError) => void;
+  /** Diagnostika: odpovědi stejné šablony bez našeho user_msg a ukázka první z nich. */
+  strays?: number;
+  strayRp?: string;
+  strayHint?: string;
 }
 
 const SOCKET_OPEN = 1;
@@ -252,8 +256,11 @@ export class RithmicPlant {
     }
     return new Promise<RithmicResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const got = this.pending.get(id);
         this.pending.delete(id);
-        reject(new RithmicRequestError(`Rithmic: požadavek ${templateId} bez odpovědi`, 'unknown', templateId));
+        // Kolik řádků přišlo k tomuto požadavku a kolik odpovědí stejné šablony bez našeho user_msg (diagnostika).
+        const detail = got ? ` (řádků ${got.rows.length}, cizích odpovědí ${got.strays ?? 0}${got.strayRp ? ` rp ${got.strayRp}` : ''}${got.strayHint ? ` ukázka ${got.strayHint}` : ''})` : '';
+        reject(new RithmicRequestError(`Rithmic: požadavek ${templateId} bez odpovědi${detail}`, 'unknown', templateId));
       }, options.timeoutMs ?? this.config.requestTimeoutMs ?? 10_000);
       const pending: Pending = {
         id,
@@ -427,6 +434,10 @@ export class RithmicPlant {
         p.rows.push(message);
         return;
       }
+    }
+    // Jen pro diagnostiku vypršení: odpověď na čekající šablonu, která nenese (náš) user_msg.
+    for (const p of this.pending.values()) {
+      if (p.responseTemplateId === message.templateId) { p.strays = (p.strays ?? 0) + 1; p.strayRp = rpCode.join(',') || p.strayRp; p.strayHint ??= JSON.stringify(message.fields).slice(0, 240); break; }
     }
     this.config.onPush?.(message, receivedAt);
   }

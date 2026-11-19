@@ -322,8 +322,9 @@ async function main(): Promise<void> {
         historyCache = { bars: bars.length > 0 ? bars : historyCache.bars, at: Date.now() };
         if (failure) console.log(`[historie] načteno jen ${bars.length} svíček (starší kus selhal: ${failure instanceof Error ? failure.message : String(failure)})`);
       } catch (error) {
-        // Selhání nesmí být tiché: poslední známá historie zůstává, další pokus až za minutu.
-        historyCache = { bars: historyCache.bars, at: Date.now() };
+        // Selhání nesmí být tiché: poslední známá historie zůstává, další pokus nejdřív za 5 minut (každý pokus po
+        // selhání znamená i nové přihlášení spojení pro historii — žádné přihlašování ve smyčce).
+        historyCache = { bars: historyCache.bars, at: Date.now() + 4 * 60_000 };
         console.log(`[historie] čtení selhalo (${error instanceof Error ? error.message : String(error)}) — nechávám poslední známou (${historyCache.bars.length} svíček); spojení pro historii otevřu znovu`);
         // Plant, který neodpovídá ani na malý dotaz, je nejspíš napůl mrtvý: zavřít → obnova ho za 5 s připojí znovu.
         ticker.closePlant('history');
@@ -366,7 +367,7 @@ async function main(): Promise<void> {
             historyOk = true;
             console.log('[historie] obnovena');
             // Stránky, které se připojily bez historie, ji jinak nedostanou: hned načíst a připojit je znovu (jako u cen).
-            if (historyCache.bars.length === 0) {
+            if (historyCache.bars.length === 0 && Date.now() - historyCache.at >= 60_000) {
               historyCache = { bars: [], at: 0 };
               void recentHistory().then((bars) => { if (bars.length > 0) for (const socket of clients) socket.close(4000, 'history restored'); });
             }
