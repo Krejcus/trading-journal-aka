@@ -386,7 +386,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     connectionRef.current = connection;
     connection.start();
     // Návrat do appky (telefon): iOS spojení na pozadí uspí a zavře. Nečekat na časovač dalšího pokusu — připojit hned.
-    const wake = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') connection.kick(); };
+    const wake = () => {
+      const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
+      connection.visibility(visible); // jen měření doby od návratu po první cenu
+      if (visible) connection.kick();
+    };
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake);
     if (typeof window !== 'undefined') { window.addEventListener('pageshow', wake); window.addEventListener('online', wake); }
     return () => {

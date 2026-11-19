@@ -62,6 +62,15 @@ export class RithmicLocalConnection {
   private silent = false;
   private authenticated = false;
   private counter = 0;
+  /**
+   * Měření jednoho otevření appky (start nebo návrat z pozadí) po krocích — jen čísla pro výpis služby, nic neřídí.
+   * Časy jsou hodiny zařízení (ms). Odešle se dvakrát: s první živou cenou a s historií svíček.
+   */
+  private trace: {
+    wakeAt: number; cold: boolean; awayMs: number | null; hadSocket: boolean; closedAt?: number; attempts: number;
+    attemptAt?: number; openAt?: number; keyAt?: number; authAt?: number; helloAt?: number; liveAt?: number; hellos: number; done?: boolean;
+  } | null = null;
+  private hiddenAt: number | null = null;
   private readonly replies = new Map<string, { op: string; resolve: (reply: RithmicLinkReply) => void }>();
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -88,6 +97,7 @@ export class RithmicLocalConnection {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
+    this.trace = { wakeAt: this.now(), cold: true, awayMs: null, hadSocket: false, attempts: 0, hellos: 0 };
     this.connect();
     this.beat = setInterval(() => {
       if (this.socket?.readyState !== OPEN) return;
@@ -117,6 +127,40 @@ export class RithmicLocalConnection {
   /**
    * Appka se vrátila do popředí: nečekat na časovač dalšího pokusu a připojit se hned. Když spojení běží, nedělá nic.
    */
+  /** Appka šla do pozadí / vrátila se: jen pro měření (viz `trace`). Návrat po méně než sekundě se neměří. */
+  visibility(visible: boolean): void {
+    const now = this.now();
+    if (!visible) { this.hiddenAt ??= now; return; }
+    if (this.hiddenAt === null) return;
+    const awayMs = now - this.hiddenAt;
+    this.hiddenAt = null;
+    if (this.stopped || awayMs < 1_000) return;
+    this.trace = { wakeAt: now, cold: false, awayMs, hadSocket: this.socket !== null, attempts: 0, hellos: 0 };
+  }
+
+  /** Odešle měření službě (ta ho jen vypíše). Selhání se ignoruje — měření nesmí nic rozbít. */
+  private report(link: RithmicLinkSocket, stage: 'cena' | 'historie', extra: Record<string, number> = {}): void {
+    const t = this.trace;
+    if (!t) return;
+    const now = this.now();
+    const since = (at: number | undefined, from: number | undefined): number | null => (at === undefined || from === undefined ? null : Math.round(at - from));
+    const metric: Record<string, number | boolean | string | null> = {
+      stage, cold: t.cold, awayMs: t.awayMs === null ? null : Math.round(t.awayMs), hadSocket: t.hadSocket,
+      // Starý (mrtvý) socket po návratu: za jak dlouho se zavřel — do té doby se nové spojení nezačne stavět.
+      staleMs: since(t.closedAt, t.wakeAt), attempts: t.attempts,
+      startMs: since(t.attemptAt, t.wakeAt), // návrat → začátek úspěšného pokusu (včetně neúspěšných)
+      socketMs: since(t.openAt, t.attemptAt), // síť: tunel + TLS + WebSocket
+      keyMs: since(t.keyAt, t.openAt), // čtení klíče zařízení (Klíčenka)
+      authMs: since(t.authAt, t.keyAt), // ověření zařízení službou
+      helloMs: since(t.helloAt, t.authAt), // první zpráva se stavem a svíčkami
+      liveMs: since(t.liveAt, t.authAt), // první živá cena
+      totalMs: Math.round(now - t.wakeAt),
+      pageMs: t.cold && typeof performance !== 'undefined' ? Math.round(performance.now()) : null, // start stránky → teď
+      ...extra,
+    };
+    try { link.send(JSON.stringify({ metric })); } catch { /* jen měření — není to příkaz */ }
+  }
+
   kick(): void {
     if (this.stopped || this.socket) return;
     if (this.retry) { clearTimeout(this.retry); this.retry = null; }
@@ -173,6 +217,12 @@ export class RithmicLocalConnection {
   private connect(): void {
     if (this.stopped) return;
     this.retry = null;
+    if (this.trace && this.trace.authAt === undefined) {
+      this.trace.attempts += 1;
+      this.trace.attemptAt = this.now();
+      this.trace.openAt = undefined;
+      this.trace.keyAt = undefined;
+    }
     this.options.handlers.onLink('connecting');
     const factory = this.options.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as RithmicLinkSocket);
     let mine: RithmicLinkSocket;
@@ -185,11 +235,16 @@ export class RithmicLocalConnection {
     mine.onopen = () => {
       if (this.socket !== mine) return;
       this.lastHeartbeatAt = this.now();
-      if (!this.options.auth) { this.authenticated = true; this.options.handlers.onLink('open'); return; }
+      if (this.trace && this.trace.authAt === undefined) this.trace.openAt = this.now();
+      if (!this.options.auth) {
+        if (this.trace && this.trace.authAt === undefined) { this.trace.keyAt = this.now(); this.trace.authAt = this.now(); }
+        this.authenticated = true; this.options.handlers.onLink('open'); return;
+      }
       this.authenticated = false;
       void Promise.resolve().then(() => this.options.auth!()).then((key) => {
         if (this.socket !== mine) return;
         if (!key) { this.refuse(mine, 'V tomto zařízení chybí klíč spárování.'); return; }
+        if (this.trace && this.trace.authAt === undefined) this.trace.keyAt = this.now();
         try { mine.send(JSON.stringify({ auth: key })); } catch { mine.close(); }
         // Klíčenku nejde přečíst (zamčený telefon, chyba systému): přechodný stav — spojení zavřít a zkoušet dál,
         // NE nabízet nové spárování. Po odemčení se připojí samo.
@@ -197,6 +252,7 @@ export class RithmicLocalConnection {
     };
     mine.onclose = () => {
       if (this.socket !== mine) return;
+      if (this.trace && this.trace.hadSocket && this.trace.closedAt === undefined) this.trace.closedAt = this.now();
       this.socket = null;
       this.authenticated = false;
       this.failPending();
@@ -214,7 +270,10 @@ export class RithmicLocalConnection {
       if (!this.authenticated) {
         // Před ověřením zařízení se čeká jen na verdikt služby; cokoli jiného se zahodí.
         if (message.type !== 'auth') return;
-        if (message.ok === true) { this.authenticated = true; this.lastHeartbeatAt = this.now(); this.options.handlers.onLink('open'); }
+        if (message.ok === true) {
+          if (this.trace && this.trace.authAt === undefined) this.trace.authAt = this.now();
+          this.authenticated = true; this.lastHeartbeatAt = this.now(); this.options.handlers.onLink('open');
+        }
         // `retry`: potíž je na straně služby (např. nečitelný seznam zařízení) — zkoušet dál, ne párovat znovu.
         else if (message.retry === true) mine.close();
         else this.refuse(mine, typeof message.error === 'string' ? message.error : 'Služba toto zařízení odmítla.');
@@ -222,6 +281,20 @@ export class RithmicLocalConnection {
       }
       const receivedAt = this.now();
       if (receivedAt - this.lastHeartbeatAt > RESYNC_GAP_MS) { mine.close(); return; }
+      const trace = this.trace;
+      if (trace && !trace.done) {
+        if (message.type === 'hello') {
+          trace.hellos += 1;
+          if (trace.helloAt === undefined) trace.helloAt = receivedAt;
+          // Druhá zpráva hello nese historii svíček: tím je graf úplný a měření končí.
+          else if (trace.hellos === 2) { this.report(mine, 'historie', { bars: Array.isArray(message.bars) ? message.bars.length : 0 }); if (trace.liveAt !== undefined) trace.done = true; }
+        } else if (trace.liveAt === undefined && (message.type === 'tick' || message.type === 'beat') && typeof message.at === 'number' && receivedAt - message.at <= this.beatTimeoutMs) {
+          trace.liveAt = receivedAt;
+          this.report(mine, 'cena', { feed: message.type === 'tick' ? 1 : 0 });
+          // Spojení přežilo pozadí (žádné nové hello nepřijde): tím měření končí.
+          if (trace.attempts === 0 || trace.hellos >= 2) trace.done = true;
+        }
+      }
       if (message.type === 'beat' || message.type === 'tick') {
         if (typeof message.at !== 'number' || receivedAt - message.at > this.beatTimeoutMs) return;
         this.lastHeartbeatAt = Math.max(this.lastHeartbeatAt, Math.min(receivedAt, message.at));

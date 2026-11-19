@@ -645,8 +645,16 @@ async function main(): Promise<void> {
         const receivedAt = performance.now();
         let id: unknown = null;
         try {
-          const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand };
+          const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand; metric?: unknown };
           id = message.id ?? null;
+          // Měření otevření appky (kroky od návratu po první cenu): jen výpis, nic neřídí. Bere jen čísla a ano/ne.
+          if (message.metric && typeof message.metric === 'object' && !message.command) {
+            const parts = Object.entries(message.metric as Record<string, unknown>).slice(0, 20)
+              .filter(([key, value]) => /^[A-Za-z]{1,12}$/.test(key) && (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || (key === 'stage' && (value === 'cena' || value === 'historie'))))
+              .map(([key, value]) => `${key} ${typeof value === 'number' ? Math.round(value) : value}`);
+            console.log(`[měření] otevření ${access.label ?? (access.local ? 'PC' : 'zařízení')}: ${parts.join(' · ')}`);
+            return;
+          }
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
           const at = Date.now();
           recent = recent.filter((time) => at - time < 10_000);
