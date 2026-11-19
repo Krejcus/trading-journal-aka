@@ -293,7 +293,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 Pět návratů na telefonu: staré spojení skončilo za 1–100 ms, nový pokus začal za 2023–2101 ms.
 První tick přišel za 2169–2570 ms. Příčinou společné prodlevy je dvousekundový reconnect po pozdě doručeném close.
 Lokální oprava jednou přeskočí prodlevu při zániku původního spojení těsně po návratu. Další selhání používá běžný odstup.
-Zrychlení po instalaci na skutečném telefonu zbývá přeměřit.
+Instalace potvrzena na skutečném iPhonu. Čtyři návraty po 6,0 / 6,0 / 119,4 / 33,2 s: start připojení 65 / 48 / 107 / 99 ms, první tick nebo heartbeat 277 / 237 / 366 / 348 ms (tick / heartbeat / heartbeat / tick), historie 276 / 237 / 2370 / 347 ms. Při studeném startu první tick 3213 ms od startu stránky, z toho 238 ms od zahájení spojení. Měření končí příjmem zprávy na telefonu.
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
