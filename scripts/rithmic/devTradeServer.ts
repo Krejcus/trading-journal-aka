@@ -54,7 +54,7 @@ const LIVE_TRADING = process.argv.includes('--live-trading') || CLOSE_ONLY;
 const HISTORY_HOURS = 168;
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
-const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
+const gatewayUrl = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
 const KEYCHAIN_SERVICE = cli('keychain') ?? (SYSTEM === 'Rithmic Test' ? 'alphatrade-rithmic-test' : 'alphatrade-rithmic-prop');
 const arg = (name: string, fallback: string): string => {
   const i = process.argv.indexOf(`--${name}`);
@@ -269,7 +269,7 @@ async function main(): Promise<void> {
     loginAllowed,
     // Odběr změn účtu: Rithmic sám pošle zprávu, když se účet změní → limity se přečtou znovu (ne dotazováním v čase).
     onAccountUpdate: () => { accountSignalAt = Date.now(); accountSignals += 1; console.log(`[účet] Rithmic oznámil změnu účtu (${accountSignals}×) — limity přečtu znovu`); },
-    url: URL, credentials: creds, socketFactory, registry,
+    url: gatewayUrl, credentials: creds, socketFactory, registry,
     // Každý systém má vlastní záznam ochrany (záznamy z testu nesmí platit pro skutečný účet a naopak).
     protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
     onIncident: (incident) => {
@@ -422,7 +422,7 @@ async function main(): Promise<void> {
     }, delayMs);
   }
   const ticker = new RithmicClient({
-    url: URL, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
+    url: gatewayUrl, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
     events: {
       onTick: (tick) => {
         if (tick.symbol !== CONTRACT) return;
