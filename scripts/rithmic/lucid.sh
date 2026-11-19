@@ -2,6 +2,7 @@
 # Služba pro účet Lucid jedním příkazem. Spouští JEN člověk v terminálu (obchodní režim chce opsání věty).
 #
 #   scripts/rithmic/lucid.sh             obchodní režim: vydá souhlas a spustí službu (PC 3311, telefon 3313)
+#   scripts/rithmic/lucid.sh obnovit     existující souhlas, potvrzení přes Touch ID
 #   scripts/rithmic/lucid.sh cteni       jen čtení (graf a stav účtu, žádné příkazy)
 #   scripts/rithmic/lucid.sh zavirani    jen zavírání a správa SL/TP (když souhlas vypršel a pozice zůstala)
 #
@@ -37,6 +38,9 @@ case "$MODE" in
       --hours "${HODIN:-12}" --max-quantity "${KS:-3}" "${NO_STOP[@]}"
     exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading
     ;;
+  obnovit)
+    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT"
+    ;;
   cteni)
     exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only
     ;;
@@ -44,7 +48,7 @@ case "$MODE" in
     exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --close-only
     ;;
   *)
-    echo "Neznámý režim: $MODE (obchod | cteni | zavirani)" >&2
+    echo "Neznámý režim: $MODE (obchod | obnovit | cteni | zavirani)" >&2
     exit 2
     ;;
 esac

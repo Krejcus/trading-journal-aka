@@ -288,6 +288,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-19 — Obnova služby Lucid na Macu (Codex)
+
+Filip chce při restartu použít už vydaný souhlas. Režim `scripts/rithmic/lucid.sh obnovit` vyžádá Touch ID před předáním služby a zachová původní účet, limity a expiraci. Nová verze předá běh jen při ověřeném prázdném účtu bez příkazů a bez rozpracované operace. Při první migraci čeká až dvě minuty na ruční ukončení původní verze. Lokální změna prošla oponenturou, převzetí na skutečném účtu zatím neověřeno.
+
 ### 2026-11-19 — iPhone: spojení během načítání LIVE a historie z paměti Macu
 
 Na nativním LIVE probíhá připojení po obnově přihlášeného uživatele souběžně s načítáním UI.

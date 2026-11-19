@@ -558,6 +558,17 @@ export class LocalExec {
   private addTimer: ReturnType<typeof setTimeout> | null = null;
   private automation = false;
   /** Povolí samočinné zápisy služby (dnes jen zrušení čekajícího přikoupení). Volá spouštěč po potvrzení účtu. */
+  /** Is it safe for the local service to leave this account for a requested maintenance restart? */
+  canRestart(symbol: string): boolean {
+    const state = this.state();
+    return this.connected && state.connected && !state.halted && state.accountId !== null && !state.blocked
+      && !state.positions.length && !state.orders.length && !state.brackets.length
+      && !this.reserved.size && !this.legsUncertain.size && !this.legsMoving.size
+      && !this.pendingResize.size && !this.splitRunning.size
+      && !this.broker.hasPendingWrites(state.accountId, symbol) && this.broker.executionNet(state.accountId, symbol) === 0
+      && this.broker.unresolvedBracketTags(state.accountId, symbol).length === 0;
+  }
+
   enableAutomation(): void {
     this.automation = true;
     this.watchPendingAdds();

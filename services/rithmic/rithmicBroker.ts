@@ -163,6 +163,7 @@ export interface RithmicBrokerPort extends BrokerPort {
   endBracketResize(accountId: number, entryBrokerOrderId: string, exitedQuantity: number): Promise<void>;
   /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
   executionNet(accountId: number, symbol: string): number | null;
+  hasPendingWrites(accountId: number, symbol: string): boolean;
   /** Průměrná vstupní cena z posledního snímku pozic — JEN zobrazení (čára pozice po obnově spojení). */
   snapshotAveragePrice(accountId: number, symbol: string): number | null;
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
@@ -1653,6 +1654,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       if (!saved) throw new Error('Rithmic: záznam ochrany po dělení vstupu nejde uložit');
     },
     snapshotAveragePrice: (account, symbol) => snapshotAverage.get(`${account}:${symbol}`) ?? null,
+    hasPendingWrites(account, symbol) {
+      const key = `${account}:${symbol}`;
+      return writeOnTheWay(key) || flattening.has(key) || closing.has(key) || protection.hasUnresolvedExit(account, symbol);
+    },
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
     routeEpoch: () => epoch,
 
