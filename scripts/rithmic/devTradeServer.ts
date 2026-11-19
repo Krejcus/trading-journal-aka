@@ -151,7 +151,10 @@ async function main(): Promise<void> {
     if (!CLOSE_ONLY) startConsent = early as LiveTradingConsent; // prošel kontrolou (strop kusů i povinnost SL jsou ověřené)
   }
   const socketFactory = (url: string): RithmicSocketLike => {
-    const socket = new WebSocket(url, { perMessageDeflate: false }) as unknown as RithmicSocketLike;
+    const raw = new WebSocket(url, { perMessageDeflate: false });
+    // Pojistka: chyba spojení k Rithmicu nikdy nesmí shodit proces (o výpadku rozhoduje obnova spojení výš).
+    raw.on('error', () => undefined);
+    const socket = raw as unknown as RithmicSocketLike;
     if (!READ_ONLY) return socket;
     // Pojistka na drátě: v režimu jen pro čtení se zápisový rámec nikdy neodešle, ať ho pošle kdokoli.
     const rawSend = socket.send.bind(socket);

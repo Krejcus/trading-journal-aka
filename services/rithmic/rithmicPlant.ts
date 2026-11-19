@@ -337,7 +337,9 @@ export class RithmicPlant {
     if (socket) {
       socket.onopen = null;
       socket.onmessage = null;
-      socket.onerror = null;
+      // Ne null: pozdní chyba spojení (např. vypršení TCP připojení až po našem vlastním timeoutu) by bez posluchače
+      // shodila celý proces (19. 11. 2026 v noci: ETIMEDOUT při obnově spojení ukončil službu).
+      socket.onerror = () => undefined;
       socket.onclose = null;
     }
     this.socket = null;
