@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-19 — iPhone: změřený návrat do grafu
+
+Pět návratů na telefonu: staré spojení skončilo za 1–100 ms, nový pokus začal za 2023–2101 ms.
+První tick přišel za 2169–2570 ms. Příčinou společné prodlevy je dvousekundový reconnect po pozdě doručeném close.
+Lokální oprava jednou přeskočí prodlevu při zániku původního spojení těsně po návratu. Další selhání používá běžný odstup.
+Zrychlení po instalaci na skutečném telefonu zbývá přeměřit.
+
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
 - Příkaz z panelu nese množství zobrazené pozice a ID jejích ochran. Služba odmítne zastaralé přikoupení i po zásahu stopu. U částečného zavření ověří vybraný vstup, vyplnění jeho TP, zrušení sesterského SL, přesný zůstatek pozice a původní ochrany zbývajících kusů.

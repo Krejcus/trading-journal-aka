@@ -70,6 +70,7 @@ export class RithmicLocalConnection {
     wakeAt: number; cold: boolean; awayMs: number | null; hadSocket: boolean; closedAt?: number; attempts: number;
     attemptAt?: number; openAt?: number; keyAt?: number; authAt?: number; helloAt?: number; liveAt?: number; hellos: number; done?: boolean;
   } | null = null;
+  private resumeRetryUntil = 0;
   private hiddenAt: number | null = null;
   private readonly replies = new Map<string, { op: string; resolve: (reply: RithmicLinkReply) => void }>();
   private readonly now: () => number;
@@ -96,6 +97,7 @@ export class RithmicLocalConnection {
 
   start(): void {
     if (!this.stopped) return;
+    this.resumeRetryUntil = 0;
     this.stopped = false;
     this.trace = { wakeAt: this.now(), cold: true, awayMs: null, hadSocket: false, attempts: 0, hellos: 0 };
     this.connect();
@@ -130,11 +132,13 @@ export class RithmicLocalConnection {
   /** Appka šla do pozadí / vrátila se: jen pro měření (viz `trace`). Návrat po méně než sekundě se neměří. */
   visibility(visible: boolean): void {
     const now = this.now();
-    if (!visible) { this.hiddenAt ??= now; return; }
+    if (!visible) { this.resumeRetryUntil = 0; this.hiddenAt ??= now; return; }
     if (this.hiddenAt === null) return;
     const awayMs = now - this.hiddenAt;
     this.hiddenAt = null;
     if (this.stopped || awayMs < 1_000) return;
+    // iOS can deliver close just after visibilitychange, when kick() still sees the old socket.
+    this.resumeRetryUntil = this.socket ? now + 1_000 : 0;
     this.trace = { wakeAt: now, cold: false, awayMs, hadSocket: this.socket !== null, attempts: 0, hellos: 0 };
   }
 
@@ -260,7 +264,9 @@ export class RithmicLocalConnection {
       // Po obnově je první stav výchozí, ne událost; starý stav se nesmí tvářit jako živý.
       this.options.handlers.onSessionReset();
       this.options.handlers.onLink('closed');
-      if (!this.stopped) this.retry = setTimeout(() => this.connect(), this.reconnectMs);
+      const retryImmediately = this.now() < this.resumeRetryUntil;
+      this.resumeRetryUntil = 0;
+      if (!this.stopped) this.retry = setTimeout(() => this.connect(), retryImmediately ? 0 : this.reconnectMs);
     };
     mine.onmessage = (event) => {
       if (this.socket !== mine) return;
