@@ -22,13 +22,13 @@ const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositi
 });
 const ack = (): LeaderOrderManageResult => ({ type: 'leader-order-managed', operationId: 'manage:x', action: 'move-stop', status: 'acknowledged', checkedAt: 1, blockers: [] });
 
-const render = (opts: { moveLimit?: boolean; groupLimitMove?: boolean; groupLimitStateHash?: string; summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
+const render = (opts: { closeWithoutStop?: boolean; moveLimit?: boolean; groupLimitMove?: boolean; groupLimitStateHash?: string; summary?: LiveChartPositionSummary; manage?: ReturnType<typeof vi.fn> | null; canClose?: boolean; guardAt?: (at: number) => LiveChartPositionSummary | null; busy?: boolean }) => {
   captured.props = null;
   const notices: string[] = [];
   const state = { pendingMove: null, setPendingMove: vi.fn(), busyRef: { current: opts.busy === true } };
   renderToStaticMarkup(React.createElement(LivePhoneOrderLines, {
     api: {} as never, state, summary: opts.summary ?? summary(), manage: (opts.manage ?? null) as never,
-    moveLimit: opts.moveLimit, groupLimitMove: opts.groupLimitMove, groupLimitStateHash: opts.groupLimitStateHash, canClose: opts.canClose ?? true, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
+    moveLimit: opts.moveLimit, groupLimitMove: opts.groupLimitMove, groupLimitStateHash: opts.groupLimitStateHash, canClose: opts.canClose ?? true, closeWithoutStop: opts.closeWithoutStop, entryAvg: 28975.5, isDark: true, onNotice: text => notices.push(text),
     ...(opts.guardAt ? { guardAt: opts.guardAt } : {}),
   }));
   return { props: captured.props!, notices, state };
@@ -92,6 +92,22 @@ describe('LIVE telefon: čáry obchodu a správa (napojení 2. 11.)', () => {
     pending.props.onCancel(lineOf(pending.props, 'entry'));
     await Promise.resolve();
     expect(manage).toHaveBeenLastCalledWith('cancel-entry', 28975.5, undefined);
+  });
+
+  it('× u pozice BEZ SL (po nepovedené výměně ochrany) zavře pozici s odkazem na vstup — žádné „cena SL/TP není známá"', async () => {
+    const manage = vi.fn(async () => ack());
+    const bare = render({ manage, closeWithoutStop: true, summary: summary({ stop: null, target: null, protection: 'bez ochrany' }) });
+    bare.props.onCancel(lineOf(bare.props, 'entry'));
+    await Promise.resolve();
+    expect(manage).toHaveBeenLastCalledWith('close-position', 28975.5, undefined);
+    expect(bare.notices.some(text => /není jedna nebo není známá/.test(text))).toBe(false);
+    // Tradovate (bez příznaku): beze změny — nic neodejde, hláška odkáže na Flatten (brána C8 zůstává).
+    manage.mockClear();
+    const tradovate = render({ manage, summary: summary({ stop: null, target: null, protection: 'bez ochrany' }) });
+    tradovate.props.onCancel(lineOf(tradovate.props, 'entry'));
+    await Promise.resolve();
+    expect(manage).not.toHaveBeenCalled();
+    expect(tradovate.notices.some(text => /není jedna nebo není známá/.test(text))).toBe(true);
   });
 
   it.each(['protected', 'target-only', 'bare'] as const)('group %s × -> actual shared desk bridge -> validator sends leader entry price, never SL or aggregate qty', async mode => {

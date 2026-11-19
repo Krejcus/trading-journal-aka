@@ -80,6 +80,21 @@ export type RithmicIncidentKind =
   /** Minulý běh skončil uprostřed zavírání — nic se neopakuje, je nutná kontrola stavu. */
   | 'flatten-interrupted';
 
+/** Řádek diagnostického záznamu notifikací (viz `onOrderJournal`). */
+export interface RithmicOrderJournalEntry {
+  at: number;
+  update: RithmicOrderUpdate;
+  /** Kniha zprávu přijala jako nový fill / jako už viděný fill / jako „vyplněno" bez exekuce. */
+  fill: boolean;
+  duplicateFill: boolean;
+  awaitingFill: boolean;
+  attention?: string;
+  /** Kolik vyplněných kusů jádru po zprávě chybí (`fillGap`). */
+  gap: number | null;
+  /** Řádek snímku mimo svůj požadavek (kniha ho neuplatní). */
+  lateSnapshot?: boolean;
+}
+
 export interface RithmicIncident {
   kind: RithmicIncidentKind;
   message: string;
@@ -93,6 +108,11 @@ export interface RithmicBrokerConfig {
   registry: RithmicAccountRegistry;
   /** Obchodní selhání a stavy, které nejdou jádru říct přes `BrokerEvent`. */
   onIncident?: (incident: RithmicIncident) => void;
+  /**
+   * Diagnostika: každá notifikace příkazu (351/352) tak, jak dorazila, a co z ní kniha udělala. Jen záznam —
+   * výjimka posluchače se spolkne a nic neřídí (příčiny `fill-missing` se bez záznamu nedají doložit).
+   */
+  onOrderJournal?: (entry: RithmicOrderJournalEntry) => void;
   now?: () => number;
   requestTimeoutMs?: number;
   /** Jak dlouho čekat na konečný stav rušeného příkazu, než se vrátí „ověř čtením". */
@@ -396,7 +416,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
   function handleOrderUpdate(source: RithmicClient, update: RithmicOrderUpdate): void {
     if (client !== source) return;
     const account = numberByText.get(update.accountId);
+    const journal = (entry: Omit<RithmicOrderJournalEntry, 'at' | 'update'>): void => {
+      try { config.onOrderJournal?.({ at: now(), update, ...entry }); } catch { /* záznam nikdy neruší příjem */ }
+    };
     if (update.isSnapshot) {
+      journal({ fill: false, duplicateFill: false, awaitingFill: false, gap: null, lateSnapshot: true });
       // Řádek snímku mimo svůj požadavek (změřeno: nenastává). Nevíme, ke kterému čtení patří
       // ani jak je starý, takže jím NIKDY nepřepisujeme příkaz, který kniha zná. Neznámý příkaz
       // znamená, že nám něco uniklo → čistá obnova.
@@ -419,6 +443,11 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
     const seen = account !== undefined ? protection.observe(account, update) : null;
     if (seen?.bound) void saveProtection();
     const delta = book.apply(update);
+    journal({
+      fill: Boolean(delta.fill), duplicateFill: delta.duplicateFill === true, awaitingFill: delta.awaitingFill === true,
+      ...(delta.attention ? { attention: delta.attention } : {}),
+      gap: account !== undefined && update.basketId ? book.fillGap(account, update.basketId) : null,
+    });
     // „Živá je novější" platí jen když kniha zprávu opravdu uplatnila.
     if ((delta.order || delta.fill) && update.basketId) touchedAt.set(update.basketId, liveSeq);
     if (account !== undefined && update.basketId && (delta.fill || delta.awaitingFill || (update.notifyType === 'FILL' && !delta.duplicateFill))) {

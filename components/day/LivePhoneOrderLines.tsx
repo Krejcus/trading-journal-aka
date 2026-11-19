@@ -134,7 +134,7 @@ export function livePhoneWorkingView(
  * nikdy nic nepošle) a ✎ na SL/TP, které jen otevře list správy (U10).
  */
 export function LivePhoneOrderLines({
-  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, groupLimitMove = false, groupLimitStateHash = null, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
+  api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, groupLimitMove = false, groupLimitStateHash = null, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, closeWithoutStop = false, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
   extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
 }: {
   api: ChartViewApi;
@@ -171,6 +171,8 @@ export function LivePhoneOrderLines({
   } | null;
   /** × u pozice jen za čerstvě zapnuté kopírky (ne shadow) — jako PC. */
   canClose: boolean;
+  /** × u pozice bez SL pošle odkaz na vstup (jen most, který zavírá bez ceny — Rithmic). */
+  closeWithoutStop?: boolean;
   /** Průměrný vstup leadera od workeru (BE). */
   entryAvg: number | null;
   /** Čekající přikoupení do pozice (čára s × = zrušit jen přikoupení). */
@@ -327,7 +329,9 @@ export function LivePhoneOrderLines({
         }
         if (line.ownerId !== LIVE_POSITION_OWNER || line.kind !== 'entry' || !summary) return;
         if (summary.kind === 'pending') void run('cancel-entry', summary.leader?.entry);
-        else void run('close-position', line.groupLimitStateHash ? summary.leader?.entry ?? summary.entry : summary.stop ?? closeExpect, undefined, undefined, line.groupLimitStateHash);
+        // Rithmic: pozice bez SL (např. po nepovedené výměně ochrany) jde zavřít taky — odkazem je vstup, jako sólo × na PC
+        // (LiveTradingScreen). Cena nic neautorizuje; služba zavírá podle kontraktu (INV-UI-04). Tradovate beze změny (C8).
+        else void run('close-position', line.groupLimitStateHash ? summary.leader?.entry ?? summary.entry : summary.stop ?? closeExpect ?? (closeWithoutStop ? summary.entry : null), undefined, undefined, line.groupLimitStateHash);
       }}
       onAction={(line, actionId) => {
         if (isLiveDisplayOnlyLine(line) || line.ownerId !== LIVE_POSITION_OWNER || !summary) return;

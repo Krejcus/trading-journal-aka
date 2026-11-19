@@ -24,6 +24,7 @@ import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent }
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
+import { createOrderJournal } from '../../services/rithmic/orderJournal';
 import { mergeRithmicDisplayHistory } from '../../lib/rithmicCandleSeed';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
@@ -278,8 +279,12 @@ async function main(): Promise<void> {
     if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
     return spendBudget();
   };
+  // Diagnostika: každá notifikace příkazu do souboru na den (results/orders-<systém>-<den>.jsonl). Nic neřídí.
+  const orderJournal = createOrderJournal(results, SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase());
+  console.log(`[záznam] Notifikace příkazů se zapisují do ${orderJournal.file()}`);
   const broker = createRithmicBroker({
     loginAllowed,
+    onOrderJournal: (entry) => orderJournal.write('order', entry),
     // Odběr změn účtu: Rithmic sám pošle zprávu, když se účet změní → limity se přečtou znovu (ne dotazováním v čase).
     onAccountUpdate: () => { accountSignalAt = Date.now(); accountSignals += 1; console.log(`[účet] Rithmic oznámil změnu účtu (${accountSignals}×) — limity přečtu znovu`); },
     url: gatewayUrl, credentials: creds, socketFactory, registry,
@@ -287,6 +292,7 @@ async function main(): Promise<void> {
     protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
     onIncident: (incident) => {
       console.log(`[incident] ${incident.kind}: ${incident.message}`);
+      orderJournal.write('incident', incident);
       exec?.onIncident(incident);
     },
   });
