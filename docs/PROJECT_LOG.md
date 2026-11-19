@@ -288,6 +288,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-19 — Diagnostika Touch ID
+
+Po opravě URL se Filipův start zastavil u obecné chyby biometrie. Obnova sestaví samostatný lokální program v soukromé dočasné složce a rozliší chybu překladu, nedostupnou biometrii a výsledek ověření včetně chybového kódu macOS. Původní příčina na Macu zatím není známá.
+
 ### 2026-11-19 — Oprava spuštění Touch ID
 
 Při prvním spuštění obnova skončila před biometrickou výzvou. Řetězec s adresou brány překrýval konstruktor URL potřebný pro nalezení souboru Swift. Adresa má nyní vlastní název.

@@ -8,12 +8,13 @@
  */
 import { requestLucidHandoff } from './lucidHandoff';
 import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
 import { scopeProblem, type DeviceScope } from '../../services/rithmic/devicePairing';
@@ -157,12 +158,23 @@ async function main(): Promise<void> {
     }
     const message = `Obnovit obchodování AlphaTrade na ${SYSTEM}, účet ${account}, strop ${startConsent!.maxQuantity}, SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'}, do ${new Date(startConsent!.expiresAt).toLocaleTimeString('cs-CZ')}.`;
     const helper = fileURLToPath(new URL('./confirmResume.swift', import.meta.url));
-    await new Promise<void>((resolve, reject) => {
-      execFile('/usr/bin/swift', [helper, message], { timeout: 90_000 }, error => {
-        if (error) reject(new Error('Touch ID nepotvrdilo obnovení služby.'));
-        else resolve();
-      });
-    });
+    const temp = mkdtempSync(join(tmpdir(), 'alphatrade-touch-'));
+    const binary = join(temp, 'AlphaTrade');
+    const run = promisify(execFile);
+    let stage = 'Příprava ověření Touch ID';
+    try {
+      console.log(stage + '…');
+      await run('/usr/bin/swiftc', ['-module-cache-path', join(temp, 'modules'), helper, '-o', binary], { timeout: 120_000 });
+      stage = 'Potvrzení přes Touch ID';
+      console.log(stage + '…');
+      await run(binary, [message], { timeout: 90_000 });
+    } catch (error) {
+      const failure = error as { stderr?: string; code?: string | number; killed?: boolean };
+      const detail = failure.stderr?.trim() || (failure.killed ? 'Vypršel čas pro dokončení.' : String(failure.code ?? 'Neznámá chyba.'));
+      throw new Error(stage + ' — ' + detail);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   }
   let heldBy: number | null = null;
   try { const pid = Number(readFileSync(lockFile, 'utf8').trim()); heldBy = Number.isInteger(pid) && pid > 0 ? pid : null; } catch { heldBy = null; }
