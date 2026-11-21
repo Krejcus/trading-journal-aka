@@ -2,6 +2,7 @@
 // JEN ZOBRAZENÍ: výběr mění, čí čísla lišta ukazuje. Na který účet graf posílá příkazy, se tady
 // nemění a nic odtud neodchází (INV-UI-*: nic zobrazovacího nesmí autorizovat příkaz).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Layers, Search } from 'lucide-react';
 
 export type LiveBarAccountStatus = 'active' | 'dll-locked' | 'breached' | 'unverifiable';
@@ -121,9 +122,10 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark, compact = fals
   const [tab, setTab] = useState<'accounts' | 'groups'>('accounts');
   const [query, setQuery] = useState('');
   const box = useRef<HTMLDivElement | null>(null);
+  const sheet = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
-    const close = (event: MouseEvent) => { if (box.current && !box.current.contains(event.target as Node)) setOpen(false); };
+    const close = (event: MouseEvent) => { const target = event.target as Node; if (box.current && !box.current.contains(target) && !sheet.current?.contains(target)) setOpen(false); };
     const esc = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', esc);
@@ -166,16 +168,75 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark, compact = fals
     return g.leaderId === id ? `leader skupiny ${g.name}` : `follower ve skupině ${g.name}`;
   };
 
+  const menu = (
+    <div ref={sheet} role="dialog" aria-label="Výběr účtu nebo skupiny" className={compact
+      ? `native-fixed-above-tab-bar fixed inset-x-0 bottom-0 z-[901] rounded-t-2xl border-t p-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] shadow-2xl ${panel}`
+      : `absolute right-0 top-[calc(100%+6px)] z-[95] w-[420px] max-w-[calc(100vw-16px)] rounded-xl border p-2 shadow-2xl ${panel}`} data-live-bar-menu>
+      {compact && <div className={`mx-auto mb-2 h-1 w-10 rounded-full ${isDark ? 'bg-white/20' : 'bg-slate-300'}`} />}
+      <div className={`flex gap-1 rounded-lg p-0.5 ${isDark ? 'bg-white/[0.05]' : 'bg-slate-100'}`}>
+        {(['accounts', 'groups'] as const).map(id => <button key={id} type="button" onClick={() => { setTab(id); setQuery(''); }}
+          className={`h-8 flex-1 rounded-md text-[12px] font-extrabold ${tab === id ? isDark ? 'bg-white/10 text-white' : 'bg-white text-slate-900 shadow-sm' : muted}`}>
+          {id === 'accounts' ? `Účty ${data.accounts.length}` : `Kopírovací skupiny ${data.groups.length}`}</button>)}
+      </div>
+      <label className={`mt-2 flex h-8 items-center gap-2 rounded-lg border px-2.5 ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200'}`}>
+        <Search size={13} className={muted} />
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder={tab === 'accounts' ? 'Hledat účet nebo propku…' : 'Hledat skupinu…'} className="w-full bg-transparent text-[12px] outline-none" />
+      </label>
+      <div className={`mt-1 overflow-y-auto pr-0.5 ${compact ? 'max-h-[60vh]' : 'max-h-[380px]'}`}>
+        {tab === 'accounts' ? firms.map(([firm, list]) => <div key={firm}>
+          <div className={`flex items-center px-2 pb-1 pt-2.5 text-[10px] font-extrabold uppercase tracking-[0.08em] ${muted}`}>{firm}<span className="ml-auto">{list.length}</span></div>
+          {list.map(item => {
+            const day = liveBarAccountDay(data, item.id, openPnl);
+            const dead = item.status === 'breached';
+            const on = selection.kind === 'account' && selection.id === item.id;
+            return <button key={item.id} type="button" disabled={dead} onClick={() => { setSelection({ kind: 'account', id: item.id }); setOpen(false); }}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left disabled:opacity-40 ${on ? rowOn : rowHover}`} data-live-bar-account={item.id}>
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-indigo-500/80 text-[10px] font-black text-white">{item.firm.slice(0, 2).toUpperCase()}</span>
+              <span className="min-w-0 flex-1"><b className="block truncate text-[12.5px]">{item.name}</b>
+                <span className={`block truncate text-[11px] ${muted}`}>{dead ? 'vyřazený · do LIVE nejde' : roleText(item.id)}{item.id === data.tradedAccountId ? ' · obchoduje graf' : ''}</span></span>
+              <span className="flex flex-col items-end gap-0.5">
+                <b className={`font-mono text-[12px] ${tone(day)}`}>{usd(day)}</b>
+                {item.status && STATUS_TEXT[item.status] && <span className={`rounded px-1.5 text-[9.5px] font-extrabold ${item.status === 'dll-locked' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>{STATUS_TEXT[item.status]}</span>}
+              </span>
+            </button>;
+          })}
+        </div>) : data.groups.filter(item => !q || `${item.name} ${accounts.get(item.leaderId)?.name ?? ''}`.toLowerCase().includes(q)).map(item => {
+          const day = liveBarGroupDay(data, item, openPnl);
+          const on = selection.kind === 'group' && selection.id === item.id;
+          const inPos = item.followers.filter(f => f.copying).length;
+          return <button key={item.id} type="button" onClick={() => { setSelection({ kind: 'group', id: item.id }); setOpen(false); }}
+            className={`mb-1.5 block w-full rounded-lg border px-3 py-2.5 text-left ${isDark ? 'border-white/10' : 'border-slate-200'} ${on ? rowOn : rowHover}`} data-live-bar-group={item.id}>
+            <span className="flex items-center gap-2"><i className={`h-2 w-2 rounded-full ${STATE_DOT[item.state]}`} /><b className="text-[13px]">{item.name}</b>
+              <span className={`rounded px-1.5 text-[9.5px] font-extrabold ${item.state === 'ARMED' ? 'bg-emerald-500/15 text-emerald-500' : item.state === 'DISARMED' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>{item.state}</span>
+              <b className={`ml-auto font-mono text-[12.5px] ${tone(day)}`}>{usd(day)}</b></span>
+            <span className={`mt-1 block text-[11px] ${muted}`}>Leader {accounts.get(item.leaderId)?.name ?? item.leaderId} → {item.followers.length} účtů · {inPos} kopíruje</span>
+            <span className="mt-2 flex flex-wrap gap-[3px]">
+              <i className="h-2.5 w-4 rounded-[3px] bg-indigo-500" title="leader" />
+              {item.followers.map(f => {
+                const st = accounts.get(f.accountId)?.status;
+                const color = st === 'breached' || st === 'unverifiable' ? 'bg-rose-500' : st === 'dll-locked' ? 'bg-amber-500' : f.copying ? 'bg-emerald-500' : isDark ? 'bg-white/15' : 'bg-slate-300';
+                return <i key={f.accountId} className={`h-2.5 w-2.5 rounded-[3px] ${color}`} title={accounts.get(f.accountId)?.name ?? f.accountId} />;
+              })}
+            </span>
+          </button>;
+        })}
+      </div>
+      <p className={`mt-1 border-t px-1.5 pt-2 text-[11px] leading-snug ${muted} ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+        Výběr mění jen to, čí P&L lišta ukazuje. Graf obchoduje dál účet {traded?.name ?? data.tradedAccountId}.
+      </p>
+    </div>
+  );
+
   return (
     <div ref={box} className={`relative flex items-center gap-1 ${compact ? 'min-w-0' : ''}`} data-live-account-bar>
       {compact && <span className={`flex h-8 items-stretch overflow-hidden rounded-lg border ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white/70'}`} data-live-bar-compact-pnl>
         <span className="flex flex-col justify-center px-2 leading-none" data-live-bar-account-pnl>
           <span className={`text-[9px] font-bold uppercase tracking-wide ${muted}`}>{selectedGroup ? 'Leader' : 'Dnes'}</span>
-          <b className={`mt-0.5 font-mono text-[12px] font-extrabold ${tone(accountDay)}`}>{usd(accountDay)}</b>
+          <b className={`mt-0.5 whitespace-nowrap font-mono text-[12px] font-extrabold ${tone(accountDay)}`}>{usd(accountDay)}</b>
         </span>
         {showOpen && <span className={`flex flex-col justify-center border-l px-2 leading-none ${isDark ? 'border-white/10' : 'border-slate-200'}`} data-live-bar-open-pnl>
           <span className={`text-[9px] font-bold uppercase tracking-wide ${muted}`}>Otevřeno</span>
-          <b className={`mt-0.5 font-mono text-[12px] font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
+          <b className={`mt-0.5 whitespace-nowrap font-mono text-[12px] font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
         </span>}
       </span>}
       {!compact && <span className={chip} title={`P&L dne účtu ${shownAccount?.name ?? ''}: realizované + otevřené`} data-live-bar-account-pnl>
@@ -186,76 +247,33 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark, compact = fals
         <span className={muted}>Otevřeno</span>
         <b className={`font-mono font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
       </span>}
-      {group && groupDay !== null && <button type="button" onClick={() => { setTab('groups'); setOpen(true); }} className={`${chip} ${isDark ? 'hover:bg-white/[0.07]' : 'hover:bg-white'}`}
+      {group && groupDay !== null && compact && <button type="button" onClick={() => { setTab('groups'); setOpen(true); }}
+        className={`flex h-8 shrink-0 flex-col justify-center rounded-lg border px-2 text-left leading-none ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white/70'}`}
+        title={`Skupina ${group.name} · ${group.state} · ${copying} kopíruje · P&L dne všech účtů skupiny`} data-live-bar-group-pnl>
+        <span className={`flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide ${muted}`}><i className={`h-[6px] w-[6px] rounded-full ${STATE_DOT[group.state]}`} />Skupina</span>
+        <b className={`mt-0.5 whitespace-nowrap font-mono text-[12px] font-extrabold ${tone(groupDay)}`}>{usd(groupDay)}</b>
+      </button>}
+      {group && groupDay !== null && !compact && <button type="button" onClick={() => { setTab('groups'); setOpen(true); }} className={`${chip} ${isDark ? 'hover:bg-white/[0.07]' : 'hover:bg-white'}`}
         title={`Skupina ${group.name} · ${group.state} · ${copying} kopíruje · P&L dne všech účtů skupiny`} data-live-bar-group-pnl>
         <i className={`h-[7px] w-[7px] rounded-full ${STATE_DOT[group.state]}`} />
-        {!compact && <><Layers size={12} className={muted} />{group.name}</>}
+        <Layers size={12} className={muted} />{group.name}
         <b className={`font-mono font-extrabold ${tone(groupDay)}`}>{usd(groupDay)}</b>
       </button>}
       <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} data-live-bar-picker
         className={`flex ${compact ? 'h-8 min-w-0 px-2 text-[12px]' : 'h-[30px] px-2.5 text-[11px]'} items-center gap-1.5 whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 font-extrabold text-indigo-400 hover:bg-indigo-500/20`}>
-        {selectedGroup ? <><Layers size={12} />{selectedGroup.name}<span className="font-bold opacity-70">1 → {selectedGroup.followers.length}</span></>
+        {selectedGroup ? compact ? <span className="flex min-w-0 items-center gap-1"><Layers size={12} className="shrink-0" /><span className="max-w-[72px] truncate">{selectedGroup.name}</span></span>
+          : <><Layers size={12} />{selectedGroup.name}<span className="font-bold opacity-70">1 → {selectedGroup.followers.length}</span></>
           : compact ? <span className="max-w-[96px] truncate">{shownAccount?.name ?? shownAccountId}</span>
           : <><span className="rounded bg-indigo-500/20 px-1.5 py-px text-[10px]">{shownAccount?.firm ?? '—'}</span>{shownAccount?.name ?? shownAccountId}</>}
-        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={12} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && compact && <div className="fixed inset-0 z-[70] bg-black/45" onClick={() => setOpen(false)} aria-hidden="true" />}
-      {open && <div role="dialog" aria-label="Výběr účtu nebo skupiny" className={compact
-        ? `fixed inset-x-0 bottom-0 z-[71] rounded-t-2xl border-t p-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] shadow-2xl ${panel}`
-        : `absolute right-0 top-[calc(100%+6px)] z-[95] w-[420px] rounded-xl border p-2 shadow-2xl ${panel}`} data-live-bar-menu>
-        {compact && <div className={`mx-auto mb-2 h-1 w-10 rounded-full ${isDark ? 'bg-white/20' : 'bg-slate-300'}`} />}
-        <div className={`flex gap-1 rounded-lg p-0.5 ${isDark ? 'bg-white/[0.05]' : 'bg-slate-100'}`}>
-          {(['accounts', 'groups'] as const).map(id => <button key={id} type="button" onClick={() => { setTab(id); setQuery(''); }}
-            className={`h-8 flex-1 rounded-md text-[12px] font-extrabold ${tab === id ? isDark ? 'bg-white/10 text-white' : 'bg-white text-slate-900 shadow-sm' : muted}`}>
-            {id === 'accounts' ? `Účty ${data.accounts.length}` : `Kopírovací skupiny ${data.groups.length}`}</button>)}
-        </div>
-        <label className={`mt-2 flex h-8 items-center gap-2 rounded-lg border px-2.5 ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200'}`}>
-          <Search size={13} className={muted} />
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder={tab === 'accounts' ? 'Hledat účet nebo propku…' : 'Hledat skupinu…'} className="w-full bg-transparent text-[12px] outline-none" />
-        </label>
-        <div className={`mt-1 overflow-y-auto pr-0.5 ${compact ? 'max-h-[60vh]' : 'max-h-[380px]'}`}>
-          {tab === 'accounts' ? firms.map(([firm, list]) => <div key={firm}>
-            <div className={`flex items-center px-2 pb-1 pt-2.5 text-[10px] font-extrabold uppercase tracking-[0.08em] ${muted}`}>{firm}<span className="ml-auto">{list.length}</span></div>
-            {list.map(item => {
-              const day = liveBarAccountDay(data, item.id, openPnl);
-              const dead = item.status === 'breached';
-              const on = selection.kind === 'account' && selection.id === item.id;
-              return <button key={item.id} type="button" disabled={dead} onClick={() => { setSelection({ kind: 'account', id: item.id }); setOpen(false); }}
-                className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left disabled:opacity-40 ${on ? rowOn : rowHover}`} data-live-bar-account={item.id}>
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-indigo-500/80 text-[10px] font-black text-white">{item.firm.slice(0, 2).toUpperCase()}</span>
-                <span className="min-w-0 flex-1"><b className="block truncate text-[12.5px]">{item.name}</b>
-                  <span className={`block truncate text-[11px] ${muted}`}>{dead ? 'vyřazený · do LIVE nejde' : roleText(item.id)}{item.id === data.tradedAccountId ? ' · obchoduje graf' : ''}</span></span>
-                <span className="flex flex-col items-end gap-0.5">
-                  <b className={`font-mono text-[12px] ${tone(day)}`}>{usd(day)}</b>
-                  {item.status && STATUS_TEXT[item.status] && <span className={`rounded px-1.5 text-[9.5px] font-extrabold ${item.status === 'dll-locked' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>{STATUS_TEXT[item.status]}</span>}
-                </span>
-              </button>;
-            })}
-          </div>) : data.groups.filter(item => !q || `${item.name} ${accounts.get(item.leaderId)?.name ?? ''}`.toLowerCase().includes(q)).map(item => {
-            const day = liveBarGroupDay(data, item, openPnl);
-            const on = selection.kind === 'group' && selection.id === item.id;
-            const inPos = item.followers.filter(f => f.copying).length;
-            return <button key={item.id} type="button" onClick={() => { setSelection({ kind: 'group', id: item.id }); setOpen(false); }}
-              className={`mb-1.5 block w-full rounded-lg border px-3 py-2.5 text-left ${isDark ? 'border-white/10' : 'border-slate-200'} ${on ? rowOn : rowHover}`} data-live-bar-group={item.id}>
-              <span className="flex items-center gap-2"><i className={`h-2 w-2 rounded-full ${STATE_DOT[item.state]}`} /><b className="text-[13px]">{item.name}</b>
-                <span className={`rounded px-1.5 text-[9.5px] font-extrabold ${item.state === 'ARMED' ? 'bg-emerald-500/15 text-emerald-500' : item.state === 'DISARMED' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>{item.state}</span>
-                <b className={`ml-auto font-mono text-[12.5px] ${tone(day)}`}>{usd(day)}</b></span>
-              <span className={`mt-1 block text-[11px] ${muted}`}>Leader {accounts.get(item.leaderId)?.name ?? item.leaderId} → {item.followers.length} účtů · {inPos} kopíruje</span>
-              <span className="mt-2 flex flex-wrap gap-[3px]">
-                <i className="h-2.5 w-4 rounded-[3px] bg-indigo-500" title="leader" />
-                {item.followers.map(f => {
-                  const st = accounts.get(f.accountId)?.status;
-                  const color = st === 'breached' || st === 'unverifiable' ? 'bg-rose-500' : st === 'dll-locked' ? 'bg-amber-500' : f.copying ? 'bg-emerald-500' : isDark ? 'bg-white/15' : 'bg-slate-300';
-                  return <i key={f.accountId} className={`h-2.5 w-2.5 rounded-[3px] ${color}`} title={accounts.get(f.accountId)?.name ?? f.accountId} />;
-                })}
-              </span>
-            </button>;
-          })}
-        </div>
-        <p className={`mt-1 border-t px-1.5 pt-2 text-[11px] leading-snug ${muted} ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-          Výběr mění jen to, čí P&L lišta ukazuje. Graf obchoduje dál účet {traded?.name ?? data.tradedAccountId}.
-        </p>
-      </div>}
+      {open && !compact && menu}
+      {/* Telefon: list jde do body. Skleněná hlavička (backdrop-filter) jinak dělá z fixed pozici vůči sobě
+          a list se otevřel nahoru mimo obrazovku. Nad celoobrazovkovým grafem (z 880). (21. 11.) */}
+      {open && compact && typeof document !== 'undefined' && createPortal(<>
+        <div className="fixed inset-0 z-[900] bg-black/45" onClick={() => setOpen(false)} aria-hidden="true" data-live-bar-backdrop />
+        {menu}
+      </>, document.body)}
     </div>
   );
 };
