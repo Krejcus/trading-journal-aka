@@ -182,6 +182,9 @@ describe('hook místního procesu', () => {
     expect(hook).toContain('setUncertain(current => [...current.filter(item => item.id !== next.id), next])');
     expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
     expect(chart).toMatch(/link === 'open' && offerBrake && !trading\.readOnly \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
+    // S výběrem účtu v liště se v klidu schová; při čemkoli, co může zablokovat běžné zavření, se vrátí (21. 11.).
+    expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(chart).toMatch(/const offerBrake = \(trading\.mayHaveExposure \|\| uncertainList\.length > 0\) && \(!accountBar \|\| brakeNeeded\);/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
     expect(conn).toContain("reason: 'Zavření nemá jednoznačné potvrzení'");

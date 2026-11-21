@@ -124,7 +124,11 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
 
   // Brzda se nabízí při otevřeném spojení s procesem — i když ceny stojí nebo proces chvíli mlčí — a vždy,
   // když je co zavírat NEBO se to neví (visící vstup, neznámý stav, nejistý příkaz). Při flat služba vrátí „bez pozice".
-  const offerBrake = trading.mayHaveExposure || uncertainList.length > 0;
+  // S výběrem účtu v liště (21. 11., Filip): v klidu se brzda neukazuje — pozice se zavírá × v grafu nebo Shift+X.
+  // Sama se vrátí, když běžná cesta nemusí fungovat: nejistý příkaz, neznámý stav / visící vstup bez pozice,
+  // služba mlčí nebo nejsou čerstvá data, stop nových vstupů.
+  const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
   const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
     ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
 
