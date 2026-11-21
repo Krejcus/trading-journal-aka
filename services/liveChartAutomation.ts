@@ -10,10 +10,14 @@ export interface LiveChartAutomation {
   fillTone: string | null;
   slTone: string | null;
   tpTone: string | null;
+  /** Čára denního limitu ztráty (DLL) v grafu, když je otevřená pozice. */
+  limitDll: boolean;
+  /** Čára max loss (MLL, trailing drawdown) v grafu, když je otevřená pozice. */
+  limitMll: boolean;
 }
 
 export const LIVE_CHART_AUTOMATION_KEY = 'at:live:chart-automation';
-const DEFAULTS: LiveChartAutomation = { boxFollow: true, fillTone: null, slTone: null, tpTone: null };
+const DEFAULTS: LiveChartAutomation = { boxFollow: true, fillTone: null, slTone: null, tpTone: null, limitDll: true, limitMll: true };
 
 export function parseLiveChartAutomation(raw: string | null | undefined): LiveChartAutomation {
   if (!raw) return DEFAULTS;
@@ -24,6 +28,8 @@ export function parseLiveChartAutomation(raw: string | null | undefined): LiveCh
       fillTone: isAlertTone(value?.fillTone) ? value.fillTone : null,
       slTone: isAlertTone(value?.slTone) ? value.slTone : null,
       tpTone: isAlertTone(value?.tpTone) ? value.tpTone : null,
+      limitDll: value?.limitDll !== false,
+      limitMll: value?.limitMll !== false,
     };
   } catch {
     return DEFAULTS;

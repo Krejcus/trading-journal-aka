@@ -101,6 +101,17 @@ const LiveChartAutomationSettings: React.FC<{ isDark: boolean }> = ({ isDark }) 
       <p style={{ margin: '0 0 8px', fontSize: 11.5, color: muted }}>
         Box se stejným směrem, ve kterém leží vstup pozice, roste s obchodem a skončí s jeho zavřením.
       </p>
+      <label style={{ ...row, cursor: 'pointer' }}>
+        <span style={label}>Čára DLL v grafu</span>
+        <input type="checkbox" checked={settings.limitDll} onChange={event => setLiveChartAutomation({ limitDll: event.target.checked })} style={{ width: 18, height: 18 }} />
+      </label>
+      <label style={{ ...row, cursor: 'pointer' }}>
+        <span style={label}>Čára MLL v grafu</span>
+        <input type="checkbox" checked={settings.limitMll} onChange={event => setLiveChartAutomation({ limitMll: event.target.checked })} style={{ width: 18, height: 18 }} />
+      </label>
+      <p style={{ margin: '0 0 8px', fontSize: 11.5, color: muted }}>
+        Cena, kde by otevřená pozice narazila na denní limit (DLL) nebo max loss (MLL). Posouvá se s počtem kusů a průměrem.
+      </p>
       {toneRow('fillTone', 'Vyplnění')}
       {toneRow('slTone', 'Zásah SL')}
       {toneRow('tpTone', 'Zásah TP')}

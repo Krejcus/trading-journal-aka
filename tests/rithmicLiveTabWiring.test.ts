@@ -129,7 +129,9 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/const mergedHeader = Boolean\(accountBar\) && chart\.candles\.length > 0;/);
     // Čáry DLL / MLL jdou vlastním kanálem i do exekučního panelu; jen s výběrem účtu (jen zobrazení).
     expect(screen).toMatch(/liveLimitLines=\{accountBar \? limitLines : null\}/);
-    expect(screen).toMatch(/data-live-limit-distance/);
+    // Čáry jdou vypnout v nastavení grafu (Automatika grafu); štítky vzdálenosti vpravo dole zrušené (21. 11.).
+    expect(screen).toMatch(/limitPrices\.dll && limitPrefs\.limitDll/);
+    expect(screen).not.toMatch(/data-live-limit-distance/);
     expect(screen).toMatch(/\{!mergedHeader && <header/);
     expect(screen).toMatch(/toolbarFixedEnd=\{mergedHeader \? <div className="flex items-center gap-1" data-live-merged-header>\{compactTabs\}\{headerRight\}<\/div> : undefined\}/);
   });
