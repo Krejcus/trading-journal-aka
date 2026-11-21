@@ -165,6 +165,11 @@ export interface RithmicBrokerPort extends BrokerPort {
   executionNet(accountId: number, symbol: string): number | null;
   /** Průměrná vstupní cena z posledního snímku pozic — JEN zobrazení (čára pozice po obnově spojení). */
   snapshotAveragePrice(accountId: number, symbol: string): number | null;
+  /**
+   * Uzavřený (realizovaný) P&L účtu z PnL streamu Rithmicu (closed_position_pnl, bez dotazu navíc) — JEN zobrazení
+   * v liště grafu. Nic se podle něj nerozhoduje (žádné brány, limity ani příkazy). Null = zatím nepřišel.
+   */
+  accountClosedPnl?(accountId: number): { closedPnl: number | null; at: number } | null;
   placeBracket(request: BrokerBracketRequest): Promise<BrokerBracketAck>;
   /**
    * Dva výstupní příkazy svázané burzou (OCO): SL (Stop) a TP (Limit) na stejné množství. Vyplnění nebo
@@ -1653,6 +1658,10 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       if (!saved) throw new Error('Rithmic: záznam ochrany po dělení vstupu nejde uložit');
     },
     snapshotAveragePrice: (account, symbol) => snapshotAverage.get(`${account}:${symbol}`) ?? null,
+    accountClosedPnl: (account) => {
+      const pnl = accountPnl.get(account);
+      return pnl ? { closedPnl: pnl.closedPnl, at: pnl.receivedAt } : null;
+    },
     executionNet: (account, symbol) => livePositions.get(`${account}:${symbol}`) === null ? null : validExpectedNet(account, symbol),
     routeEpoch: () => epoch,
 

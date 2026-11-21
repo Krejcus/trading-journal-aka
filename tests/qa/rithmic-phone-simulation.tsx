@@ -21,7 +21,7 @@ createRoot(document.getElementById('root')!).render(
     open isDark
     onLeave={() => note('Zpět na Live Dashboard (ve zkušební stránce nikam nevede)')}
     {...(asDevice ? {} : { simulationUrl: `ws://${location.host}/local-simulation${query}` })}
-    accountBar={location.search.includes('limit=blizko') ? simulationAccountBarNearLimit() : SIMULATION_ACCOUNT_BAR}
+    accountBar={location.search.includes('ucty=skutecne') ? null : location.search.includes('limit=blizko') ? simulationAccountBarNearLimit() : SIMULATION_ACCOUNT_BAR}
     header={({ group, account, compact }) => <LivePhoneHeader groupName={null} group={group} account={account} hideCopier={compact}
       copier={{ label: 'Kopírka: zkušební stránka', tone: 'muted', armed: false }} onMenu={() => note('LIVE menu (ve zkušební stránce není)')} />}
     phoneChart={slots => <LivePhoneChart trades={[]} allTrades={[]} sessions={[]} isDark onUpdateTrade={() => undefined} slots={slots} onLeave={slots.onLeave} />}

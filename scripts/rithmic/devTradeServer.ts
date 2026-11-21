@@ -549,7 +549,10 @@ async function main(): Promise<void> {
   await refreshLimits();
   setInterval(() => {
     const at = Date.now();
-    broadcast({ type: 'beat', at, feed: freshPrice(at) !== null });
+    // Realizovaný P&L účtu z PnL streamu (jen zobrazení v liště grafu — nic se podle něj nerozhoduje).
+    const pnlAccount = broker.accountIds()[0];
+    const pnl = pnlAccount === undefined ? null : broker.accountClosedPnl?.(pnlAccount) ?? null;
+    broadcast({ type: 'beat', at, feed: freshPrice(at) !== null, pnl: pnl ? { closed: pnl.closedPnl, at: pnl.at } : null });
     // A stalled RMS refresh can expire even while the market feed remains active.
     publishLimits();
   }, 1_000).unref();

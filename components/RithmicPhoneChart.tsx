@@ -3,7 +3,7 @@
 // dodá svíčky, cenu, pozici a most příkazů ze služby. Obrazovka nic neautorizuje: každý příkaz ověřuje
 // služba (LocalExec). Nouzová lišta kopírky sem nepatří — jen „Zavřít pozici" a karty stavů.
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import LiveAccountBar, { liveLimitLinePrices, type LiveAccountBarData } from './LiveAccountBar';
+import LiveAccountBar, { liveLimitLinePrices, rithmicAccountBarData, type LiveAccountBarData } from './LiveAccountBar';
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../services/liveChartAutomation';
 import type { LiveDeskPhoneChartSlots } from './TradovateLiveDesk';
@@ -96,13 +96,17 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
 /** Jak dlouho po rozpadu spojení držet poslední známý obraz, než obrazovka ohlásí výpadek. */
 const RECONNECT_GRACE_MS = 4_000;
 
-const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl, accountBar = null }) => {
+const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl, accountBar: accountBarProp = null }) => {
   // Spárování se čte znovu po každé změně (nové spárování, zrušení) — jinak by obrazovka držela starou adresu.
   const [linkVersion, setLinkVersion] = useState(0);
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   // Spárované zařízení (telefon) se službě prokazuje klíčem z Klíčenky; PC a simulace klíč zařízení nemají.
   const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });
+  // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
+  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.accountClosedPnl }),
+    [trading.accountName, trading.system, trading.accountClosedPnl]);
+  const accountBar = accountBarProp ?? realAccountBar;
   // Rozsah tohoto zařízení (určila ho služba při spárování a sama ho vynucuje): obrazovka podle něj jen NENABÍZÍ,
   // co by služba stejně odmítla — aby se o odmítnutí člověk nedozvěděl až po klepnutí v nouzi.
   const deviceScope = useMemo(() => (deviceAuth ? readRithmicDeviceLink()?.scope ?? 'full' : 'full'), [deviceAuth]);
@@ -224,7 +228,9 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   const exposureShown = grace ? lastPosition.current?.summary != null : trading.mayHaveExposure;
   // S výběrem účtu v hlavičce (21. 11., Filip): v klidu se brzda neukazuje — pozice se zavírá × u pozice v grafu.
   // Sama se vrátí, když běžná cesta nemusí fungovat (nejistý příkaz, neznámý stav, služba mlčí, stop vstupů).
-  const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
+  const unprotected = hasPosition && (shownPosition?.summary?.kind !== 'position' || shownPosition.summary.stop == null);
+  const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || unprotected || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (link === 'open' || grace) && !viewOnly && (exposureShown || trading.uncertain.length > 0) && (!accountBar || brakeNeeded || grace);
   const brake = useMemo(() => (offerBrake ? { armed: closeArmedAt != null, busy: closeBusy, onTap: tapClose } : null), [offerBrake, closeArmedAt, closeBusy, tapClose]);
 

@@ -10,7 +10,7 @@ import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmi
 import { rithmicLocalUrl } from '../lib/rithmicLocalLink';
 import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import type { TradeToast } from '../lib/liveTradeToasts';
-import type { LiveAccountBarData } from './LiveAccountBar';
+import { rithmicAccountBarData, type LiveAccountBarData } from './LiveAccountBar';
 import { buildLiveStatusStrip } from '../services/liveStatusStrip';
 
 /** Obrazovka počítá riziko a velikost napevno pro MNQ — jiný kontrakt by dával špatná čísla. */
@@ -38,9 +38,13 @@ interface Props {
 
 const card = (id: string, tone: TradeToast['tone'], badge: string, title: string, line: string): TradeToast => ({ id, at: Date.now(), tone, badge, title, line, pnl: null, accounts: 0, sticky: true, wrapLine: true });
 
-const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl, accountBar = null }) => {
+const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl, accountBar: accountBarProp = null }) => {
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl]);
   const trading = useRithmicLocalTrading({ url, enabled: open });
+  // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
+  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.accountClosedPnl }),
+    [trading.accountName, trading.system, trading.accountClosedPnl]);
+  const accountBar = accountBarProp ?? realAccountBar;
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
@@ -127,7 +131,9 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   // S výběrem účtu v liště (21. 11., Filip): v klidu se brzda neukazuje — pozice se zavírá × v grafu nebo Shift+X.
   // Sama se vrátí, když běžná cesta nemusí fungovat: nejistý příkaz, neznámý stav / visící vstup bez pozice,
   // služba mlčí nebo nejsou čerstvá data, stop nových vstupů.
-  const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
+  const unprotected = hasPosition && (trading.position?.summary?.kind !== 'position' || trading.position.summary.stop == null);
+  const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
   const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
     ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);

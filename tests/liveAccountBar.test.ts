@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, liveLimitLinePrices, type LiveAccountBarData } from '../components/LiveAccountBar';
+import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, liveLimitLinePrices, rithmicAccountBarData, type LiveAccountBarData } from '../components/LiveAccountBar';
 
 const data: LiveAccountBarData = {
   tradedAccountId: 'L',
@@ -65,5 +65,26 @@ describe('LiveAccountBar P&L', () => {
     expect(liveLimitLinePrices({ ...base, quantity: 3 }).dll?.price).toBe(24853.5);
     // Bez limitů nic.
     expect(liveLimitLinePrices({ side: 'long', quantity: 1, averagePrice: 25000, pointValue: 2, tickSize: 0.25, realizedToday: 0 })).toEqual({ dll: null, mll: null });
+  });
+});
+
+describe('skutečný účet Rithmicu v liště', () => {
+  it('jeden účet bez skupin, realizovaný P&L ze služby', () => {
+    expect(rithmicAccountBarData({ accountName: 'LT-123', system: 'LucidTrading', closedPnl: -240.5 })).toEqual({
+      tradedAccountId: 'LT-123', groups: [], accounts: [{ id: 'LT-123', name: 'LT-123', firm: 'LucidTrading', realizedToday: -240.5 }],
+    });
+  });
+
+  it('bez názvu účtu lišta není; starší služba bez P&L dá „—“, ne nulu', () => {
+    expect(rithmicAccountBarData({ accountName: undefined, system: 'X', closedPnl: 1 })).toBeNull();
+    const bar = rithmicAccountBarData({ accountName: 'A', system: null, closedPnl: undefined })!;
+    expect(bar.accounts[0]).toMatchObject({ firm: 'Rithmic', realizedToday: null });
+    expect(liveBarAccountDay(bar, 'A', 50)).toBeNull();
+  });
+
+  it('bez realizovaného výsledku se DLL nekreslí, MLL ano', () => {
+    const out = liveLimitLinePrices({ side: 'long', quantity: 1, averagePrice: 25000, pointValue: 2, tickSize: 0.25, realizedToday: null, dailyLossLimit: 1000, maxLossLeft: 1000 });
+    expect(out.dll).toBeNull();
+    expect(out.mll?.price).toBe(24500);
   });
 });

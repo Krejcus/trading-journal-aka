@@ -187,6 +187,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const [capturedAt, setCapturedAt] = useState(0);
   /** Proces žije (tep) a jeho spojení pro ceny taky. Čerstvost se nikdy nevyrábí v prohlížeči. */
   const [limits, setLimits] = useState<Limits | null>(null);
+  /** Realizovaný P&L účtu z PnL streamu Rithmicu — JEN zobrazení (lišta grafu), nikdy brána ani limit. */
+  const [closedPnl, setClosedPnl] = useState<number | null | undefined>(undefined);
   const [feedLive, setFeedLive] = useState(false);
   /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
   const [helloFresh, setHelloFresh] = useState(false);
@@ -299,6 +301,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
           lastMarketAt.current = 0;
           setHelloFresh(false);
           setLimits(null);
+          setClosedPnl(undefined);
           priceRef.current = null;
           feedBox.reset();
           setFeedLive(false);
@@ -371,6 +374,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             setLimits(message.limits as Limits | null);
           } else if (message.type === 'beat') {
             setFeedLive(message.feed === true && Date.now() - lastMarketAt.current <= 30_000);
+            // Realizovaný P&L dne (jen zobrazení v liště). Starší služba ho neposílá → zůstane undefined („—“).
+            if ('pnl' in message) {
+              const closed = (message.pnl as { closed?: unknown } | null)?.closed;
+              setClosedPnl(typeof closed === 'number' && Number.isFinite(closed) ? closed : null);
+            }
           } else if (message.type === 'state') {
             const next = message.state as LocalExecState;
             if (stateRef.current?.connected === false && next.connected && identity && journal) {
@@ -786,7 +794,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     reducible, reduceOne,
     authFailed,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !hideOwnExit(order, state?.blocked)).length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, accountClosedPnl: closedPnl, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !hideOwnExit(order, state?.blocked)).length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,

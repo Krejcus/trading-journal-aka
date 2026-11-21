@@ -11,8 +11,8 @@ export interface LiveBarAccount {
   id: string;
   name: string;
   firm: string;
-  /** Realizovaný P&L dne v USD (z vyplnění). */
-  realizedToday: number;
+  /** Realizovaný P&L dne v USD (z vyplnění); null = služba ho neposlala (lišta ukáže „—“, nikdy nulu). */
+  realizedToday: number | null;
   status?: LiveBarAccountStatus;
   /** Denní limit ztráty propky v USD (DLL); chybí = účet ho nemá nebo není znám. */
   dailyLossLimit?: number;
@@ -59,10 +59,11 @@ export function liveBarOpenPnl(data: LiveAccountBarData, accountId: string, trad
   return follower?.copying ? open * follower.ratio : 0;
 }
 
-/** P&L dne účtu = realizovaný + otevřený. */
-export function liveBarAccountDay(data: LiveAccountBarData, accountId: string, tradedOpenPnl: number | null): number {
+/** P&L dne účtu = realizovaný + otevřený; null, když realizovaný není znám. */
+export function liveBarAccountDay(data: LiveAccountBarData, accountId: string, tradedOpenPnl: number | null): number | null {
   const account = data.accounts.find(item => item.id === accountId);
-  return (account?.realizedToday ?? 0) + liveBarOpenPnl(data, accountId, tradedOpenPnl);
+  if (!account || account.realizedToday === null) return null;
+  return account.realizedToday + liveBarOpenPnl(data, accountId, tradedOpenPnl);
 }
 
 /**
@@ -72,12 +73,13 @@ export function liveBarAccountDay(data: LiveAccountBarData, accountId: string, t
  */
 export function liveLimitLinePrices(input: {
   side: 'long' | 'short'; quantity: number; averagePrice: number; pointValue: number; tickSize: number;
-  realizedToday: number; dailyLossLimit?: number; maxLossLeft?: number;
+  realizedToday: number | null; dailyLossLimit?: number; maxLossLeft?: number;
 }): { dll: { price: number; amount: number } | null; mll: { price: number; amount: number } | null } {
   const perPoint = input.quantity * input.pointValue;
   if (!(perPoint > 0) || !Number.isFinite(input.averagePrice)) return { dll: null, mll: null };
   const mllAmount = input.maxLossLeft == null ? null : Math.max(0, input.maxLossLeft);
-  const dllRaw = input.dailyLossLimit == null ? null : Math.max(0, input.dailyLossLimit + input.realizedToday);
+  // Bez známého realizovaného výsledku dne nejde DLL spočítat — čára se radši nekreslí.
+  const dllRaw = input.dailyLossLimit == null || input.realizedToday === null ? null : Math.max(0, input.dailyLossLimit + input.realizedToday);
   const dllAmount = dllRaw == null ? null : mllAmount == null ? dllRaw : Math.min(dllRaw, mllAmount);
   // Zaokrouhlení na tick směrem k vstupu (čára nikdy neslibuje víc prostoru, než je).
   const at = (amount: number) => {
@@ -92,9 +94,29 @@ export function liveLimitLinePrices(input: {
 }
 
 /** P&L dne skupiny = leader + všichni followeři (i vypnutí, jejich dnešní výsledek k ní patří). */
-export function liveBarGroupDay(data: LiveAccountBarData, group: LiveBarGroup, tradedOpenPnl: number | null): number {
-  return [group.leaderId, ...group.followers.map(item => item.accountId)]
-    .reduce((sum, id) => sum + liveBarAccountDay(data, id, tradedOpenPnl), 0);
+export function liveBarGroupDay(data: LiveAccountBarData, group: LiveBarGroup, tradedOpenPnl: number | null): number | null {
+  let sum = 0;
+  for (const id of [group.leaderId, ...group.followers.map(item => item.accountId)]) {
+    const day = liveBarAccountDay(data, id, tradedOpenPnl);
+    if (day === null) return null;
+    sum += day;
+  }
+  return sum;
+}
+
+/**
+ * Skutečný účet Rithmicu pro lištu (21. 11.): jeden účet, na který graf obchoduje, bez skupin. Realizovaný
+ * výsledek dne posílá služba z PnL streamu Rithmicu (jen zobrazení); starší služba ho neposílá → „—“.
+ * DLL / MLL Rithmic v použitelném tvaru neposílá, takže čáry limitů tu nejsou.
+ */
+export function rithmicAccountBarData(input: { accountName: string | null | undefined; system: string | null | undefined; closedPnl: number | null | undefined }): LiveAccountBarData | null {
+  const name = input.accountName?.trim();
+  if (!name) return null;
+  return {
+    tradedAccountId: name,
+    groups: [],
+    accounts: [{ id: name, name, firm: input.system?.trim() || 'Rithmic', realizedToday: typeof input.closedPnl === 'number' && Number.isFinite(input.closedPnl) ? input.closedPnl : null }],
+  };
 }
 
 /** Skupina, do které účet patří (jako leader nebo follower). */
@@ -102,8 +124,8 @@ export function liveBarGroupOf(data: LiveAccountBarData, accountId: string): Liv
   return data.groups.find(item => item.leaderId === accountId || item.followers.some(f => f.accountId === accountId)) ?? null;
 }
 
-const usd = (value: number) => `${value >= 0 ? '+' : '−'}${Math.abs(Math.round(value)).toLocaleString('cs-CZ')} USD`;
-const tone = (value: number) => (value >= 0 ? 'text-emerald-500' : 'text-rose-500');
+const usd = (value: number | null) => (value === null ? '— USD' : `${value >= 0 ? '+' : '−'}${Math.abs(Math.round(value)).toLocaleString('cs-CZ')} USD`);
+const tone = (value: number | null) => (value === null ? 'text-slate-500' : value >= 0 ? 'text-emerald-500' : 'text-rose-500');
 const STATE_DOT: Record<LiveBarGroupState, string> = { ARMED: 'bg-emerald-500', DISARMED: 'bg-amber-500', HALTED: 'bg-rose-500', KILL: 'bg-rose-500' };
 const STATUS_TEXT: Partial<Record<LiveBarAccountStatus, string>> = { 'dll-locked': 'limit dne', breached: 'breached', unverifiable: 'neověřitelný' };
 

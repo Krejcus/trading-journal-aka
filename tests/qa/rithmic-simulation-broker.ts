@@ -135,8 +135,13 @@ export async function attachSimulation(http: Server, port: number) {
     }
     broadcast({ type: 'tick', symbol, price, bar: candles.current(symbol, at), at });
   }, 250);
-  const beats = setInterval(() => broadcast({ type: 'beat', feed: true, at: Date.now() }), 1000);
+  // Realizovaný P&L simulace: součet zavřených obchodů z posledního stavu (jen zobrazení v liště). Ne `exec.state()`:
+  // to zvyšuje pořadové číslo stavu.
+  let lastCloses: ReadonlyArray<{ pointsTotal: number }> = [];
+  const unsubscribeCloses = exec.subscribe(state => { lastCloses = state.closes; });
+  const simClosed = () => Math.round(lastCloses.reduce((sum, close) => sum + close.pointsTotal * 2, 0) * 100) / 100;
+  const beats = setInterval(() => broadcast({ type: 'beat', feed: true, at: Date.now(), pnl: { closed: simClosed(), at: Date.now() } }), 1000);
   http.once('close', () => {
-    clearInterval(ticks); clearInterval(beats); unsubscribe(); exec.detach(); broker.stop(); ws.close(); deviceServer.close();
+    clearInterval(ticks); clearInterval(beats); unsubscribe(); unsubscribeCloses(); exec.detach(); broker.stop(); ws.close(); deviceServer.close();
   });
 }

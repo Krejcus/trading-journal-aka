@@ -2342,10 +2342,11 @@ acceptAgentStatus((await executeAgent({
             onLeave={() => navigateToTab('overview')}
             phoneChart={rithmicPhoneSlot}
             userId={userId}
-            header={({ group, account }) => <LivePhoneHeader
+            header={({ group, account, compact }) => <LivePhoneHeader
               groupName={null}
               group={group}
               account={account}
+              hideCopier={compact}
               copier={livePhoneCopierChip({
                 pending: !agentStatusResolved,
                 fresh: agentStatusFresh && !agentStatusRestored,

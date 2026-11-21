@@ -183,7 +183,9 @@ describe('hook místního procesu', () => {
     expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
     expect(chart).toMatch(/link === 'open' && offerBrake && !trading\.readOnly \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
     // S výběrem účtu v liště se v klidu schová; při čemkoli, co může zablokovat běžné zavření, se vrátí (21. 11.).
-    expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| unprotected \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    // Pozice bez známé ceny SL: × ji nezavře, brzda musí zůstat.
+    expect(chart).toMatch(/const unprotected = hasPosition && \(trading\.position\?\.summary\?\.kind !== 'position' \|\| trading\.position\.summary\.stop == null\);/);
     expect(chart).toMatch(/const offerBrake = \(trading\.mayHaveExposure \|\| uncertainList\.length > 0\) && \(!accountBar \|\| brakeNeeded\);/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
@@ -501,7 +503,8 @@ describe('Rithmic graf na telefonu', () => {
     // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
     expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\) && \(!accountBar \|\| brakeNeeded \|\| grace\);/);
     // S výběrem účtu v hlavičce se v klidu schová; vrací se při nejistotě, neznámém stavu, mlčící službě, stopu vstupů (21. 11.).
-    expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| unprotected \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(wrapper).toMatch(/const unprotected = hasPosition && \(shownPosition\?\.summary\?\.kind !== 'position' \|\| shownPosition\.summary\.stop == null\);/);
     // Krátký výpadek (návrat do appky): poslední známý obraz se drží jen pár sekund, pak obrazovka hlásí pravdu.
     expect(wrapper).toMatch(/const RECONNECT_GRACE_MS = 4_000;/);
     expect(wrapper).toMatch(/window\.setTimeout\(\(\) => \{ hadState\.current = false; setGrace\(false\); \}, RECONNECT_GRACE_MS\);/);
