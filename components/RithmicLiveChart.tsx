@@ -10,6 +10,7 @@ import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmi
 import { rithmicLocalUrl } from '../lib/rithmicLocalLink';
 import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import type { TradeToast } from '../lib/liveTradeToasts';
+import type { LiveAccountBarData } from './LiveAccountBar';
 import { buildLiveStatusStrip } from '../services/liveStatusStrip';
 
 /** Obrazovka počítá riziko a velikost napevno pro MNQ — jiný kontrakt by dával špatná čísla. */
@@ -31,11 +32,13 @@ interface Props {
   disarm: React.ComponentProps<typeof LiveTradingScreenSlot>['disarm'];
   onDisarm?: React.ComponentProps<typeof LiveTradingScreenSlot>['onDisarm'];
   onCrash: () => void;
+  /** Výběr účtu / skupiny a P&L dne v horní liště (jen zobrazení, zatím jen lokální simulace). */
+  accountBar?: LiveAccountBarData | null;
 }
 
 const card = (id: string, tone: TradeToast['tone'], badge: string, title: string, line: string): TradeToast => ({ id, at: Date.now(), tone, badge, title, line, pnl: null, accounts: 0, sticky: true, wrapLine: true });
 
-const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl }) => {
+const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl, accountBar = null }) => {
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl]);
   const trading = useRithmicLocalTrading({ url, enabled: open });
   const { link, state, symbol } = trading;
@@ -162,6 +165,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         entryScaleIn={trading.scaleIn}
         entryMaxContracts={trading.maxContracts} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView} liveFills={trading.liveFills}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
+        accountBar={accountBar}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}
       {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified disabled={!trading.helloFresh || link !== 'open'} onClick={dismissUncertain} title={uncertainList.map(item => `${item.label} · ${item.reason}`).join('; ')}

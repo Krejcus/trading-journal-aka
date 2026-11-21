@@ -16384,3 +16384,11 @@ Keychain, device pairing, Supabase command relay. p95 162–269 ms.
 
 ### 2026-09-11 (Codex, localhost: potvrzení Tradovate účtů)
 Pouze TradovateAccountProfileSetup: kompaktní rozbalovací účty, hromadná identita jen pro vybrané řádky, původ hodnot, chybějící risk z dostupného broker snapshotu, zachování uložených hodnot a viditelné rozdíly. Katalog doplňuje pouze prázdná pole a při shodné fázi Evaluation; velikost z názvu vyžaduje potvrzení. Browser ověřil 7 účtů, Lucid risk 1200/2000/EOD, změnu jediného označeného účtu a discard. Testy katalogu 7/7, lint a diff check passed; celoprojektový typecheck po více než 5 minutách bez výsledku zastaven. Žádné profily neuloženy, žádný deploy ani broker/worker změna. Localhost dev:live stále používá read-only proxy; uložení profilů nebylo ověřeno.
+
+### 2026-11-21 — LIVE graf: P&L, P&L skupiny a výběr účtu/skupiny v horní liště (Claude)
+
+- Nová komponenta `components/LiveAccountBar.tsx`: v horní liště LIVE grafu ukazuje P&L dne vybraného účtu (realizované + otevřené) a P&L dne jeho kopírovací skupiny. Rozbalovací výběr má záložky Účty (podle propek, role leader/follower, stav) a Kopírovací skupiny (stav, P&L, tečky účtů) a hledání.
+- Je to JEN ZOBRAZENÍ (INV-UI): výběr mění, čí čísla lišta ukazuje, účet pro příkazy grafu se nemění. Patička to říká nahlas. Štítek se stavem spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) zůstává vedle.
+- Zapnuto jen tam, kde přijde prop `accountBar`: zatím jen lokální simulace (`tests/qa/rithmic-simulation.tsx` s mock účty v `tests/qa/rithmic-simulation-accounts.ts`). Produkce beze změny.
+- Ověřeno v simulaci na 127.0.0.1:4196 (launch `rithmic-topbar-sim`): po Market vstupu se P&L účtu i skupiny hýbe s cenou. Test `tests/liveAccountBar.test.ts` 6/6, tsc bez chyb mimo `extension/`. Větev `claude/rithmic-topbar-20261121`, nepushnuto.
+- Do produkce zbývá: zdroj skutečných účtů a skupin (Rithmic má dnes ve službě jeden účet, skupiny jsou z kopírky Tradovate) a realizovaný P&L dne z `closes` služby.

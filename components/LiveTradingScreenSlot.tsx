@@ -5,6 +5,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { QuantumSpinner } from './QuantumLoader';
 import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData, LiveTradingSolo, LiveTradingTab } from './LiveTradingScreen';
 import type { TradeToast } from '../lib/liveTradeToasts';
+import type { LiveAccountBarData } from './LiveAccountBar';
 import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -171,6 +172,8 @@ interface Props {
   solo?: LiveTradingSolo | null;
   /** Další karty vlevo dole (hlášky místní služby). */
   extraToasts?: readonly TradeToast[] | null;
+  /** Výběr účtu / skupiny a P&L dne v horní liště (jen zobrazení). */
+  accountBar?: LiveAccountBarData | null;
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
@@ -274,6 +277,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && left.solo?.legsRemovable === right.solo?.legsRemovable
   && left.solo?.emergencyClose?.run === right.solo?.emergencyClose?.run && (left.solo?.emergencyClose?.busy ?? null) === (right.solo?.emergencyClose?.busy ?? null)
   && (left.extraToasts ?? []).map(card => card.id).join('|') === (right.extraToasts ?? []).map(card => card.id).join('|')
+  && left.accountBar === right.accountBar
   && (left.workingOrders?.key ?? 'none') === (right.workingOrders?.key ?? 'none')
   && (left.liveFills?.key ?? 'none') === (right.liveFills?.key ?? 'none')
   && (left.userId ?? null) === (right.userId ?? null)

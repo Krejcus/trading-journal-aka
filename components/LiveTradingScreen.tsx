@@ -23,6 +23,7 @@ import LiveHotkeysHelp, {
   LIVE_HOTKEY_REPLAY_TEXT,
 } from './LiveHotkeysHelp';
 import LiveGroupChip from './LiveGroupChip';
+import LiveAccountBar, { type LiveAccountBarData } from './LiveAccountBar';
 import LiveTradeToasts from './LiveTradeToasts';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { manageNoticeToast, type TradeToast } from '../lib/liveTradeToasts';
@@ -244,6 +245,11 @@ interface Props {
   solo?: LiveTradingSolo | null;
   /** Další karty vlevo dole (hlášky místní služby). Jen zobrazení. */
   extraToasts?: readonly TradeToast[] | null;
+  /**
+   * Výběr účtu / kopírovací skupiny a P&L dne v horní liště (místo pevného štítku účtu).
+   * Jen zobrazení — účet, na který graf obchoduje, se tím nemění. Chybí = dosavadní štítek.
+   */
+  accountBar?: LiveAccountBarData | null;
 }
 
 /**
@@ -338,7 +344,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   group: workerGroup = null, position = null, disarm = null, onDisarm, onTargetChange, onPreviewEntry, onPlaceEntry, onManageEntry, manageEntryAvgPrice, managePendingLegsSupported, manageMoveBareEntrySupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageCloseSupported = false, entryMarketSupported = false, entryMaxContracts = 1, entryFrontContract = null, entryScaleIn = null,
   entryBareSupported = false, entryBarePendingSupported = false, entryBareLimitSupported = false, entryBarePartial = null, entryBareEntry = null, entryLeaderPosition = null, onAttachBrackets, entryBlockedReason = null, manageLeaderAccountId = null,
   workingOrders = null, liveFills = null, userId = null, alertWatch = null,
-  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null, solo = null, extraToasts = null,
+  bareClose = null, onBareClose, bareLegTrade = null, onBareLeg, manageLockRef = null, onReplayChange, marketData = null, solo = null, extraToasts = null, accountBar = null,
 }) => {
   const now = useMinuteNow();
   const day = chartMarketDay(pragueDayKey(now));
@@ -1089,6 +1095,8 @@ const LiveTradingScreen: React.FC<Props> = ({
         {workerChip && <button type="button" onClick={() => onNavigate('overview')} title={workerChip.title} className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[workerChip.tone].ring}`}>
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
+        {accountBar && <LiveAccountBar data={accountBar} openPnl={shownOpenPnl} isDark={isDark} />}
+        {/* Štítek nese i stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) — zůstává i s výběrem účtu. */}
         {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
         {solo?.reduce && <button
           type="button"
