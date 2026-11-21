@@ -2,7 +2,10 @@
 // Kreslí STÁVAJÍCÍ telefonní graf (`LivePhoneChart` přes slot desku), jen mu místo deníku dne a IBKR
 // dodá svíčky, cenu, pozici a most příkazů ze služby. Obrazovka nic neautorizuje: každý příkaz ověřuje
 // služba (LocalExec). Nouzová lišta kopírky sem nepatří — jen „Zavřít pozici" a karty stavů.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import LiveAccountBar, { liveLimitLinePrices, type LiveAccountBarData } from './LiveAccountBar';
+import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
+import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../services/liveChartAutomation';
 import type { LiveDeskPhoneChartSlots } from './TradovateLiveDesk';
 import { rithmicScreenInstrumentIssue } from './RithmicLiveChart';
 import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
@@ -24,13 +27,15 @@ interface Props {
   /** Telefonní graf desku (`LivePhoneChart` z App) — stejný slot jako u Tradovate. */
   phoneChart: (slots: LiveDeskPhoneChartSlots) => React.ReactNode;
   /** Hlavička desku (LIVE menu, stav kopírky): dostane P&L pozice a čipy účtu Rithmicu. */
-  header: (parts: { group?: React.ReactNode; account: React.ReactNode }) => React.ReactNode;
+  header: (parts: { group?: React.ReactNode; account: React.ReactNode; compact?: boolean }) => React.ReactNode;
   /** Vrstvy desku nad grafem (menu záložek). */
   overlay?: React.ReactNode;
   /** Jen klíč knihovny šablon SL/TP na zařízení (nic neautorizuje). */
   userId?: string | null;
   /** Zkušební stránka: adresa simulace místo skutečné místní služby. */
   simulationUrl?: string;
+  /** Výběr účtu / skupiny a P&L dne v hlavičce (jen zobrazení, zatím jen simulace). */
+  accountBar?: LiveAccountBarData | null;
 }
 
 /** Druhý dotyk „Zavřít pozici" nejdřív po této době (dotyk-duch) a nejpozději do `CLOSE_CONFIRM_MS`. */
@@ -66,7 +71,8 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
         <button type="button" data-rithmic-phone-close disabled={brake.busy} onClick={brake.onTap} style={{
           // Vpravo (vedle cenové osy): vlevo nahoře je popisek grafu.
           pointerEvents: 'auto', justifySelf: 'end', marginRight: 64, minHeight: 36, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 800, cursor: 'pointer',
-          border: '1px solid #e11d48', color: brake.armed ? '#fff' : '#fb7185', background: brake.armed ? '#e11d48' : 'rgba(244,63,94,.12)', opacity: brake.busy ? 0.6 : 1,
+          // Plné pozadí: brzda leží přes popisek grafu (OHLC) a musí jít přečíst (21. 11.).
+          border: '1px solid #e11d48', color: brake.armed ? '#fff' : '#fb7185', background: brake.armed ? '#e11d48' : '#2a0b14', boxShadow: '0 6px 18px -8px rgba(0,0,0,.7)', opacity: brake.busy ? 0.6 : 1,
         }}>{brake.busy ? 'Zavírám…' : brake.armed ? 'Opravdu zavřít? Klepni znovu' : 'Zavřít pozici'}</button>
       )}
       {cards.map(card => (
@@ -90,7 +96,7 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
 /** Jak dlouho po rozpadu spojení držet poslední známý obraz, než obrazovka ohlásí výpadek. */
 const RECONNECT_GRACE_MS = 4_000;
 
-const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl }) => {
+const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl, accountBar = null }) => {
   // Spárování se čte znovu po každé změně (nové spárování, zrušení) — jinak by obrazovka držela starou adresu.
   const [linkVersion, setLinkVersion] = useState(0);
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -216,7 +222,10 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   // Během lhůty po výpadku se nabídka zavření řídí posledním známým stavem (neznámý stav by ji jinak na pár
   // sekund ukázal i na účtu bez pozice a zase schoval).
   const exposureShown = grace ? lastPosition.current?.summary != null : trading.mayHaveExposure;
-  const offerBrake = (link === 'open' || grace) && !viewOnly && (exposureShown || trading.uncertain.length > 0);
+  // S výběrem účtu v hlavičce (21. 11., Filip): v klidu se brzda neukazuje — pozice se zavírá × u pozice v grafu.
+  // Sama se vrátí, když běžná cesta nemusí fungovat (nejistý příkaz, neznámý stav, služba mlčí, stop vstupů).
+  const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  const offerBrake = (link === 'open' || grace) && !viewOnly && (exposureShown || trading.uncertain.length > 0) && (!accountBar || brakeNeeded || grace);
   const brake = useMemo(() => (offerBrake ? { armed: closeArmedAt != null, busy: closeBusy, onTap: tapClose } : null), [offerBrake, closeArmedAt, closeBusy, tapClose]);
 
   // Most příkazů: účet jen pro čtení ho nemá (graf jen zobrazuje). „Zavřít" z lišty grafu = stejná brzda služby.
@@ -226,8 +235,33 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
     onPlaceEntry: trading.onPlaceEntry, onManageEntry: trading.onManageEntry, onBareLeg: trading.onBareLeg, closeNow: runClose,
   }), [trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
 
+  // P&L pozice a čáry DLL / MLL (jen zobrazení): z průměru, kusů a živé ceny služby.
+  const summary = shownPosition?.summary?.kind === 'position' ? shownPosition.summary : null;
+  const avg = trading.averagePrice ?? summary?.entry ?? null;
+  const pv = trading.pointValue ?? 2;
+  const openPnl = summary && avg != null && quotePrice != null ? (quotePrice - avg) * summary.quantity * pv * (summary.side === 'long' ? 1 : -1) : null;
+  const limitPrefs = useSyncExternalStore(subscribeLiveChartAutomation, getLiveChartAutomation, getLiveChartAutomation);
+  const limitAccount = accountBar?.accounts.find(item => item.id === accountBar.tradedAccountId) ?? null;
+  const limitLines = useMemo<BacktestChartOrderLine[] | undefined>(() => {
+    if (!limitAccount || !summary || avg == null || !(summary.quantity > 0)) return undefined;
+    const prices = liveLimitLinePrices({ side: summary.side, quantity: summary.quantity, averagePrice: avg, pointValue: pv, tickSize: trading.tickSize ?? 0.25,
+      realizedToday: limitAccount.realizedToday, ...(limitAccount.dailyLossLimit != null ? { dailyLossLimit: limitAccount.dailyLossLimit } : {}), ...(limitAccount.maxLossLeft != null ? { maxLossLeft: limitAccount.maxLossLeft } : {}) });
+    const away = (price: number) => (quotePrice == null ? '' : ` · ${Math.abs(quotePrice - price).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} b`);
+    const line = (id: string, price: number, color: string, label: string): BacktestChartOrderLine => ({ id, ownerId: id, ownerType: 'order', kind: 'stopLoss', price, color, label, draggable: false });
+    const out: BacktestChartOrderLine[] = [];
+    if (prices.dll && limitPrefs.limitDll) out.push(line('limit-dll', prices.dll.price, '#f59e0b', `DLL −${Math.round(prices.dll.amount).toLocaleString('cs-CZ')} USD${away(prices.dll.price)}`));
+    if (prices.mll && limitPrefs.limitMll && !(limitPrefs.limitDll && prices.mll.price === prices.dll?.price)) out.push(line('limit-mll', prices.mll.price, '#e11d48', `MLL −${Math.round(prices.mll.amount).toLocaleString('cs-CZ')} USD${away(prices.mll.price)}`));
+    return out.length ? out : undefined;
+  }, [limitAccount, summary, avg, pv, trading.tickSize, quotePrice, limitPrefs.limitDll, limitPrefs.limitMll]);
+
   const mode = rithmicPhoneModeLabel({ system: trading.system, readOnly: viewOnly, closeOnly: closeOnlyHere, liveAccount: trading.liveAccount, simulation: Boolean(simulationUrl) });
-  const account = (
+  // S výběrem účtu: P&L, výběr a štítek režimu jen když je co hlásit (jen čtení, SKUTEČNÝ ÚČET …), ne „simulace“.
+  const account = accountBar ? (
+    <>
+      <LiveAccountBar compact data={accountBar} openPnl={openPnl} isDark={isDark} />
+      {mode && mode.tone !== 'muted' && <span data-rithmic-phone-mode={mode.tone} style={{ ...chip, flex: 'none', fontWeight: 900, letterSpacing: mode.tone === 'danger' ? '.04em' : undefined, ...MODE_STYLE[mode.tone] }}>{mode.text}</span>}
+    </>
+  ) : (
     <>
       <span data-rithmic-phone-account title={[trading.system, trading.accountName, symbol].filter(Boolean).join(' · ')} style={{ ...chip, border: '1px solid var(--dj-line, rgba(148,163,184,.3))', background: 'var(--dj-chip, transparent)', color: 'var(--dj-text, inherit)', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', lineHeight: '26px', maxWidth: '60vw' }}>
         {[trading.system ?? 'Rithmic', trading.accountName ?? 'účet neznámý'].join(' · ')}
@@ -270,7 +304,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
         // (výpadek spojení po návratu do appky), graf pod ní neposkočí.
         header: group => (
           <div ref={headerRef} data-rithmic-phone-header style={{ position: 'relative' }}>
-            {header({ group, account })}
+            {header(accountBar ? { account, compact: true } : { group, account })}
             <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 44, pointerEvents: 'none' }}>
               <div style={{ pointerEvents: 'auto' }}>{status(false)}</div>
             </div>
@@ -291,6 +325,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
         // Příkazy zadané jinde: jen čáry pro zobrazení, nikdy do mostu příkazů.
         workingOrders: trading.workingView,
         userId: userId ?? null,
+        ...(limitLines ? { limitLines } : {}),
       })}
     </>
   );

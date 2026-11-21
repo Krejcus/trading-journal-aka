@@ -7,7 +7,8 @@ import SheetGrip from './SheetGrip';
 
 export type LiveTradeSide = 'buy' | 'sell';
 
-const PILL_HEIGHT = 48;
+// Menší lišta (21. 11., Filip): 34 px místo 48, užší tlačítka.
+const PILL_HEIGHT = 34;
 // Aurora: sytá skleněná tlačítka s jemnou září.
 const SELL_FILL: React.CSSProperties = { background: 'linear-gradient(180deg, rgba(255,92,108,.95), rgba(222,52,70,.92))', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.35), 0 8px 18px -10px rgba(239,70,85,.9)' };
 const BUY_FILL: React.CSSProperties = { background: 'linear-gradient(180deg, rgba(88,136,255,.95), rgba(40,96,240,.92))', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.35), 0 8px 18px -10px rgba(47,107,255,.9)' };
@@ -47,10 +48,10 @@ export function LiveTradePill({ isDark = true, prefs, onPrefs, bid, ask, onQty, 
       className="dj-btn dj-pill-side"
       aria-label={kind === 'sell' ? 'Prodat market' : 'Koupit market'}
       onClick={() => { playNativeHapticIfAvailable('medium'); onSide(kind); }}
-      style={{ minWidth: 92, padding: '5px 10px', border: 0, borderRadius: 9, cursor: 'pointer', color: '#fff', textAlign: 'center', lineHeight: 1.1, ...(kind === 'sell' ? SELL_FILL : BUY_FILL) }}
+      style={{ minWidth: 68, padding: '2px 8px', border: 0, borderRadius: 7, cursor: 'pointer', color: '#fff', textAlign: 'center', lineHeight: 1.1, ...(kind === 'sell' ? SELL_FILL : BUY_FILL) }}
     >
-      <small style={{ display: 'block', fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', opacity: 0.82 }}>{kind === 'sell' ? 'PRODAT' : 'KOUPIT'}</small>
-      <span className="dj-mono" style={{ fontSize: 14, fontWeight: 700 }}>{formatLivePrice(price)}</span>
+      <small style={{ display: 'block', fontSize: 7.5, fontWeight: 800, letterSpacing: '.08em', opacity: 0.82 }}>{kind === 'sell' ? 'PRODAT' : 'KOUPIT'}</small>
+      <span className="dj-mono" style={{ fontSize: 11.5, fontWeight: 700 }}>{formatLivePrice(price)}</span>
     </button>
   );
 
@@ -64,7 +65,7 @@ export function LiveTradePill({ isDark = true, prefs, onPrefs, bid, ask, onQty, 
         position: 'absolute', zIndex: 23, height: PILL_HEIGHT, boxSizing: 'border-box',
         left: `calc(6px + (100% - var(--pill-w, 280px) - 12px) * ${pos.x})`,
         top: `calc(6px + (100% - ${PILL_HEIGHT}px - 34px) * ${pos.y})`,
-        display: 'flex', alignItems: 'stretch', padding: 3, borderRadius: 12,
+        display: 'flex', alignItems: 'stretch', padding: 2, borderRadius: 9,
         border: `1px solid ${dragging ? 'rgba(157,183,255,.6)' : 'var(--dj-line)'}`,
         background: isDark ? 'rgba(13,18,27,.92)' : 'rgba(255,255,255,.92)',
         backdropFilter: 'blur(24px) saturate(180%)', WebkitBackdropFilter: 'blur(24px) saturate(180%)',
@@ -100,12 +101,12 @@ export function LiveTradePill({ isDark = true, prefs, onPrefs, bid, ask, onQty, 
           onPrefs({ ...prefs, x: pos.x, y: pos.y });
         }}
         onPointerCancel={() => { drag.current = null; setDragging(false); setPos({ x: prefs.x, y: prefs.y }); }}
-        style={{ width: 24, display: 'grid', placeItems: 'center', color: dragging ? '#9db7ff' : 'var(--dj-muted)', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
-      ><GripVertical size={16} /></span>
+        style={{ width: 18, display: 'grid', placeItems: 'center', color: dragging ? '#9db7ff' : 'var(--dj-muted)', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+      ><GripVertical size={13} /></span>
       {side('sell', bid)}
-      <button type="button" className="dj-btn" aria-label={`Počet kontraktů ${prefs.qty}`} onClick={onQty} style={{ width: 54, border: 0, background: 'transparent', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--dj-muted)', fontSize: 10, lineHeight: 1.15 }}>
+      <button type="button" className="dj-btn" aria-label={`Počet kontraktů ${prefs.qty}`} onClick={onQty} style={{ width: 38, border: 0, background: 'transparent', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--dj-muted)', fontSize: 8.5, lineHeight: 1.1 }}>
         <span className="dj-mono">{spread != null ? spread.toFixed(2) : 'ks'}</span>
-        <b className="dj-mono" style={{ fontSize: 15, color: 'var(--dj-text)' }}>{prefs.qty}</b>
+        <b className="dj-mono" style={{ fontSize: 12.5, color: 'var(--dj-text)' }}>{prefs.qty}</b>
       </button>
       {side('buy', ask)}
     </div>

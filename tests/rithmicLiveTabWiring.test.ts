@@ -499,7 +499,9 @@ describe('Rithmic graf na telefonu', () => {
 
   it('obal: zavření pozice je dosažitelné i při incidentu, mlčící službě a schované hlavičce; incident jde potvrdit', () => {
     // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
-    expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\);/);
+    expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\) && \(!accountBar \|\| brakeNeeded \|\| grace\);/);
+    // S výběrem účtu v hlavičce se v klidu schová; vrací se při nejistotě, neznámém stavu, mlčící službě, stopu vstupů (21. 11.).
+    expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
     // Krátký výpadek (návrat do appky): poslední známý obraz se drží jen pár sekund, pak obrazovka hlásí pravdu.
     expect(wrapper).toMatch(/const RECONNECT_GRACE_MS = 4_000;/);
     expect(wrapper).toMatch(/window\.setTimeout\(\(\) => \{ hadState\.current = false; setGrace\(false\); \}, RECONNECT_GRACE_MS\);/);
@@ -507,7 +509,7 @@ describe('Rithmic graf na telefonu', () => {
     expect(wrapper).toMatch(/const result = await closeNow\(\);/);
     // Karty a brzda: v hlavičce, a když je hlavička schovaná, nad grafem; i v prázdném stavu.
     // Pod hlavičkou PLAVOU (nulová výška v toku), aby graf při výpadku spojení neposkočil.
-    expect(wrapper).toMatch(/\{header\(\{ group, account \}\)\}\n\s+<div style=\{\{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 44, pointerEvents: 'none' \}\}>/);
+    expect(wrapper).toMatch(/\{header\(accountBar \? \{ account, compact: true \} : \{ group, account \}\)\}\n\s+<div style=\{\{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 44, pointerEvents: 'none' \}\}>/);
     expect(wrapper).toMatch(/overlay: <>\{overlay\}\{!headerShown && status\(true\)\}<\/>/);
     expect(wrapper.slice(wrapper.indexOf('data-rithmic-phone-empty'))).toContain('{status(false)}');
     expect(wrapper).toMatch(/if \(card\.action\?\.kind === 'ack'\) void confirmIncident\(\);/);

@@ -111,9 +111,11 @@ interface Props {
   /** Otevřený P&L obchodovaného účtu v USD (z pozice v grafu); null = bez pozice. */
   openPnl: number | null;
   isDark: boolean;
+  /** Telefon: P&L v jednom čipu nad sebou, krátký výběr a výběr jako spodní list přes celou šířku. */
+  compact?: boolean;
 }
 
-const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark }) => {
+const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark, compact = false }) => {
   const [selection, setSelection] = useState<LiveBarSelection>({ kind: 'account', id: data.tradedAccountId });
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'accounts' | 'groups'>('accounts');
@@ -165,28 +167,43 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark }) => {
   };
 
   return (
-    <div ref={box} className="relative flex items-center gap-1" data-live-account-bar>
-      <span className={chip} title={`P&L dne účtu ${shownAccount?.name ?? ''}: realizované + otevřené`} data-live-bar-account-pnl>
+    <div ref={box} className={`relative flex items-center gap-1 ${compact ? 'min-w-0' : ''}`} data-live-account-bar>
+      {compact && <span className={`flex h-8 items-stretch overflow-hidden rounded-lg border ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white/70'}`} data-live-bar-compact-pnl>
+        <span className="flex flex-col justify-center px-2 leading-none" data-live-bar-account-pnl>
+          <span className={`text-[9px] font-bold uppercase tracking-wide ${muted}`}>{selectedGroup ? 'Leader' : 'Dnes'}</span>
+          <b className={`mt-0.5 font-mono text-[12px] font-extrabold ${tone(accountDay)}`}>{usd(accountDay)}</b>
+        </span>
+        {showOpen && <span className={`flex flex-col justify-center border-l px-2 leading-none ${isDark ? 'border-white/10' : 'border-slate-200'}`} data-live-bar-open-pnl>
+          <span className={`text-[9px] font-bold uppercase tracking-wide ${muted}`}>Otevřeno</span>
+          <b className={`mt-0.5 font-mono text-[12px] font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
+        </span>}
+      </span>}
+      {!compact && <span className={chip} title={`P&L dne účtu ${shownAccount?.name ?? ''}: realizované + otevřené`} data-live-bar-account-pnl>
         <span className={muted}>{selectedGroup ? 'Leader dnes' : 'Dnes'}</span>
         <b className={`font-mono font-extrabold ${tone(accountDay)}`}>{usd(accountDay)}</b>
-      </span>
-      {showOpen && <span className={chip} title={`Otevřené P&L pozice účtu ${shownAccount?.name ?? ''}`} data-live-bar-open-pnl>
+      </span>}
+      {!compact && showOpen && <span className={chip} title={`Otevřené P&L pozice účtu ${shownAccount?.name ?? ''}`} data-live-bar-open-pnl>
         <span className={muted}>Otevřeno</span>
         <b className={`font-mono font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
       </span>}
       {group && groupDay !== null && <button type="button" onClick={() => { setTab('groups'); setOpen(true); }} className={`${chip} ${isDark ? 'hover:bg-white/[0.07]' : 'hover:bg-white'}`}
         title={`Skupina ${group.name} · ${group.state} · ${copying} kopíruje · P&L dne všech účtů skupiny`} data-live-bar-group-pnl>
         <i className={`h-[7px] w-[7px] rounded-full ${STATE_DOT[group.state]}`} />
-        <Layers size={12} className={muted} />{group.name}
+        {!compact && <><Layers size={12} className={muted} />{group.name}</>}
         <b className={`font-mono font-extrabold ${tone(groupDay)}`}>{usd(groupDay)}</b>
       </button>}
       <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} data-live-bar-picker
-        className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400 hover:bg-indigo-500/20">
+        className={`flex ${compact ? 'h-8 min-w-0 px-2 text-[12px]' : 'h-[30px] px-2.5 text-[11px]'} items-center gap-1.5 whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 font-extrabold text-indigo-400 hover:bg-indigo-500/20`}>
         {selectedGroup ? <><Layers size={12} />{selectedGroup.name}<span className="font-bold opacity-70">1 → {selectedGroup.followers.length}</span></>
+          : compact ? <span className="max-w-[96px] truncate">{shownAccount?.name ?? shownAccountId}</span>
           : <><span className="rounded bg-indigo-500/20 px-1.5 py-px text-[10px]">{shownAccount?.firm ?? '—'}</span>{shownAccount?.name ?? shownAccountId}</>}
         <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && <div role="dialog" aria-label="Výběr účtu nebo skupiny" className={`absolute right-0 top-[calc(100%+6px)] z-[95] w-[420px] rounded-xl border p-2 shadow-2xl ${panel}`} data-live-bar-menu>
+      {open && compact && <div className="fixed inset-0 z-[70] bg-black/45" onClick={() => setOpen(false)} aria-hidden="true" />}
+      {open && <div role="dialog" aria-label="Výběr účtu nebo skupiny" className={compact
+        ? `fixed inset-x-0 bottom-0 z-[71] rounded-t-2xl border-t p-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] shadow-2xl ${panel}`
+        : `absolute right-0 top-[calc(100%+6px)] z-[95] w-[420px] rounded-xl border p-2 shadow-2xl ${panel}`} data-live-bar-menu>
+        {compact && <div className={`mx-auto mb-2 h-1 w-10 rounded-full ${isDark ? 'bg-white/20' : 'bg-slate-300'}`} />}
         <div className={`flex gap-1 rounded-lg p-0.5 ${isDark ? 'bg-white/[0.05]' : 'bg-slate-100'}`}>
           {(['accounts', 'groups'] as const).map(id => <button key={id} type="button" onClick={() => { setTab(id); setQuery(''); }}
             className={`h-8 flex-1 rounded-md text-[12px] font-extrabold ${tab === id ? isDark ? 'bg-white/10 text-white' : 'bg-white text-slate-900 shadow-sm' : muted}`}>
@@ -196,7 +213,7 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark }) => {
           <Search size={13} className={muted} />
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder={tab === 'accounts' ? 'Hledat účet nebo propku…' : 'Hledat skupinu…'} className="w-full bg-transparent text-[12px] outline-none" />
         </label>
-        <div className="mt-1 max-h-[380px] overflow-y-auto pr-0.5">
+        <div className={`mt-1 overflow-y-auto pr-0.5 ${compact ? 'max-h-[60vh]' : 'max-h-[380px]'}`}>
           {tab === 'accounts' ? firms.map(([firm, list]) => <div key={firm}>
             <div className={`flex items-center px-2 pb-1 pt-2.5 text-[10px] font-extrabold uppercase tracking-[0.08em] ${muted}`}>{firm}<span className="ml-auto">{list.length}</span></div>
             {list.map(item => {

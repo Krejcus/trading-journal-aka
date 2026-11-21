@@ -15,7 +15,7 @@ const TONE_COLOR: Record<LivePhoneCopierChip['tone'], string> = {
  * Hlavička LIVE nad telefonním grafem: „LIVE ▾“ otevře menu záložek, vedle
  * skupina a stav kopírky. Jen zobrazení (INV-UI-01/03) — nic neodesílá.
  */
-export function LivePhoneHeader({ groupName, copier, onMenu, group, account }: {
+export function LivePhoneHeader({ groupName, copier, onMenu, group, account, hideCopier = false }: {
   groupName: string | null;
   copier: LivePhoneCopierChip;
   onMenu: () => void;
@@ -23,17 +23,19 @@ export function LivePhoneHeader({ groupName, copier, onMenu, group, account }: {
   group?: React.ReactNode;
   /** Čipy účtu mimo kopírku (Rithmic: systém · účet, štítek režimu); hlavička se pak smí zalomit. */
   account?: React.ReactNode;
+  /** Rithmic s výběrem účtu (21. 11.): informační čip kopírky Tradovate se neukazuje. */
+  hideCopier?: boolean;
 }) {
   const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px', borderRadius: 9, border: '1px solid var(--dj-line)', background: 'var(--dj-chip)', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', minWidth: 0 };
   return (
-    <div className="dj-glass" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)', ...(account ? { flexWrap: 'wrap', rowGap: 6 } : {}) }}>
+    <div className="dj-glass" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--dj-line)', background: 'var(--dj-card)', ...(account && !hideCopier ? { flexWrap: 'wrap', rowGap: 6 } : {}) }}>
       <button type="button" className="dj-btn" aria-label="LIVE menu" onClick={onMenu} style={{ ...chip, height: 32, padding: '0 10px 0 12px', color: '#a5b4fc', fontWeight: 900, letterSpacing: '.06em', cursor: 'pointer' }}>
         LIVE<ChevronDown size={14} color="var(--dj-muted)" />
       </button>
       {group ?? (groupName && <span style={{ ...chip, color: 'var(--dj-text)', overflow: 'hidden', textOverflow: 'ellipsis' }}><i style={{ width: 7, height: 7, borderRadius: 7, background: '#818cf8', flex: 'none' }} />{groupName}</span>)}
       {account}
       {/* Zapnutá kopírka: jantarový prstenec (směr Aurora), ne zelená. */}
-      <span title={copier.title} style={{ ...chip, color: copier.armed ? '#fbbf24' : TONE_COLOR[copier.tone], boxShadow: copier.armed ? '0 0 0 2px rgba(251,191,36,.45)' : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>{copier.label}</span>
+      {!hideCopier && <span title={copier.title} style={{ ...chip, color: copier.armed ? '#fbbf24' : TONE_COLOR[copier.tone], boxShadow: copier.armed ? '0 0 0 2px rgba(251,191,36,.45)' : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>{copier.label}</span>}
     </div>
   );
 }

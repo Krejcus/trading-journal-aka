@@ -275,7 +275,9 @@ describe('statika B5: odeslání jen tlačítkem, přehrávání nic, zobrazení
 
   it('pracující příkazy jdou jen do extraLines a štítků — nikdy do trade, manage ani odeslání', () => {
     expect(phone.match(/working\.\w+/g)).toEqual(['working.lines', 'working.badges']);
-    expect(phone).toMatch(/extraLines=\{working\.lines\}/);
+    expect(phone).toMatch(/extraLines=\{withLimitLines\(working\.lines, slots\.limitLines\)\}/);
+    // Čáry DLL / MLL (21. 11.) jen přidají zobrazovací čáry za pracující příkazy — stejná vrstva bez akcí.
+    expect(phone).toMatch(/const withLimitLines = \(lines: readonly BacktestChartOrderLine\[\], limit: readonly BacktestChartOrderLine\[\] \| undefined\) => \(limit\?\.length \? \[\.\.\.lines, \.\.\.limit\] : lines\);/);
     expect(phone).toMatch(/const working = useMemo\(\(\) => livePhoneWorkingView\(slots\.workingOrders, contract\), \[slots\.workingOrders, contract\]\);/);
     expect(phone.match(/slots\.workingOrders/g)).toHaveLength(2);
     // Pojistka nad overlayem v každém handleru (čára jen pro zobrazení nikdy nic nepošle ani nezmění návrh).

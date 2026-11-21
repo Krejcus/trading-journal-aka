@@ -58,7 +58,11 @@ import type { MarketCandle } from '../../services/marketData';
 import type { LiveTradingMarketData } from '../LiveTradingScreen';
 import { perfDuration } from '../../lib/perfTrace';
 import { markLiveCommandPaint, type LiveCommandTraceStage, type LiveCommandWorkerTiming } from '../../lib/liveCommandPerformance';
+import type { BacktestChartOrderLine } from '../../services/backtestOrderLines';
 import './dayJournal.css';
+
+/** Čáry DLL / MLL (jen zobrazení) za čarami pracujících příkazů — stejná vrstva, nikdy do trade ani správy. */
+const withLimitLines = (lines: readonly BacktestChartOrderLine[], limit: readonly BacktestChartOrderLine[] | undefined) => (limit?.length ? [...lines, ...limit] : lines);
 
 /** Dotyk mladší než tohle po otevření menu plusu se ignoruje (stejná hranice jako druhý klik čar). */
 const LIVE_PLUS_GHOST_TAP_MS = 350;
@@ -91,6 +95,8 @@ export interface LivePhoneChartSlots {
    * příkazů, `LiveChartWorkingOrders` desku). Nikdy nejdou do `trade` ani do správy.
    */
   workingOrders?: (LiveWorkingOrdersView & { contract: string | null }) | null;
+  /** Čáry DLL / MLL účtu v obchodě (Rithmic, 21. 11.): jen zobrazení, nejdou táhnout ani zavřít. */
+  limitLines?: readonly BacktestChartOrderLine[];
   /** U8: klíč knihovny šablon SL/TP na zařízení (nic neautorizuje); null = nepřihlášeno. */
   userId?: string | null;
   /**
@@ -734,7 +740,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             closeExpect={trade?.scaleIn?.stopLoss ?? null}
             isDark={isDark}
             onNotice={say}
-            extraLines={working.lines}
+            extraLines={withLimitLines(working.lines, slots.limitLines)}
             draftLines={(() => {
               const draftAt = chartDraft ? draftQuote(lastPrice) : null;
               return chartDraft && draftAt ? livePhoneDraftLines(chartDraft, LIVE_PHONE_INSTRUMENT, draftAt, trade?.scaleIn) : undefined;

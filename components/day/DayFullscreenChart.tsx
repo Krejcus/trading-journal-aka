@@ -243,9 +243,10 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const panelDragRef = useRef<{ startX: number; startY: number; x: number; y: number; spanX: number; spanY: number } | null>(null);
   // Vodorovná lišta (jako TradingView): úchyt vlevo + nástroje vedle sebe.
-  const PANEL_ITEM = 42;
-  const panelWidth = 28 + favorites.length * PANEL_ITEM + 4;
-  const PANEL_HEIGHT = 48;
+  // Tenčí lišta (21. 11., Filip): 36 px místo 48, tlačítka 32 px.
+  const PANEL_ITEM = 34;
+  const panelWidth = 22 + favorites.length * PANEL_ITEM + 4;
+  const PANEL_HEIGHT = 36;
   const [textEdit, setTextEdit] = useState<{ id: string; text: string; fresh: boolean } | null>(null);
   // Plné nastavení kresby (stejné dialogy jako na PC, včetně šablon) přes celou obrazovku.
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
@@ -938,7 +939,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
         )}
         {/* Plovoucí panel oblíbených (jako na PC): klepnutí vezme nástroj, za úchyt jde posunout. */}
         {panel.on && favorites.length > 0 && !chromeHidden && !toolsOpen && !textEdit && (
-          <div role="toolbar" aria-label="Oblíbené nástroje" style={{ position: 'absolute', left: `calc((100% - ${panelWidth}px) * ${panel.x})`, top: `calc((100% - ${PANEL_HEIGHT}px) * ${panel.y})`, zIndex: 24, height: PANEL_HEIGHT, padding: '0 2px 0 0', boxSizing: 'border-box', borderRadius: 14, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 12px 30px -14px rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', touchAction: 'none' }}>
+          <div role="toolbar" aria-label="Oblíbené nástroje" style={{ position: 'absolute', left: `calc((100% - ${panelWidth}px) * ${panel.x})`, top: `calc((100% - ${PANEL_HEIGHT}px) * ${panel.y})`, zIndex: 24, height: PANEL_HEIGHT, padding: '0 2px 0 0', boxSizing: 'border-box', borderRadius: 11, border: '1px solid var(--dj-line)', background: 'var(--dj-card)', boxShadow: '0 12px 30px -14px rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', touchAction: 'none' }}>
             <span
               aria-label="Posunout panel"
               onPointerDown={event => {
@@ -955,14 +956,14 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
               }}
               onPointerUp={() => { if (panelDragRef.current) { panelDragRef.current = null; writeDayDrawPanel(window.localStorage, panel); } }}
               onPointerCancel={() => { panelDragRef.current = null; }}
-              style={{ width: 28, height: '100%', display: 'grid', placeItems: 'center', color: 'var(--dj-muted)', cursor: 'grab', touchAction: 'none' }}
-            ><GripVertical size={16} /></span>
+              style={{ width: 22, height: '100%', display: 'grid', placeItems: 'center', color: 'var(--dj-muted)', cursor: 'grab', touchAction: 'none' }}
+            ><GripVertical size={14} /></span>
             {favorites.map(tool => {
               const Icon = toolIcon(tool);
               const on = toolName === tool;
               return (
-                <button key={tool} type="button" className="dj-btn" aria-label={toolTitle(tool)} aria-pressed={on} onClick={() => (on ? cancelTool() : startTool(tool as DrawingToolId))} style={{ width: 40, height: 40, marginLeft: 2, borderRadius: 10, border: 0, padding: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: on ? '#fff' : 'var(--dj-text)', background: on ? 'linear-gradient(180deg,#6366f1,#4f46e5)' : 'transparent' }}>
-                  {Icon ? <Icon size={20} /> : <span style={{ fontSize: 10, fontWeight: 700 }}>{toolTitle(tool).slice(0, 3)}</span>}
+                <button key={tool} type="button" className="dj-btn" aria-label={toolTitle(tool)} aria-pressed={on} onClick={() => (on ? cancelTool() : startTool(tool as DrawingToolId))} style={{ width: 32, height: 32, marginLeft: 2, borderRadius: 8, border: 0, padding: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: on ? '#fff' : 'var(--dj-text)', background: on ? 'linear-gradient(180deg,#6366f1,#4f46e5)' : 'transparent' }}>
+                  {Icon ? <Icon size={17} /> : <span style={{ fontSize: 10, fontWeight: 700 }}>{toolTitle(tool).slice(0, 3)}</span>}
                 </button>
               );
             })}
