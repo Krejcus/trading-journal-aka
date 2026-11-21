@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, type LiveAccountBarData } from '../components/LiveAccountBar';
+import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, liveBarRisk, type LiveAccountBarData } from '../components/LiveAccountBar';
 
 const data: LiveAccountBarData = {
   tradedAccountId: 'L',
@@ -49,5 +49,17 @@ describe('LiveAccountBar P&L', () => {
     expect(liveBarGroupOf(data, 'L')?.id).toBe('g');
     expect(liveBarGroupOf(data, 'C')?.id).toBe('g');
     expect(liveBarGroupOf(data, 'S')).toBeNull();
+  });
+
+  it('DLL a MLL se hýbou s otevřenou pozicí; DLL nikdy nepřesáhne MLL', () => {
+    const withLimits: LiveAccountBarData = { ...data, accounts: data.accounts.map(item => item.id === 'L' ? { ...item, dailyLossLimit: 1000, maxLossLeft: 600 } : item.id === 'A' ? { ...item, dailyLossLimit: 1000, maxLossLeft: 2000 } : item) };
+    // L: realizováno −100, otevřeno −50 → DLL 850, ale MLL 550 je blíž → DLL 550.
+    expect(liveBarRisk(withLimits, 'L', -50)).toEqual({ dll: 550, mll: 550 });
+    // A (follower ×1): realizováno +50, otevřeno −50 → DLL 1000, MLL 1950.
+    expect(liveBarRisk(withLimits, 'A', -50)).toEqual({ dll: 1000, mll: 1950 });
+    // Hluboko v mínusu se limity zastaví na nule.
+    expect(liveBarRisk(withLimits, 'L', -5000)).toEqual({ dll: 0, mll: 0 });
+    // Účet bez známých limitů nic neukazuje.
+    expect(liveBarRisk(withLimits, 'S', 0)).toEqual({ dll: null, mll: null });
   });
 });

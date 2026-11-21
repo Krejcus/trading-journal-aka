@@ -32,6 +32,15 @@ const accounts: LiveBarAccount[] = [
   acc('LT-013', 'Flex 50K •013', 'LucidTrading', 0),
 ];
 
+// Limity propek (mock): DLL podle velikosti účtu, rezerva do max loss různě daleko (bez otevřené pozice).
+const mllLeft: Record<string, number> = { 'LOCAL-SIM': 1840, 'LT-003': 610, 'LT-005': 1420, 'LT-009': 880, 'LT-099': 0, 'AP-118': 1150, 'BU-B02': 1990 };
+for (const item of accounts) {
+  if (item.firm === 'Rithmic Test') continue;
+  const big = /100K/.test(item.name);
+  item.dailyLossLimit = big ? 1500 : 1000;
+  item.maxLossLeft = mllLeft[item.id] ?? (big ? 2900 : 1750) - (item.id.charCodeAt(item.id.length - 1) % 7) * 35;
+}
+
 const ratio: Record<string, number> = { 'LT-004': 0.5, 'LT-010': 1.5 };
 const off = new Set(['LT-009', 'LT-012', 'LT-099', 'AP-130']);
 const main: LiveBarGroupFollower[] = ['LT-002', 'LT-003', 'LT-004', 'LT-005', 'LT-006', 'LT-007', 'LT-008', 'LT-009', 'LT-010', 'LT-011', 'LT-012', 'LT-099', 'AP-117', 'AP-118', 'AP-121', 'AP-122', 'AP-130', 'BU-B01', 'BU-B02']
