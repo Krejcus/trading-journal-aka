@@ -1188,7 +1188,8 @@ const LiveTradingScreen: React.FC<Props> = ({
       </header>
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <ChartDataStatus quality={chart.quality} />
+          {/* Rithmic graf (solo): běžný řádek „Poslední svíčka…" schovaný (rozhodnutí Filipa 21. 11.); varování o datech zůstává. */}
+          {(!solo || chart.quality.tone === 'warn') && <ChartDataStatus quality={chart.quality} />}
           <div className="relative min-h-0 flex-1">
           {/* Všechna oznámení v grafu jsou karty vlevo dole — i výsledek příkazu (dřív text nahoře uprostřed). */}
           <LiveTradeToasts events={shownEvents} extra={toastExtras} capExtra copierArmed={closeAllowed} isDark={isDark} hideAccounts={Boolean(soloAccountLabel)} />

@@ -122,6 +122,8 @@ describe('obrazovka v režimu jednoho účtu', () => {
     // Jen informační stav workeru a kopírky Tradovate je v Rithmic grafu schovaný (rozhodnutí Filipa 21. 11.).
     expect(screen).toMatch(/\{workerChip && !solo && <button/);
     expect(screen).toMatch(/\{copierChip && !solo && <button/);
+    // Řádek stavu svíček: v Rithmic grafu jen při varování o datech.
+    expect(screen).toMatch(/\{\(!solo \|\| chart\.quality\.tone === 'warn'\) && <ChartDataStatus/);
   });
 
   it('alerty jsou v režimu jednoho účtu vypnuté a výchozí zdroj dat se nečte', () => {
