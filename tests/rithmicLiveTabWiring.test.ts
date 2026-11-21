@@ -125,7 +125,10 @@ describe('obrazovka v režimu jednoho účtu', () => {
     // Řádek stavu svíček: v Rithmic grafu jen při varování o datech.
     expect(screen).toMatch(/\{\(!solo \|\| chart\.quality\.tone === 'warn'\) && <ChartDataStatus/);    // S výběrem účtu: bez nápisu LIVE a bez štítku účtu; stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) zůstává.
     expect(screen).toMatch(/\{accountBar && solo\?\.statusNote && <span data-solo-status/);
-    expect(screen).toMatch(/\{soloAccountLabel && !accountBar && <span/);
+    expect(screen).toMatch(/\{soloAccountLabel && !accountBar && <span/);    // Sloučení s lištou grafu jen s vykresleným grafem; navigace na přehled zůstává jako ikony (INV-UI-02).
+    expect(screen).toMatch(/const mergedHeader = Boolean\(accountBar\) && chart\.candles\.length > 0;/);
+    expect(screen).toMatch(/\{!mergedHeader && <header/);
+    expect(screen).toMatch(/toolbarFixedEnd=\{mergedHeader \? <div className="flex items-center gap-1" data-live-merged-header>\{compactTabs\}\{headerRight\}<\/div> : undefined\}/);
   });
 
   it('alerty jsou v režimu jednoho účtu vypnuté a výchozí zdroj dat se nečte', () => {

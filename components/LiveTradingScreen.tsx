@@ -1064,31 +1064,9 @@ const LiveTradingScreen: React.FC<Props> = ({
     ? 'border-indigo-500 text-indigo-500'
     : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-100' : 'text-slate-500 hover:text-slate-900'}`);
 
-  const screen = (
-    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} style={{ bottom: 'var(--live-safety-height, 0px)' }} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
-      {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
-      <div className="live-chart-aurora" aria-hidden="true" />
-      {/* Vlastní vrstva nad grafem: rozbalovací okna hlavičky (účty skupiny,
-          potvrzení vypnutí) jinak zapadnou pod plovoucí prvky grafu. */}
-      <header className={`live-chart-header relative z-[800] flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
-        {!accountBar && <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>}
-        <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto no-scrollbar" aria-label="LIVE navigace">
-          {tabs.map(item => {
-            const Icon = item.icon;
-            const active = item.id === 'chart';
-            // Na přehled (DISARM, kill) se jde vždy — INV-UI-02.
-            const blocked = navigationBlocked && !active && item.id !== 'overview';
-            return <button
-              key={item.id}
-              type="button"
-              disabled={blocked}
-              title={blocked ? 'Čekám na potvrzení změny konfigurace workerem' : undefined}
-              onClick={() => onNavigate(item.id)}
-              className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-[11.5px] font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tabTone(active)}`}
-            ><Icon size={13} />{item.label}</button>;
-          })}
-        </nav>
-        <span className="flex-1" />
+  // Hlavička se s výběrem účtu slučuje s lištou grafu — jen když je graf vykreslený (jinak by zmizela navigace i OFF).
+  const mergedHeader = Boolean(accountBar) && chart.candles.length > 0;
+  const headerRight = (<>
         {chart.liveSource && <span className={`hidden whitespace-nowrap px-2 font-mono text-[10px] 2xl:inline ${isDark ? 'text-slate-500' : 'text-slate-400'}`} title="Zdroj živé svíčky">{chart.liveSource}</span>}
         {/* Skutečný stav kopírky (jako stavová lišta LIVE); klik vede na přehled s vypnutím. */}
         {strip.notice && <button type="button" onClick={() => onNavigate('overview')} title={strip.notice} className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500">Incident kopírky →</button>}
@@ -1189,7 +1167,47 @@ const LiveTradingScreen: React.FC<Props> = ({
           aria-label="Zavřít graf"
           className={`ml-0.5 flex h-8 w-8 items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`}
         ><X size={16} /></button>
-      </header>
+  </>);
+  // Navigace ve sloučené liště: jen ikony (na přehled s DISARM a kill se jde vždy — INV-UI-02).
+  const compactTabs = tabs.length > 0 ? <nav className="flex items-center gap-0.5" aria-label="LIVE navigace">
+    {tabs.map(item => {
+      const Icon = item.icon;
+      const active = item.id === 'chart';
+      const blocked = navigationBlocked && !active && item.id !== 'overview';
+      return <button key={item.id} type="button" disabled={blocked} onClick={() => onNavigate(item.id)}
+        title={blocked ? 'Čekám na potvrzení změny konfigurace workerem' : item.label} aria-label={item.label}
+        className={`grid h-8 w-8 place-items-center rounded-md disabled:cursor-wait disabled:opacity-40 ${active ? 'text-indigo-400' : isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Icon size={15} /></button>;
+    })}
+  </nav> : null;
+
+  const screen = (
+    <div className={`fixed inset-0 z-[300] flex flex-col ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${surface} ${isDark ? 'dark' : ''}`} style={{ bottom: 'var(--live-safety-height, 0px)' }} role="region" aria-label="LIVE graf" aria-hidden={leaving || undefined}>
+      {/* Aurorová záře při příchodu — jednou, pak je průhledná a nebere kliky. */}
+      <div className="live-chart-aurora" aria-hidden="true" />
+      {/* Vlastní vrstva nad grafem: rozbalovací okna hlavičky (účty skupiny,
+          potvrzení vypnutí) jinak zapadnou pod plovoucí prvky grafu. */}
+      {/* S výběrem účtu se hlavička slučuje s lištou grafu (21. 11.): obsah jde do pevné pravé části lišty. */}
+      {!mergedHeader && <header className={`live-chart-header relative z-[800] flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
+        {!accountBar && <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>}
+        <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto no-scrollbar" aria-label="LIVE navigace">
+          {tabs.map(item => {
+            const Icon = item.icon;
+            const active = item.id === 'chart';
+            // Na přehled (DISARM, kill) se jde vždy — INV-UI-02.
+            const blocked = navigationBlocked && !active && item.id !== 'overview';
+            return <button
+              key={item.id}
+              type="button"
+              disabled={blocked}
+              title={blocked ? 'Čekám na potvrzení změny konfigurace workerem' : undefined}
+              onClick={() => onNavigate(item.id)}
+              className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-[11.5px] font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tabTone(active)}`}
+            ><Icon size={13} />{item.label}</button>;
+          })}
+        </nav>
+        <span className="flex-1" />
+        {headerRight}
+      </header>}
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
           {/* Rithmic graf (solo): běžný řádek „Poslední svíčka…" schovaný (rozhodnutí Filipa 21. 11.); varování o datech zůstává. */}
@@ -1209,6 +1227,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               defaultLayoutId="1"
               initialCandles={chart.candles}
               isDark={isDark}
+              toolbarFixedEnd={mergedHeader ? <div className="flex items-center gap-1" data-live-merged-header>{compactTabs}{headerRight}</div> : undefined}
               toolbarEnd={<>
                 {!solo && <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />}
                 <LiveFillAnnounceToggle isDark={isDark} />

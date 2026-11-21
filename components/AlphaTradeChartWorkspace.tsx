@@ -560,6 +560,8 @@ interface AlphaTradeChartWorkspaceProps {
   liveOrderEntry?: LiveOrderEntryBridge;
   /** Doplňkové ovládání na konci horní lišty (LIVE: motiv obrazovky). */
   toolbarEnd?: React.ReactNode;
+  /** Pevná pravá část lišty, která se neposouvá s nástroji (LIVE: P&L, výběr účtu, zavření pozice, OFF). */
+  toolbarFixedEnd?: React.ReactNode;
 }
 
 export interface WorkspaceReviewSlots {
@@ -1391,6 +1393,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   livePriceLines = null,
   liveOrderEntry,
   toolbarEnd,
+  toolbarFixedEnd,
 }) => {
   const layoutStorageKey = layoutScope ? `${WORKSPACE_LAYOUT_STORAGE_KEY}:${layoutScope}` : WORKSPACE_LAYOUT_STORAGE_KEY;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3491,6 +3494,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         </div>
         <div className={`relative z-[120] flex h-full shrink-0 items-center gap-1 pl-1 pr-2 ${toolbarSurface}`}>
         <span className={topDivider} />
+        {toolbarFixedEnd}
         {!embedded && <>
         <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} title="Zavřít fullscreen (Esc)" aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
         </>}
