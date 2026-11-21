@@ -121,7 +121,7 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\{!strip\.notice && attention\.length > 0 && <button/);
     // Jen informační stav workeru a kopírky Tradovate je v Rithmic grafu schovaný (rozhodnutí Filipa 21. 11.).
     expect(screen).toMatch(/\{workerChip && !solo && <button/);
-    expect(screen).toMatch(/\{copierChip && !solo && <button/);
+    expect(screen).toMatch(/\{copierChip && \(!solo \|\| copierChip\.tone === 'warn' \|\| copierChip\.tone === 'danger'\) && <button/);
     // Řádek stavu svíček: v Rithmic grafu jen při varování o datech.
     expect(screen).toMatch(/\{\(!solo \|\| chart\.quality\.tone === 'warn'\) && <ChartDataStatus/);    // S výběrem účtu: bez nápisu LIVE a bez štítku účtu; stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) zůstává.
     expect(screen).toMatch(/\{accountBar && solo\?\.statusNote && <span data-solo-status/);
@@ -183,7 +183,9 @@ describe('hook místního procesu', () => {
     expect(screen).toMatch(/\{solo\?\.emergencyClose && <button/);
     expect(chart).toMatch(/link === 'open' && offerBrake && !trading\.readOnly \? \{ emergencyClose: \{ run: emergencyClose, busy: closeBusy \} \}/);
     // S výběrem účtu v liště se v klidu schová; při čemkoli, co může zablokovat běžné zavření, se vrátí (21. 11.).
-    expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| unprotected \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    // Brzda i když × a Shift+X zrovna nejdou: příkaz čeká na výsledek, přehrávání, Rithmic odpojený.
+    expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| unprotected \|\| trading\.commandInFlight \|\| replaying \|\| !trading\.available\s+\|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(chart).toMatch(/accountBar=\{accountBar\} onReplayChange=\{setReplaying\}/);
     // Pozice bez známé ceny SL: × ji nezavře, brzda musí zůstat.
     expect(chart).toMatch(/const unprotected = hasPosition && \(trading\.position\?\.summary\?\.kind !== 'position' \|\| trading\.position\.summary\.stop == null\);/);
     expect(chart).toMatch(/const offerBrake = \(trading\.mayHaveExposure \|\| uncertainList\.length > 0\) && \(!accountBar \|\| brakeNeeded\);/);
@@ -503,7 +505,7 @@ describe('Rithmic graf na telefonu', () => {
     // Nabídka brzdy nezávisí na `blocked`, ceně ani `silent` — jen na spojení, režimu čtení a možné expozici.
     expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\) && \(!accountBar \|\| brakeNeeded \|\| grace\);/);
     // S výběrem účtu v hlavičce se v klidu schová; vrací se při nejistotě, neznámém stavu, mlčící službě, stopu vstupů (21. 11.).
-    expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| unprotected \|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
+    expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| unprotected \|\| trading\.commandInFlight \|\| !trading\.available\s+\|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
     expect(wrapper).toMatch(/const unprotected = hasPosition && \(shownPosition\?\.summary\?\.kind !== 'position' \|\| shownPosition\.summary\.stop == null\);/);
     // Krátký výpadek (návrat do appky): poslední známý obraz se drží jen pár sekund, pak obrazovka hlásí pravdu.
     expect(wrapper).toMatch(/const RECONNECT_GRACE_MS = 4_000;/);

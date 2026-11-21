@@ -104,8 +104,8 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });
   // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
-  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.accountClosedPnl }),
-    [trading.accountName, trading.system, trading.accountClosedPnl]);
+  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.silent ? null : trading.accountClosedPnl }),
+    [trading.accountName, trading.system, trading.accountClosedPnl, trading.silent]);
   const accountBar = accountBarProp ?? realAccountBar;
   // Rozsah tohoto zařízení (určila ho služba při spárování a sama ho vynucuje): obrazovka podle něj jen NENABÍZÍ,
   // co by služba stejně odmítla — aby se o odmítnutí člověk nedozvěděl až po klepnutí v nouzi.
@@ -230,7 +230,9 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   // Sama se vrátí, když běžná cesta nemusí fungovat (nejistý příkaz, neznámý stav, služba mlčí, stop vstupů).
   // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
   const unprotected = hasPosition && (shownPosition?.summary?.kind !== 'position' || shownPosition.summary.stop == null);
-  const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || unprotected || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  // Také když × zrovna nejde: rozběhnutý příkaz (čeká na výsledek), Rithmic odpojený. Přehrávání má telefon pokryté lištou s Flattenem.
+  const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || unprotected || trading.commandInFlight || !trading.available
+    || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (link === 'open' || grace) && !viewOnly && (exposureShown || trading.uncertain.length > 0) && (!accountBar || brakeNeeded || grace);
   const brake = useMemo(() => (offerBrake ? { armed: closeArmedAt != null, busy: closeBusy, onTap: tapClose } : null), [offerBrake, closeArmedAt, closeBusy, tapClose]);
 

@@ -42,9 +42,10 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl]);
   const trading = useRithmicLocalTrading({ url, enabled: open });
   // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
-  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.accountClosedPnl }),
-    [trading.accountName, trading.system, trading.accountClosedPnl]);
+  const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.silent ? null : trading.accountClosedPnl }),
+    [trading.accountName, trading.system, trading.accountClosedPnl, trading.silent]);
   const accountBar = accountBarProp ?? realAccountBar;
+  const [replaying, setReplaying] = useState(false);
   const { link, state, symbol } = trading;
   const instrumentIssue = rithmicScreenInstrumentIssue({ symbol, tickSize: trading.tickSize, pointValue: trading.pointValue });
   const usable = trading.available && !instrumentIssue;
@@ -133,7 +134,9 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   // služba mlčí nebo nejsou čerstvá data, stop nových vstupů.
   // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
   const unprotected = hasPosition && (trading.position?.summary?.kind !== 'position' || trading.position.summary.stop == null);
-  const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || Boolean(blocked) || trading.silent || !trading.helloFresh;
+  // Také když × a Shift+X zrovna nejdou: rozběhnutý příkaz (čekají na výsledek), přehrávání grafu, Rithmic odpojený.
+  const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || trading.commandInFlight || replaying || !trading.available
+    || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
   const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
     ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
@@ -175,7 +178,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         entryScaleIn={trading.scaleIn}
         entryMaxContracts={trading.maxContracts} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView} liveFills={trading.liveFills}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
-        accountBar={accountBar}
+        accountBar={accountBar} onReplayChange={setReplaying}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}
       {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified disabled={!trading.helloFresh || link !== 'open'} onClick={dismissUncertain} title={uncertainList.map(item => `${item.label} · ${item.reason}`).join('; ')}

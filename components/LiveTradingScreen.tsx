@@ -1121,7 +1121,8 @@ const LiveTradingScreen: React.FC<Props> = ({
           title="Zavře pozici tohoto účtu hned Marketem a zruší její příkazy. Nečeká na jiný rozběhnutý příkaz."
           className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/20 disabled:cursor-wait disabled:opacity-60"
         ><X size={12} />{solo.emergencyClose.busy ? 'Zavírám…' : 'Zavřít pozici'}</button>}
-        {copierChip && !solo && <button
+        {/* Solo (Rithmic): čip kopírky Tradovate jen při varování nebo problému (nouzové zastavení, zámek dne …). */}
+        {copierChip && (!solo || copierChip.tone === 'warn' || copierChip.tone === 'danger') && <button
           type="button"
           onClick={() => onNavigate('overview')}
           title={`${copierChip.title ?? 'Stav kopírky ze stavu workeru.'} Zapnutí a vypnutí je na Live Dashboardu.`}

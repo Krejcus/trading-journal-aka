@@ -461,8 +461,24 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     : silent ? 'Místní proces neodpovídá — jde jen zavřít pozici.'
     : 'Ceny z Rithmicu stojí — nový vstup nejde, zavření a zrušení ano.';
 
-  const send = useCallback((command: LocalExecCommand): Promise<Reply> => connectionRef.current?.send(command as unknown as { op: string } & Record<string, unknown>)
-    ?? Promise.resolve({ ok: false, sent: false, error: 'místní proces není připojený' } as Reply), []);
+  // Rozběhnuté příkazy (bez potvrzení incidentu): během nich × a Shift+X odpoví „čeká se na výsledek“, takže graf
+  // musí ukázat brzdu (Flatten na nic nečeká). Jen pro nabídku brzdy — nic se podle toho neposílá.
+  const [inFlight, setInFlight] = useState(0);
+  const send = useCallback((command: LocalExecCommand): Promise<Reply> => {
+    const sent = connectionRef.current?.send(command as unknown as { op: string } & Record<string, unknown>)
+      ?? Promise.resolve({ ok: false, sent: false, error: 'místní proces není připojený' } as Reply);
+    if (command.op === 'ack') return sent;
+    setInFlight((count) => count + 1);
+    return sent.finally(() => setInFlight((count) => Math.max(0, count - 1)));
+  }, []);
+  // Brzda až po 1 s čekání: běžný posun SL/TP trvá zlomek sekundy a brzda by jinak problikla při každém.
+  const [commandSlow, setCommandSlow] = useState(false);
+  const waiting = inFlight > 0;
+  useEffect(() => {
+    if (!waiting) { setCommandSlow(false); return undefined; }
+    const timer = setTimeout(() => setCommandSlow(true), 1_000);
+    return () => clearTimeout(timer);
+  }, [waiting]);
   const measure = (label: string, done: (s: LocalExecState) => boolean) => measureRef.current?.(label, done);
 
   const symbol = hello?.symbol ?? '';
@@ -794,7 +810,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     reducible, reduceOne,
     authFailed,
     link, system: hello?.system ?? null, symbol, price, state, events, position, marketData,
-    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, accountClosedPnl: closedPnl, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !hideOwnExit(order, state?.blocked)).length, entryReady, entryBlockedReason, silent,
+    available, helloFresh, readOnly, limits, maxContracts, accountName: hello?.account, accountClosedPnl: closedPnl, commandInFlight: commandSlow, closeOnly: hello?.closeOnly, liveAccount: hello?.live === true, workingOrders: orders.filter((order) => order.status === 'working' && order.role === 'other' && !hideOwnExit(order, state?.blocked)).length, entryReady, entryBlockedReason, silent,
     /** Je co zavírat nebo se to neví: pozice, pracující příkaz, nebo stav není znám. Jen pro nabídku brzdy. */
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
