@@ -257,6 +257,8 @@ interface Props {
  * OFF a čipy v hlavičce dál platí, INV-UI-02); dostupnost příkazů tohoto grafu říká `available`.
  */
 export interface LiveTradingSolo {
+  /** Stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET …); null = vše v pořádku. S výběrem účtu v liště se ukáže jen tohle. */
+  statusNote?: string | null;
   limitsLabel?: string;
   quantityLimits?: { buy: number; sell: number };
   lastCloseLabel?: string;
@@ -1069,7 +1071,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       {/* Vlastní vrstva nad grafem: rozbalovací okna hlavičky (účty skupiny,
           potvrzení vypnutí) jinak zapadnou pod plovoucí prvky grafu. */}
       <header className={`live-chart-header relative z-[800] flex h-11 shrink-0 items-center gap-1 border-b px-2 ${bar}`}>
-        <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>
+        {!accountBar && <span className="px-2 text-[11px] font-black tracking-[0.14em] text-indigo-500">LIVE</span>}
         <nav className="flex h-full min-w-0 items-stretch gap-0.5 overflow-x-auto no-scrollbar" aria-label="LIVE navigace">
           {tabs.map(item => {
             const Icon = item.icon;
@@ -1098,8 +1100,10 @@ const LiveTradingScreen: React.FC<Props> = ({
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
         {accountBar && <LiveAccountBar data={accountBar} openPnl={shownOpenPnl} isDark={isDark} />}
-        {/* Štítek nese i stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) — zůstává i s výběrem účtu. */}
-        {soloAccountLabel && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
+        {/* S výběrem účtu v liště (21. 11.) zůstává ze štítku jen stav spojení, a to jen když je co hlásit. */}
+        {accountBar && solo?.statusNote && <span data-solo-status title={soloAccountLabel ?? undefined}
+          className={`flex h-[30px] items-center whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-extrabold ${solo.statusNote === 'jen čtení' || solo.statusNote === 'jen zavírání' || solo.statusNote === 'připojuji' ? 'border-amber-500/60 bg-amber-500/10 text-amber-500' : 'border-rose-500/60 bg-rose-500/10 text-rose-500'}`}>{solo.statusNote}</span>}
+        {soloAccountLabel && !accountBar && <span title="Tento graf obchoduje jen tento účet. Kopírka Tradovate s ním nesouvisí." className="flex h-[30px] items-center whitespace-nowrap rounded-lg border border-indigo-500/50 bg-indigo-500/10 px-2.5 text-[11px] font-extrabold text-indigo-400">{soloAccountLabel}</span>}
         {solo?.reduce && <button
           type="button"
           data-solo-reduce

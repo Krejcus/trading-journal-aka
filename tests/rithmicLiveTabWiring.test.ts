@@ -123,7 +123,9 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\{workerChip && !solo && <button/);
     expect(screen).toMatch(/\{copierChip && !solo && <button/);
     // Řádek stavu svíček: v Rithmic grafu jen při varování o datech.
-    expect(screen).toMatch(/\{\(!solo \|\| chart\.quality\.tone === 'warn'\) && <ChartDataStatus/);
+    expect(screen).toMatch(/\{\(!solo \|\| chart\.quality\.tone === 'warn'\) && <ChartDataStatus/);    // S výběrem účtu: bez nápisu LIVE a bez štítku účtu; stav spojení (odpojeno, jen čtení, SKUTEČNÝ ÚČET) zůstává.
+    expect(screen).toMatch(/\{accountBar && solo\?\.statusNote && <span data-solo-status/);
+    expect(screen).toMatch(/\{soloAccountLabel && !accountBar && <span/);
   });
 
   it('alerty jsou v režimu jednoho účtu vypnuté a výchozí zdroj dat se nečte', () => {
