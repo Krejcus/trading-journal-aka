@@ -550,6 +550,8 @@ interface AlphaTradeChartWorkspaceProps {
   resetViewOnOpen?: boolean;
   /** Deník dneška: čáry živé pozice z kopírky (jen zobrazení; v přehrávání vypnuto). */
   livePriceLines?: LivePriceLinesFeed | null;
+  /** Čáry limitů propky (DLL / MLL) pro všechny panely včetně exekučního — jen zobrazení. */
+  liveLimitLines?: LivePriceLinesFeed | null;
   /**
    * Vlastní paměť rozložení (deník dne si pamatuje své panely zvlášť,
    * nezdědí dva grafy z detailu obchodu) a výchozí rozložení pro ni.
@@ -1391,6 +1393,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   liveCandles = null,
   resetViewOnOpen = false,
   livePriceLines = null,
+  liveLimitLines = null,
   liveOrderEntry,
   toolbarEnd,
   toolbarFixedEnd,
@@ -1515,6 +1518,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     ? liveCandleTargets.filter(target => target.root !== liveOrderEntry?.executionInstrument)
     : liveCandleTargets), [liveCandleTargets, liveOrderEntry?.executionInstrument, livePositionOverlay]);
   useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? livePriceLines : null, livePriceLineTargets);
+  // Limity propky (DLL / MLL) se kreslí i do exekučního panelu — štítky pozice je nekreslí.
+  useLivePriceLinesBinding(!backtestSession && replay.phase !== 'active' ? liveLimitLines : null, liveCandleTargets);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());
   const restoredSessionLayoutRef = useRef(false);
   const pendingSessionPanelsRef = useRef<WorkspaceSnapshot>({ ...backtestSession?.workspaceState?.panels });

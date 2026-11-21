@@ -54,3 +54,8 @@ export const SIMULATION_ACCOUNT_BAR: LiveAccountBarData = {
     { id: 'test', name: 'Zkušební', leaderId: 'RT-T01', followers: [{ accountId: 'RT-T02', ratio: 1, copying: true }], state: 'DISARMED' },
   ],
 };
+
+/** Ukázka „u limitu" (`?limit=blizko`): LOCAL-SIM má dnes za sebou skoro celý denní limit, čára DLL je blízko ceny. */
+export function simulationAccountBarNearLimit(): LiveAccountBarData {
+  return { ...SIMULATION_ACCOUNT_BAR, accounts: SIMULATION_ACCOUNT_BAR.accounts.map(item => (item.id === 'LOCAL-SIM' ? { ...item, realizedToday: -975, maxLossLeft: 1020 } : item)) };
+}

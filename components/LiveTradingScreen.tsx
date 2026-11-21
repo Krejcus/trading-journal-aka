@@ -23,7 +23,8 @@ import LiveHotkeysHelp, {
   LIVE_HOTKEY_REPLAY_TEXT,
 } from './LiveHotkeysHelp';
 import LiveGroupChip from './LiveGroupChip';
-import LiveAccountBar, { type LiveAccountBarData } from './LiveAccountBar';
+import LiveAccountBar, { liveLimitLinePrices, type LiveAccountBarData } from './LiveAccountBar';
+import type { LivePriceLine } from '../lib/journalLivePosition';
 import LiveTradeToasts from './LiveTradeToasts';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { manageNoticeToast, type TradeToast } from '../lib/liveTradeToasts';
@@ -547,6 +548,26 @@ const LiveTradingScreen: React.FC<Props> = ({
     positionLines.publish(position?.symbol ?? null, position?.lines ?? []);
   }, [position, positionLines]);
   useEffect(() => () => positionLines.publish(null, []), [positionLines]);
+  // Čáry DLL a MLL obchodovaného účtu (jen zobrazení, 21. 11.): kde by otevřená pozice narazila na limit propky.
+  // Posouvají se s počtem kusů a průměrem; vzdálenost v bodech od živé ceny je v popisku.
+  const [limitLines] = useState(createLivePriceLinesFeed);
+  const limitAccount = accountBar?.accounts.find(item => item.id === accountBar.tradedAccountId) ?? null;
+  const limitPrices = useMemo(() => {
+    const avg = manageEntryAvgPrice ?? summary?.entry ?? null;
+    if (!limitAccount || summary?.kind !== 'position' || avg == null || !(summary.quantity > 0)) return null;
+    return liveLimitLinePrices({ side: summary.side, quantity: summary.quantity, averagePrice: avg, pointValue: INSTRUMENT.pointValue, tickSize: INSTRUMENT.tickSize,
+      realizedToday: limitAccount.realizedToday, ...(limitAccount.dailyLossLimit != null ? { dailyLossLimit: limitAccount.dailyLossLimit } : {}), ...(limitAccount.maxLossLeft != null ? { maxLossLeft: limitAccount.maxLossLeft } : {}) });
+  }, [limitAccount, summary?.kind, summary?.side, summary?.quantity, summary?.entry, manageEntryAvgPrice]);
+  const limitNow = tick?.price ?? null;
+  useEffect(() => {
+    if (!limitPrices) { limitLines.publish(null, []); return; }
+    const away = (price: number) => (limitNow == null ? '' : ` · ${Math.abs(limitNow - price).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} b`);
+    const lines: LivePriceLine[] = [];
+    if (limitPrices.dll) lines.push({ id: 'dll', price: limitPrices.dll.price, color: '#f59e0b', style: 'dashed', title: `DLL −${Math.round(limitPrices.dll.amount).toLocaleString('cs-CZ')} USD${away(limitPrices.dll.price)}` });
+    if (limitPrices.mll && limitPrices.mll.price !== limitPrices.dll?.price) lines.push({ id: 'mll', price: limitPrices.mll.price, color: '#e11d48', style: 'dashed', title: `MLL −${Math.round(limitPrices.mll.amount).toLocaleString('cs-CZ')} USD${away(limitPrices.mll.price)}` });
+    limitLines.publish(position?.symbol ?? null, lines);
+  }, [limitPrices, limitNow, limitLines, position?.symbol]);
+  useEffect(() => () => limitLines.publish(null, []), [limitLines]);
   // Vypnutí kopírky (INV-UI-02): jedno odeslání naráz, neověřený stav s potvrzením.
   const [disarmConfirm, setDisarmConfirm] = useState(false);
   const [disarmBusy, setDisarmBusy] = useState(false);
@@ -1215,6 +1236,19 @@ const LiveTradingScreen: React.FC<Props> = ({
           <div className="relative min-h-0 flex-1">
           {/* Všechna oznámení v grafu jsou karty vlevo dole — i výsledek příkazu (dřív text nahoře uprostřed). */}
           <LiveTradeToasts events={shownEvents} extra={toastExtras} capExtra copierArmed={closeAllowed} isDark={isDark} hideAccounts={Boolean(soloAccountLabel)} />
+          {/* Vzdálenost k DLL / MLL v bodech — vidět i když je čára mimo graf (jen zobrazení, 21. 11.). */}
+          {limitPrices && limitNow != null && (limitPrices.dll || limitPrices.mll) && <div data-live-limit-distance className="pointer-events-none absolute bottom-9 right-[88px] z-[30] flex items-center gap-1">
+            {[['DLL', limitPrices.dll, 'border-amber-500/60 bg-amber-500/15 text-amber-500'] as const, ['MLL', limitPrices.mll, 'border-rose-500/60 bg-rose-500/15 text-rose-500'] as const]
+              .filter(([name, item]) => item && !(name === 'MLL' && item.price === limitPrices.dll?.price))
+              .map(([name, item, cls]) => {
+                const dist = Math.abs(limitNow - item!.price);
+                const below = item!.price < limitNow;
+                return <span key={name} className={`rounded-md border px-2 py-0.5 font-mono text-[10.5px] font-extrabold backdrop-blur-sm ${cls}`}
+                  title={`${name}: na ${item!.price.toLocaleString('cs-CZ', { minimumFractionDigits: 2 })} by účet ztratil ${Math.round(item!.amount).toLocaleString('cs-CZ')} USD`}>
+                  {name} {dist.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} b {below ? '↓' : '↑'}
+                </span>;
+              })}
+          </div>}
           {chart.candles.length > 0 ? (
             <AlphaTradeChartWorkspace
               key={day}
@@ -1241,6 +1275,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               resetViewOnOpen
               liveOrderEntry={liveOrderEntry}
               livePriceLines={positionLines}
+              liveLimitLines={accountBar ? limitLines : null}
               onClose={() => onNavigate('overview')}
             />
           ) : (

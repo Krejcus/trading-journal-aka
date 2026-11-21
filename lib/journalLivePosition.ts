@@ -282,7 +282,8 @@ export function confirmWorkerMismatches(
   return { since: nextSince, confirmed, pending, ok };
 }
 
-export type LivePriceLineKind = 'entry' | 'pending' | 'stop' | 'target';
+/** `dll` / `mll`: kde by pozice narazila na denní limit / max loss propky (jen zobrazení, LIVE graf). */
+export type LivePriceLineKind = 'entry' | 'pending' | 'stop' | 'target' | 'dll' | 'mll';
 
 export interface LivePriceLine {
   id: LivePriceLineKind;

@@ -65,17 +65,29 @@ export function liveBarAccountDay(data: LiveAccountBarData, accountId: string, t
 }
 
 /**
- * Kolik zbývá do limitů s ohledem na otevřenou pozici. MLL = rezerva + otevřený P&L;
- * DLL = denní limit + P&L dne, ale nikdy víc než MLL (max loss je blíž než denní limit).
+ * Ceny, kde by otevřená pozice narazila na DLL a MLL (jen zobrazení, čáry v grafu). Rezerva se bere BEZ
+ * otevřené pozice: MLL = rezerva do max loss; DLL = denní limit + realizované dne, nikdy víc než MLL.
+ * Čára se posouvá s počtem kusů a průměrnou cenou — po přikoupení je blíž.
  */
-export function liveBarRisk(data: LiveAccountBarData, accountId: string, tradedOpenPnl: number | null): { dll: number | null; mll: number | null } {
-  const account = data.accounts.find(item => item.id === accountId);
-  if (!account) return { dll: null, mll: null };
-  const open = liveBarOpenPnl(data, accountId, tradedOpenPnl);
-  const mll = account.maxLossLeft == null ? null : Math.max(0, account.maxLossLeft + open);
-  const dllRaw = account.dailyLossLimit == null ? null : Math.max(0, account.dailyLossLimit + account.realizedToday + open);
-  const dll = dllRaw == null ? null : mll == null ? dllRaw : Math.min(dllRaw, mll);
-  return { dll, mll };
+export function liveLimitLinePrices(input: {
+  side: 'long' | 'short'; quantity: number; averagePrice: number; pointValue: number; tickSize: number;
+  realizedToday: number; dailyLossLimit?: number; maxLossLeft?: number;
+}): { dll: { price: number; amount: number } | null; mll: { price: number; amount: number } | null } {
+  const perPoint = input.quantity * input.pointValue;
+  if (!(perPoint > 0) || !Number.isFinite(input.averagePrice)) return { dll: null, mll: null };
+  const mllAmount = input.maxLossLeft == null ? null : Math.max(0, input.maxLossLeft);
+  const dllRaw = input.dailyLossLimit == null ? null : Math.max(0, input.dailyLossLimit + input.realizedToday);
+  const dllAmount = dllRaw == null ? null : mllAmount == null ? dllRaw : Math.min(dllRaw, mllAmount);
+  // Zaokrouhlení na tick směrem k vstupu (čára nikdy neslibuje víc prostoru, než je).
+  const at = (amount: number) => {
+    const raw = input.side === 'long' ? input.averagePrice - amount / perPoint : input.averagePrice + amount / perPoint;
+    const ticks = raw / input.tickSize;
+    return (input.side === 'long' ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9)) * input.tickSize;
+  };
+  return {
+    dll: dllAmount == null ? null : { price: at(dllAmount), amount: dllAmount },
+    mll: mllAmount == null ? null : { price: at(mllAmount), amount: mllAmount },
+  };
 }
 
 /** P&L dne skupiny = leader + všichni followeři (i vypnutí, jejich dnešní výsledek k ní patří). */
@@ -91,9 +103,6 @@ export function liveBarGroupOf(data: LiveAccountBarData, accountId: string): Liv
 
 const usd = (value: number) => `${value >= 0 ? '+' : '−'}${Math.abs(Math.round(value)).toLocaleString('cs-CZ')} USD`;
 const tone = (value: number) => (value >= 0 ? 'text-emerald-500' : 'text-rose-500');
-const usdPlain = (value: number) => `${Math.round(value).toLocaleString('cs-CZ')} USD`;
-/** Pod 30 % limitu žlutě, na nule červeně, jinak běžně. */
-const riskTone = (left: number, limit: number | null) => (left <= 0 ? 'text-rose-500' : limit && left < limit * 0.3 ? 'text-amber-500' : '');
 const STATE_DOT: Record<LiveBarGroupState, string> = { ARMED: 'bg-emerald-500', DISARMED: 'bg-amber-500', HALTED: 'bg-rose-500', KILL: 'bg-rose-500' };
 const STATUS_TEXT: Partial<Record<LiveBarAccountStatus, string>> = { 'dll-locked': 'limit dne', breached: 'breached', unverifiable: 'neověřitelný' };
 
@@ -125,8 +134,9 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark }) => {
   const shownAccount = accounts.get(shownAccountId) ?? null;
   // Skupina se ukazuje jen tehdy, když je vybraná; u jednoho účtu lištu nezahlcuje (21. 11.).
   const group = selectedGroup;
-  const risk = liveBarRisk(data, shownAccountId, openPnl);
-  const limits = { dll: shownAccount?.dailyLossLimit ?? null, mll: shownAccount ? (shownAccount.maxLossLeft ?? null) : null };
+  const shownOpen = liveBarOpenPnl(data, shownAccountId, openPnl);
+  // Otevřené P&L jen u účtu, který tu pozici nese (obchodovaný účet nebo kopírující follower).
+  const showOpen = openPnl !== null && (shownAccountId === data.tradedAccountId || shownOpen !== 0);
   const accountDay = liveBarAccountDay(data, shownAccountId, openPnl);
   const groupDay = group ? liveBarGroupDay(data, group, openPnl) : null;
   const copying = group ? group.followers.filter(item => item.copying).length : 0;
@@ -160,13 +170,9 @@ const LiveAccountBar: React.FC<Props> = ({ data, openPnl, isDark }) => {
         <span className={muted}>{selectedGroup ? 'Leader dnes' : 'Dnes'}</span>
         <b className={`font-mono font-extrabold ${tone(accountDay)}`}>{usd(accountDay)}</b>
       </span>
-      {risk.dll !== null && <span className={chip} data-live-bar-dll
-        title={`DLL zbývá: kolik ještě smí účet ${shownAccount?.name ?? ''} dnes ztratit, včetně otevřené pozice. Denní limit ${limits.dll?.toLocaleString('cs-CZ') ?? '—'} USD; nikdy víc než rezerva do max loss.`}>
-        <span className={muted}>DLL</span><b className={`font-mono font-extrabold ${riskTone(risk.dll, limits.dll)}`}>{risk.dll <= 0 ? 'vyčerpán' : usdPlain(risk.dll)}</b>
-      </span>}
-      {risk.mll !== null && <span className={chip} data-live-bar-mll
-        title={`MLL zbývá: rezerva do max loss (trailing drawdown) účtu ${shownAccount?.name ?? ''} včetně otevřené pozice.`}>
-        <span className={muted}>MLL</span><b className={`font-mono font-extrabold ${riskTone(risk.mll, limits.mll)}`}>{usdPlain(risk.mll)}</b>
+      {showOpen && <span className={chip} title={`Otevřené P&L pozice účtu ${shownAccount?.name ?? ''}`} data-live-bar-open-pnl>
+        <span className={muted}>Otevřeno</span>
+        <b className={`font-mono font-extrabold ${tone(shownOpen)}`}>{usd(shownOpen)}</b>
       </span>}
       {group && groupDay !== null && <button type="button" onClick={() => { setTab('groups'); setOpen(true); }} className={`${chip} ${isDark ? 'hover:bg-white/[0.07]' : 'hover:bg-white'}`}
         title={`Skupina ${group.name} · ${group.state} · ${copying} kopíruje · P&L dne všech účtů skupiny`} data-live-bar-group-pnl>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, liveBarRisk, type LiveAccountBarData } from '../components/LiveAccountBar';
+import { liveBarAccountDay, liveBarGroupDay, liveBarGroupOf, liveBarOpenPnl, liveLimitLinePrices, type LiveAccountBarData } from '../components/LiveAccountBar';
 
 const data: LiveAccountBarData = {
   tradedAccountId: 'L',
@@ -51,15 +51,19 @@ describe('LiveAccountBar P&L', () => {
     expect(liveBarGroupOf(data, 'S')).toBeNull();
   });
 
-  it('DLL a MLL se hýbou s otevřenou pozicí; DLL nikdy nepřesáhne MLL', () => {
-    const withLimits: LiveAccountBarData = { ...data, accounts: data.accounts.map(item => item.id === 'L' ? { ...item, dailyLossLimit: 1000, maxLossLeft: 600 } : item.id === 'A' ? { ...item, dailyLossLimit: 1000, maxLossLeft: 2000 } : item) };
-    // L: realizováno −100, otevřeno −50 → DLL 850, ale MLL 550 je blíž → DLL 550.
-    expect(liveBarRisk(withLimits, 'L', -50)).toEqual({ dll: 550, mll: 550 });
-    // A (follower ×1): realizováno +50, otevřeno −50 → DLL 1000, MLL 1950.
-    expect(liveBarRisk(withLimits, 'A', -50)).toEqual({ dll: 1000, mll: 1950 });
-    // Hluboko v mínusu se limity zastaví na nule.
-    expect(liveBarRisk(withLimits, 'L', -5000)).toEqual({ dll: 0, mll: 0 });
-    // Účet bez známých limitů nic neukazuje.
-    expect(liveBarRisk(withLimits, 'S', 0)).toEqual({ dll: null, mll: null });
+  it('čáry DLL a MLL: cena, kde by pozice narazila na limit; po přikoupení blíž', () => {
+    const base = { side: 'long' as const, averagePrice: 25000, pointValue: 2, tickSize: 0.25, realizedToday: -120, dailyLossLimit: 1000, maxLossLeft: 1840 };
+    // 1 MNQ: DLL 880 USD = 440 b pod vstupem, MLL 1 840 USD = 920 b.
+    expect(liveLimitLinePrices({ ...base, quantity: 1 })).toEqual({ dll: { price: 24560, amount: 880 }, mll: { price: 24080, amount: 1840 } });
+    // 2 MNQ: stejné peníze, poloviční vzdálenost.
+    expect(liveLimitLinePrices({ ...base, quantity: 2 })).toEqual({ dll: { price: 24780, amount: 880 }, mll: { price: 24540, amount: 1840 } });
+    // Short: nad vstupem.
+    expect(liveLimitLinePrices({ ...base, side: 'short', quantity: 2 }).dll?.price).toBe(25220);
+    // DLL nikdy dál než MLL.
+    expect(liveLimitLinePrices({ ...base, quantity: 1, maxLossLeft: 500 }).dll).toEqual({ price: 24750, amount: 500 });
+    // Zaokrouhlení na tick směrem ke vstupu (long nahoru): 3 MNQ → 880/6 = 146,67 b.
+    expect(liveLimitLinePrices({ ...base, quantity: 3 }).dll?.price).toBe(24853.5);
+    // Bez limitů nic.
+    expect(liveLimitLinePrices({ side: 'long', quantity: 1, averagePrice: 25000, pointValue: 2, tickSize: 0.25, realizedToday: 0 })).toEqual({ dll: null, mll: null });
   });
 });

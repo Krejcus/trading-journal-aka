@@ -127,6 +127,9 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\{accountBar && solo\?\.statusNote && <span data-solo-status/);
     expect(screen).toMatch(/\{soloAccountLabel && !accountBar && <span/);    // Sloučení s lištou grafu jen s vykresleným grafem; navigace na přehled zůstává jako ikony (INV-UI-02).
     expect(screen).toMatch(/const mergedHeader = Boolean\(accountBar\) && chart\.candles\.length > 0;/);
+    // Čáry DLL / MLL jdou vlastním kanálem i do exekučního panelu; jen s výběrem účtu (jen zobrazení).
+    expect(screen).toMatch(/liveLimitLines=\{accountBar \? limitLines : null\}/);
+    expect(screen).toMatch(/data-live-limit-distance/);
     expect(screen).toMatch(/\{!mergedHeader && <header/);
     expect(screen).toMatch(/toolbarFixedEnd=\{mergedHeader \? <div className="flex items-center gap-1" data-live-merged-header>\{compactTabs\}\{headerRight\}<\/div> : undefined\}/);
   });
