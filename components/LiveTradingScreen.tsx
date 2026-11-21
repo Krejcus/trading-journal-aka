@@ -1092,7 +1092,9 @@ const LiveTradingScreen: React.FC<Props> = ({
         {strip.notice && <button type="button" onClick={() => onNavigate('overview')} title={strip.notice} className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500">Incident kopírky →</button>}
         {!strip.notice && attention.length > 0 && <button type="button" onClick={() => onNavigate('overview')} title={`Na přehledu: ${attention.join(', ')}.`} className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-500/50 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-600">Zkontroluj Live Dashboard →</button>}
         {copier.reconnectRequired > 0 && <button type="button" onClick={() => onNavigate('overview')} className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-500/50 bg-amber-500/10 px-2.5 text-[11px] font-extrabold text-amber-600">Tradovate: přihlásit znovu</button>}
-        {workerChip && <button type="button" onClick={() => onNavigate('overview')} title={workerChip.title} className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[workerChip.tone].ring}`}>
+        {/* Rithmic graf (solo): štítky Worker a Kopírka Tradovate jsou jen informační a lištu zahlcují
+            (rozhodnutí Filipa 21. 11.). Incident kopírky, „Zkontroluj Live Dashboard" a OFF zůstávají (INV-UI-02). */}
+        {workerChip && !solo && <button type="button" onClick={() => onNavigate('overview')} title={workerChip.title} className={`flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-bold ${TONE[workerChip.tone].ring}`}>
           <i className={`h-[7px] w-[7px] rounded-full ${TONE[workerChip.tone].dot}`} />Worker <b className={TONE[workerChip.tone].text}>{workerChip.value}</b>
         </button>}
         {accountBar && <LiveAccountBar data={accountBar} openPnl={shownOpenPnl} isDark={isDark} />}
@@ -1114,7 +1116,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           title="Zavře pozici tohoto účtu hned Marketem a zruší její příkazy. Nečeká na jiný rozběhnutý příkaz."
           className="flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-rose-500/60 bg-rose-500/10 px-2.5 text-[11px] font-extrabold text-rose-500 hover:bg-rose-500/20 disabled:cursor-wait disabled:opacity-60"
         ><X size={12} />{solo.emergencyClose.busy ? 'Zavírám…' : 'Zavřít pozici'}</button>}
-        {copierChip && <button
+        {copierChip && !solo && <button
           type="button"
           onClick={() => onNavigate('overview')}
           title={`${copierChip.title ?? 'Stav kopírky ze stavu workeru.'} Zapnutí a vypnutí je na Live Dashboardu.`}

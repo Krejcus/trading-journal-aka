@@ -115,10 +115,13 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/\.\.\.\(solo \? \{ events: shownEvents, fills: undefined, available: solo\.available \} : \{\}\),/);
   });
 
-  it('skutečný stav kopírky se v hlavičce neschovává (incident, čip)', () => {
+  it('incident kopírky se v hlavičce neschovává; informační čipy Worker a Kopírka Tradovate v Rithmic grafu ano (21. 11.)', () => {
+    // Incident a výzva ke kontrole Dashboardu zůstávají i v režimu jednoho účtu (INV-UI-02).
     expect(screen).toMatch(/\{strip\.notice && <button/);
-    expect(screen).not.toMatch(/copierChip && !solo/);
-    expect(screen).toContain("'Kopírka Tradovate'");
+    expect(screen).toMatch(/\{!strip\.notice && attention\.length > 0 && <button/);
+    // Jen informační stav workeru a kopírky Tradovate je v Rithmic grafu schovaný (rozhodnutí Filipa 21. 11.).
+    expect(screen).toMatch(/\{workerChip && !solo && <button/);
+    expect(screen).toMatch(/\{copierChip && !solo && <button/);
   });
 
   it('alerty jsou v režimu jednoho účtu vypnuté a výchozí zdroj dat se nečte', () => {
