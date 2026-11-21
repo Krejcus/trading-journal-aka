@@ -16393,3 +16393,17 @@ Pouze TradovateAccountProfileSetup: kompaktní rozbalovací účty, hromadná id
 - Ověřeno v simulaci na 127.0.0.1:4196 (launch `rithmic-topbar-sim`): po Market vstupu se P&L účtu i skupiny hýbe s cenou. Test `tests/liveAccountBar.test.ts` 6/6, tsc bez chyb mimo `extension/`. Větev `claude/rithmic-topbar-20261121`, nepushnuto.
 - Do produkce zbývá: zdroj skutečných účtů a skupin (Rithmic má dnes ve službě jeden účet, skupiny jsou z kopírky Tradovate) a realizovaný P&L dne z `closes` služby.
 - Doplněno 21. 11. (Claude, stejná větev, nepushnuto): lišta Rithmic grafu se s výběrem účtu slučuje s lištou grafu do jednoho řádku (pevná pravá část: Dnes, Otevřeno, výběr účtu/skupiny, Objednávka). Štítek skupiny je jen při výběru skupiny. Pryč jsou: nápis LIVE, štítek účtu (zůstává jen stav spojení při problému nebo SKUTEČNÝ ÚČET), čipy Worker a Kopírka Tradovate (incident a „Zkontroluj Dashboard“ zůstávají, INV-UI-02) a řádek stavu svíček (jen při varování). DLL a MLL jsou čáry v grafu (vlastní kanál čar, posun s kusy a průměrem), zapínají se v Automatice grafu. Brzda „Zavřít pozici“: v klidu skrytá, vrací se při nejistém příkazu, neznámém stavu, mlčící službě nebo stopu vstupů. Rozhodnutí Filipa: brzdu nechat jen pro problémy.
+
+### 2026-11-21 — LIVE: skutečný účet Rithmicu v liště, telefon, iPhone build (Claude)
+
+- **Lišta ze skutečného účtu.** Lišta bere název účtu z `hello` a realizovaný P&L dne z PnL streamu Rithmicu (`closed_position_pnl`, `accountClosedPnl` na brokeru). Služba ho posílá v sekundovém `beat`. Je to jen zobrazení: nic se podle něj nerozhoduje a nečte se nic navíc mimo stream. Starší služba ho neposílá → „—“, dokud Filip službu nerestartuje. DLL/MLL Rithmic neposílá, takže na skutečném účtu čáry nejsou.
+- **Telefon.** Výběr účtu je spodní list v portálu do `body` (skleněná hlavička dělala z `fixed` relativní pozici). Je nad celoobrazovkovým grafem (z 880). Čip kopírky Tradovate se schová jen v klidu: ARMED nebo varování zůstávají vidět.
+- **Brzda.** Při výběru účtu se v klidu skrývá. Vrací se vždy, když × nebo Shift+X nejdou:
+  - nejistý nebo rozběhnutý příkaz po 1 s (záměrný kompromis proti problikávání);
+  - pozice bez známé ceny SL (× ji nezavře);
+  - přehrávání na PC;
+  - Rithmic odpojený, služba mlčí, starý `hello`, stop vstupů.
+- **Kontrola.** `copier-design-critic`: první kolo „OPRAVIT PŘED COMMITEM“ (rozběhnutý příkaz, přehrávání, odpojení), po f5552903 „OK s výhradami“. Otevřené výhrady:
+  - Brzda nevidí pozici na jiném kontraktu, než ukazuje graf. Platilo i předtím.
+  - Pro `brakeNeeded` chybí testy chování, jsou jen regexy.
+- **iPhone.** Čistá instalace z f5552903, větev `claude/rithmic-topbar-20261121` je nepushnutá.
