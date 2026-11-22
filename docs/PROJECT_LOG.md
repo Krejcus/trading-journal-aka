@@ -16407,3 +16407,31 @@ Pouze TradovateAccountProfileSetup: kompaktní rozbalovací účty, hromadná id
   - Brzda nevidí pozici na jiném kontraktu, než ukazuje graf. Platilo i předtím.
   - Pro `brakeNeeded` chybí testy chování, jsou jen regexy.
 - **iPhone.** Čistá instalace z f5552903, větev `claude/rithmic-topbar-20261121` je nepushnutá.
+
+### 2026-11-22 — Obrazovka kopírky Rithmic: příprava pro PC i telefon (Claude)
+
+- **Proč.** Tradovate půjde pryč. Obrazovka kopírky je postavená předem podle schváleného náhledu (`mockups/rithmic-nahled-claude.html`) a napojí se, až bude kopírka ve službě Rithmic. Do navigace appky zatím zapojená není.
+- **Výpočty: `lib/rithmicCopierView.ts`.** Jen zobrazení. Obsahuje:
+  - P&L účtu a skupiny;
+  - SL/TP v USD jako součet za skupinu, nebo průměr na účet v pozici. Účet bez SL do čísla nepatří a hlásí se zvlášť;
+  - nejbližší DLL a nejmenší rezervu DD;
+  - brány zapnutí, jen pro ukázku: rozhoduje služba;
+  - skrývání názvů účtů;
+  - nastavení tabulky (`at:copier:table`).
+- **Komponenty: `components/copier/`.** Obsahují:
+  - 3D vypínač s animací: komety z knoflíku k dlaždicím, zásah dlaždice;
+  - pruh skupiny se SL/TP (skupina ↔ účet, plynulé dopočítání);
+  - menu ⋯: filtry a hromadný výběr, šablony followerů, „Zavřít všechny pozice“ se dvojím potvrzením;
+  - nastavení ⚙: sloupce s přetahováním, pruh skupiny, soukromí;
+  - tabulku followerů včetně řádku bez SL/TP;
+  - detail účtu: na PC panel, na telefonu spodní list, s akcemi „Doplnit SL/TP podle leadera“ a „Zavřít pozici účtu“;
+  - telefonní kartu skupiny: velký otevřený P&L v obchodu, velký den mimo něj.
+- **Kopírka nic neposílá.** Vše, co mění stav, jde přes `actions`. Obrazovka sama neposílá nic.
+- **Zkušební stránka.** `tests/qa/rithmic-copier.html` (`?phone=1`, `?light=1`) se simulací v prohlížeči: cena, pozice, „Účet bez SL/TP“, „Neshoda“.
+- **Otevřené pro napojení.**
+  - Rozhodnout v jádru kopírky (invarianty, `copier-design-critic`):
+    - potvrzení zapnutí (náhled ho nemá);
+    - doplnění ochrany;
+    - zavření účtu;
+    - šablony.
+  - Ze služby Rithmic zatím chybí data účtů a skupin.
