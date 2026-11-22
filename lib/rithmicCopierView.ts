@@ -19,10 +19,10 @@ export interface CopierAccount {
   id: string;
   name: string;
   firm: string;
-  /** Zůstatek bez otevřené pozice (ranní + realizované dne). */
-  balance: number;
-  /** Realizovaný P&L dne v USD. */
-  realizedToday: number;
+  /** Zůstatek bez otevřené pozice (ranní + realizované dne); null = služba ho neposílá. */
+  balance: number | null;
+  /** Realizovaný P&L dne v USD; null = není znám (ukáže se „—“, nikdy nula). */
+  realizedToday: number | null;
   /** Denní limit ztráty propky (USD); null = účet ho nemá. */
   dailyLossLimit: number | null;
   /** Rezerva do max loss / trailing DD bez otevřené pozice (USD); null = neznámá. */
@@ -72,8 +72,8 @@ export function copierOpenPnl(account: CopierAccount, price: number | null, poin
   return (price - p.averagePrice) * qty * pointValue * dir(p);
 }
 
-export function copierDayPnl(account: CopierAccount, price: number | null, pointValue: number): number {
-  return account.realizedToday + copierOpenPnl(account, price, pointValue);
+export function copierDayPnl(account: CopierAccount, price: number | null, pointValue: number): number | null {
+  return account.realizedToday == null ? null : account.realizedToday + copierOpenPnl(account, price, pointValue);
 }
 
 /** Pozice bez SL: ztráta účtu není omezená a do součtu SL skupiny nepatří. */
@@ -98,7 +98,7 @@ export function copierRisk(account: CopierAccount, price: number | null, pointVa
   const ddLeft = account.drawdownLeft == null ? null : Math.max(0, account.drawdownLeft + open);
   if (account.status === 'breached') return { ddLeft: 0, dllLeft: 0 };
   if (account.dailyLossLimit == null) return { ddLeft, dllLeft: null };
-  const day = account.realizedToday + open;
+  const day = (account.realizedToday ?? 0) + open;
   const dll = Math.max(0, account.dailyLossLimit + Math.min(0, day));
   return { ddLeft, dllLeft: ddLeft == null ? dll : Math.min(dll, ddLeft) };
 }
@@ -114,9 +114,10 @@ export function copierTileKind(account: CopierAccount): CopierTileKind {
 }
 
 export interface CopierGroupSummary {
-  day: number;
+  /** null = některý účet nemá známý realizovaný výsledek. */
+  day: number | null;
   open: number;
-  balance: number;
+  balance: number | null;
   /** SL / TP v USD podle režimu (součet nebo průměr na účet v pozici); null = nikdo v pozici se SL. */
   sl: number | null;
   tp: number | null;
@@ -139,13 +140,15 @@ export function copierGroupMembers(group: CopierGroup): string[] {
 }
 
 export function copierGroupSummary(view: CopierView, group: CopierGroup, mode: CopierSltpMode): CopierGroupSummary {
-  let day = 0, open = 0, balance = 0, sl = 0, tp = 0, tpKnown = 0, protectedCount = 0, inPosition = 0, contracts = 0;
+  let day: number | null = 0, open = 0, balance: number | null = 0, sl = 0, tp = 0, tpKnown = 0, protectedCount = 0, inPosition = 0, contracts = 0;
   const unprotectedIds: string[] = [];
   let nearestDll: CopierGroupSummary['nearestDll'] = null, minDd: CopierGroupSummary['minDd'] = null;
   for (const id of copierGroupMembers(group)) {
     const a = view.accounts[id]; if (!a) continue;
     const o = copierOpenPnl(a, view.price, view.pointValue);
-    open += o; day += a.realizedToday + o; balance += a.balance + o;
+    open += o;
+    day = day == null || a.realizedToday == null ? null : day + a.realizedToday + o;
+    balance = balance == null || a.balance == null ? null : balance + a.balance + o;
     if (a.position) { inPosition += 1; contracts += a.brokerQuantity ?? a.position.quantity; }
     if (copierUnprotected(a)) unprotectedIds.push(id);
     const v = copierSltpUsd(a, view.pointValue);
@@ -264,3 +267,37 @@ export const usdText = (v: number | null, opts: { unit?: boolean } = {}): string
   return opts.unit === false ? s : `${s} USD`;
 };
 export const plainUsd = (v: number | null): string => (v == null || !Number.isFinite(v) ? '—' : `${Math.round(v).toLocaleString('cs-CZ')} USD`);
+
+/**
+ * Skutečný účet ze služby Rithmic jako leader skupiny bez followerů (22. 11.: kopírka ve službě zatím není).
+ * Jen to, co služba opravdu posílá: název, systém, realizovaný P&L dne (jinak „—“), pozice se SL/TP, cena.
+ * Zůstatek, DLL ani rezervu Rithmic v použitelném tvaru neposílá → null, nikdy vymyšlené číslo.
+ * Neznámý stav pozice (spojení) = null pohled: obrazovka to řekne, netváří se jako „bez pozice“.
+ */
+export function rithmicCopierViewFromService(input: {
+  accountName: string | null | undefined;
+  system: string | null | undefined;
+  closedPnl: number | null | undefined;
+  positionKnown: boolean;
+  position: { side: 'long' | 'short'; quantity: number; entry: number | null; stop: number | null; target: number | null } | null;
+  price: number | null;
+  pointValue: number | null;
+  maxContracts: number;
+}): CopierView | null {
+  const name = input.accountName?.trim();
+  if (!name || !input.positionKnown) return null;
+  const p = input.position;
+  const account: CopierAccount = {
+    id: name, name, firm: input.system?.trim() || 'Rithmic', balance: null,
+    realizedToday: typeof input.closedPnl === 'number' && Number.isFinite(input.closedPnl) ? input.closedPnl : null,
+    dailyLossLimit: null, drawdownLeft: null, drawdownMax: null,
+    position: p && p.quantity > 0 && p.entry != null ? { side: p.side, quantity: p.quantity, averagePrice: p.entry, stop: p.stop, target: p.target } : null,
+    status: 'active', copyOn: true, ratio: 1, maxContracts: Math.max(0, input.maxContracts), latencyMs: null,
+  };
+  return {
+    accounts: { [name]: account },
+    groups: [{ id: 'rithmic', name: 'Hlavní', leaderId: name, followerIds: [], state: 'disarmed' }],
+    pointValue: input.pointValue ?? 2,
+    price: input.price,
+  };
+}

@@ -113,7 +113,7 @@ export function CopierGroupStrip({ view, group, settings, onSettings, settingsOp
 
 // ── menu skupiny (⋯)
 export function CopierGroupMenu({ openPositions, editOn, onEdit, onTemplate, onFlatten, onClose }: {
-  openPositions: number; editOn: boolean; onEdit: () => void; onTemplate: (ratio: number, max: number) => void; onFlatten: () => void; onClose: () => void;
+  openPositions: number; editOn: boolean; onEdit: () => void; onTemplate?: (ratio: number, max: number) => void; onFlatten?: () => void; onClose: () => void;
 }) {
   const [arm, setArm] = useState(false);
   useEffect(() => { if (!arm) return undefined; const t = window.setTimeout(() => setArm(false), 4000); return () => window.clearTimeout(t); }, [arm]);
@@ -121,12 +121,12 @@ export function CopierGroupMenu({ openPositions, editOn, onEdit, onTemplate, onF
   return (
     <div className="cp-menu" onClick={(e) => e.stopPropagation()}>
       <button type="button" onClick={onEdit}>☑ Filtry a hromadný výběr<small>{editOn ? 'zapnuto' : ''}</small></button>
-      <div className="sep" /><div className="lb">Šablona followerů</div>
-      {([['Opatrná', 0.5, 2], ['Standard', 1, 3], ['Plná', 2, 4]] as const).map(([l, r, m]) => <button key={l} type="button" onClick={() => onTemplate(r, m)}>{l}<small>{ratioText(r)} · strop {m}</small></button>)}
-      <div className="sep" />
-      <button type="button" className={`danger${arm ? ' arm' : ''}`} onClick={() => { if (!arm) { setArm(true); return; } setArm(false); onFlatten(); }}>
+      {onTemplate && <><div className="sep" /><div className="lb">Šablona followerů</div>
+      {([['Opatrná', 0.5, 2], ['Standard', 1, 3], ['Plná', 2, 4]] as const).map(([l, r, m]) => <button key={l} type="button" onClick={() => onTemplate(r, m)}>{l}<small>{ratioText(r)} · strop {m}</small></button>)}</>}
+      {onFlatten && <><div className="sep" />
+      <button type="button" className={`danger${arm ? ' arm' : ''}`} onClick={() => { if (!arm) { setArm(true); return; } setArm(false); onFlatten?.(); }}>
         {arm ? `Opravdu zavřít ${openPositions} pozic? Klikni znovu` : '⏹ Zavřít všechny pozice skupiny'}
-      </button>
+      </button></>}
     </div>
   );
 }
@@ -205,7 +205,7 @@ export function CopierTiles({ view, group, settings, selectedId, onOpen }: {
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 8 }}><span className="cp-mut" style={{ fontSize: 11 }}>otevřeno</span><b className={`cp-num ${tone(lo)}`} style={{ marginLeft: 'auto', fontSize: 15 }}>{usdText(lo)}</b></div>
       </div>}
-      <div className="cp-tiles">
+      {group.followerIds.length === 0 ? <div className="cp-mut" style={{ fontSize: 12, padding: '10px 4px', lineHeight: 1.45 }}>Zatím žádní followeři. Kopírka ve službě Rithmic se připravuje — tady uvidíš jejich dlaždice, jakmile půjdou přidat.</div> : <div className="cp-tiles">
         {group.followerIds.map(id => view.accounts[id]).filter(Boolean).map(a => {
           const o = copierOpenPnl(a, view.price, view.pointValue);
           return (
@@ -215,7 +215,7 @@ export function CopierTiles({ view, group, settings, selectedId, onOpen }: {
             </button>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -224,7 +224,7 @@ export function CopierTiles({ view, group, settings, selectedId, onOpen }: {
 type Filter = 'all' | 'copy' | 'off' | 'prob';
 export function CopierFollowerTable({ view, group, settings, edit, selectedId, onOpen, onToggleCopy, onBulk }: {
   view: CopierView; group: CopierGroup; settings: CopierTableSettings; edit: boolean; selectedId: string | null;
-  onOpen: (id: string) => void; onToggleCopy: (id: string) => void; onBulk: (action: 'on' | 'off' | 'ratio', ids: string[], value?: number) => void;
+  onOpen: (id: string) => void; onToggleCopy?: (id: string) => void; onBulk?: (action: 'on' | 'off' | 'ratio', ids: string[], value?: number) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all'), [q, setQ] = useState(''), [sort, setSort] = useState<'name' | 'day' | 'dll' | 'dd' | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -238,7 +238,7 @@ export function CopierFollowerTable({ view, group, settings, edit, selectedId, o
   if (q) rows = rows.filter(a => `${a.name} ${a.firm}`.toLowerCase().includes(q.toLowerCase()));
   const risk = (a: CopierAccount) => copierRisk(a, view.price, view.pointValue);
   if (sort === 'name') rows = [...rows].sort((x, y) => x.name.localeCompare(y.name));
-  if (sort === 'day') rows = [...rows].sort((x, y) => copierDayPnl(x, view.price, view.pointValue) - copierDayPnl(y, view.price, view.pointValue));
+  if (sort === 'day') rows = [...rows].sort((x, y) => (copierDayPnl(x, view.price, view.pointValue) ?? 0) - (copierDayPnl(y, view.price, view.pointValue) ?? 0));
   if (sort === 'dll') rows = [...rows].sort((x, y) => (risk(x).dllLeft ?? 1e9) - (risk(y).dllLeft ?? 1e9));
   if (sort === 'dd') rows = [...rows].sort((x, y) => (risk(x).ddLeft ?? 1e9) - (risk(y).ddLeft ?? 1e9));
   const cols = useMemo(() => settings.order.map(k => COPIER_COLUMNS.find(c => c.key === k)!).filter(c => c && !settings.hidden.includes(c.key)), [settings.order, settings.hidden]);
@@ -249,7 +249,7 @@ export function CopierFollowerTable({ view, group, settings, edit, selectedId, o
     const o = copierOpenPnl(a, view.price, view.pointValue), r = risk(a), v = copierSltpUsd(a, view.pointValue);
     const warn = (x: number | null, max: number | null) => (x == null ? '' : x <= 0 ? 'cp-loss' : max && x < max * 0.3 ? 'cp-warn' : '');
     switch (k) {
-      case 'balance': return <b className="cp-num">{plainUsd(a.balance + o)}</b>;
+      case 'balance': return <b className="cp-num">{plainUsd(a.balance == null ? null : a.balance + o)}</b>;
       case 'position': return <span className={`cp-num${a.brokerQuantity != null ? ' cp-loss' : ''}`}>{a.brokerQuantity != null ? `${posText(a)} ≠ ${a.position?.quantity ?? 0}` : posText(a)}</span>;
       case 'day': { const d = copierDayPnl(a, view.price, view.pointValue); return <b className={`cp-num ${tone(d)}`}>{usdText(d)}</b>; }
       case 'dll': return <b className={`cp-num ${warn(r.dllLeft, a.dailyLossLimit)}`}>{r.dllLeft == null ? '—' : r.dllLeft <= 0 ? 'vyčerpán' : plainUsd(r.dllLeft)}</b>;
@@ -270,7 +270,7 @@ export function CopierFollowerTable({ view, group, settings, edit, selectedId, o
         <div className="cp-fchips">{([['all', 'Vše'], ['copy', 'Kopíruje'], ['off', 'Vypnuté'], ['prob', 'Problém']] as const).map(([k, l]) => <button key={k} type="button" className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<i>{counts[k]}</i></button>)}</div>
         <span style={{ flex: 1 }} /><input className="cp-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Hledat účet…" />
       </div>}
-      {edit && sel.size > 0 && <div className="cp-bulk">
+      {edit && onBulk && sel.size > 0 && <div className="cp-bulk">
         <b>Vybráno {sel.size}</b>
         <button type="button" className="cp-btn" onClick={() => onBulk('off', [...sel])}>Vypnout</button><button type="button" className="cp-btn" onClick={() => onBulk('on', [...sel])}>Zapnout</button>
         <span className="cp-mut">Poměr</span>{[0.5, 1, 2].map(r => <button key={r} type="button" className="cp-btn" onClick={() => onBulk('ratio', [...sel], r)}>{ratioText(r)}</button>)}
@@ -285,11 +285,11 @@ export function CopierFollowerTable({ view, group, settings, edit, selectedId, o
         {rows.length ? rows.map(a => (
           <div key={a.id} data-cp-row={a.id} className={`cp-fr${selectedId === a.id ? ' sel' : ''}${a.status === 'breached' ? ' dead' : ''}${copierUnprotected(a) ? ' noprot' : ''}`} style={{ gridTemplateColumns: grid }} onClick={() => onOpen(a.id)}>
             {edit && <span className={`cp-ck${sel.has(a.id) ? ' on' : ''}`} onClick={(e) => { e.stopPropagation(); setSel(s => { const n = new Set(s); if (n.has(a.id)) n.delete(a.id); else n.add(a.id); return n; }); }}>{sel.has(a.id) ? '✓' : ''}</span>}
-            <button type="button" className={`cp-sw${a.copyOn ? ' on' : ''}`} onClick={(e) => { e.stopPropagation(); onToggleCopy(a.id); }} aria-label={`Kopírování ${a.name}`} />
+            <button type="button" className={`cp-sw${a.copyOn ? ' on' : ''}`} disabled={!onToggleCopy} style={onToggleCopy ? undefined : { opacity: 0.5, cursor: 'default' }} onClick={(e) => { e.stopPropagation(); onToggleCopy?.(a.id); }} aria-label={`Kopírování ${a.name}`} />
             <span className="nm"><b><FirmDot firm={a.firm} />{shownName(a, settings)}</b>{settings.firm && <small>{a.firm}{leader && a.firm !== leader.firm ? <> · <span className="cp-warn">jiná propka</span></> : null}</small>}</span>
             {cols.map(c => <span key={c.key} className={c.right ? 'r' : ''}>{cell(a, c.key)}</span>)}
           </div>
-        )) : <div className="cp-mut" style={{ padding: 16, fontSize: 12 }}>Nic neodpovídá filtru.</div>}
+        )) : <div className="cp-mut" style={{ padding: 16, fontSize: 12 }}>{all.length ? 'Nic neodpovídá filtru.' : 'Zatím žádní followeři. Přidat je půjde, až bude kopírka ve službě Rithmic.'}</div>}
       </div>
     </>
   );
@@ -298,7 +298,7 @@ export function CopierFollowerTable({ view, group, settings, edit, selectedId, o
 // ── detail účtu (PC panel / telefon spodní list)
 export function CopierAccountDetail({ view, group, id, settings, asSheet, onClose, onToggleCopy, onFixProtection, onClosePosition }: {
   view: CopierView; group: CopierGroup; id: string; settings: CopierTableSettings; asSheet: boolean; onClose: () => void;
-  onToggleCopy: (id: string) => void; onFixProtection: (id: string) => void; onClosePosition: (id: string) => void;
+  onToggleCopy?: (id: string) => void; onFixProtection?: (id: string) => void; onClosePosition?: (id: string) => void;
 }) {
   const a = view.accounts[id]; if (!a) return null;
   const leader = view.accounts[group.leaderId], isLead = id === group.leaderId;
@@ -312,16 +312,17 @@ export function CopierAccountDetail({ view, group, id, settings, asSheet, onClos
       <h3 style={asSheet ? { margin: 0, fontSize: 17, display: 'flex', alignItems: 'center', gap: 8 } : undefined}>
         <FirmDot firm={a.firm} />{shownName(a, settings)}
         {isLead ? <span className="cp-chip a">leader</span> : statusChip(a, group.state === 'armed')}
-        {!isLead && <button type="button" className={`cp-sw${a.copyOn ? ' on' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => onToggleCopy(a.id)} aria-label="Kopírování" />}
+        {!isLead && onToggleCopy && <button type="button" className={`cp-sw${a.copyOn ? ' on' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => onToggleCopy(a.id)} aria-label="Kopírování" />}
         {!asSheet && <button type="button" className="cp-x" style={isLead ? undefined : { marginLeft: 8 }} onClick={onClose}>×</button>}
       </h3>
       <div className="cp-mut" style={{ fontSize: 11.5, marginTop: 3 }}>{a.firm} · {isLead ? 'tady obchoduješ v LIVE' : a.copyOn ? 'kopírování zapnuté' : 'kopírování vypnuté'}{leader && a.firm !== leader.firm ? <> · <span className="cp-warn">jiná propka</span></> : null}</div>
       {naked && <div className="cp-np"><b>⚠ Pozice bez SL/TP</b><span>Ochrana u brokera chybí. Ztráta tohoto účtu teď není omezená a v SL skupiny chybí. Kopírka nic neposílá sama.</span>
-        <div className="act"><button type="button" className="cp-btn pri" onClick={() => onFixProtection(a.id)}>Doplnit SL/TP podle leadera</button><button type="button" className="cp-btn red" onClick={() => onClosePosition(a.id)}>Zavřít pozici účtu</button></div>
+        {onFixProtection && onClosePosition ? <div className="act"><button type="button" className="cp-btn pri" onClick={() => onFixProtection(a.id)}>Doplnit SL/TP podle leadera</button><button type="button" className="cp-btn red" onClick={() => onClosePosition(a.id)}>Zavřít pozici účtu</button></div>
+          : <span style={{ marginTop: 8 }}>SL doplníš nebo pozici zavřeš v grafu LIVE.</span>}
         <small>{leader?.position?.stop != null ? `SL ${fmtPrice(leader.position.stop)}${leader.position.target != null ? ` · TP ${fmtPrice(leader.position.target)}` : ''} · ` : ''}jen ochranné příkazy, pozici nemění</small></div>}
-      <div className="cp-bal"><div><small>Zůstatek</small><b className="cp-num">{plainUsd(a.balance + o)}</b></div></div>
+      <div className="cp-bal"><div><small>Zůstatek</small><b className="cp-num">{plainUsd(a.balance == null ? null : a.balance + o)}</b></div></div>
       <div className="cp-edg">
-        <div><small>Denní P&L</small><b className={`cp-num ${tone(d)}`}>{usdText(d)}</b><em>realizováno {usdText(a.realizedToday)}</em></div>
+        <div><small>Denní P&L</small><b className={`cp-num ${tone(d)}`}>{usdText(d)}</b><em>{a.realizedToday == null ? 'realizované zatím nepřišlo' : `realizováno ${usdText(a.realizedToday)}`}</em></div>
         <div><small>Otevřený P&L</small><b className={`cp-num ${a.position ? tone(o) : ''}`}>{a.position ? usdText(o) : '—'}</b><em>{a.position ? `${posText(a)} @ ${fmtPrice(a.position.averagePrice)}` : 'bez pozice'}</em></div>
         <div><small>DLL zbývá</small><b className="cp-num">{r.dllLeft == null ? '—' : r.dllLeft <= 0 ? 'vyčerpán' : plainUsd(r.dllLeft)}</b>{bar(r.dllLeft, a.dailyLossLimit, 'linear-gradient(90deg,var(--cp-warn),var(--cp-win))')}<em>{a.dailyLossLimit == null ? 'bez denního limitu' : `limit ${plainUsd(a.dailyLossLimit)}`}</em></div>
         <div><small>Rezerva DD</small><b className="cp-num">{r.ddLeft == null ? '—' : plainUsd(r.ddLeft)}</b>{bar(r.ddLeft, a.drawdownMax, 'linear-gradient(90deg,var(--cp-warn),var(--cp-accent))')}<em>{a.drawdownMax == null ? '—' : `trailing ${plainUsd(a.drawdownMax)}`}</em></div>

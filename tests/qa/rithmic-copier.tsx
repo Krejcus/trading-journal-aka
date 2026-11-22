@@ -4,7 +4,18 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { RithmicCopierPhone, RithmicCopierScreen } from '../../components/copier/RithmicCopierScreen';
 import { SimBar, useCopierSimulation } from './rithmic-copier-sim';
+import RithmicCopierTab from '../../components/copier/RithmicCopierTab';
 import '../../index.css';
+
+// `?service=1`: záložka LIVE „Kopírka“ nad lokální simulací služby Rithmic (účet LOCAL-SIM, jen čtení).
+function ServicePage() {
+  const phone = location.search.includes('phone=1');
+  return (
+    <div style={{ minHeight: '100vh', background: 'radial-gradient(1200px 600px at 20% -10%,#1e1b4b 0%,#0b1020 45%,#060913 100%)' }}>
+      <div style={{ maxWidth: phone ? 430 : 1240, margin: '0 auto' }}><RithmicCopierTab open narrow={phone} isDark simulationUrl={`ws://${location.host}/local-simulation`} /></div>
+    </div>
+  );
+}
 
 function Page() {
   const { view, actions, sim } = useCopierSimulation();
@@ -20,4 +31,4 @@ function Page() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<Page />);
+createRoot(document.getElementById('root')!).render(location.search.includes('service=1') ? <ServicePage /> : <Page />);

@@ -16435,3 +16435,9 @@ Pouze TradovateAccountProfileSetup: kompaktní rozbalovací účty, hromadná id
     - zavření účtu;
     - šablony.
   - Ze služby Rithmic zatím chybí data účtů a skupin.
+- **Zapojeno jako záložka LIVE „Kopírka“ (22. 11.).** Ukáže se jen s propojenou službou Rithmic (`rithmicConfigured`). Ukazuje skutečný účet ze služby jako leadera skupiny bez followerů:
+  - pozice, SL/TP, P&L a realizovaný výsledek dne;
+  - zůstatek, DLL a DD služba neposílá, ukáže se „—“;
+  - neznámý stav pozice = prázdný stav, ne „bez pozice“.
+  
+  Zapnutí odpoví „se připravuje“. Zastavit, šablony, zavření a doplnění se bez napojení neukážou (`CopierActions` mají volitelné akce). Zkušební stránka `?service=1` běží nad lokální simulací služby.

@@ -64,6 +64,7 @@ import {
   Link2,
   ListRestart,
   Loader2,
+  Network,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -181,6 +182,7 @@ import { rithmicLocalAvailable, rithmicPairingOffered } from '../lib/rithmicLoca
 // Staticky (desk nesmí nic líně načítat — studený start); mimo vývojovou appku se nikdy nevykreslí.
 import RithmicLiveChart from './RithmicLiveChart';
 import RithmicPhoneChart from './RithmicPhoneChart';
+import RithmicCopierTab from './copier/RithmicCopierTab';
 import type { LivePhoneChartSlots } from './day/LivePhoneChart';
 import LiveTradingScreenSlot, { liveChartCrashedThisSession, preloadLiveTradingScreen, rememberLiveChartCrash } from './LiveTradingScreenSlot';
 
@@ -452,8 +454,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
   useEffect(() => {
     if (tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable && !rithmicPhoneChartAvailable) setTab('overview');
+    if (tab === 'copier' && !rithmicConfigured) setTab('overview');
     if (tab !== 'chart') setPhoneMenuOpen(false);
-  }, [chartAvailable, phoneChartAvailable, rithmicChartAvailable, rithmicPhoneChartAvailable, tab]);
+  }, [chartAvailable, phoneChartAvailable, rithmicChartAvailable, rithmicPhoneChartAvailable, rithmicConfigured, tab]);
   // Načítá se jen panel aktivní záložky, souběžně se stavem LIVE. Desktop míří
   // rovnou do grafu a vedlejší panely do té doby vůbec nepotřebuje.
   useEffect(() => {
@@ -2116,6 +2119,8 @@ acceptAgentStatus((await executeAgent({
     { id: 'accounts', label: 'Účty', icon: WalletCards },
     { id: 'orders', label: 'Pozice a příkazy', icon: ListRestart },
     { id: 'events', label: 'Události', icon: Clock3 },
+    // Kopírka přes Rithmic (jen s propojenou službou na Macu): zatím jen čtení tvého účtu, kopírka se připravuje.
+    ...(rithmicConfigured ? [{ id: 'copier' as const, label: 'Kopírka', icon: Network }] : []),
   ];
 
   const checkingConnection = live.status == null;
@@ -2716,6 +2721,11 @@ acceptAgentStatus((await executeAgent({
             />
           ) : null}
           {tab === 'accounts' ? <Accounts data={liveData} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
+          {tab === 'copier' && rithmicConfigured ? (
+            <ErrorBoundary name="RithmicCopierTab" fallback={<LiveSlotFailure label="Kopírka" />}>
+              <RithmicCopierTab open narrow={narrow || isNativeShell()} isDark={theme !== 'light'} />
+            </ErrorBoundary>
+          ) : null}
           {tab === 'orders' ? <PositionsAndOrders data={liveData} profiles={live.profiles} /> : null}
           {tab === 'events' ? (
             <>

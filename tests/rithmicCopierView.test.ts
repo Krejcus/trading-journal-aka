@@ -64,6 +64,12 @@ describe('kopírka Rithmic: výpočty zobrazení', () => {
     expect(g.find(x => x.label === 'Každá pozice má SL a TP')?.ok).toBe(false);
   });
 
+  it('neznámý realizovaný výsledek nebo zůstatek: „—“, ne nula', () => {
+    const v = view([acc('L', { realizedToday: null, balance: null }), acc('F')]);
+    const s = copierGroupSummary(v, v.groups[0], 'sum');
+    expect(s.day).toBeNull(); expect(s.balance).toBeNull(); expect(s.open).toBe(40);
+  });
+
   it('skrývání názvů', () => {
     expect(copierRedact('Flex 50K •002', 3, 3)).toBe('Fle••••••002');
     expect(copierRedact('ABC', 3, 3)).toBe('ABC');
@@ -75,5 +81,25 @@ describe('kopírka Rithmic: výpočty zobrazení', () => {
     expect(s.order.slice(0, 2)).toEqual(['tp', 'sl']);
     expect(s.order).toHaveLength(COPIER_TABLE_DEFAULTS.order.length);
     expect(s.hidden).toEqual(['dd']); expect(s.sltp).toBe('avg'); expect(s.redactStart).toBe(12);
+  });
+});
+
+describe('skutečný účet Rithmicu v kopírce', () => {
+  it('leader bez followerů, jen data ze služby', async () => {
+    const { rithmicCopierViewFromService } = await import('../lib/rithmicCopierView');
+    const v = rithmicCopierViewFromService({ accountName: 'LT-1', system: 'LucidTrading', closedPnl: -120, positionKnown: true,
+      position: { side: 'long', quantity: 2, entry: 25000, stop: 24990, target: null }, price: 25004, pointValue: 2, maxContracts: 3 })!;
+    expect(v.groups).toEqual([{ id: 'rithmic', name: 'Hlavní', leaderId: 'LT-1', followerIds: [], state: 'disarmed' }]);
+    expect(v.accounts['LT-1']).toMatchObject({ balance: null, realizedToday: -120, dailyLossLimit: null, firm: 'LucidTrading', position: { averagePrice: 25000, stop: 24990, target: null } });
+    const s = copierGroupSummary(v, v.groups[0], 'sum');
+    expect(s.day).toBe(-104); expect(s.sl).toBe(-40); expect(s.tp).toBeNull();
+  });
+
+  it('neznámý stav nebo účet = žádný pohled; neznámý výsledek dne „—“', async () => {
+    const { rithmicCopierViewFromService } = await import('../lib/rithmicCopierView');
+    const base = { accountName: 'A', system: null, closedPnl: undefined, positionKnown: true, position: null, price: 1, pointValue: 2, maxContracts: 1 };
+    expect(rithmicCopierViewFromService({ ...base, positionKnown: false })).toBeNull();
+    expect(rithmicCopierViewFromService({ ...base, accountName: '' })).toBeNull();
+    expect(rithmicCopierViewFromService(base)!.accounts.A.realizedToday).toBeNull();
   });
 });

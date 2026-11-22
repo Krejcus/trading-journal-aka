@@ -13,19 +13,20 @@ import {
 } from './CopierParts';
 import { playCopierEnergy } from './copierFx';
 
+/** Co obrazovka umí vyvolat. Volitelné akce, které nejsou napojené, se v obrazovce vůbec neukážou (nic nepředstírá). */
 export interface CopierActions {
   /** Požádá o zapnutí; vrátí bránu, která neprošla (obrazovka ji jen ukáže). */
   onArm: (groupId: string) => { ok: true } | { ok: false; gate: CopierGate };
   onDisarm: (groupId: string) => void;
-  onKill: () => void;
-  onToggleCopy: (accountId: string) => void;
-  onBulk: (groupId: string, action: 'on' | 'off' | 'ratio', ids: string[], value?: number) => void;
-  onTemplate: (groupId: string, ratio: number, max: number) => void;
-  onFlatten: (groupId: string) => void;
-  onFixProtection: (accountId: string) => void;
-  onClosePosition: (accountId: string) => void;
+  onKill?: () => void;
+  onToggleCopy?: (accountId: string) => void;
+  onBulk?: (groupId: string, action: 'on' | 'off' | 'ratio', ids: string[], value?: number) => void;
+  onTemplate?: (groupId: string, ratio: number, max: number) => void;
+  onFlatten?: (groupId: string) => void;
+  onFixProtection?: (accountId: string) => void;
+  onClosePosition?: (accountId: string) => void;
   /** Oprava brány „Účty způsobilé“: vypnout účet a zkusit znovu. */
-  onDisableAccount: (accountId: string) => void;
+  onDisableAccount?: (accountId: string) => void;
   onNewGroup?: () => void;
 }
 
@@ -69,18 +70,18 @@ function useArm(group: CopierGroup | undefined, actions: CopierActions, root: Re
   return { fail, setFail, shake, fx, toggle };
 }
 
-function FailNote({ gate, onClose, onFix }: { gate: CopierGate; onClose: () => void; onFix: (id: string) => void }) {
+function FailNote({ gate, onClose, onFix }: { gate: CopierGate; onClose: () => void; onFix?: (id: string) => void }) {
   return (
     <div className="cp-fail" onClick={(e) => e.stopPropagation()}>
       <b>Kopírka se nezapnula</b><span>{gate.label} · {gate.detail}</span>
-      {gate.fixAccountId && <button type="button" className="cp-btn" style={{ marginTop: 8, height: 28, fontSize: 11.5 }} onClick={() => onFix(gate.fixAccountId!)}>Vypnout účet a zapnout</button>}
+      {gate.fixAccountId && onFix && <button type="button" className="cp-btn" style={{ marginTop: 8, height: 28, fontSize: 11.5 }} onClick={() => onFix(gate.fixAccountId!)}>Vypnout účet a zapnout</button>}
       <button type="button" className="x" onClick={onClose}>×</button>
     </div>
   );
 }
 
 // ─────────────────────────────── PC
-export function RithmicCopierScreen({ view, actions, isDark = true }: { view: CopierView; actions: CopierActions; isDark?: boolean }) {
+export function RithmicCopierScreen({ view, actions, isDark = true, note = null, emptyNote = 'Žádná kopírovací skupina.' }: { view: CopierView; actions: CopierActions; isDark?: boolean; note?: React.ReactNode; emptyNote?: React.ReactNode }) {
   const [gi, setGi] = useState(0);
   const group = view.groups[Math.min(gi, view.groups.length - 1)];
   const [settings, setSettings] = useCopierTableSettings();
@@ -91,7 +92,7 @@ export function RithmicCopierScreen({ view, actions, isDark = true }: { view: Co
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPanel(null); setMenu(false); } };
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
   }, []);
-  if (!group) return <div className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ padding: 24 }}>Žádná kopírovací skupina.</div>;
+  if (!group) return <div className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ padding: 24 }}><div className="cp-card" style={{ padding: 18, fontSize: 13 }}>{emptyNote}</div></div>;
   const sum = copierGroupSummary(view, group, settings.sltp);
   const pw = powerOf(group);
   const openId = panel && typeof panel === 'object' ? panel.id : null;
@@ -100,17 +101,18 @@ export function RithmicCopierScreen({ view, actions, isDark = true }: { view: Co
     <div ref={root} className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 640 }} onClick={() => { setPanel(null); setMenu(false); }} data-rithmic-copier>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 850, letterSpacing: '-.02em' }}>Kopírka</h1>
-        <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Skupina dnes <b className={`cp-num ${sum.day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.day)}</b></span>
+        <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Skupina dnes <b className={`cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.day)}</b></span>
         <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Otevřeno <b className={`cp-num ${sum.open >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.open)}</b></span>
         <span style={{ flex: 1 }} />
         {actions.onNewGroup && <button type="button" className="cp-btn" onClick={actions.onNewGroup}>＋ Nová skupina</button>}
         <span style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
           <CopierPowerSwitch ref={sw} state={pw.state} sub={pw.sub} onClick={arm.toggle} shakeKey={arm.shake} fx={arm.fx} />
-          {arm.fail && <FailNote gate={arm.fail} onClose={() => arm.setFail(null)} onFix={(id) => { arm.setFail(null); actions.onDisableAccount(id); window.setTimeout(arm.toggle, 250); }} />}
+          {arm.fail && <FailNote gate={arm.fail} onClose={() => arm.setFail(null)} onFix={actions.onDisableAccount ? (id) => { arm.setFail(null); actions.onDisableAccount!(id); window.setTimeout(arm.toggle, 250); } : undefined} />}
         </span>
-        <button type="button" className="cp-btn red" onClick={actions.onKill} title="Zastaví všechny skupiny do konce session. SL, TP a zavírání fungují dál.">⏻ Zastavit kopírku</button>
+        {actions.onKill && <button type="button" className="cp-btn red" onClick={actions.onKill} title="Zastaví všechny skupiny do konce session. SL, TP a zavírání fungují dál.">⏻ Zastavit kopírku</button>}
       </div>
 
+      {note && <div className="cp-card" style={{ padding: '10px 14px', fontSize: 12.5, borderColor: 'color-mix(in srgb,var(--cp-accent) 40%,transparent)' }}>{note}</div>}
       <div className="cp-card" style={{ padding: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <div className="cp-gtabs">{view.groups.map((g, i) => <button key={g.id} type="button" className={i === gi ? 'on' : ''} onClick={(e) => { e.stopPropagation(); setGi(i); setPanel(null); }}><i className={`cp-dot ${g.state}`} />{g.name} <small>1 → {g.followerIds.length}</small></button>)}</div>
@@ -125,9 +127,9 @@ export function RithmicCopierScreen({ view, actions, isDark = true }: { view: Co
           onToggleSltp={() => setSettings({ ...settings, sltp: settings.sltp === 'avg' ? 'sum' : 'avg' })}
           onOpenAccount={(id) => setPanel({ id })}
           menu={menu ? <CopierGroupMenu openPositions={openPositions} editOn={edit} onClose={() => setMenu(false)}
-            onEdit={() => { setEdit(e => !e); setMenu(false); }} onTemplate={(r, m) => { setMenu(false); actions.onTemplate(group.id, r, m); }} onFlatten={() => { setMenu(false); actions.onFlatten(group.id); }} /> : null} />
+            onEdit={() => { setEdit(e => !e); setMenu(false); }} onTemplate={actions.onTemplate ? (r, m) => { setMenu(false); actions.onTemplate!(group.id, r, m); } : undefined} onFlatten={actions.onFlatten ? () => { setMenu(false); actions.onFlatten!(group.id); } : undefined} /> : null} />
         <CopierFollowerTable view={view} group={group} settings={settings} edit={edit} selectedId={openId} onOpen={(id) => setPanel({ id })}
-          onToggleCopy={actions.onToggleCopy} onBulk={(a, ids, v) => actions.onBulk(group.id, a, ids, v)} />
+          onToggleCopy={actions.onToggleCopy} onBulk={actions.onBulk ? (a, ids, v) => actions.onBulk!(group.id, a, ids, v) : undefined} />
       </div>
 
       {panel === 'settings' && <CopierSettingsPanel settings={settings} onChange={setSettings} onClose={() => setPanel(null)} sample={view.accounts[group.followerIds[0]]?.name ?? 'Flex 50K •002'} />}
@@ -138,14 +140,14 @@ export function RithmicCopierScreen({ view, actions, isDark = true }: { view: Co
 }
 
 // ─────────────────────────────── telefon
-export function RithmicCopierPhone({ view, actions, isDark = true }: { view: CopierView; actions: CopierActions; isDark?: boolean }) {
+export function RithmicCopierPhone({ view, actions, isDark = true, note = null, emptyNote = 'Žádná kopírovací skupina.' }: { view: CopierView; actions: CopierActions; isDark?: boolean; note?: React.ReactNode; emptyNote?: React.ReactNode }) {
   const [gi, setGi] = useState(0);
   const group = view.groups[Math.min(gi, view.groups.length - 1)];
   const [settings, setSettings] = useCopierTableSettings();
   const [sheet, setSheet] = useState<null | 'settings' | { id: string }>(null), [filter, setFilter] = useState<'all' | 'prob'>('all');
   const root = useRef<HTMLDivElement>(null), sw = useRef<HTMLButtonElement>(null);
   const arm = useArm(group, actions, root, [sw]);
-  if (!group) return <div className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ padding: 16 }}>Žádná kopírovací skupina.</div>;
+  if (!group) return <div className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ padding: 16 }}><div className="cp-card" style={{ padding: 16, fontSize: 13 }}>{emptyNote}</div></div>;
   const sum = copierGroupSummary(view, group, settings.sltp);
   const leader = view.accounts[group.leaderId];
   const followers = group.followerIds.map(id => view.accounts[id]).filter(Boolean);
@@ -168,7 +170,7 @@ export function RithmicCopierPhone({ view, actions, isDark = true }: { view: Cop
       <div className="cp-pchips">{view.groups.map((g, i) => <button key={g.id} type="button" className={i === gi ? 'on' : ''} onClick={() => { setGi(i); setSheet(null); }}><i className={`cp-dot ${g.state}`} />{g.name} <span className="cp-mut">{g.followerIds.length}</span></button>)}</div>
 
       <div className={`cp-card cp-grpc${inTrade ? ' intrade' : ''}`}>
-        <div className="ga"><div className="l">Skupina dnes</div><b className={`v cp-num ${sum.day >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.day)}</b><div className="sync" style={{ fontSize: 10.5 }}>{sync}</div></div>
+        <div className="ga"><div className="l">Skupina dnes</div><b className={`v cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.day)}</b><div className="sync" style={{ fontSize: 10.5 }}>{sync}</div></div>
         <span className="sp" />
         <div className="gb"><div className="l">Otevřeno · {sum.inPosition} účtů</div><b className={`v cp-num ${sum.open >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.open)}</b>
           <div className="sub"><SltpValue sl={sum.sl} tp={sum.tp} mode={settings.sltp} unit={false} onToggle={() => setSettings({ ...settings, sltp: settings.sltp === 'avg' ? 'sum' : 'avg' })}
@@ -193,19 +195,21 @@ export function RithmicCopierPhone({ view, actions, isDark = true }: { view: Cop
       <div className="cp-card" style={{ padding: 12, position: 'relative' }}>
         <div style={{ display: 'flex', gap: 8 }}>
           <CopierPowerSwitch ref={sw} big state={pw.state} sub={pw.sub} onClick={arm.toggle} shakeKey={arm.shake} fx={arm.fx} />
-          <button type="button" className="cp-btn red" style={{ height: 48, borderRadius: 14 }} onClick={actions.onKill}>⏻ Zastavit</button>
+          {actions.onKill && <button type="button" className="cp-btn red" style={{ height: 48, borderRadius: 14 }} onClick={actions.onKill}>⏻ Zastavit</button>}
         </div>
         {arm.fail && <div className="cp-fail" style={{ position: 'static', width: 'auto', marginTop: 8 }}><b>Kopírka se nezapnula</b><span>{arm.fail.label} · {arm.fail.detail}</span>
-          {arm.fail.fixAccountId && <button type="button" className="cp-btn" style={{ marginTop: 8, height: 30 }} onClick={() => { const id = arm.fail!.fixAccountId!; arm.setFail(null); actions.onDisableAccount(id); window.setTimeout(arm.toggle, 250); }}>Vypnout účet a zapnout</button>}
+          {arm.fail.fixAccountId && actions.onDisableAccount && <button type="button" className="cp-btn" style={{ marginTop: 8, height: 30 }} onClick={() => { const id = arm.fail!.fixAccountId!; arm.setFail(null); actions.onDisableAccount!(id); window.setTimeout(arm.toggle, 250); }}>Vypnout účet a zapnout</button>}
           <button type="button" className="x" onClick={() => arm.setFail(null)}>×</button></div>}
-        <div className="cp-mut" style={{ fontSize: 11, marginTop: 8 }}>Zapnutí i zastavení platí hned, na PC i v telefonu.</div>
+        {actions.onKill && <div className="cp-mut" style={{ fontSize: 11, marginTop: 8 }}>Zapnutí i zastavení platí hned, na PC i v telefonu.</div>}
       </div>
+      {note && <div className="cp-card" style={{ padding: '10px 13px', fontSize: 12 }}>{note}</div>}
 
       <div className="cp-card" style={{ padding: '6px 13px' }}>
         <div className="cp-fchips" style={{ margin: '6px 0' }}>{([['all', 'Vše', followers.length], ['prob', 'Problém', probs.length]] as const).map(([k, l, n]) => <button key={k} type="button" className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<i>{n}</i></button>)}</div>
-        {rows.map(a => { const o = copierOpenPnl(a, view.price, view.pointValue), day = a.realizedToday + o; return (
+        {!rows.length && <div className="cp-mut" style={{ fontSize: 12, padding: '10px 0' }}>{followers.length ? 'Žádný účet s problémem.' : 'Zatím žádní followeři.'}</div>}
+        {rows.map(a => { const o = copierOpenPnl(a, view.price, view.pointValue), day = a.realizedToday == null ? null : a.realizedToday + o; return (
           <div key={a.id} className="cp-row" onClick={() => setSheet({ id: a.id })}>
-            <span><b><FirmDot firm={a.firm} />{shownName(a, settings)}</b><small>×{a.ratio.toLocaleString('cs-CZ')} · {a.position ? `${a.position.side === 'long' ? 'Long' : 'Short'} ${a.brokerQuantity ?? a.position.quantity}` : 'bez pozice'} · dnes <b className={`cp-num ${day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ display: 'inline' }}>{usdText(day)}</b></small></span>
+            <span><b><FirmDot firm={a.firm} />{shownName(a, settings)}</b><small>×{a.ratio.toLocaleString('cs-CZ')} · {a.position ? `${a.position.side === 'long' ? 'Long' : 'Short'} ${a.brokerQuantity ?? a.position.quantity}` : 'bez pozice'} · dnes <b className={`cp-num ${day == null ? '' : day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ display: 'inline' }}>{usdText(day)}</b></small></span>
             {statusChip(a, group.state === 'armed')}<span className="chev">›</span>
           </div>); })}
       </div>

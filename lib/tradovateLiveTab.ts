@@ -1,5 +1,6 @@
 /** `chart` = živý graf přes celou obrazovku (jen desktop, výchozí po kliku na LIVE). */
-export type TradovateLiveTab = 'chart' | 'connections' | 'overview' | 'risk' | 'accounts' | 'orders' | 'events';
+/** `copier` = kopírka přes službu Rithmic (22. 11. 2026: zatím jen tvůj účet, kopírka ve službě se připravuje). */
+export type TradovateLiveTab = 'chart' | 'connections' | 'overview' | 'risk' | 'accounts' | 'orders' | 'events' | 'copier';
 
 const LIVE_TABS = new Set<TradovateLiveTab>([
   'chart',
@@ -9,6 +10,7 @@ const LIVE_TABS = new Set<TradovateLiveTab>([
   'accounts',
   'orders',
   'events',
+  'copier',
 ]);
 
 export const tradovateLiveTabFromSearch = (search: string): TradovateLiveTab => {

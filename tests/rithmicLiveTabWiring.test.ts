@@ -528,3 +528,15 @@ describe('Rithmic graf na telefonu', () => {
     expect(wrapper).toMatch(/rithmicPhoneModeLabel\(\{ system: trading\.system, readOnly: viewOnly, closeOnly: closeOnlyHere, liveAccount: trading\.liveAccount,/);
   });
 });
+
+describe('záložka Kopírka (Rithmic, 22. 11.)', () => {
+  it('jen s propojenou službou, jen čtení skutečného účtu, bez akcí bez napojení', () => {
+    const desk = readFileSync(new URL('../components/TradovateLiveDesk.tsx', import.meta.url), 'utf8');
+    const tab = readFileSync(new URL('../components/copier/RithmicCopierTab.tsx', import.meta.url), 'utf8');
+    expect(desk).toMatch(/\.\.\.\(rithmicConfigured \? \[\{ id: 'copier' as const, label: 'Kopírka', icon: Network \}\] : \[\]\)/);
+    expect(desk).toMatch(/if \(tab === 'copier' && !rithmicConfigured\) setTab\('overview'\);/);
+    // Žádné zastavení, šablony, zavření ani doplnění bez napojení; zapnutí jen řekne, že se připravuje.
+    expect(tab).toMatch(/const ACTIONS: CopierActions = \{ onArm: \(\) => \(\{ ok: false, gate: NOT_READY \}\), onDisarm: \(\) => undefined \};/);
+    expect(tab).not.toMatch(/onKill|onFlatten|onClosePosition|onFixProtection|onTemplate/);
+  });
+});
