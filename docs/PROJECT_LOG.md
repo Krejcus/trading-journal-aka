@@ -343,6 +343,23 @@ a případně malé čisté funkce z archivu.
   v appce brzda (platilo i dřív). tsc, 4 309+ testů, build zelené. Obchod z nového desku naostro NEOVĚŘEN.
   Zbývá vlna 3 (~85 souborů s Tradovate/kopírka v názvu kvůli typům, AccountsManager OAuth, iOS widgety),
   vlna 4 (DROP tabulek po čerstvé úplné záloze), úklid worktree.
+- **Účet za Vercel (rozbor 1. 8.–22. 11.):** ~179 USD vypočtené ceny, z toho ~105 USD spotřeba nad
+  poplatek Pro. Největší položky: paměť a CPU funkcí (~52 USD — hlídač kopírky v minutovém cronu
+  `send-alerts` a `journal-import`, který od 14. 10. běžel každou minutu s rozpočtem až 300 s), buildy
+  (~29 USD — každý push buildil dva projekty a k tomu náhledy větví), volání a přenosy relaye (~20 USD).
+  Cíl Filipa: vejít se do 20 USD měsíčně. Opatření: Tradovate serverová část pryč (vlna 1), nově
+  `ignoreCommand` ve `vercel.json` → `scripts/vercel-ignore-build.sh` (builduje se jen `main` a jen když
+  se změní web nebo API; dokumentace, testy, iOS, Pine, skripty a migrace build nespouští), projekt
+  `oauth-data-probe` (kopie appky z 15. 8. kvůli Tradovate OAuth) určen ke smazání. Zbylý minutový
+  cron `send-alerts` je levný (1.–14. 8. stál ~0,01 USD denně), frekvence se neměnila kvůli oknu ±1 min
+  u připomínek. Za týden ověřit vyúčtování.
+- **Vlna 3, první část (nasazeno 8cecffe7):** pryč klient iOS widgetů a Live Activity (při odhlášení se
+  jen uklidí zbytky), TradingView alerty v Nastavení, Mac párovací deep link (`lib/appDeepLink.ts`
+  drží jen `?page=`), Tradovate onboarding a stav OAuth ve správě účtů (kokpit jede ze snapshotů
+  a pravidel firmy, obecný typ `lib/propAccountProfile.ts`), živá Tradovate pozice v grafu deníku,
+  čtení stavu workeru, IBKR klient, skripty TradeCopia. Otevřené: odkud má graf deníku brát dnešní
+  živé svíčky (soubor z workeru už nikdo nezapisuje) — čeká na Filipa; na tom visí smazání kanálu
+  ceny TradingView/IBKR a zbytku typů kopírky.
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
