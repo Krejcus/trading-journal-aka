@@ -1,6 +1,5 @@
 import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { LiveCommandNotSentError } from '../lib/liveCommandErrors';
-import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -10,6 +9,14 @@ import {
   LIVE_MANAGE_CONFIRM_MIN_MS, LIVE_MANAGE_CONFIRM_MS, LIVE_MANAGE_PENDING_HOLD_MS, createLiveManageRun, liveManageConfirmStep,
   liveManageErrorNotice, liveManageResultNotice, useLiveManageRunner, type LiveManageCallback, type LiveManageNotice, type LiveManagePendingMove,
 } from '../hooks/useLiveManageRunner';
+
+/** Chyba ve tvaru odmítnutí serveru (stav, kód) — sdílený kód ji pozná podle polí, ne podle třídy. */
+class RelayRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly retryAfterMs: number | null = null, public readonly code: string | null = null, public readonly precheck = false) {
+    super(message);
+    this.name = 'TradovateRequestError';
+  }
+}
 
 const NOW = Date.UTC(2026, 10, 3, 15);
 const result = (patch: Partial<LeaderOrderManageResult> = {}): LeaderOrderManageResult => ({
@@ -138,7 +145,7 @@ describe('texty výsledků (shodné s dosavadním PC runLiveManage)', () => {
     expect(ack('move-stop', 'Noha se mezitím vyplnila — vyplnil se SL.')).toMatchObject({ tone: 'warn', text: 'Noha se mezitím vyplnila — vyplnil se SL.' });
   });
   it('mapování prokazatelně neodeslaných chyb — podle kódu relay odmítnutí / typu chyby, ne textu', () => {
-    const relay = (code: string, status = 409) => withLiveRelayPhase(new TradovateRequestError(code, status, null, code), 'submit');
+    const relay = (code: string, status = 409) => withLiveRelayPhase(new RelayRequestError(code, status, null, code), 'submit');
     expect(liveManageErrorNotice(relay('copier-relay-entry-busy'), NOW)).toMatchObject({ tone: 'bad', text: 'Neodesláno: jiná změna se právě zpracovává' });
     expect(liveManageErrorNotice(relay('copier-relay-entry-superseded'), NOW).text).toBe('Neodesláno: mezitím přišlo vypnutí kopírky (brzda)');
     expect(liveManageErrorNotice(relay('copier-relay-entry-not-admitted: expired'), NOW).text).toBe('Neodesláno: server změnu nepřijal');

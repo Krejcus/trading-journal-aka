@@ -4,7 +4,6 @@ import {
   DEFAULT_LIVE_PILL, LIVE_PILL_STORAGE_KEY, accountsLabel, contractRoot, livePhoneGroupLine, pressQtyKey, qtyFromBuffer, readLivePillPrefs, writeLivePillPrefs,
 } from '../lib/livePhoneTrade';
 import type { LiveChartPositionAccountRow, LiveChartPositionSummary } from '../lib/liveChartPosition';
-import { liveChartPositionTvLegs as livePhoneTvLegs } from '../lib/tvLivePnl';
 
 const row = (over: Partial<LiveChartPositionAccountRow> = {}): LiveChartPositionAccountRow => ({
   accountId: 1, name: 'LUCID', isLeader: true, quantity: 2, entry: 21452.25, openPnl: 120.5, stop: 21421, target: 21514.75,
@@ -83,18 +82,6 @@ describe('obchodní lišta na telefonu', () => {
     expect(livePhoneGroupLine({ symbol: 'MNQZ6', summary: summary({ kind: 'pending', side: 'short', entryType: 'Limit', quantity: 2 }) })).toBe('MNQ · Sell Limit 2 · 3 účty');
     expect(livePhoneGroupLine({ symbol: 'MNQZ6', summary: summary({ scopeLabel: 'jen T2' }) })).toBe('MNQ · Long 6 · jen T2');
     expect(livePhoneGroupLine({ symbol: null, summary: null })).toBeNull();
-  });
-
-  it('živé P&L účtů: noha na účet z kotvy brokera; chybí-li kotva u kteréhokoli, jen kotva', () => {
-    const position = { symbol: 'MNQZ6', summary: summary() };
-    const legs = livePhoneTvLegs(position)!;
-    expect(legs).toHaveLength(3);
-    expect(legs[0]).toMatchObject({ symbol: 'MNQZ6', netPosition: 2, averagePrice: 21452.25, anchorAt: Date.parse('2026-11-02T14:30:00.000Z') });
-    expect(legs[0].grossPnl).toBeCloseTo(122.98, 6);
-    expect(livePhoneTvLegs({ symbol: 'MNQZ6', summary: summary({ side: 'short' }) })![0].netPosition).toBe(-2);
-    expect(livePhoneTvLegs(position, [row({ openPnlAsOf: null })])).toBeNull();
-    expect(livePhoneTvLegs(position, [row({ openPnl: null })])).toBeNull();
-    expect(livePhoneTvLegs({ symbol: 'MNQZ6', summary: summary({ kind: 'pending' }) })).toBeNull();
   });
 
   it('fáze A: lišta ani LIVE graf na telefonu nemají cestu k brokerovi', () => {

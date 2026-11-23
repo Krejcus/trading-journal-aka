@@ -418,26 +418,28 @@ describe('Rithmic graf na telefonu', () => {
   const wrapper = readFileSync('components/RithmicPhoneChart.tsx', 'utf8');
   const fullscreen = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
 
-  it('telefonní graf: se zdrojem ze slotu jdou svíčky, kotace i kontrakt ze slotu, ne z IBKR', () => {
+  it('telefonní graf: svíčky, kotace i kontrakt jdou jen ze slotu', () => {
     expect(phone).toMatch(/const marketSlot = slots\.market \?\? null;/);
     expect(phone).toMatch(/chartDataDisabled: marketSlot != null/);
     for (const field of ['candles', 'quality', 'loading', 'error', 'liveStatus', 'liveCapturedAt', 'liveSource', 'liveFeed'])
       expect(phone).toMatch(new RegExp(`${field}: marketSlot\\.data\\.${field}\\b`));
     expect(phone).toMatch(/<DayFullscreenChart\s+ctl=\{ctl\}/);
-    // Kanál ceny appky: bez odběru, bez zájmu o P&L a bez ticku IBKR.
-    expect(phone).toMatch(/watchingPositionPrice && !ownMarket \? tvPriceChannel\.addPnlInterest\(\) : undefined/);
-    expect(phone).toMatch(/useSyncExternalStore\(ownMarket \? NO_PRICE_SUBSCRIPTION : tvPriceStore\.subscribe,/);
-    expect(phone).toMatch(/ownMarket \? null : independentIbkrTick\(/);
-    expect(phone).toMatch(/const liveTickAt = ownMarket \? marketQuote\?\.at \?\? null : independentTick\?\.at \?\? null;/);
-    expect(phone).toMatch(/const contract = ownMarket \? marketSlot\.contract : independentTick\?\.symbol/);
-    // Kotace pro odeslání: ve větvi slotu se vrací dřív, než se sáhne na tick IBKR.
+    // Jiný zdroj ceny než slot appka nemá (kanál TradingView / IBKR odstraněn 23. 11. 2026).
+    for (const gone of ['tvPriceChannel', 'tvPriceStore', 'independentIbkrTick', 'previewSymbolFromChartSource'])
+      expect(phone).not.toContain(gone);
+    expect(phone).toMatch(/const liveTickAt = marketQuote\?\.at \?\? null;/);
+    expect(phone).toMatch(/const contract = marketSlot\?\.contract \?\? null;/);
+    expect(phone).toMatch(/const chartContract = marketSlot\?\.contract \?\? null;/);
+    // Kotace pro odeslání: bez slotu NENÍ (nic se neodešle); se slotem projde pojistkami tvaru.
     const quoteMemo = phone.slice(phone.indexOf('const quote = useMemo<LivePhoneQuote | null>'), phone.indexOf('const slotMark = useMemo'));
-    expect(quoteMemo.indexOf('if (ownMarket) {')).toBeGreaterThan(0);
-    expect(quoteMemo.indexOf('if (ownMarket) {')).toBeLessThan(quoteMemo.indexOf('independentTick.symbol'));
-    // Pojistka utažení SL / BE a P&L štítku: se slotem jeho kotace, tick IBKR jen bez slotu.
-    expect(phone.match(/slotMark \?\? \{ source: independentTick\?\.source \?\? null,/g)).toHaveLength(2);
-    expect(phone).toMatch(/ownMarket \? 'Kontrakt není ověřený — nic se neodeslalo\.'/);
-    expect(phone).toMatch(/ownMarket \? 'Živá cena teď není dostupná'/);
+    expect(quoteMemo).toMatch(/if \(!ownMarket \|\| !marketQuote \|\| !marketQuote\.symbol\?\.startsWith\('MNQ'\)/);
+    expect(quoteMemo).toMatch(/marketQuote\.bid <= 0 \|\| marketQuote\.ask < marketQuote\.bid \|\| !Number\.isFinite\(marketQuote\.at\)\) return null;/);
+    // Pojistka utažení SL / BE a P&L štítku: kotace slotu; bez slotu je značka vždy stará (pojistka blokuje).
+    expect(phone).toMatch(/const NO_MARK = \{ source: null, price: null, at: null, stale: true \} as const;/);
+    expect(phone).toMatch(/stale: quote == null \|\| slotMarkStale \} : NO_MARK\)/);
+    expect(phone.match(/\n      slotMark, at\)|\n    slotMark, LIVE_PHONE_INSTRUMENT\.pointValue/g)).toHaveLength(2);
+    expect(phone).toContain("'Kontrakt není ověřený — nic se neodeslalo.'");
+    expect(phone).toContain('Živá cena teď není dostupná');
     // Cizí trh (Rithmic Test): starší historie appky se nepřipojuje.
     expect(phone).toMatch(/marketSlot\?\.appHistory === false \? \{ externalHistory: true \} : \{\}/);
     expect(fullscreen).toMatch(/const htf = externalHistory \? EXTERNAL_HTF : htfRead;/);

@@ -1,11 +1,18 @@
 import { withLiveRelayPhase } from '../lib/liveCommandErrors';
 import { isLiveCommandNotSent, liveCommandNotSentText } from '../lib/liveCommandErrors';
-import { TradovateRequestError } from '../services/tradovateOAuthConnection';
 import { isLiveDisplayOnlyLine } from '../lib/liveWorkingOrderLines';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LIVE_ATTACH_SEND_ACTION, LIVE_POSITION_OWNER, liveBreakEven, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { LIVE_DISPLAY_PNL_MAX_AGE_MS, liveDisplayOpenPnl, liveShownOpenPnl, type LiveChartPositionSummary } from '../lib/liveChartPosition';
+
+/** Chyba ve tvaru odmítnutí serveru (stav, kód) — sdílený kód ji pozná podle polí, ne podle třídy. */
+class RelayRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly retryAfterMs: number | null = null, public readonly code: string | null = null, public readonly precheck = false) {
+    super(message);
+    this.name = 'TradovateRequestError';
+  }
+}
 
 const summary = (patch: Partial<LiveChartPositionSummary> = {}): LiveChartPositionSummary => ({
   kind: 'position', side: 'short', quantity: 4, entry: 28975.5, entryType: null, openPnl: 12, mark: 28960,
@@ -215,7 +222,7 @@ describe('LIVE → Graf: přímé odeslání velkým tlačítkem (Filip 30. 10.)
     expect(ticket).toMatch(/if \(placedResult\.status === 'acknowledged'\) onAcknowledged\?\.\(\);/);
   });
   it('read-only localhost (HTTP 405) je „neodesláno“, ne neznámý výsledek — podle stavu, ne textu', () => {
-    expect(liveCommandNotSentText(withLiveRelayPhase(new TradovateRequestError('Localhost je pro Tradovate pouze read-only.', 405), 'submit'))).toMatch(/z localhostu se k brokerovi nezapisuje/);
+    expect(liveCommandNotSentText(withLiveRelayPhase(new RelayRequestError('Localhost je pro Tradovate pouze read-only.', 405), 'submit'))).toMatch(/z localhostu se k brokerovi nezapisuje/);
     expect(isLiveCommandNotSent(new Error('Localhost je pro Tradovate pouze read-only.'))).toBe(false);
     expect(ticket).toMatch(/isLiveCommandNotSent\(reason\)/);
   });

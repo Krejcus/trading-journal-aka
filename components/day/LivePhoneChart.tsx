@@ -1,5 +1,3 @@
-import { independentIbkrTick } from '../../lib/ibkrDisplayPnl';
-import { tvPriceChannel, tvPriceStore } from '../../services/tvPriceChannel';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { SessionConfig, Trade } from '../../types';
 import DayFullscreenChart from './DayFullscreenChart';
@@ -23,7 +21,6 @@ import { LIVE_COMMAND_BUSY_TEXT, createLiveBareCloseRun } from '../../hooks/live
 import { useLiveFillAnnounceMode, useLiveFillAnnouncer } from '../../hooks/useLiveFillAnnouncer';
 import { useLivePositionBoxFollow } from '../../hooks/useLivePositionBoxFollow';
 import LiveChartAutomationSettings, { LiveBoxFollowPane } from '../LiveChartAutomationSettings';
-import { previewSymbolFromChartSource } from '../../lib/leaderEntryPreview';
 import { useLiveNoPriceNotice, useLiveResumeState } from '../../hooks/useLiveResumeState';
 import { liveTicketLegsProblem, LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AGE_MS, liveAttachDefaults, liveAttachIntent, liveQuoteStaleText } from '../../lib/liveBareEntry';
 import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
@@ -100,9 +97,9 @@ export interface LivePhoneChartSlots {
   /** U8: klíč knihovny šablon SL/TP na zařízení (nic neautorizuje); null = nepřihlášeno. */
   userId?: string | null;
   /**
-   * Jiný zdroj trhu než deník dne a IBKR (místní služba Rithmicu, 18. 11. 2026): svíčky, živá svíčka,
-   * kotace i kontrakt jdou odsud a kanál ceny appky (`tvPriceStore`) se ke grafu ani k odeslání
-   * nepoužije. Chybí = dosavadní cesta beze změny. Jen zobrazení a pojistky UI — příkaz ověří služba.
+   * Zdroj trhu (místní služba Rithmicu, 18. 11. 2026): svíčky, živá svíčka, kotace i kontrakt jdou odsud;
+   * jiný zdroj ceny appka nemá. Chybí = bez kotace, nic se neodešle. Jen zobrazení a pojistky UI — příkaz
+   * ověří služba.
    */
   market?: {
     data: LiveTradingMarketData;
@@ -125,7 +122,8 @@ export interface LivePhoneChartSlots {
 const NO_FILLS: readonly LiveFillMarker[] = [];
 const NO_TRADES: Trade[] = [];
 /** Se zdrojem trhu ze slotu se kanál ceny appky neodebírá. */
-const NO_PRICE_SUBSCRIPTION = () => () => undefined;
+/** Bez zdroje trhu ve slotu není žádná cena: značka je vždy stará. */
+const NO_MARK = { source: null, price: null, at: null, stale: true } as const;
 /** Nejvýš tolik karet upozornění najednou, ať nevytlačí kartu rizika. */
 const ALERT_CARDS_MAX = 2;
 /** Přehrávání ukazuje historii: z lišty, plusu, listu ani lišty návrhu se nic neodešle (N1, U3). */
@@ -147,7 +145,7 @@ function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveF
   return null;
 }
 
-/** Market jen s cenou kanálu mladší než tohle (worker ji ověří znovu proti IBKR). */
+/** Market jen s kotací služby mladší než tohle (služba ji ověří znovu). */
 const PHONE_MARKET_QUOTE_MAX_AGE_MS = LIVE_BARE_QUOTE_MAX_AGE_MS;
 
 /**
@@ -224,37 +222,25 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const [notice, setNotice] = useState<{ key: number; text: string } | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
   const trade = slots.trade ?? null;
-  // Živá cena jako panel na PC: kanál ceny grafu, kontrakt jen ze zdroje IBKR (INV-UI-04).
-  const watchingPositionPrice = slots.position.summary?.kind === 'position';
-  // Se zdrojem trhu ze slotu se kanál ceny appky neodebírá a jeho cena se nikam nepoužije.
+  // Cena, kotace i kontrakt jdou jen ze zdroje trhu ve slotu (místní služba Rithmicu) — INV-UI-04.
   const ownMarket = marketSlot != null;
-  useEffect(() => watchingPositionPrice && !ownMarket ? tvPriceChannel.addPnlInterest() : undefined, [watchingPositionPrice, ownMarket]);
-  const priceView = useSyncExternalStore(ownMarket ? NO_PRICE_SUBSCRIPTION : tvPriceStore.subscribe, tvPriceStore.view, tvPriceStore.view);
-  const priceReceivedAt = ownMarket ? null : tvPriceStore.diagnostics().lastReceivedAt;
-  const independentTick = useMemo(() => (ownMarket ? null : independentIbkrTick(priceView, priceReceivedAt, Date.now())), [ownMarket, priceView, priceReceivedAt]);
   const marketQuote = marketSlot?.quote ?? null;
   // Zdroj a zastaralost ceny slotu pro pojistku utažení SL / BE a živé P&L štítku (jen zobrazení).
   const slotMarkSource = marketSlot?.data.liveSource ?? null;
   const slotMarkStale = marketSlot != null && marketSlot.data.liveStatus !== 'live';
-  // Minute-history freshness does not certify or invalidate an independent signed IBKR tick.
-  const liveTickAt = ownMarket ? marketQuote?.at ?? null : independentTick?.at ?? null;
+  const liveTickAt = marketQuote?.at ?? null;
   const resuming = useLiveResumeState(liveTickAt != null || ctl.chart.liveStatus === 'live', liveTickAt);
   const noPriceNotice = useLiveNoPriceNotice(true, liveTickAt, resuming);
-  const contract = ownMarket ? marketSlot.contract : independentTick?.symbol ?? previewSymbolFromChartSource(ctl.chart.liveSource);
+  const contract = marketSlot?.contract ?? null;
   const quote = useMemo<LivePhoneQuote | null>(() => {
-    // Zdroj ze slotu: stejné pojistky tvaru jako u IBKR (MNQ, kladný bid, ask ≥ bid); kontrakt musí být znám.
-    if (ownMarket) {
-      if (!marketQuote || !marketQuote.symbol?.startsWith('MNQ') || !Number.isFinite(marketQuote.bid) || !Number.isFinite(marketQuote.ask)
-        || marketQuote.bid <= 0 || marketQuote.ask < marketQuote.bid || !Number.isFinite(marketQuote.at)) return null;
-      return { symbol: marketQuote.symbol, bid: marketQuote.bid, ask: marketQuote.ask, at: marketQuote.at };
-    }
-    if (!independentTick || !independentTick.symbol.startsWith('MNQ') || independentTick.bid == null || independentTick.ask == null
-      || !Number.isFinite(independentTick.bid) || !Number.isFinite(independentTick.ask) || independentTick.bid <= 0
-      || independentTick.ask < independentTick.bid) return null;
-    return { symbol: independentTick.symbol, bid: independentTick.bid, ask: independentTick.ask, at: independentTick.at };
-  }, [independentTick, ownMarket, marketQuote?.symbol, marketQuote?.bid, marketQuote?.ask, marketQuote?.at]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Se zdrojem ze slotu jde do pojistky utažení SL / BE a do P&L štítku jeho kotace; jinak (null) tick IBKR.
-  const slotMark = useMemo(() => (ownMarket ? { source: slotMarkSource, price: quote?.bid ?? null, at: quote?.at ?? null, stale: quote == null || slotMarkStale } : null),
+    // Kotace jen ze zdroje trhu ve slotu (místní služba). Pojistky tvaru: MNQ, kladný bid, ask ≥ bid, známý kontrakt.
+    // Bez slotu kotace NENÍ — nic se neodešle (jiný zdroj ceny appka od 23. 11. 2026 nemá).
+    if (!ownMarket || !marketQuote || !marketQuote.symbol?.startsWith('MNQ') || !Number.isFinite(marketQuote.bid) || !Number.isFinite(marketQuote.ask)
+      || marketQuote.bid <= 0 || marketQuote.ask < marketQuote.bid || !Number.isFinite(marketQuote.at)) return null;
+    return { symbol: marketQuote.symbol, bid: marketQuote.bid, ask: marketQuote.ask, at: marketQuote.at };
+  }, [ownMarket, marketQuote?.symbol, marketQuote?.bid, marketQuote?.ask, marketQuote?.at]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Do pojistky utažení SL / BE a do P&L štítku jde kotace slotu; bez slotu je značka vždy stará (pojistka blokuje).
+  const slotMark = useMemo(() => (ownMarket ? { source: slotMarkSource, price: quote?.bid ?? null, at: quote?.at ?? null, stale: quote == null || slotMarkStale } : NO_MARK),
     [ownMarket, slotMarkSource, slotMarkStale, quote]);
   // Jeden příkaz naráz (zámek přes ref — dvojklep nepošle druhý; nový operationId jen za nový pokus).
   // Zámek je JEDEN pro celý graf i desk (oponentura UI C7/C8 kolo 1): vstup, attach, × / BE / posun
@@ -293,7 +279,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     !trade ? 'Odesílání z telefonu tu není dostupné.'
       : trade.blockedReason ?? (resuming ? 'Čekám na živou cenu — nic se neodeslalo.' : market && !trade.marketSupported ? 'Worker zatím neumí Market.'
         : !quote || Date.now() - quote.at > PHONE_MARKET_QUOTE_MAX_AGE_MS ? liveQuoteStaleText(quote?.at ?? null, Date.now())
-          : !(quote.symbol ?? (market ? null : trade.frontContract)) ? (ownMarket ? 'Kontrakt není ověřený — nic se neodeslalo.' : 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.') : null)
+          : !(quote.symbol ?? (market ? null : trade.frontContract)) ? 'Kontrakt není ověřený — nic se neodeslalo.' : null)
   );
   // Lišta: Koupit / Prodat = holý Market hned (Filip 1. 11.), SL/TP se doplní z čáry; v pozici přikoupení.
   // Přehrávání: graf ukazuje historii — živý Market z lišty nikdy (N1, 3. 11.; lišta je navíc schovaná).
@@ -384,21 +370,21 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const registerBoxFollow = useLivePositionBoxFollow({ position: chartPosition, target: 'phone', events: slots.copyEvents });
   // Šipky plnění: jen dnešní den a jen plnění, která deník ještě nekreslí (stejné id plnění u brokera).
   const journalFillIds = useMemo(() => new Set(ctl.chart.chartTrades.flatMap(trade => trade.executionHistory?.fills.map(fill => String(fill.id)) ?? [])), [ctl.chart.chartTrades]);
-  // Kontrakt grafu: IBKR zdroj nese konkrétní měsíc; souvislá řada TV = front od brokera; jinak pozice.
+  // Kontrakt grafu dává zdroj trhu ve slotu (konkrétní měsíc).
   // Jiný měsíc (týden rollu) nebo neznámý kontrakt = šipky se nekreslí (ceny by seděly o spread vedle).
-  const chartContract = ownMarket ? marketSlot.contract : previewSymbolFromChartSource(ctl.chart.liveSource) ?? chartPosition.symbol ?? trade?.frontContract ?? null;
+  const chartContract = marketSlot?.contract ?? null;
   const shownFills = useMemo(() => (ctl.isToday && slots.fillsSymbol != null && slots.fillsSymbol === chartContract
     ? liveFillsNotInJournal(slots.fills ?? NO_FILLS, journalFillIds) : NO_FILLS), [ctl.isToday, slots.fills, slots.fillsSymbol, chartContract, journalFillIds]);
   // Pojistky utažení SL a BE jako PC (LiveTradingScreen.guardSummaryAt): bez ceny z P&L brokera
-  // čerstvá kotace IBKR téhož kontraktu (≤ 3 s). Jen blokuje, nic neautorizuje (INV-UI-04).
+  // čerstvá kotace služby téhož kontraktu (≤ 3 s). Jen blokuje, nic neautorizuje (INV-UI-04).
   const guardAt = useCallback((at: number) => (chartPosition.summary
     ? withIbkrTightenMark(chartPosition.summary, chartPosition.symbol ?? null,
-      slotMark ?? { source: independentTick?.source ?? null, price: independentTick?.price ?? null, at: independentTick?.at ?? null, stale: independentTick == null }, at)
-    : null), [chartPosition.summary, chartPosition.symbol, independentTick, slotMark]);
-  // Živé P&L jen do štítku (INV-UI-04); bez čerstvé ceny IBKR téhož kontraktu číslo brokera.
+      slotMark, at)
+    : null), [chartPosition.summary, chartPosition.symbol, slotMark]);
+  // Živé P&L jen do štítku (INV-UI-04); bez čerstvé kotace téhož kontraktu číslo brokera.
   const displayOpenPnl = useMemo(() => (chartPosition.summary ? liveDisplayOpenPnl(chartPosition.summary, chartPosition.symbol ?? null,
-    slotMark ?? { source: independentTick?.source ?? null, price: independentTick?.price ?? null, at: independentTick?.at ?? null, stale: independentTick == null }, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
-  [chartPosition.summary, chartPosition.symbol, independentTick, slotMark]);
+    slotMark, LIVE_PHONE_INSTRUMENT.pointValue, Date.now()) : null),
+  [chartPosition.summary, chartPosition.symbol, slotMark]);
   const shownOpenPnl = chartPosition.summary ? liveShownOpenPnl(chartPosition.summary, displayOpenPnl) : null;
   // „Zavřít / Zrušit“ lišty pozice: zrušení čekajícího vstupu jde sdíleným zámkem čar (jeden příkaz naráz).
   const barTradeRef = useRef(trade);
@@ -453,7 +439,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     if (previous == null || previous === entry) return;
     editDraft(draft => livePhoneMarketDraftFollow(draft, previous, entry, trade?.scaleIn, LIVE_PHONE_INSTRUMENT.tickSize));
   }, [quote, chartDraft?.side, chartDraft?.type]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Pracující příkazy (U5): jen zobrazení, jen když kontrakt čar sedí s kontraktem grafu (IBKR měsíc).
+  // Pracující příkazy (U5): jen zobrazení, jen když kontrakt čar sedí s kontraktem grafu.
   const working = useMemo(() => livePhoneWorkingView(slots.workingOrders, contract), [slots.workingOrders, contract]);
   // Správa pozice (U10): list s číslem a BE variantami — otevře ✎ na čáře nebo „SL/TP“ v liště pozice.
   const [manageLeg, setManageLeg] = useState<{ key: number; leg: 'stopLoss' | 'takeProfit' } | null>(null);
@@ -474,7 +460,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     setCards(current => [...current.slice(-5), { id: `local-${at}-${Math.random().toString(36).slice(2, 6)}`, at, tone, badge, title, line, pnl: null, accounts: 0, sticky: false, ms, ...extra }]);
   }, []);
   sayCardRef.current = (text: string, ok: boolean) => card(ok ? 'green' : 'amber', ok ? 'OK' : 'Pozor', text, '', 5_000);
-  // Upozornění na cenu: přihlášený = server (sdílené s PC, hlídá Mac worker z IBKR), jinak jen zařízení.
+  // Upozornění na cenu: úložiště alertů (serverové hlídání zmizelo s workerem 23. 11. 2026).
   const alertStore = usePriceAlertStore();
   const alertState = useSyncExternalStore(alertStore.subscribe, alertStore.getState, alertStore.getState);
   // Spuštění ze serveru (úroveň uživatele, ne cena trhu); slot datové vrstvy má přednost.
@@ -550,7 +536,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       : now && draft.type === 'stop' && stopIsTriggered(draft, now) ? 'stop je už za trhem (spustil by se hned)' : null;
     if (crossed) { refuse(`${crossed}, nic se neodeslalo.`); return; }
     setOrder(null);
-    // Limit/Stop bez IBKR: kontrakt podle brokera (worker ho ověří znovu); Market jen z IBKR.
+    // Limit/Stop bez čerstvé kotace: kontrakt podle brokera (služba ho ověří znovu); Market jen s kotací.
     void send(livePhoneSheetPayload(draft, LIVE_PHONE_INSTRUMENT, quote, trade?.frontContract ?? null));
   };
   const backToSheet = () => setOrder(current => (current ? { ...current, key: Date.now(), mode: 'sheet', template: false } : current));
@@ -704,7 +690,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {noPriceNotice && (
             <div aria-live="polite" style={{ position: 'absolute', top: 12, left: 0, right: 0, zIndex: 6, pointerEvents: 'none', display: 'flex', justifyContent: 'center' }}>
               <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: isDark ? '#1e293b' : '#fff', color: isDark ? '#e2e8f0' : '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,.25)' }}>
-                {ownMarket ? 'Živá cena teď není dostupná' : 'Živá kotace IBKR teď není dostupná'}
+                Živá cena teď není dostupná
               </span>
             </div>
           )}

@@ -1,9 +1,7 @@
 import React from 'react';
 import { ChevronDown, X } from 'lucide-react';
-import { LiveOpenPnlValue, LiveTvMark, TV_LIVE_PNL_TITLE } from '../LiveOpenPnlValue';
 import type { LiveChartPosition, LiveChartPositionAccountRow } from '../../lib/liveChartPosition';
 import { contractRoot, livePhoneGroupLine } from '../../lib/livePhoneTrade';
-import { liveChartPositionTvLegs } from '../../lib/tvLivePnl';
 import { formatLivePrice } from './LivePhoneTrade';
 import SheetGrip from './SheetGrip';
 
@@ -12,8 +10,7 @@ import SheetGrip from './SheetGrip';
  * v hlavičce místo názvu skupiny, klepnutí vysune list s účty. Jen zobrazení
  * stejného read modelu jako PC graf (`useLiveChartData`) — žádné tlačítko
  * odsud nic neodesílá (INV-UI-01/03). Neověřený stav řekne slovy, nikdy
- * „flat“ ani poslední známé číslo. Živý pohyb P&L s cenou trhu jen na
- * obrazovce (INV-UI-04).
+ * „flat“ ani poslední známé číslo.
  */
 
 const usd = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}$${Math.abs(value).toFixed(2)}`;
@@ -87,9 +84,7 @@ export function LivePhoneAccountsSheet({ position, onClose }: { position: LiveCh
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '12px 16px 0', fontSize: 12.5, color: 'var(--dj-muted)' }}>
               <span>Celkem otevřeno</span>
               <span className="dj-mono" style={{ fontSize: 15, fontWeight: 800 }}>
-                {summary.openPnl == null ? '—' : <LiveOpenPnlValue anchor={summary.openPnl} legs={liveChartPositionTvLegs(position)}>
-                  {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
-                </LiveOpenPnlValue>}
+                {summary.openPnl == null ? '—' : <span style={{ color: tone(summary.openPnl) }}>{usd(summary.openPnl)}</span>}
               </span>
             </div>
           )}
@@ -135,9 +130,7 @@ function AccountRow({ row, position }: { row: LiveChartPositionAccountRow; posit
           ? <span style={{ color: 'var(--dj-muted)', fontSize: 12.5 }}>čeká</span>
           : row.openPnl == null
             ? <span style={{ color: 'var(--dj-muted)' }}>—</span>
-            : <LiveOpenPnlValue anchor={row.openPnl} legs={liveChartPositionTvLegs(position, [row])}>
-              {(value, live) => <span title={live ? TV_LIVE_PNL_TITLE : undefined} style={{ color: tone(value) }}>{usd(value)}{live ? <LiveTvMark /> : null}</span>}
-            </LiveOpenPnlValue>}
+            : <span style={{ color: tone(row.openPnl) }}>{usd(row.openPnl)}</span>}
       </div>
     </div>
   );
