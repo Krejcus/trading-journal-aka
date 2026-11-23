@@ -123,7 +123,6 @@ it('actual logout invalidates the session before awaiting native cleanup and the
   expect(context.authEpochRef.current).toBe(2);
   expect(context.setSession).toHaveBeenCalledWith(null);
   // Stav kopírky odcházejícího uživatele zmizí hned, ne až po úklidu.
-  expect(context.clearCopierAgentStatusStore).toHaveBeenCalledOnce();
   expect(context.logoutInProgressRef.current).toBe(true);
   expect(context.supabase.auth.signOut).not.toHaveBeenCalled();
   cleanup.resolve(); await running;

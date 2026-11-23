@@ -160,49 +160,6 @@ describe('LIVE → Graf: pozice do panelu a grafu', () => {
   });
 });
 
-describe('LIVE → Graf: vypnutí a strážní pravidla', () => {
-  const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
-  const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
-  const overview = readFileSync('components/LiveCopyTradeOverview.tsx', 'utf8');
-
-  it('neověřené vypnutí má stejný text jako přehled LIVE', () => {
-    const text = /const UNVERIFIED_DISARM_TEXT = '([^']+)'/.exec(screen)?.[1];
-    expect(text).toBeTruthy();
-    expect(overview).toContain(text!);
-  });
-
-  it('graf vypíná jen přes safety cestu desku, stabilní funkcí přes ref, bez opakování', () => {
-    expect(desk).toMatch(/safetyCommandRef\.current = executeSafetyCommand;/);
-    expect(desk).toMatch(/await safetyCommandRef\.current\(\{ type: 'disarm' \}\);/);
-    expect(desk).toMatch(/const disarmFromChart = useCallback\(async \(\)[^]*?\}, \[\]\);/);
-      });
-
-  it('hláška z grafu na přehledu má čas a zmizí po zapnutí kopírky nebo po 10 minutách', () => {
-    expect(desk).toMatch(/armedNow \|\| freshnessNow - chartSafetyNotice\.at > 10 \* 60_000/);
-    expect(desk).toMatch(/agentStatusFresh && !agentStatusRestored && agentStatus\?\.controller\.armed === true/);
-    expect(desk).toMatch(/toLocaleTimeString\('cs-CZ'/);
-  });
-
-  it('dvojklik na Vypnout: zámek přes ref nezávislý na překreslení', () => {
-    expect(screen).toMatch(/if \(!onDisarm \|\| disarmBusy \|\| disarmInFlightRef\.current\) return;\n    disarmInFlightRef\.current = true;/);
-  });
-
-  it('karta pozice je jen zobrazení: klik jen rozbalí účty, žádné akce (správa je ve štítcích grafu)', () => {
-    const ticket = readFileSync('components/LiveOrderTicket.tsx', 'utf8');
-    const card = ticket.slice(ticket.indexOf('const PositionCard'), ticket.indexOf('/** Jak dlouho výsledek náhledu platí'));
-    expect(card).not.toMatch(/<button/);
-    // Jediná interakce karty je rozbalení účtů — nic neodesílá.
-    expect(card.match(/onClick=\{[^\n]*\}/g)).toEqual(['onClick={() => canExpand && setExpanded(value => !value)}']);
-    expect(card).not.toMatch(/onManage|onPlace|onPreview|onDraft/);
-    // Správa SL/TP/BE z panelu zmizela 31. 10.; U10 (3. 11.) ji vrací jako samostatnou sekci
-    // pod kartou — jen přes sdílený runner správy (jeden zámek s čarami grafu), nikdy z karty.
-    const manage = ticket.slice(ticket.indexOf('const ManageSection'), ticket.indexOf('interface Props {'));
-    expect(manage).not.toMatch(/onManageEntry|onPlaceEntry|onAttachBrackets/);
-    expect(ticket).toMatch(/const step = manageRunner\.request\(intent\);/);
-    expect(ticket.match(/onManageEntry\(/g)).toBeNull();
-  });
-});
-
 describe('LIVE → Graf: SL na BE a pojistka utažení (fáze 2c, jen UI)', () => {
   it('BE na tick ve směru ochrany, s epsilonem proti součtům fillů', () => {
     expect(breakEvenStop('long', 29029.3)).toBe(29029.25);

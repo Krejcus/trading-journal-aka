@@ -97,18 +97,6 @@ describe('obchodní lišta na telefonu', () => {
     expect(livePhoneTvLegs({ symbol: 'MNQZ6', summary: summary({ kind: 'pending' }) })).toBeNull();
   });
 
-  it('hlavička telefonu: P&L skupiny jen z read modelu LIVE pultu, bez vlastního čtení relaye', () => {
-    const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
-    expect(desk).toMatch(/enabled: \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart'/);
-    // Telefon dostane tutéž pozici jako PC (jen s poznámkou o skluzu fillu ke štítku SL).
-    expect(desk).toMatch(/position: chartPositionShown/);
-    expect(desk).toMatch(/const chartPositionShown = useMemo\(\(\) => \{\s*const summary = chartData\.position\.summary;/);
-    // Tempo čtení zrychluje jen PC graf, telefon ne.
-    expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
-    const accounts = readFileSync('components/day/LivePhoneAccounts.tsx', 'utf8');
-    expect(accounts).not.toMatch(/useDisplayWorkerStatus|useJournalLivePosition|flatten|close-position|cancel-order|manage-leader/i);
-  });
-
   it('fáze A: lišta ani LIVE graf na telefonu nemají cestu k brokerovi', () => {
     for (const file of ['components/day/LivePhoneTrade.tsx', 'components/day/LivePhoneChart.tsx', 'components/day/LivePhoneOrderSheet.tsx', 'components/day/LivePhoneAccounts.tsx', 'lib/livePhoneTrade.ts']) {
       const source = readFileSync(file, 'utf8');

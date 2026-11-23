@@ -57,16 +57,6 @@ describe('B1: brána odeslání ručního vstupu (telefon i PC)', () => {
     // Bez záznamů (starší worker, null) nic neblokuje navíc.
     expect(liveEntryBlockedReason({ ...ok, entries: undefined })).toBeNull();
   });
-
-  it('desk: telefon i PC berou tutéž bránu (žádná druhá, volnější cesta)', () => {
-    const desk = source('components/TradovateLiveDesk.tsx');
-    expect(desk).toMatch(/const entryBlockedReason = liveEntryBlockedReason\(\{\s*entrySupported: supportsCopierManualEntry\(agentStatus\),\s*fresh: agentStatusFresh && !agentStatusRestored,/);
-    expect(desk).toContain('blockedReason: entryBlockedReason,');
-    expect(desk).toContain('entryBlockedReason={entryBlockedReason}');
-    // Inline kopie brány v phoneTrade už není.
-    const tradeBlock = desk.slice(desk.indexOf('const phoneTrade = useMemo'), desk.indexOf('const phoneFills = useMemo'));
-    expect(tradeBlock).not.toMatch(/Stav kopírky se ověřuje|entries\.some/);
-  });
 });
 
 describe('B1: holý vstup a pozice leadera (U4)', () => {
@@ -78,23 +68,6 @@ describe('B1: holý vstup a pozice leadera (U4)', () => {
     expect(liveBareEntryRecord(raw)).toEqual({ operationId: 'entry:abc', status: 'acknowledged', createdAt: 5, symbol: SYM, side: 'Buy', quantity: 2, bare: true, open: true });
     expect(liveBareEntryRecord(null)).toBeNull();
     expect(liveBareEntryRecord(undefined)).toBeNull();
-  });
-
-  it('desk: holý vstup jen přes newestOpenBareEntry a jen v pohledu leadera skupiny workeru; attach jen s capability', () => {
-    const desk = source('components/TradovateLiveDesk.tsx');
-    expect(desk).toMatch(/const chartBareEntry = useMemo\(\(\) => \(chartLeaderBasis\s*\? liveBareEntryRecord\(newestOpenBareEntry\(agentStatus\?\.controller\.manualEntries, chartPositionSymbol\)\)\s*: null\)/);
-    // Ovládání po fillu se neschová (review Codexu): nabídky i z neověřené pozice, odeslání zastaví brána.
-    expect(desk).toMatch(/const chartManageSummary = chartData\.position\?\.summary \?\? null;/);
-    expect(desk).toMatch(/const chartGuard = useMemo\(\(\) => createLiveChartCommandGuard\(\{/);
-    expect(desk).toMatch(/livePhonePosition\(chartManageSummary, chartLeaderBasis, chartPositionSymbol, chartBareEntry\?\.operationId \?\? null\)/);
-    // PC: Přidat SL/TP = deskový attachBrackets, jen když worker inzeruje manual-entry-bare-v1.
-    expect(desk.match(/onAttachBrackets/g)).toHaveLength(1);
-    expect(desk).toContain('{...(supportsCopierManualEntryBare(agentStatus) && !supportsCopierManualOrderSingleLeg(agentStatus) ? { onAttachBrackets: attachBrackets } : {})}');
-    // Telefon: náhled = deskový previewLeaderEntry jen s capability ručního vstupu.
-    expect(desk.match(/preview: previewLeaderEntry/g)).toHaveLength(1);
-    expect(desk).toContain('...(supportsCopierManualEntry(agentStatus) ? { preview: previewLeaderEntry } : {}),');
-    // Inline kopie výběru holého vstupu zmizela (jediná logika je v lib/liveBareEntry).
-    expect(desk).not.toMatch(/newest\.bare === true/);
   });
 });
 
@@ -162,28 +135,6 @@ describe('B1: pracující příkazy pro graf (U5) — jen zobrazení', () => {
     expect(() => liveChartWorkingOrders(junk, { frontContract: SYM })).not.toThrow();
     expect(liveChartWorkingOrders({ verified: true } as never, {}).lines).toEqual([]);
   });
-
-  it('desk: čáry jdou jen do obálky grafu (PC prop, telefonní slot), nikdy do phoneTrade ani callbacků', () => {
-    const desk = source('components/TradovateLiveDesk.tsx');
-    const uses = desk.split('\n').filter(line => /\bchartWorkingOrders\b/.test(line)).map(line => line.trim());
-    expect(uses).toEqual([
-      'const chartWorkingOrders = useKeyedValue(chartWorkingWithIntents);',
-      'workingOrders={chartWorkingOrders}',
-      'workingOrders: chartWorkingOrders,',
-    ]);
-    expect(desk).toMatch(/pendingAdd: scaleInPendingAdd \? \{ price: scaleInPendingAdd\.price, orderType: scaleInPendingAdd\.orderType \} : null,/);
-    const tradeBlock = desk.slice(desk.indexOf('const phoneTrade = useMemo'), desk.indexOf('const phoneFills = useMemo'));
-    expect(tradeBlock).not.toMatch(/working|userId/i);
-    for (const name of ['previewLeaderEntry', 'placeLeaderEntry', 'manageLeaderEntry', 'attachBrackets', 'runStaticSafetyAction']) {
-      const start = desk.indexOf(`const ${name} = useCallback`);
-      expect(start, name).toBeGreaterThan(0);
-      expect(desk.slice(start, desk.indexOf('\n  }, [', start)), name).not.toMatch(/working|Working|userId/);
-    }
-    // Hook skládá podklad ze stejného čtení příkazů jako karta a z ověřené pozice.
-    const hook = source('hooks/useLiveChartData.ts');
-    expect(hook).toMatch(/const working = useMemo\(\(\) => liveChartWorkingSource\(\{\s*enabled: enabled && viewGroup != null,\s*accounts,\s*orders,/);
-    expect(hook).toMatch(/return \{ group: tradeGroup, groupKey, position, disarm, working \};/);
-  });
 });
 
 describe('B1: šipky plnění pro PC (U4)', () => {
@@ -219,19 +170,5 @@ describe('B1: obálka PC grafu propouští nové podklady a porovnává je', () 
     }
     expect(comparator).toMatch(/\(left\.workingOrders\?\.key \?\? 'none'\) === \(right\.workingOrders\?\.key \?\? 'none'\)/);
     expect(comparator).toMatch(/\(left\.liveFills\?\.key \?\? 'none'\) === \(right\.liveFills\?\.key \?\? 'none'\)/);
-  });
-
-  it('desk předá PC grafu nové podklady s bezpečnými výchozími hodnotami', () => {
-    const desk = source('components/TradovateLiveDesk.tsx');
-    const pc = desk.slice(desk.indexOf('<LiveTradingScreenSlot'), desk.indexOf('/>', desk.indexOf('entryScaleIn={')));
-    for (const prop of [
-      'entryBareSupported={supportsCopierManualEntryBare(agentStatus)}',
-      'entryBareEntry={chartBareEntry}',
-      'entryLeaderPosition={chartLeaderPosition}',
-      'manageLeaderAccountId={workerGroup?.leaderAccountId ?? null}',
-      'workingOrders={chartWorkingOrders}',
-      'liveFills={pcFills}',
-      'userId={userId}',
-    ]) expect(pc, prop).toContain(prop);
   });
 });

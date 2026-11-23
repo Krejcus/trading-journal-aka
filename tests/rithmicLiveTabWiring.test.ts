@@ -15,7 +15,7 @@ import { liveTicketLegsProblem } from '../lib/liveBareEntry';
 import { liveLineMoveBlockReason } from '../lib/liveChartOrderLines';
 import { LIVE_COMMAND_BUSY_TEXT } from '../hooks/liveCommandRuns';
 
-const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
+const desk = readFileSync('components/LiveDesk.tsx', 'utf8');
 const screen = readFileSync('components/LiveTradingScreen.tsx', 'utf8');
 const chart = readFileSync('components/RithmicLiveChart.tsx', 'utf8');
 const hook = readFileSync('hooks/useRithmicLocalTrading.ts', 'utf8');
@@ -24,29 +24,6 @@ const server = readFileSync('scripts/rithmic/devTradeServer.ts', 'utf8');
 const link = readFileSync('lib/rithmicLocalLink.ts', 'utf8');
 
 describe('Rithmic graf v desku LIVE', () => {
-  const branch = desk.slice(desk.indexOf('<ErrorBoundary name="RithmicLiveChart"'), desk.indexOf(') : rithmicPhoneChartAvailable && tab === \'chart\' && rithmicPhoneSlot ? ('));
-
-  it('dostupnost: jen když Tradovate graf neexistuje, a záložka Graf je v desku právě dvakrát', () => {
-    expect(desk).toMatch(/const rithmicChartAvailable = !chartAvailable && !phoneChartAvailable && !rithmicPhoneChartAvailable && !narrow && rithmicConfigured;/);
-    expect(desk).toMatch(/const \[rithmicConfigured\] = useState\(rithmicLocalAvailable\);/);
-    expect(desk.match(/id: 'chart' as const, label: 'Graf'/g)).toHaveLength(2);
-  });
-
-  it('čtení kopírky na Rithmic grafu nevisí (rychlý poll, push expozice, data grafu)', () => {
-    expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
-    expect(desk).toMatch(/enabled: \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart',/);
-    expect(desk.match(/rithmicChartAvailable/g)).toHaveLength(6);
-  });
-
-  it('větev nedostane zámek ani příkazy kopírky; má skutečný stav kopírky, OFF a hlášení pádu', () => {
-    expect(branch.length).toBeGreaterThan(200);
-    for (const forbidden of ['liveCommandLockRef', 'setChartReplayActive', 'placeLeaderEntry', 'manageLeaderEntry', 'previewLeaderEntry', 'closeBareLeader', 'workingOrders', 'liveFills'])
-      expect(branch).not.toContain(forbidden);
-    expect(branch).toContain('onCrash={noteChartCrash}');
-    expect(branch).toContain("onError={() => setChartCrash('outer')}");
-    expect(branch).toContain('status: agentStatus?.controller ?? null');
-    expect(branch).toContain('onDisarm={disarmFromChart}');
-  });
 
   it('komponenta nevyrábí stav kopírky a nepředává sdílený zámek', () => {
     expect(chart).not.toMatch(/armed:\s*true/);
@@ -437,30 +414,6 @@ describe('Rithmic graf na telefonu', () => {
   const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
   const wrapper = readFileSync('components/RithmicPhoneChart.tsx', 'utf8');
   const fullscreen = readFileSync('components/day/DayFullscreenChart.tsx', 'utf8');
-  const phoneBranch = desk.slice(desk.indexOf('<ErrorBoundary name="RithmicPhoneChart"'), desk.indexOf(') : phoneChartAvailable && tab === \'chart\' && phoneChart ? ('));
-
-  it('desk: větev pro úzký displej a nativní appku, nezávislá na vypínači grafu Tradovate', () => {
-    expect(desk).toMatch(/const rithmicPhoneChartAvailable = !chartAvailable && !phoneChartAvailable && \(rithmicConfigured \|\| rithmicPairingHere\) && \(narrow \|\| isNativeShell\(\)\) && Boolean\(rithmicPhoneSlot\);/);
-    // Slot bere přímo z props (vlastní zavřená proměnná), ne přes `LIVE_CHART_ENABLED ? phoneChartSlot : undefined`.
-    expect(desk).toMatch(/const rithmicPhoneSlot = phoneChartSlot;/);
-    expect(phoneBranch).toContain('phoneChart={rithmicPhoneSlot}');
-    expect(desk).toMatch(/\.\.\.\(rithmicChartAvailable \|\| rithmicPhoneChartAvailable \? \[\{ id: 'chart' as const, label: 'Graf'/);
-    expect(desk).toMatch(/if \(tab === 'chart' && !chartAvailable && !phoneChartAvailable && !rithmicChartAvailable && !rithmicPhoneChartAvailable\) setTab\('overview'\);/);
-    expect(desk).toMatch(/rithmicLocalAvailable\(\) && \(!rithmicPhoneLayoutNow\(\) \|\| Boolean\(rithmicPhoneSlot\)\)/);
-    expect(desk).toMatch(/\{\(phoneChartAvailable \|\| rithmicPhoneChartAvailable\) && tab !== 'chart' && \(/);
-  });
-
-  it('desk: větev nedostane zámek, příkazy ani data grafu kopírky; skutečný stav kopírky zůstává v hlavičce', () => {
-    expect(phoneBranch.length).toBeGreaterThan(200);
-    for (const forbidden of ['liveCommandLockRef', 'phoneTrade', 'placeLeaderEntry', 'manageLeaderEntry', 'previewLeaderEntry', 'closeBareLeader', 'attachBrackets', 'runStaticSafetyAction', 'chartWorkingOrders', 'phoneFills', 'chartPositionShown', 'chartLive'])
-      expect(phoneBranch).not.toContain(forbidden);
-    expect(phoneBranch).toContain('controller: agentStatus?.controller');
-    expect(phoneBranch).toContain('rememberLiveChartCrash(); noteChartCrash();');
-    // Čtení kopírky ani data grafu Tradovate se pro Rithmic graf nezapínají (viz i test výše).
-    expect(desk).not.toMatch(/enabled: \([^)]*rithmicPhoneChartAvailable/);
-    expect(desk).not.toMatch(/chartOpenRef\.current = \([^)]*rithmicPhoneChartAvailable/);
-    expect(desk).toMatch(/if \(!phoneChartAvailable \|\| !workerGroup\) return null;/);
-  });
 
   it('telefonní graf: se zdrojem ze slotu jdou svíčky, kotace i kontrakt ze slotu, ne z IBKR', () => {
     expect(phone).toMatch(/const marketSlot = slots\.market \?\? null;/);
@@ -529,14 +482,25 @@ describe('Rithmic graf na telefonu', () => {
   });
 });
 
-describe('záložka Kopírka (Rithmic, 22. 11.)', () => {
-  it('jen s propojenou službou, jen čtení skutečného účtu, bez akcí bez napojení', () => {
-    const desk = readFileSync(new URL('../components/TradovateLiveDesk.tsx', import.meta.url), 'utf8');
+describe('LIVE desk jen pro Rithmic (23. 11. 2026)', () => {
+  it('desk nemá žádný stav, čtení ani příkazy Tradovate kopírky', () => {
+    const code = desk.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
+    for (const forbidden of ['Tradovate', 'tradovate', 'agentStatus', 'liveCommandLockRef', 'workerGroup', 'useLiveChartData', 'copierRuntime', 'localCopierAgent'])
+      expect(code).not.toContain(forbidden);
+    expect(desk).toContain('copier={NO_LIVE_COPIER}');
+    expect(desk).toContain('disarm={null}');
+  });
+  it('záložky: Graf jen se službou (PC) nebo se službou či spárováním (telefon), Kopírka jen se službou', () => {
+    expect(desk).toMatch(/const phoneChartAvailable = phoneLayout && \(configured \|\| pairingHere\) && Boolean\(phoneChart\);/);
+    expect(desk).toMatch(/const pcChartAvailable = !phoneLayout && configured;/);
+    expect(desk).toMatch(/\.\.\.\(configured \? \[\{ id: 'copier' as const, label: 'Kopírka', icon: Network \}\] : \[\]\)/);
     const tab = readFileSync(new URL('../components/copier/RithmicCopierTab.tsx', import.meta.url), 'utf8');
-    expect(desk).toMatch(/\.\.\.\(rithmicConfigured \? \[\{ id: 'copier' as const, label: 'Kopírka', icon: Network \}\] : \[\]\)/);
-    expect(desk).toMatch(/if \(tab === 'copier' && !rithmicConfigured\) setTab\('overview'\);/);
     // Žádné zastavení, šablony, zavření ani doplnění bez napojení; zapnutí jen řekne, že se připravuje.
     expect(tab).toMatch(/const ACTIONS: CopierActions = \{ onArm: \(\) => \(\{ ok: false, gate: NOT_READY \}\), onDisarm: \(\) => undefined \};/);
     expect(tab).not.toMatch(/onKill|onFlatten|onClosePosition|onFixProtection|onTemplate/);
+  });
+  it('pád grafu se zapamatuje a ukáže chybu místo prázdné plochy', () => {
+    expect(desk).toContain('rememberLiveChartCrash(); noteChartCrash();');
+    expect(desk.match(/<LiveSlotFailure label="Rithmic graf" \/>/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

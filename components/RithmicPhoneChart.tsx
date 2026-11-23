@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import LiveAccountBar, { liveLimitLinePrices, rithmicAccountBarData, type LiveAccountBarData } from './LiveAccountBar';
 import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../services/liveChartAutomation';
-import type { LiveDeskPhoneChartSlots } from './TradovateLiveDesk';
+import type { LiveDeskPhoneChartSlots } from './LiveDesk';
 import { rithmicScreenInstrumentIssue } from './RithmicLiveChart';
 import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';

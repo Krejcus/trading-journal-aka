@@ -153,9 +153,9 @@ const entryMsOf = (trade: Trade) => {
   return Number.isFinite(at) ? at : trade.timestamp || Date.parse(trade.date);
 };
 
-/** Obchody, které do živého Labu patří: deník Tradovate, ne backtest, ne nevzaté. */
+/** Obchody, které do živého Labu patří: deník Tradovate, ne backtest. */
 export function labEligible(trade: Trade, backtestAccounts: ReadonlySet<string>): boolean {
-  return isEvidenceJournalTrade(trade) && !isRetiredJournalTrade(trade) && !trade.untaken
+  return isEvidenceJournalTrade(trade) && !isRetiredJournalTrade(trade)
     && !backtestAccounts.has(String(trade.accountId)) && Number.isFinite(Number(trade.pnl));
 }
 

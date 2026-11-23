@@ -40,7 +40,6 @@ describe('buildLabDecisions', () => {
       journal('a', { pnl: 10 }),
       { ...journal('legacy', { pnl: 99 }), copierTradeId: undefined, source: 'manual' } as Trade,
       journal('bt', { accountId: 'bt', pnl: 5 }),
-      journal('untaken', { pnl: 0, untaken: { orderId: '1' } as unknown as Trade['untaken'] }),
     ] });
     expect(decisions.map(d => d.leaderTradeId)).toEqual(['a']);
   });

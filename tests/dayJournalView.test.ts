@@ -20,9 +20,9 @@ const trade = (id: string, clock: string, pnl: number, extra: Partial<Trade> = {
 const NOTE = '3f2a8c1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b';
 
 describe('trades of the day', () => {
-  const trades = [trade('t1', '10:05', 300), trade('t2', '11:48', -100), trade('t3', '16:10', 200), trade('x', '23:59', 50, { date: '2026-10-14', entryTime: at('00:30', '2026-10-14') }), trade('u', '10:00', 0, { untaken: {} as never })];
+  const trades = [trade('t1', '10:05', 300), trade('t2', '11:48', -100), trade('t3', '16:10', 200), trade('x', '23:59', 50, { date: '2026-10-14', entryTime: at('00:30', '2026-10-14') })];
 
-  it('keeps Prague-day entries without untaken orders and splits them by session', () => {
+  it('keeps Prague-day entries and splits them by session', () => {
     const day = tradesForDay(trades, DAY);
     expect(day.map(item => item.id)).toEqual(['t1', 't2', 't3']);
     expect(tradesInScope(day, 'london', windows).map(item => item.id)).toEqual(['t1', 't2']);

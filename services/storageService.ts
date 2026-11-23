@@ -25,8 +25,6 @@ import { readTradeListPages } from './tradeListPages';
 import { isEvidenceJournalTrade, visibleJournalTrades } from '../lib/journalTradeFacts';
 import { journalReviewPatch } from '../lib/journalReviewPatch';
 import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
-import { readJournalSourceStatus } from './journalSourceStatus';
-import { loadTradovateJournalSourceStatus } from './tradovateOAuthConnection';
 import { perfDuration, perfMark } from '../lib/perfTrace';
 import { isValidTradeSyncMeta, syncOwnerTrades, type TradeSyncChanges, type TradeSyncMeta, type TradeSyncResult } from './tradeSyncEngine';
 
@@ -1459,14 +1457,6 @@ export const storageService = {
     const { data, error } = await supabase.from('trades').update({ is_public: true, share_notes: shareNotes })
       .eq('id', id).eq('user_id', userId).select('id').maybeSingle();
     if (error || !data) throw new Error('Nastavení veřejného sdílení nebylo uloženo. Zkuste to znovu.');
-  },
-
-  async getJournalSourceStatus(ids: readonly string[], signal?: AbortSignal) {
-    const version = authStateVersion;
-    const owner = await getUserId();
-    const stillOwner = async () => version === authStateVersion && await getUserId() === owner && version === authStateVersion;
-    if (!owner || !await stillOwner()) throw new Error('journal-source-session-changed');
-    return readJournalSourceStatus(loadTradovateJournalSourceStatus, owner, ids, stillOwner, signal);
   },
 
   async getJournalTradeDetails(ids: readonly string[], signal?: AbortSignal): Promise<Trade[]> {

@@ -1,8 +1,6 @@
-import { loadUntakenOrders, saveUntakenReview, type UntakenReview } from './services/untakenOrders';
 import { inReviewQueue, REVIEW_QUEUE_SINCE_MS } from './lib/tradeReviewFacts';
 import { coalescedJournalRead } from './services/coalescedJournalRead';
 import { filterHistoryTrades } from './lib/historyTradeFilter';
-import { journalSourceConnections } from './services/journalSourceStatus';
 import { aggregateHistoryTrades, tradeDetailMembers } from './lib/tradeHistoryPresentation';
 import { combinedTradeChanges } from './services/combinedTradePatch';
 import { discardBacktestAnalytics, enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
@@ -16,20 +14,16 @@ import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import { perfMark, perfMarkOnce } from './lib/perfTrace';
 import { isNativeBuild } from './utils/runtimeConfig';
-import { TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS } from './lib/tradovateIntentPrefetch';
-import { afterLivePriority, holdForLive, releaseLivePriority } from './lib/livePriority';
+import { afterLivePriority } from './lib/livePriority';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
-import { tradeNeedsEnrichment } from './services/tradovateImport';
+import { tradeNeedsEnrichment } from './services/importedTrades';
 import { storageService, getUserId, subscribeTradeSync } from './services/storageService';
 import { preloadDecodedImage } from './services/imageDecodeCache';
 import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { historyCardOrder } from './lib/historyCardOrder';
-import type { JournalLiveSource } from './hooks/useJournalLivePosition';
-import { workerCoverageOwners } from './lib/tradovateWorkerCoverage';
-import type { JournalLiveInterest } from './lib/journalLivePosition';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
   BacktestTradeOutboxError, discardBacktestTrades, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
@@ -47,17 +41,12 @@ import { reconcileDashboardRows } from './utils/dashboardRefresh';
 import { createDashboardRecovery } from './services/dashboardRecovery';
 import { createSessionRequestGuard } from './utils/sessionRequestGuard';
 import { clearNativeSessionSurfaces, waitForNativeSessionCleanup } from './services/nativeSessionCleanup';
-import { clearCopierAgentStatusStore } from './lib/copierAgentStatusStore';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
-import { useTradovateLiveData } from './components/useTradovateLiveData';
-import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
-import { syncJournalConnections, mergeImportedJournalTrades, journalProcessingRetryDelay, journalProcessingSignature, type JournalSyncReport } from './services/journalImportSync';
 import { mergeTradeAnalytics, type TradeAnalytics } from './lib/tradeAnalyticsMerge';
 import { mergeDeferredAvatar } from './lib/avatarImage';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
-import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 type DashboardModule = typeof import('./components/Dashboard');
 let loadedDashboard: DashboardModule | null = null;
@@ -105,8 +94,6 @@ const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewIn
 // LIVE je skládá do přehledu staticky: lazy komponenta by při prvním vykreslení
 // přehledu suspendovala celou stránku a React by ji držel prázdnou ≥ 300 ms.
 import LiveJournalHistory from './components/LiveJournalHistory';
-import JournalImportStatus from './components/JournalImportStatus';
-import JournalSourceStatus from './components/JournalSourceStatus';
 const HistoryPanelModal = React.lazy(() => import('./components/HistoryPanelModal'));
 const Settings = React.lazy(() => import('./components/Settings'));
 import type { SettingsTab } from './components/Settings';
@@ -120,21 +107,11 @@ const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspac
 const BacktestBlindReview = React.lazy(() => import('./components/BacktestBlindReview'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
-type LiveDeskModule = typeof import('./components/TradovateLiveDesk');
-let loadedLiveDesk: LiveDeskModule | null = null;
-const loadLiveDesk = () => import('./components/TradovateLiveDesk').then(module => {
-  loadedLiveDesk = module;
-  return module;
-});
-const LazyLiveDesk = React.lazy(loadLiveDesk);
+// LIVE jen přes Rithmic (23. 11. 2026): štíhlý desk, načtený až při otevření.
+const loadLiveDesk = () => import('./components/LiveDesk');
+const LiveDesk = React.lazy(loadLiveDesk);
 // LIVE → Graf na telefonu: graf dneška z deníku (těžký graf jen když je potřeba).
 const LazyLivePhoneChart = React.lazy(() => import('./components/day/LivePhoneChart'));
-/** Přednačtený LIVE se vykreslí hned, bez Suspense; jinak jako dřív přes lazy.
- * Volba platí po celou dobu připojení, jinak by změna typu LIVE remountovala. */
-const LiveDesk: React.FC<React.ComponentProps<LiveDeskModule['default']>> = props => {
-  const [Desk] = React.useState(() => loadedLiveDesk?.default ?? LazyLiveDesk);
-  return <Desk {...props} />;
-};
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -151,12 +128,8 @@ import { canAccess } from './utils/featureGating';
 import {
   appDeepLinkIntentFromSearch,
   consumeAppDeepLinkUrl,
-  consumeMacCompanionPairingUrl,
-  isMacCompanionPairingSearch,
-  MAC_COMPANION_PAIRING_SESSION_KEY,
   type AppDeepLinkIntent,
 } from './lib/macCompanionDeepLink';
-import type { TradovateLiveTab } from './lib/tradovateLiveTab';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader, { QuantumSpinner } from './components/QuantumLoader';
@@ -534,7 +507,6 @@ const App: React.FC = () => {
     logoutInProgressRef.current = true;
     authEpochRef.current += 1;
     sessionRef.current = null;
-    clearCopierAgentStatusStore();
     setSession(null); // Unmount producers before clearing their native surfaces.
     setLogoutBusy(true);
     setLogoutError(null);
@@ -625,13 +597,6 @@ const App: React.FC = () => {
     setIsLabExpLoaded(false);
     setTradeToast(null);
     setAiChatTrade(null);
-    setCopierImportReport(null);
-    setCopierImportError(false);
-    setCopierImportRunning(false);
-    copierImportAbortRef.current?.abort();
-    copierJournalLastSyncRef.current = 0;
-    journalVerifiedReadsRef.current = new Map();
-    copierJournalSyncBusyRef.current = false;
     setOfflineSnapshotAt(null);
     setSyncError(null);
     setAppError(null);
@@ -679,8 +644,7 @@ const App: React.FC = () => {
         if (sessionRef.current?.user.id !== activeSession.user.id) {
           authEpochRef.current += 1;
           // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
-          clearCopierAgentStatusStore();
-          if (sessionRef.current) beginUserSwitch();
+                if (sessionRef.current) beginUserSwitch();
         }
         sessionRef.current = activeSession;
         setSession(activeSession);
@@ -725,8 +689,7 @@ const App: React.FC = () => {
         if (sessionRef.current?.user.id !== activeSession.user.id) {
           authEpochRef.current += 1;
           // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
-          clearCopierAgentStatusStore();
-          if (sessionRef.current) beginUserSwitch();
+                if (sessionRef.current) beginUserSwitch();
         }
         sessionRef.current = activeSession;
         // Only trigger session update if it's actually different to avoid loops
@@ -743,8 +706,7 @@ const App: React.FC = () => {
       if (event === 'SIGNED_OUT') {
         const signedOutUserId = sessionRef.current?.user.id;
         sessionRef.current = null;
-        clearCopierAgentStatusStore();
-        authEpochRef.current += 1;
+            authEpochRef.current += 1;
         // Do not call async auth methods from inside Supabase's auth callback.
         if (signedOutUserId && !logoutInProgressRef.current) {
           void clearNativeSessionSurfaces(signedOutUserId);
@@ -853,11 +815,6 @@ const App: React.FC = () => {
 
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
-  const [copierImportReport, setCopierImportReport] = useState<JournalSyncReport | null>(null);
-  const [copierImportError, setCopierImportError] = useState(false);
-  const [copierImportRunning, setCopierImportRunning] = useState(false);
-  const journalProcessingStallRef = useRef<{ signature: string; rounds: number; completedAt?: number }>({ signature: '', rounds: 0 });
-  const copierImportAbortRef = useRef<AbortController | null>(null);
   const copierRowsRef = useRef(trades);
   copierRowsRef.current = trades;
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
@@ -866,82 +823,7 @@ const App: React.FC = () => {
   // True pokud currentUser obsahuje data z DB (ne jen DEFAULT_USER nebo JWT instant fallback).
   // Drží loader dokud role nedorazí z DB → eliminuje flash locked tabů pro ownery.
   const [isUserFromDb, setIsUserFromDb] = useState(false);
-  const copierJournalSyncBusyRef = useRef(false);
-  const copierJournalLastSyncRef = useRef(0);
-  const journalVerifiedReadsRef = useRef(new Map<string, string>());
 
-  // Nevzaté obchody (zrušené vstupy s bracketem) — samostatné karty v Hodnotit.
-  const [untakenTrades, setUntakenTrades] = useState<Trade[]>([]);
-  const refreshUntaken = useCallback(async () => {
-    const userId = session?.user?.id;
-    if (!userId) { setUntakenTrades([]); return; }
-    const rows = await loadUntakenOrders(REVIEW_QUEUE_SINCE_MS);
-    if (session?.user?.id === userId) setUntakenTrades(rows);
-  }, [session?.user?.id]);
-  useEffect(() => { if (isInitialLoadDone) void refreshUntaken(); }, [isInitialLoadDone, refreshUntaken]);
-  const handleSaveUntaken = useCallback(async (trade: Trade, review: UntakenReview | null) => {
-    const meta = trade.untaken;
-    if (!meta) return false;
-    const ok = await saveUntakenReview(meta, review);
-    if (ok) setUntakenTrades(list => list.map(item => item.id === trade.id
-      ? { ...item, needsReview: review == null, notes: review?.note ?? '', untaken: { ...meta, review } } : item));
-    return ok;
-  }, []);
-
-  const runCopierJournalSync = useCallback(async (force = false) => {
-    perfMark('journal:sync-call');
-    const userId = session?.user?.id;
-    if (!userId || copierJournalSyncBusyRef.current) return;
-    const isCurrentSession = captureSessionRequest(userId);
-    if (!isCurrentSession()) return;
-    // Živý deník (14. 10. 2026): server zpracuje nové obchody sám; klient se
-    // jen levně ptá, zda je nový stav (bez změny = jedno RPC).
-    // Odstup se měří od konce běhu: s tolerancí, jinak by každý druhý tik interval vypadl.
-    if (!force && Date.now() - copierJournalLastSyncRef.current < JOURNAL_SYNC_INTERVAL_MS - 15_000) return;
-    copierJournalSyncBusyRef.current = true;
-    const abort = new AbortController();
-    copierImportAbortRef.current = abort;
-    setCopierImportRunning(true);
-    const before = copierRowsRef.current;
-    try {
-      // Při studeném otevření LIVE deník počká, až se LIVE zobrazí.
-      await afterLivePriority();
-      if (!isCurrentSession() || abort.signal.aborted) return;
-      const result = await syncJournalConnections({ accounts, signal: abort.signal, verifiedReads: journalVerifiedReadsRef.current,
-        isCurrent: isCurrentSession, loadStatus: loadTradovateOAuthStatus,
-        importConnection: importTradovateJournalConnection, loadTrades: () => storageService.getTrades(),
-      });
-      if (!isCurrentSession() || abort.signal.aborted) return;
-      setCopierImportReport(result.report);
-      setCopierImportError(false);
-      if (result.trades) setTrades(current => isCurrentSession()
-        ? mergeImportedJournalTrades(current, before, result.trades!) : current);
-      void refreshUntaken();
-    } catch {
-      if (isCurrentSession() && !abort.signal.aborted) setCopierImportError(true);
-    } finally {
-      if (isCurrentSession() && copierImportAbortRef.current === abort) {
-        copierJournalLastSyncRef.current = Date.now();
-        copierJournalSyncBusyRef.current = false;
-        setCopierImportRunning(false);
-        copierImportAbortRef.current = null;
-      }
-    }
-  }, [accounts, session?.user?.id, captureSessionRequest, refreshUntaken]);
-
-  useEffect(() => {
-    copierJournalSyncBusyRef.current = false;
-    copierJournalLastSyncRef.current = 0;
-    journalVerifiedReadsRef.current = new Map();
-    journalProcessingStallRef.current = { signature: '', rounds: 0 };
-    setCopierImportReport(null); setCopierImportError(false); setCopierImportRunning(false);
-    return () => { copierImportAbortRef.current?.abort(); };
-  }, [session?.user?.id]);
-
-
-  // LIVE refresh is only a scheduling hint. Current group configuration is not
-  // evidence of historical membership and is deliberately not consumed.
-  const handleCopierJournalRefresh = useCallback(() => { void runCopierJournalSync(); }, [runCopierJournalSync]);
 
   // Safety timeout: pokud DB user load selže nebo trvá moc dlouho (>5s),
   // uvolnit loader s JWT user data. Lepší fallback než nekonečný spinner.
@@ -1302,7 +1184,6 @@ const App: React.FC = () => {
   // posuvný kontejner, takže bez resetu nová stránka zdědila pozici staré
   // (sjel jsi dolů na Dashboardu → Historie se otevřela dole).
   const pageScrollRef = useRef<HTMLDivElement>(null);
-  const tradovateLiveDataRef = useRef<unknown>(null);
   const previousScrollPageRef = useRef(activePage);
   useLayoutEffect(() => {
     if (previousScrollPageRef.current === activePage) return;
@@ -1328,114 +1209,13 @@ const App: React.FC = () => {
     const root = pageScrollRef.current;
     return root ? animatePageEnter(root) : undefined;
   }, [activePage, bootTransitionDone, dashboardMode]);
-  const [requestedLiveTab, setRequestedLiveTab] = useState<TradovateLiveTab | null>(null);
-  const [macCompanionPairingIntent, setMacCompanionPairingIntent] = useState(() => {
-    const requestedByUrl = isMacCompanionPairingSearch(window.location.search);
-    let requestedByLoginRoundTrip = false;
-    try {
-      requestedByLoginRoundTrip = sessionStorage.getItem(MAC_COMPANION_PAIRING_SESSION_KEY) === 'pending';
-      if (requestedByUrl) sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending');
-    } catch { /* sessionStorage unavailable — URL still works */ }
-    return requestedByUrl || requestedByLoginRoundTrip;
-  });
-  useEffect(() => { perfMark(`nav:${activePage}`); }, [activePage]);
-  // Studené otevření LIVE (ještě bez dat): těžké čtení na pozadí počká, než
-  // se LIVE zobrazí (uvolní TradovateLiveDesk), nejdéle 6 s. Odchod z LIVE
-  // přednost hned ukončí.
-  useEffect(() => {
-    if (activePage !== 'live') return;
-    if (!tradovateLiveDataRef.current) holdForLive();
-    return () => releaseLivePriority();
-  }, [activePage]);
-  // Deník dneška s živou pozicí: vlastní úsporné tempo čtení z brokera
-  // (ne plný režim LIVE), jen když se dívá; pozice dodá heartbeat workera.
-  const [journalLiveInterest, setJournalLiveInterest] = useState<JournalLiveInterest>('off');
-  const tradovateLiveEnabled = activePage === 'live'
-    || (activePage === 'accounts' && dashboardMode !== 'backtesting');
-  const tradovateLive = useTradovateLiveData(
-    isUserFromDb && currentUser.id !== 'default_user' ? currentUser.id : '',
-    {
-      accounts: isInitialLoadDone ? accounts : null,
-      onAccountsChanged: setAccounts,
-    },
-    tradovateLiveEnabled,
-    activePage === 'journal' && dashboardMode !== 'backtesting' ? journalLiveInterest : 'off',
-  );
-  const journalLiveUserId = isUserFromDb && currentUser.id !== 'default_user' ? currentUser.id : '';
-  const journalLiveSource = useMemo<JournalLiveSource | null>(() => (journalLiveUserId ? {
-    userId: journalLiveUserId,
-    data: tradovateLive.data,
-    profiles: tradovateLive.profiles,
-    connectionIds: tradovateLive.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
-    coverageOwners: workerCoverageOwners(tradovateLive.connectionData),
-    setInterest: setJournalLiveInterest,
-  } : null), [journalLiveUserId, tradovateLive.data, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
-  tradovateLiveDataRef.current = tradovateLive.data;
-  const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
-  useEffect(() => {
-    if (!isInitialLoadDone || !session?.user?.id || !hasJournalConnection) return;
-    const refresh = () => { if (document.visibilityState === 'visible') void runCopierJournalSync(); };
-    refresh();
-    const timer = window.setInterval(refresh, JOURNAL_SYNC_INTERVAL_MS);
-    window.addEventListener('online', refresh);
-    document.addEventListener('visibilitychange', refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', refresh); };
-  }, [hasJournalConnection, isInitialLoadDone, runCopierJournalSync, session?.user?.id]);
-  // Continue durable input preparation without waiting for the periodic refresh.
-  // A failed request stops this chain; reconnect/visibility or manual retry can resume it.
-  useEffect(() => {
-    if (!isInitialLoadDone || !session?.user?.id || copierImportRunning || copierImportError
-      || !copierImportReport?.connections.some(row => row.state === 'processing')) {
-      if (!copierImportRunning) journalProcessingStallRef.current = { signature: '', rounds: 0 };
-      return;
-    }
-    // Postup = rychlé navázání; stání na místě (zámek jiného importéra, 409) odstup prodlužuje.
-    const signature = journalProcessingSignature(copierImportReport);
-    const stall = journalProcessingStallRef.current;
-    if (stall.completedAt !== copierImportReport.completedAt) {
-      journalProcessingStallRef.current = { signature, completedAt: copierImportReport.completedAt,
-        rounds: stall.signature === signature ? stall.rounds + 1 : 0 };
-    }
-    const delay = journalProcessingRetryDelay(journalProcessingStallRef.current.rounds);
-    let timer: number | undefined;
-    const schedule = () => {
-      window.clearTimeout(timer);
-      if (document.visibilityState !== 'visible' || !navigator.onLine) return;
-      timer = window.setTimeout(() => { void runCopierJournalSync(true); }, delay);
-    };
-    schedule();
-    window.addEventListener('online', schedule);
-    document.addEventListener('visibilitychange', schedule);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener('online', schedule);
-      document.removeEventListener('visibilitychange', schedule);
-    };
-  }, [isInitialLoadDone, session?.user?.id, copierImportRunning, copierImportError, copierImportReport, runCopierJournalSync]);
-  const [liveIntentPending, setLiveIntentPending] = useState(false);
-  const prefetchLiveData = tradovateLive.prefetch;
-  const prepareLiveNavigation = useCallback((options?: { speculative?: boolean }) => {
-    perfMark(options?.speculative ? 'live:prepare-menu' : 'live:prepare');
-    if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
+  // Najetí na LIVE v menu jen přednačte kód desku; data si Rithmic graf čte sám z místní služby.
+  const prepareLiveNavigation = useCallback((_options?: { speculative?: boolean }) => {
+    perfMark('live:prepare');
+    if (activePage === 'live' || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
-    prefetchLiveData(options?.speculative ? TRADOVATE_MENU_INTENT_PREFETCH_TTL_MS : undefined);
-    // Otevření menu Více ještě není volba LIVE: neodkládat kvůli němu čtení
-    // ostatních stránek.
-    if (!tradovateLive.data && !options?.speculative) setLiveIntentPending(true);
-  }, [currentUser.role, prefetchLiveData, tradovateLive.data, tradovateLiveEnabled]);
-  useEffect(() => {
-    if (!liveIntentPending) return;
-    const timeout = window.setTimeout(() => setLiveIntentPending(false), 3_000);
-    return () => window.clearTimeout(timeout);
-  }, [liveIntentPending]);
-  const deferSecondaryReads = activePage === 'live' || liveIntentPending;
-
-  const oauthAccountLiveStates = useMemo(() => buildOAuthAccountLiveStates({
-    accounts,
-    status: tradovateLive.status,
-    connectionData: tradovateLive.connectionData,
-    profiles: tradovateLive.profiles,
-  }), [accounts, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
+  }, [activePage, currentUser.role]);
+  const deferSecondaryReads = activePage === 'live';
 
   /**
    * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
@@ -1461,11 +1241,6 @@ const App: React.FC = () => {
       }
       const nextDeepLink = appDeepLinkIntentFromSearch(url.search);
       if (nextDeepLink) setPendingDeepLink(nextDeepLink);
-
-      if (isMacCompanionPairingSearch(url.search)) {
-        try { sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending'); } catch { /* no-op */ }
-        setMacCompanionPairingIntent(true);
-      }
     };
 
     const captureCurrentIntent = () => captureIntent();
@@ -1499,9 +1274,6 @@ const App: React.FC = () => {
 
     if (canAccess(pendingDeepLink.page, currentUser.role)) {
       setActivePage(pendingDeepLink.page);
-      if (pendingDeepLink.page === 'live' && pendingDeepLink.tab) {
-        setRequestedLiveTab(pendingDeepLink.tab);
-      }
     } else {
       setActivePage('dashboard');
     }
@@ -1510,23 +1282,6 @@ const App: React.FC = () => {
     window.history.replaceState(null, '', consumeAppDeepLinkUrl(window.location.href));
   }, [currentUser.role, isUserFromDb, pendingDeepLink, session]);
 
-  // Wait for the authoritative DB role. A temporary cached `friend` must not
-  // consume the intent and strand the owner on Dashboard.
-  useEffect(() => {
-    if (!macCompanionPairingIntent || !session || !isUserFromDb) return;
-    if (!canAccess('live', currentUser.role)) return;
-    setActivePage('live');
-  }, [currentUser.role, isUserFromDb, macCompanionPairingIntent, session]);
-
-  const handleMacCompanionPairingIntentHandled = useCallback(() => {
-    setMacCompanionPairingIntent(false);
-    try { sessionStorage.removeItem(MAC_COMPANION_PAIRING_SESSION_KEY); } catch { /* no-op */ }
-    window.history.replaceState(null, '', consumeMacCompanionPairingUrl(window.location.href));
-  }, []);
-
-  const handleRequestedLiveTabHandled = useCallback(() => {
-    setRequestedLiveTab(null);
-  }, []);
 
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
   // přes přímou state mutaci nebo router redirect → přesměrovat na dashboard.
@@ -1580,13 +1335,7 @@ const App: React.FC = () => {
           }
           // `live:overview` (rizikové notifikace): LIVE rovnou na přehledu s nouzovou
           // lištou, ne na telefonním grafu (INV-UI-02).
-          if (page === LIVE_OVERVIEW_ROUTE) {
-            setRequestedLiveTab('overview');
-            nativeActions.current.navigate('live');
-            return;
-          }
-          if (page === LIVE_CHART_ROUTE) {
-            setRequestedLiveTab('chart');
+          if (page === LIVE_OVERVIEW_ROUTE || page === LIVE_CHART_ROUTE) {
             nativeActions.current.navigate('live');
             return;
           }
@@ -3432,10 +3181,6 @@ const App: React.FC = () => {
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
   // Podklady historie / archiv neúplných záznamů — otevírané z menu ⋯ v Historii.
   const [historyPanel, setHistoryPanel] = useState<'sources' | 'inbox' | null>(null);
-  const historySourceConnections = useMemo(
-    () => journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId)),
-    [accounts, archivedAccounts, copierImportReport],
-  );
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
@@ -3713,11 +3458,8 @@ const App: React.FC = () => {
 
   // Fronta hodnocení: obchody z Tradovate „k revizi“ od tlusté čáry (1. 10.),
   // kopírované skupiny jako jeden obchod (hodnocení se propíše na všechny účty).
-  const reviewQueue = useMemo(() => [
-    ...aggregateHistoryTrades(trades).filter(inReviewQueue),
-    ...untakenTrades.filter(trade => trade.needsReview === true),
-  ], [trades, untakenTrades]);
-  const reviewTrades = useMemo(() => untakenTrades.length ? [...trades, ...untakenTrades] : trades, [trades, untakenTrades]);
+  const reviewQueue = useMemo(() => aggregateHistoryTrades(trades).filter(inReviewQueue), [trades]);
+  const reviewTrades = trades;
   useEffect(() => {
     if (inNativeShell) reportNativeShellReviewCount(reviewQueue.length);
   }, [inNativeShell, reviewQueue.length]);
@@ -4734,30 +4476,20 @@ const App: React.FC = () => {
 
                   {/* Bez obchodů nemá Historie lištu s menu ⋯ — stav načtení, podklady a archiv
                       pak zůstávají vidět přímo na stránce (vysvětlují, proč je prázdná). */}
-                  {activePage === 'history' && dashboardMode !== 'backtesting' && trades.length === 0 && (
-                    <>
-                    <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
-                      onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
-                    <JournalSourceStatus key={currentUser.id} connections={historySourceConnections} />
-                    </>
-                  )}
-
                   {activePage === 'history' && historyPanel && (
-                    <HistoryPanelModal title={historyPanel === 'sources' ? 'Podklady historie' : 'Neúplné záznamy a původní poznámky'} onClose={() => setHistoryPanel(null)}>
-                      {historyPanel === 'sources'
-                        ? <JournalSourceStatus key={currentUser.id} connections={historySourceConnections} defaultOpen />
-                        : <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} defaultOpen />}
+                    <HistoryPanelModal title="Neúplné záznamy a původní poznámky" onClose={() => setHistoryPanel(null)}>
+                      <JournalReviewInbox key={currentUser.id} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} defaultOpen />
                     </HistoryPanelModal>
                   )}
 
                   {activePage === 'history' && (
                     <>
-                    {dashboardMode !== 'backtesting' && trades.length === 0 && <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} />}
+                    {dashboardMode !== 'backtesting' && trades.length === 0 && <JournalReviewInbox key={currentUser.id} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} />}
                     {
                     trades.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
                         <div className="w-full max-w-md h-64">
-                          <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">Zatím tu nejsou žádné obchody. Obchody z připojeného Tradovate se doplní automaticky.</div>
+                          <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">Zatím tu nejsou žádné obchody. Přidej obchod ručně nebo importem.</div>
                         </div>
                       </div>
                     ) : (
@@ -4769,12 +4501,7 @@ const App: React.FC = () => {
                         onAttachScreenshot={handleAttachTradeScreenshot}
                         onSaveChartNotes={handleSaveChartNotes}
                         onOpenReview={(trade) => openReview({ tradeId: String(trade.id) })}
-                        toolbarStatus={dashboardMode !== 'backtesting' ? (
-                          <JournalImportStatus compact report={copierImportReport} running={copierImportRunning} error={copierImportError}
-                            onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
-                        ) : undefined}
                         menuItems={dashboardMode !== 'backtesting' ? [
-                          ...(historySourceConnections.length ? [{ id: 'sources', label: 'Podklady historie', icon: Database, onSelect: () => setHistoryPanel('sources') }] : []),
                           { id: 'inbox', label: 'Neúplné záznamy', icon: FileText, onSelect: () => setHistoryPanel('inbox') },
                         ] : undefined}
                         onClear={handleClearTrades}
@@ -4874,7 +4601,6 @@ const App: React.FC = () => {
                       onOpenCoach={() => setActivePage('ai')}
                       onAskCoach={prompt => { setAiActiveConvId(undefined); setAiInitialPrompt(prompt); setActivePage('ai'); }}
                       immersive={journalImmersive}
-                      liveSource={journalLiveSource}
                     />
                   )}
 
@@ -4925,10 +4651,6 @@ const App: React.FC = () => {
                         // Merge zpět Backtest účty, ať je AccountsManager nesmaže.
                         onUpdate={(next) => updateAccountsLocally([...next, ...accounts.filter(isBacktestAccount)])}
                         onDelete={handleDeleteAccount}
-                        oauthLiveStates={oauthAccountLiveStates}
-                        tradovateProfiles={tradovateLive.profiles}
-                        tradovateConnectionData={tradovateLive.connectionData}
-                        onTradovateProfilesChanged={tradovateLive.setProfiles}
                         theme={theme}
                         trades={trades}
                         onUpdateTrades={handleUpdateTrades}
@@ -4968,30 +4690,11 @@ const App: React.FC = () => {
                       uživatel, LIVE nevykreslujeme — stav kopírky A nesmí být vidět
                       pod session B ani na okamžik. */}
                   {activePage === 'live' && session?.user.id === currentUser.id && (
+                    <React.Suspense fallback={null}>
                     <LiveDesk
                       key={currentUser.id}
                       userId={currentUser.id}
-                      cardOwner={{ name: currentUser.name, avatar: currentUser.avatar }}
                       theme={theme}
-                      live={tradovateLive}
-                      onCopierJournalRefresh={handleCopierJournalRefresh}
-                      journalHistory={<LiveJournalHistory trades={baseFilteredTrades} accounts={allAccountsWithArchived}
-                        mode={viewMode} onMode={setViewMode} onSelect={setAiChatTrade} onHistory={() => setActivePage('history')} />}
-                      /* Stav podkladů historie je na LIVE doplňková informace, ne to
-                         první, co chceš vidět — proto až za obsahem a až s daty
-                         (pod kostrou by se ukázal a pak skočil dolů). Na Historii
-                         zůstává nahoře, tam se váže přímo k obsahu stránky. */
-                      journalStatus={dashboardMode !== 'backtesting' ? (
-                        <div className="mx-auto mt-4 max-w-[1500px]">
-                          <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
-                            onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
-                          <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
-                        </div>
-                      ) : null}
-                      requestedTab={requestedLiveTab}
-                      onRequestedTabHandled={handleRequestedLiveTabHandled}
-                      macCompanionPairingIntent={macCompanionPairingIntent}
-                      onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
                       phoneChart={slots => (
                         <React.Suspense fallback={null}>
                           <LazyLivePhoneChart trades={journalDayTrades} allTrades={trades} sessions={activeSessions}
@@ -4999,6 +4702,7 @@ const App: React.FC = () => {
                         </React.Suspense>
                       )}
                     />
+                    </React.Suspense>
                   )}
 
                   {activePage === 'settings' && (
@@ -5094,7 +4798,6 @@ const App: React.FC = () => {
             initialTradeId={review.tradeId}
             initialNote={review.note}
             onUpdateTrade={handleUpdateTrade}
-            onSaveUntaken={handleSaveUntaken}
             onSaveChartNotes={handleSaveChartNotes}
             onAttachScreenshot={handleAttachTradeScreenshot}
             onDirtyChange={handleReviewDirty}

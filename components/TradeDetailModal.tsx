@@ -7,7 +7,7 @@ import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import { formatHoldDuration } from '../lib/holdDuration';
 import { tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
-import { pointValueFor } from '../services/tradovateImport';
+import { pointValueFor } from '../services/importedTrades';
 import { motion } from 'framer-motion';
 import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,

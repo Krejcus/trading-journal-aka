@@ -289,8 +289,6 @@ export interface Trade {
   pnlEstimated?: boolean;
   /** Broker evidence for this account only; combined cards select an individual source. */
   executionHistory?: import('./lib/tradeExecutionHistory').TradeExecutionHistory;
-  /** Nevzatý obchod (zrušený vstup s bracketem) — jen v Hodnotit, mimo statistiky. */
-  untaken?: import('./services/untakenOrders').UntakenMeta;
   /** Ruční význam setupu. Automatický přepočet jej nesmí měnit. */
   setupType?: 'reaction' | 'break' | 'unclear';
   tags?: string[];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { labHeldValueUsd, labManagement, labSetups, labTime, labUntaken, type LabUntakenItem } from '../lib/labSections';
+import { labHeldValueUsd, labManagement, labSetups, labTime } from '../lib/labSections';
 import type { LabDecision } from '../lib/labDataset';
 import type { LabExcursion } from '../lib/labExcursion';
 
@@ -42,23 +42,6 @@ describe('labManagement', () => {
     const summary = labManagement([naked, decision({ pnlUsd: -40 })], new Map());
     expect(summary.noStop).toMatchObject({ totalUsd: -300, avgLossUsd: -300, avgLossWithStopUsd: -40 });
     expect(labHeldValueUsd(naked, undefined)).toBeNull();
-  });
-});
-
-describe('labUntaken', () => {
-  const item = (id: string, minutes: number, outcome: LabUntakenItem['outcome'], reason: string | null, qty = 5): LabUntakenItem => ({
-    id, pointValue: 2, reason, outcome,
-    order: { orderId: id, side: 'Sell', type: 'Limit', quantity: qty, placedAt: 0, legs: [{ at: 0, price: 30900 }], end: { kind: 'cancel', at: minutes * 60_000 } },
-  });
-  it('sums what cancelling cost and saved, by how long the order waited and by reason', () => {
-    const summary = labUntaken([
-      item('a', 9.7, { kind: 'fill', fillAt: 0, price: 30900, result: 'tp', resultAt: 1, exitPrice: 30761.25, points: 138.75 }, 'Zrušil jsem předčasně'),
-      item('b', 0.9, { kind: 'fill', fillAt: 0, price: 30842.75, result: 'sl', resultAt: 1, exitPrice: 30879.5, points: -36.75 }, 'Setup přestal platit', 1),
-      item('c', 15, { kind: 'nofill', closestAt: 0, closestPrice: 30890, missBy: 10 }, 'Zrušil jsem předčasně'),
-    ]);
-    expect(summary).toMatchObject({ count: 3, missed: 1387.5, saved: 73.5, tp: 1, sl: 1, nofill: 1, correct: 2 });
-    expect(summary.buckets.map(b => [b.label, b.items.length])).toEqual([['do 2 min', 1], ['2–10 min', 1], ['nad 10 min', 1]]);
-    expect(summary.reasons.find(r => r.reason === 'Zrušil jsem předčasně')).toMatchObject({ hits: 1, judged: 2 });
   });
 });
 

@@ -8,7 +8,7 @@ const app = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8');
 // nechalo data A na obrazovce pod session B, dokud nedoběhl load() pro B.
 describe('přepnutí uživatele A→B bez odhlášení', () => {
   it('obě cesty auth (getSession i onAuthStateChange) zahodí data A', () => {
-    const switches = app.match(/clearCopierAgentStatusStore\(\);\n\s*if \(sessionRef\.current\) beginUserSwitch\(\);/g) ?? [];
+    const switches = app.match(/\n\s*if \(sessionRef\.current\) beginUserSwitch\(\);/g) ?? [];
     expect(switches).toHaveLength(2);
   });
 
@@ -21,7 +21,7 @@ describe('přepnutí uživatele A→B bez odhlášení', () => {
     // Odhlášení používá týž reset (jeden seznam, nic se nerozejde).
     expect(app).toMatch(/if \(event === 'SIGNED_OUT'\) \{[\s\S]*?resetUserScopedState\(\);[\s\S]*?clearAppStorage\(\);/);
     const reset = app.slice(app.indexOf('const resetUserScopedState'), app.indexOf('const beginUserSwitch'));
-    for (const step of ['setTrades([])', 'setAccounts([])', 'isAccountsDirty.current = false', 'isFetchingRef.current = false', 'copierImportAbortRef.current?.abort()']) {
+    for (const step of ['setTrades([])', 'setAccounts([])', 'isAccountsDirty.current = false', 'isFetchingRef.current = false']) {
       expect(reset).toContain(step);
     }
   });

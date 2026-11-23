@@ -79,50 +79,11 @@ async function run() {
 }
 
 describe('cron: výstraha na zaseknutou frontu relaye', () => {
-  it('čte jen nevyřízené v2/24h příkazy živých zařízení starší než 30 s a pošle výstrahu', async () => {
-    expect(await run()).toBe(200);
-    expect(state.relayQueries).toHaveLength(1);
-    const calls = Object.fromEntries(state.relayQueries[0].map(([method, args]) => [method === 'in' ? `in:${args[0]}` : method, args]));
-    expect(calls['in:device_id']).toEqual(['device_id', ['live']]);
-    expect(calls['in:status']).toEqual(['status', ['pending', 'claimed']]);
-    expect(calls.lt).toEqual(['created_at', iso(30_000)]);
-    expect(calls.or).toEqual([`status.eq.pending,and(delivery_id.not.is.null,claimed_at.gte.${iso(24 * 60 * 60_000)})`]);
-    expect(state.jobs.map(job => job.payload.title)).toContain('Copier: BRZDA NEPOTVRZENA');
-    expect(state.markers).toContainEqual(expect.objectContaining({ deviceId: 'live', incidentKey: 'relay-stuck', active: true, detail: `b:${CMD}` }));
-  });
-
-  it('ohlášenou brzdu dohledá podle id a její expiraci ohlásí jako poplach', async () => {
-    state.tables.copier_alert_state.push({ device_id: 'live', user_id: 'user', incident_key: 'relay-stuck', active: true, detail: `b:${CMD}` });
-    state.relayRows = [];
-    state.tables.tradovate_copier_commands[0] = { ...state.tables.tradovate_copier_commands[0], status: 'expired', error: 'command-expired' };
-    expect(await run()).toBe(200);
-    expect(state.relayQueries).toHaveLength(2);
-    expect(state.relayQueries[1]).toContainEqual(['in', ['id', [CMD]]]);
-    expect(state.jobs.map(job => job.payload.title)).toContain('Copier: BRZDA NEPROVEDENA');
-    expect(state.markers).toContainEqual(expect.objectContaining({ incidentKey: 'relay-stuck', active: false }));
-  });
 
   it('plný limit řádků = neznámo: výstraha se neuzavře', async () => {
     state.tables.copier_alert_state.push({ device_id: 'live', user_id: 'user', incident_key: 'relay-stuck', active: true, detail: `b:${CMD}` });
     state.relayRows = Array.from({ length: 500 }, (_, index) => ({ ...state.tables.tradovate_copier_commands[0], device_id: 'other', id: `x-${index}` }));
     expect(await run()).toBe(200);
-    expect(state.markers.filter(marker => marker.incidentKey === 'relay-stuck')).toHaveLength(0);
-  });
-
-  it('chyba čtení fronty nic neotevře ani neuzavře a ostatní watchdog běží dál', async () => {
-    state.failRelayRead = true;
-    state.tables.copier_alert_state.push({ device_id: 'live', user_id: 'user', incident_key: 'relay-stuck', active: true, detail: `b:${CMD}` });
-    state.tables.tradovate_copier_device_runtime[0].status = { controller: { ...workerStatus.controller, killSwitch: true } };
-    expect(await run()).toBe(200);
-    expect(state.markers.filter(marker => marker.incidentKey === 'relay-stuck')).toHaveLength(0);
-    expect(state.jobs.map(job => job.payload.title)).toContain('Copier: KILL SWITCH');
-  });
-
-  it('výjimka při čtení fronty neshodí ostatní incidenty', async () => {
-    state.throwRelayRead = true;
-    state.tables.tradovate_copier_device_runtime[0].status = { controller: { ...workerStatus.controller, killSwitch: true } };
-    expect(await run()).toBe(200);
-    expect(state.jobs.map(job => job.payload.title)).toContain('Copier: KILL SWITCH');
     expect(state.markers.filter(marker => marker.incidentKey === 'relay-stuck')).toHaveLength(0);
   });
 

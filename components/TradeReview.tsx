@@ -1,7 +1,4 @@
 import EntryOrderDetail from './EntryOrderDetail';
-import { entryOrderOutcomeCard } from '../services/journalEntryOrdersPrimitive';
-import type { EntryOrderOutcome } from '../lib/entryOrderOutcome';
-import { UNTAKEN_REASONS, untakenMonthSummary, type UntakenReview } from '../services/untakenOrders';
 import {
   ENTRY_ORDER_FOCUS_EVENT, ENTRY_ORDER_HOVER_EVENT, ENTRY_ORDER_SELECT_EVENT, emitEntryOrder,
   type EntryOrderFocusDetail, type EntryOrderHoverDetail, type EntryOrderSelectDetail,
@@ -34,7 +31,7 @@ import { FIRM_LOGOS, firmColor, firmInitials, firmLabel, firmOf } from '../utils
  */
 export default function TradeReview({
   queue, allTrades, accounts, isDark, emotions, htfOptions, ltfOptions, mistakeOptions,
-  initialTradeId, initialNote, onUpdateTrade, onSaveUntaken, onSaveChartNotes, onAttachScreenshot, onDirtyChange, onClose,
+  initialTradeId, initialNote, onUpdateTrade, onSaveChartNotes, onAttachScreenshot, onDirtyChange, onClose,
 }: {
   queue: readonly Trade[];
   allTrades: readonly Trade[];
@@ -47,8 +44,6 @@ export default function TradeReview({
   initialTradeId?: string;
   initialNote?: string;
   onUpdateTrade: (tradeId: string | number, updates: Partial<Trade>) => unknown;
-  /** Nevzatý obchod (zrušený vstup): ukládá se jen důvod zrušení a poznámka. */
-  onSaveUntaken?: (trade: Trade, review: UntakenReview | null) => Promise<boolean>;
   onSaveChartNotes?: (tradeIds: readonly string[], notes: ChartNote[]) => Promise<boolean>;
   onAttachScreenshot?: (tradeIds: readonly string[], url: string) => Promise<boolean>;
   onDirtyChange?: (dirty: boolean) => void;
@@ -73,7 +68,7 @@ export default function TradeReview({
   const [chartIndex, setChartIndex] = useState(0);
   const chartTimerRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(chartTimerRef.current), []);
-  const [reviewed, setReviewed] = useState<{ id: string; net: number; valid: 'ok' | 'bad' | 'untaken'; reasons: string[] }[]>([]);
+  const [reviewed, setReviewed] = useState<{ id: string; net: number; valid: 'ok' | 'bad'; reasons: string[] }[]>([]);
   const [finished, setFinished] = useState(false);
 
   // Úzká obrazovka (telefon): bez workspace, graf vložený jako v detailu.
@@ -191,8 +186,6 @@ export default function TradeReview({
   // Vstupní příkazy: najetí v grafu rozsvítí řádky, klik připne a rozbalí detail.
   const [orderHover, setOrderHover] = useState<string | null>(null);
   const [orderPinned, setOrderPinned] = useState<EntryOrderSelectDetail | null>(null);
-  // Výsledek „kdybys nezrušil“ počítá graf ze svíček a posílá ho ve výběru.
-  const [orderOutcomes, setOrderOutcomes] = useState<Map<string, { outcome: EntryOrderOutcome; pointValue: number }>>(new Map());
   const orderPinnedRef = useRef(false);
   orderPinnedRef.current = Boolean(orderPinned?.orderId);
   const stepsRef = useRef<HTMLOListElement>(null);
@@ -201,10 +194,6 @@ export default function TradeReview({
     const onSelect = (event: Event) => {
       const detail = (event as CustomEvent<EntryOrderSelectDetail>).detail;
       setOrderPinned(detail?.orderId ? detail : null);
-      if (detail?.orderId && detail.outcome) {
-        const known = { outcome: detail.outcome, pointValue: detail.pointValue ?? 2 };
-        setOrderOutcomes(map => new Map(map).set(detail.orderId!, known));
-      }
       if (detail?.orderId) setOpenFold(state => state.steps ? state : { ...state, steps: true });
     };
     window.addEventListener(ENTRY_ORDER_HOVER_EVENT, onHover);
@@ -222,50 +211,9 @@ export default function TradeReview({
     return () => window.clearTimeout(timer);
   }, [orderPinned?.orderId]);
 
-  // Nevzatý obchod: návrh důvodu z dat, dokud si ho uživatel nevybere sám.
-  const untaken = current?.untaken ?? null;
-  const untakenOutcome = untaken ? orderOutcomes.get(untaken.orderId) ?? (untaken.review?.outcome
-    ? { outcome: untaken.review.outcome, pointValue: untaken.review.pointValue ?? 2 } : null) : null;
-  const suggestedReason = untakenSuggestion(untakenOutcome?.outcome ?? null);
-  const untakenReason = draft?.untakenReason || suggestedReason || '';
-  const blocked = untaken ? !untakenReason : draft?.valid === 'bad' && (!draft.reasons.length || draft.why.trim().length < 5);
-  const markDoneUntaken = useCallback(async () => {
-    if (!current?.untaken || !draft || !onSaveUntaken) return;
-    const meta = current.untaken;
-    setPhase('saving'); setError(null);
-    const review: UntakenReview = {
-      reason: untakenReason, ...(draft.notes.trim() ? { note: draft.notes.trim() } : {}),
-      ...(untakenOutcome ? { outcome: untakenOutcome.outcome, pointValue: untakenOutcome.pointValue } : {}),
-      reviewedAt: new Date().toISOString(),
-    };
-    const previous = meta.review;
-    const ok = await onSaveUntaken(current, review);
-    if (!ok) { setPhase('idle'); setError('Hodnocení se nepodařilo uložit.'); return; }
-    setReviewed(list => [...list.filter(item => item.id !== String(current.id)), { id: String(current.id), net: 0, valid: 'untaken', reasons: [] }]);
-    setDraftState(null);
-    setPhase('saved');
-    const trade = current;
-    setToast({
-      key: Date.now(),
-      text: `${current.instrument || ''} ${clock(meta.order.placedAt)} · nevzatý · ${untakenReason.toLowerCase()}`,
-      undo: () => {
-        setToast(null);
-        setReviewed(list => list.filter(item => item.id !== String(trade.id)));
-        void onSaveUntakenRef.current?.(trade, previous).then(result => {
-          if (!result && mountedRef.current) setError('Vrácení se nepodařilo uložit.');
-        });
-      },
-    });
-    return true;
-  }, [current, draft, onSaveUntaken, untakenOutcome, untakenReason]);
-  const onSaveUntakenRef = useRef(onSaveUntaken);
-  onSaveUntakenRef.current = onSaveUntaken;
+  const blocked = draft?.valid === 'bad' && (!draft.reasons.length || draft.why.trim().length < 5);
   const markDone = useCallback(async () => {
     if (!current || !draft || phase !== 'idle' || blocked) return;
-    if (current.untaken) {
-      if (await markDoneUntaken()) leaveAfterDone();
-      return;
-    }
     const planFacts = reviewFacts(current, (details.get(String((sources[index] ?? current).id)) ?? current).executionHistory);
     if (planSideError(planFacts, numberOrNull(draft.plannedSL), numberOrNull(draft.plannedTP))) {
       setError('Plánovaný SL nebo TP je na špatné straně vstupu.');
@@ -311,7 +259,7 @@ export default function TradeReview({
       },
     });
     leaveAfterDone();
-  }, [blocked, current, details, draft, index, leaveAfterDone, markDoneUntaken, onUpdateTrade, phase, sources]);
+  }, [blocked, current, details, draft, index, leaveAfterDone, onUpdateTrade, phase, sources]);
 
   // Klávesy: ← → mimo pole, ⌘↵ hotovo, Esc zavřít.
   const keysRef = useRef({ move, markDone, close });
@@ -396,11 +344,10 @@ export default function TradeReview({
   const header = (
     <div className={`shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b ${line} bg-[var(--bg-card)]`}>
       <span className={`text-[13.5px] font-extrabold mr-1 ${ink}`}>{narrow ? 'Hodnocení' : 'Hodnocení obchodu'}</span>
-      {untaken && <Pill className="text-violet-500 bg-violet-500/10 border-violet-500/30">Nevzatý</Pill>}
       <Pill className={long ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/30' : 'text-rose-500 bg-rose-500/10 border-rose-500/30'}>{long ? '↗ Long' : '↘ Short'}</Pill>
       <Pill isDark={isDark}>{current.instrument || '—'}</Pill>
       <Pill isDark={isDark}>{new Date(facts.entryAt).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })} · {clock(facts.entryAt)}–{clock(facts.exitAt)}</Pill>
-      {noSL && !untaken && <Pill className="text-amber-600 bg-amber-500/10 border-amber-500/40">⚠ Bez SL</Pill>}
+      {noSL && <Pill className="text-amber-600 bg-amber-500/10 border-amber-500/40">⚠ Bez SL</Pill>}
       {!narrow && <Pill isDark={isDark}><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Tradovate</Pill>}
       <span className="flex-1" />
       {narrow && <button type="button" onClick={close} aria-label="Zavřít hodnocení" className={`h-8 w-8 -mr-1.5 grid place-items-center rounded-md ${muted}`}><X size={17} /></button>}
@@ -560,119 +507,8 @@ export default function TradeReview({
     </aside>
   );
 
-  // ── Nevzatý obchod: zrušený vstup s bracketem, vlastní karta ──────────────
-  const uOrder = untaken?.order ?? null;
-  const uOutcome = untakenOutcome?.outcome ?? null;
-  const uPoint = untakenOutcome?.pointValue ?? (/^NQ/.test(current.instrument || '') ? 20 : 2);
-  const uLimit = uOrder?.legs.at(-1)?.price ?? null;
-  const uSL = uOrder?.bracket?.sl ?? null, uTP = uOrder?.bracket?.tp ?? null;
-  const uRisk = uLimit != null && uSL != null ? Math.abs(uLimit - uSL) : null;
-  const uReward = uLimit != null && uTP != null ? Math.abs(uTP - uLimit) : null;
-  const uCard = uOutcome && uOrder ? entryOrderOutcomeCard(uOutcome, uOrder.quantity, uPoint) : null;
-  const cardTone = (name: 'green' | 'red' | 'amber' | 'slate') => ({
-    green: isDark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    red: isDark ? 'border-rose-500/30 bg-rose-500/10 text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700',
-    amber: isDark ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700',
-    slate: isDark ? 'border-white/10 bg-white/5 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700',
-  })[name];
-  const uSteps: { at: number; label: string; price: number | null; color: string; ghost?: boolean }[] = uOrder ? [
-    ...uOrder.legs.map((leg, i) => ({ at: leg.at, label: i ? `${uOrder.side} ${uOrder.type} posunut` : `${uOrder.side} ${uOrder.type} zadán`, price: leg.price, color: i ? '#a855f7' : '#7c3aed' })),
-    ...(uOrder.end ? [{ at: uOrder.end.at, label: 'Zrušen', price: null, color: '#94a3b8' }] : []),
-    ...(uOutcome?.kind === 'nofill' ? [{ at: uOutcome.closestAt, label: 'nejblíž by se přiblížila', price: uOutcome.closestPrice, color: '#f59e0b', ghost: true }] : []),
-    ...(uOutcome?.kind === 'fill' ? [
-      { at: uOutcome.fillAt, label: 'by se vyplnil', price: uOutcome.price, color: '#cbd5e1', ghost: true },
-      ...(uOutcome.resultAt != null && (uOutcome.result === 'tp' || uOutcome.result === 'sl')
-        ? [{ at: uOutcome.resultAt, label: uOutcome.result === 'tp' ? 'by trefil TP' : 'by trefil SL', price: uOutcome.exitPrice, color: uOutcome.result === 'tp' ? '#10b981' : '#f43f5e', ghost: true }] : []),
-    ] : []),
-  ] : [];
-  const untakenMonth = untakenMonthSummary(allTrades);
-  const untakenLeft = uOrder && (
-    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
-      <Section title="Nevzatý obchod" aux={<><Lock size={10} /> z Tradovate</>} />
-      <div className={`px-4 pb-3 border-b ${line}`}>
-        <p className="text-[11px] font-semibold text-violet-500">Zrušený vstup</p>
-        <p className={`mt-1 text-[19px] font-semibold tracking-[-0.02em] tabular-nums ${ink}`}>
-          <span className={uOrder.side === 'Buy' ? 'text-[#2962ff]' : 'text-[#f23645]'}>{uOrder.side} {uOrder.type}</span> {price(uLimit)}{uOrder.quantity != null ? ` × ${uOrder.quantity}` : ''}
-        </p>
-        <p className={`mt-1 text-[11px] ${muted}`}>zadán {clockS(uOrder.placedAt)}{uOrder.end ? ` · zrušen ${clockS(uOrder.end.at)} · stál ${holdText(uOrder.end.at - uOrder.placedAt)}` : ''}</p>
-        <div className={`mt-2.5 rounded-lg border px-2.5 py-2 ${uCard ? cardTone(uCard.tone) : cardTone('slate')}`}>
-          <small className="block text-[10px] font-semibold opacity-80">Kdybys nezrušil</small>
-          {uCard ? <>
-            <strong className="block text-[18px] font-extrabold tracking-[-0.01em] tabular-nums">{uCard.value}</strong>
-            <span className={`block text-[10.5px] leading-snug ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{uCard.sub}{uOutcome?.kind === 'fill' && uOutcome.points != null && uRisk ? ` · ${uOutcome.points >= 0 ? '' : '−'}${fmt(Math.abs(uOutcome.points / uRisk), 1)} R` : ''}</span>
-          </> : <span className={`block text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Počítám ze svíček grafu…</span>}
-        </div>
-      </div>
-      <Section title="Plán příkazu" aux="bracket" />
-      <Cells isDark={isDark}>
-        <Cell label={uOrder.type === 'Limit' ? 'Limit' : 'Stop'} value={price(uLimit)}
-          sub={uOutcome?.kind === 'fill' ? `cena došla v ${clock(uOutcome.fillAt)}` : uOutcome?.kind === 'nofill' ? `chybělo ${fmt(uOutcome.missBy)} b.` : undefined} />
-        <Cell label="Riziko" value={uRisk == null ? '—' : `${fmt(uRisk)} b.`} sub={uRisk != null && uOrder.quantity != null ? `${money(-uRisk * uOrder.quantity * uPoint).replace('−', '')} při ${uOrder.quantity} ks` : undefined} />
-        <Cell label="SL" value={price(uSL)} className="text-rose-500" />
-        <Cell label="TP" value={price(uTP)} className="text-emerald-500" sub={uRisk && uReward != null ? `plán 1 : ${(uReward / uRisk).toLocaleString('cs-CZ', { maximumFractionDigits: 1, minimumFractionDigits: 1 })}` : undefined} />
-      </Cells>
-      <Section title="Průběh" aux="co se stalo a co by se stalo" />
-      <ol className={`mx-3 rounded-md border px-1.5 py-1 ${line} ${cellBg}`} onMouseLeave={() => window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: null }))}>
-        {uSteps.map((step, i) => (
-          <li key={i} onMouseEnter={() => step.price != null && window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: { atMs: step.at, price: step.price, color: step.color } }))}
-            className={`grid grid-cols-[56px_1fr_auto] items-center h-6 px-1.5 rounded text-[11px] ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}>
-            <time className={`text-[10px] tabular-nums ${muted}`}>{step.ghost ? clock(step.at) : clockS(step.at)}</time>
-            <span className={`flex min-w-0 items-center gap-1.5 ${step.ghost ? 'italic text-slate-400' : isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              <i className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: step.color }} /><span className="truncate">{step.label}</span>
-            </span>
-            <b className="font-semibold tabular-nums" style={{ color: step.ghost && step.color === '#cbd5e1' ? '#94a3b8' : step.price == null ? '#94a3b8' : step.color }}>{price(step.price)}</b>
-          </li>
-        ))}
-      </ol>
-      <Section title="Účet" aux={<><Lock size={10} /> leader</>} />
-      {accountRows.map(row => (
-        <div key={row.id} className={`mx-3 flex items-center gap-2 text-[11.5px] font-semibold ${ink}`}>
-          <FirmMark firm={row.firm} size={20} /><span className="truncate">{row.name}</span>
-        </div>
-      ))}
-      <div className="h-3 shrink-0" />
-    </aside>
-  );
-  const untakenRight = uOrder && (
-    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
-      <Section title="Proč jsi ho zrušil?" aux="povinné" />
-      <div className="mx-3 flex flex-wrap gap-1" role="radiogroup" aria-label="Důvod zrušení">
-        {UNTAKEN_REASONS.map(reason => {
-          const on = untakenReason === reason;
-          return (
-            <button key={reason} type="button" role="radio" aria-checked={on} onClick={() => setDraft(d => ({ ...d, untakenReason: reason }))}
-              className={`inline-flex h-[24px] items-center gap-1 rounded-full border px-2.5 text-[11px] font-semibold transition-colors ${on
-                ? 'border-violet-500 bg-violet-500 text-white' : `${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-400' : 'bg-[var(--bg-card)] text-slate-500'}`}`}>
-              {reason}
-              {reason === suggestedReason && <span className={`rounded-full px-1.5 text-[8.5px] font-semibold leading-[14px] ${on ? 'bg-white/25' : 'bg-violet-500/15 text-violet-500'}`}>návrh</span>}
-            </button>
-          );
-        })}
-      </div>
-      {suggestedReason && <p className={`mx-3 mt-1.5 text-[10.5px] leading-snug ${muted}`}>
-        Návrh z dat: {uOutcome?.kind === 'nofill' ? 'cena na příkaz po zrušení nedošla.' : uOutcome?.kind === 'fill' && uOutcome.result === 'tp'
-          ? 'cena na příkaz došla až po zrušení a obchod by šel do TP.' : 'po vyplnění by obchod šel do SL — zrušení tě ušetřilo.'}
-      </p>}
-      <Section title="Poznámka" aux="dobrovolná" />
-      <textarea value={draft.notes} onChange={event => setDraft(d => ({ ...d, notes: event.target.value }))} rows={3} placeholder="Co tě vedlo ke zrušení…"
-        className={`mx-3 resize-y rounded-md border px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-violet-500/50 ${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-card)] text-slate-800'}`} />
-      <div className={`mx-3 mt-3 flex flex-col gap-0.5 rounded-md border border-dashed px-2.5 py-2 text-[10.5px] ${line}`}>
-        <p className="flex justify-between gap-2"><span className={muted}>Statistiky strategie</span><b className="text-slate-400">nepočítá se</b></p>
-        <p className="flex justify-between gap-2"><span className={muted}>P&amp;L účtu</span><b className="text-slate-400">nepočítá se</b></p>
-        <p className="flex justify-between gap-2"><span className={muted}>Souhrn Nevzaté obchody</span><b className="text-violet-500">počítá se</b></p>
-      </div>
-      {untakenMonth.count > 0 && <p className={`mx-3 mt-2 text-[10.5px] leading-relaxed ${muted}`}>
-        {new Date().toLocaleDateString('cs-CZ', { month: 'long' }).replace(/^./, c => c.toUpperCase())} zatím: <b className={ink}>{untakenMonth.count} {untakenMonth.count === 1 ? 'nevzatý' : 'nevzaté'}</b>
-        {untakenMonth.missed > 0 && <> · zrušením jsi přišel o <b className="text-rose-500">{money(untakenMonth.missed).replace('+', '')}</b></>}
-        {untakenMonth.saved > 0 && <>{untakenMonth.missed > 0 ? ' a' : ' · zrušením jsi'} ušetřil <b className="text-emerald-500">{money(untakenMonth.saved).replace('+', '')}</b></>}
-        {untakenMonth.topReason && <>. Nejčastěji: <b className={ink}>{untakenMonth.topReason.toLowerCase()}</b></>}.
-      </p>}
-      {error && <p className="mx-3 mt-3 text-[11px] font-semibold text-rose-500" role="alert">{error}</p>}
-      <div className="h-3 shrink-0" />
-    </aside>
-  );
-  const left = untakenLeft || tradeLeft;
-  const right = untakenRight || tradeRight;
+  const left = tradeLeft;
+  const right = tradeRight;
 
   const toastEl = toast && (
     <div key={toast.key} className={`tr-toast native-fixed-above-tab-bar fixed left-5 bottom-5 z-[320] flex items-center gap-3 h-10 pl-3 pr-2 rounded-md text-[12px] shadow-xl ${isDark ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-white'}`}>
@@ -742,8 +578,6 @@ interface ReviewDraft {
   emotions: string[];
   mistakes: string[];
   notes: string;
-  /** Nevzatý obchod: vybraný důvod zrušení ('' = platí návrh z dat). */
-  untakenReason: string;
 }
 
 function draftOf(trade: Trade, noteSource?: Trade | null, initialNote?: string): ReviewDraft {
@@ -759,17 +593,7 @@ function draftOf(trade: Trade, noteSource?: Trade | null, initialNote?: string):
     emotions: [...(trade.emotions ?? [])],
     mistakes: [...(trade.mistakes ?? [])],
     notes: initialNote ? [note, initialNote].filter(Boolean).join('\n\n') : note,
-    untakenReason: trade.untaken?.review?.reason ?? '',
   };
-}
-
-/** Návrh důvodu zrušení podle toho, co by příkaz udělal. */
-function untakenSuggestion(outcome: EntryOrderOutcome | null): string | null {
-  if (!outcome) return null;
-  if (outcome.kind === 'nofill') return 'Cena nedošla';
-  if (outcome.result === 'tp') return 'Zrušil jsem předčasně';
-  if (outcome.result === 'sl') return 'Setup přestal platit';
-  return null;
 }
 
 const STEP_COLOR: Record<ReviewStep['kind'], string> = { entry: '#3b82f6', sl: '#f43f5e', tp: '#10b981', exit: '#64748b', order: '#a855f7', cancel: '#94a3b8' };
@@ -831,7 +655,7 @@ function Empty({ isDark, text, onClose }: { isDark: boolean; text: string; onClo
   );
 }
 
-function DoneScreen({ isDark, reviewed, total, onClose }: { isDark: boolean; reviewed: { net: number; valid: 'ok' | 'bad' | 'untaken'; reasons: string[] }[]; total: number; onClose: () => void }) {
+function DoneScreen({ isDark, reviewed, total, onClose }: { isDark: boolean; reviewed: { net: number; valid: 'ok' | 'bad'; reasons: string[] }[]; total: number; onClose: () => void }) {
   const ok = reviewed.filter(item => item.valid === 'ok').length;
   const bad = reviewed.filter(item => item.valid === 'bad').length;
   const net = reviewed.reduce((sum, item) => sum + item.net, 0);

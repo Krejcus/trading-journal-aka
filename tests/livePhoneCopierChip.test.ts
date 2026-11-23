@@ -40,16 +40,4 @@ describe('čip kopírky v hlavičce telefonního LIVE grafu', () => {
     const resume = { phase: 'waiting' } as CopierControllerStatus['transportResume'];
     expect(chip(status({ transportResume: resume }))).toMatchObject({ label: 'Kopírka se obnovuje', tone: 'warn', armed: false });
   });
-
-  it('INV-UI-02: rizikové notifikace otevřou přehled, menu LIVE přehled vždy obsahuje', () => {
-    const notifications = readFileSync('services/nativeCopierNotifications.ts', 'utf8');
-    expect(notifications).toMatch(/route: LIVE_OVERVIEW_ROUTE,/);
-    expect(notifications).toMatch(/route: risk \? LIVE_OVERVIEW_ROUTE : 'live',/);
-    const app = readFileSync('App.tsx', 'utf8');
-    expect(app).toMatch(/if \(page === LIVE_OVERVIEW_ROUTE\) \{\s*setRequestedLiveTab\('overview'\);\s*nativeActions\.current\.navigate\('live'\);/);
-    const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
-    expect(desk).toMatch(/tabs=\{tabs\.filter\(item => item\.id !== 'chart'\)\}/);
-    // Telefonní graf nečte stav workeru rychleji (jen graf na PC).
-    expect(desk).toMatch(/chartOpenRef\.current = \(chartAvailable \|\| phoneChartAvailable\) && tab === 'chart';/);
-  });
 });

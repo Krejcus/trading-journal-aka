@@ -51,56 +51,6 @@ describe('LIVE → Graf: DISARM je vždy dosažitelný (INV-UI-02)', () => {
     expect(liveTabNavigationAllowed('overview', 'risk', arming)).toBe(true);
   });
 
-  it('vrstva grafu nikdy nezamkne přehled a desk mu předává skutečný stav kopírky', () => {
-    const screen = source('components/LiveTradingScreen.tsx');
-    expect(screen).toMatch(/const blocked = navigationBlocked && !active && item\.id !== 'overview';/);
-    expect(screen).toMatch(/buildLiveStatusStrip\(\{ status: copier\.status, available: copier\.available, pending: copier\.pending, transport: copier\.transport, journalHealth: copier\.journalHealth \}\)/);
-    const desk = source('components/TradovateLiveDesk.tsx');
-    expect(desk).toMatch(/status: agentStatus\?\.controller \?\? null,\s*available: runtimeAvailable,\s*pending: !agentStatusResolved,/);
-    // Expozice přímo z workeru (F2a) jen do grafu, karet a skrytí BE — nikdy do stavu kopírky ani příkazů.
-    const liveUses = desk.match(/chartLive\.[A-Za-z.?]+/g) ?? [];
-    expect(liveUses.sort()).toEqual([
-      'chartLive.exposureObservedAt',
-      'chartLive.status',
-      'chartLive.status',
-      'chartLive.status',
-      'chartLive.status?.controller.recentCopyEvents',
-      // Telefonní graf (2. 11.): stejné události jen do karet vlevo dole, za běžícího runtime.
-      'chartLive.status?.controller.recentCopyEvents',
-      // Telefon (2. 11. večer): průměr vstupu jen když graf ukazuje poll (jako PC manageEntryAvgPrice) + deps.
-      'chartLive.status',
-      'chartLive.status',
-      // Šipky plnění leadera jen do slotu grafu (memo + deps), nikdy do phoneTrade ani relaye.
-      'chartLive.status',
-      'chartLive.status?.controller',
-      'chartLive.exposureObservedAt',
-      'chartLive.exposureObservedAt',
-    ].sort());
-    expect(desk).toMatch(/chartShowsPoll: chartLive\.status === agentStatus,/);
-    expect(desk).toMatch(/controller: chartLive\.status\?\.controller, exposureObservedAt: chartLive\.exposureObservedAt,/);
-    expect(desk).toMatch(/copyEvents: runtimeAvailable \? chartLive\.status\?\.controller\.recentCopyEvents : undefined,/);
-    expect(desk).toMatch(/agentStatus: chartLive\.status,/);
-    expect(desk).toMatch(/copyEvents=\{chartLive\.status\?\.controller\.recentCopyEvents\}/);
-    expect(desk).toMatch(/manageEntryAvgPrice=\{chartLive\.status === agentStatus \? /);
-    expect(desk).toMatch(/armFlowActiveRef\.current = true;\s*setArmFlowActive\(true\);\s*try \{\s*return await armLiveGroupFlow\(targetGroup, armGuard\);\s*\} finally \{\s*armFlowActiveRef\.current = false;/);
-    // Deep link jde stejnou bránou; graf během zapínání se zahodí.
-    expect(desk).toMatch(/if \(requestedTab === 'chart' && armFlowActiveRef\.current\) \{ onRequestedTabHandled\?\.\(\); return; \}\s*if \(!liveTabNavigationAllowed\(tab, requestedTab,/);
-  });
-
-  it('načítání i pád grafu mají cestu na přehled a pád se nezopakuje po reloadu', () => {
-    const slot = source('components/LiveTradingScreenSlot.tsx');
-    expect(slot).toMatch(/<ErrorBoundary name="LiveTradingScreen" onError=\{\(\) => \{ rememberLiveChartCrash\(\); onCrash\?\.\(\); \}\} fallback=\{<FallbackLayer [^>]*failed leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
-    expect(slot).toMatch(/<Suspense fallback=\{<FallbackLayer [^>]*failed=\{false\} leaving=\{closing\} onNavigate=\{props\.onNavigate\} \/>\}>/);
-    expect(slot).toMatch(/onClick=\{\(\) => onNavigate\('overview'\)\}/);
-    // Odchodová animace nesmí držet kliky: přehled je pod vrstvou dostupný hned.
-    expect(source('index.css')).toMatch(/\.live-chart-leave \{ animation: live-chart-fold [^}]*pointer-events: none; \}/);
-    expect(source('components/LiveTradingScreen.tsx')).toMatch(/\$\{leaving \? 'live-chart-leave' : 'live-chart-enter'\}/);
-    // Graf na PC i na telefonu (phoneChart): po pádu v relaci se LIVE otevře na přehledu.
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/chartAvailable: \(liveChartAvailableNow\(\) \|\| Boolean\(phoneChart\) \|\| \(rithmicLocalAvailable\(\) && \(!rithmicPhoneLayoutNow\(\) \|\| Boolean\(rithmicPhoneSlot\)\)\)\) && !liveChartCrashedThisSession\(\)/);
-    expect(source('components/TradovateLiveDesk.tsx')).toMatch(/<ErrorBoundary name="LivePhoneChart" onError=\{\(\) => \{ rememberLiveChartCrash\(\); noteChartCrash\(\); \}\}/);
-    expect(source('components/ErrorBoundary.tsx')).toMatch(/this\.props\.onError\?\.\(error\);/);
-  });
-
   it('hlavička upozorní na problémy, které chip Kopírka neodliší', () => {
     const status = {
       armed: true, killSwitch: false, connected: true, shadowMode: false,
@@ -130,17 +80,6 @@ describe('LIVE → Graf je jen UI', () => {
     // Zamčené, dokud náhled nejde (Market, SL/TP, chyby panelu, zastaralá cena, worker bez odeslání).
     expect(submit.slice(0, 200)).toMatch(/disabled=\{directBlocked != null \|\| directBusy \|\| directLocked\}/);
     expect(ticket).not.toMatch(/onSubmit|executeAgent|placeOrder/);
-  });
-
-  it('ukázkové účty jen v dev buildu s přepínačem, nikdy jako náhrada za skutečnou skupinu', () => {
-    const screen = source('components/LiveTradingScreen.tsx');
-    expect(screen).toMatch(/if \(!import\.meta\.env\.DEV\) return false;/);
-    expect(screen).toMatch(/getItem\('at:dev:live-chart-sample'\) === '1'/);
-    // Skutečná skupina má přednost; ukázka nemá ověřený stav kopírky.
-    expect(screen).toMatch(/workerGroup \?\? \(sample \? \{ \.\.\.SAMPLE_LIVE_TRADE_GROUP, armed: null \} : null\)/);
-    for (const file of ['components/LiveOrderTicket.tsx', 'components/LiveGroupChip.tsx', 'components/TradovateLiveDesk.tsx']) {
-      expect(source(file), file).not.toMatch(/SAMPLE_LIVE_TRADE_GROUP/);
-    }
   });
 
   it('vrstva grafu není dialog — uvnitř dialogu graf ignoruje pravé tlačítko, zkratky i dvojklik', () => {

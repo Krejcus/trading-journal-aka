@@ -250,19 +250,6 @@ describe('fáze 1a: strážní pravidla', () => {
     expect(body).not.toMatch(/await |dispatchBroker|options\.broker|persist|onAudit|lastError =|failClosed/);
     expect(body).toMatch(/return evaluateManualEntryPreview\(/);
   });
-
-  it('starý / neznámý copy-command ve workeru nikdy nevrátí „ok“ bez výsledku', () => {
-    const agent = readFileSync('server/localCopierExecutionAgent.ts', 'utf8');
-    expect(agent).toMatch(/unsupported-copy-command:/);
-    expect(agent).toMatch(/case 'preview-leader-entry': \{/);
-  });
-
-  it('relay pouští nejvýš jeden náhled na zařízení a validuje ho na enqueue i claim', () => {
-    const relay = readFileSync('server/tradovateCopierCommandRelay.ts', 'utf8');
-    expect(relay).toMatch(/if \(command\.type === 'preview-leader-entry'\) return validateLeaderEntryPreview\(value\)/);
-    expect(relay).toMatch(/copier-relay-preview-busy/);
-    expect(relay).toMatch(/PREVIEW_COMMAND_TTL_MS = 15_000/);
-  });
 });
 
 describe('C12: denní pauza CME v náhledu vstupu (oponentura P2)', () => {

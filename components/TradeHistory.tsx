@@ -22,7 +22,7 @@ import {
   Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles,
   MoreHorizontal, CheckSquare, Inbox, CalendarRange
 } from 'lucide-react';
-import { tradeNeedsEnrichment } from '../services/tradovateImport';
+import { tradeNeedsEnrichment } from '../services/importedTrades';
 
 import TradeDetailModal from './TradeDetailModal';
 const WeeklyReview = React.lazy(() => import('./WeeklyReview'));

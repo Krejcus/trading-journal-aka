@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const actions = vi.hoisted(() => Array.from({ length: 7 }, () => vi.fn().mockResolvedValue(undefined)));
 vi.mock('../utils/runtimeConfig', () => ({ isNativeBuild: true }));
-vi.mock('../services/nativeCopierNotifications', () => ({ clearCopierNativeNotificationState: actions[0] }));
 vi.mock('../services/nativeSessionReminders', () => ({ clearNativeSessionReminderState: actions[1] }));
 vi.mock('../services/nativePushNotifications', () => ({ deactivateNativeRemoteNotifications: actions[2] }));
 vi.mock('../services/nativeLiveActivityPush', () => ({ deactivateNativeLiveActivityPush: actions[3] }));
@@ -37,7 +36,8 @@ describe('native logout boundary', () => {
     const { clearNativeSessionSurfaces } = await import('../services/nativeSessionCleanup');
     const cleanup = clearNativeSessionSurfaces('user-a');
     await vi.runAllTimersAsync(); await cleanup;
-    actions.forEach(action => expect(action).toHaveBeenCalledOnce());
+    // actions[0] patřil notifikacím Tradovate kopírky (odstraněno 23. 11. 2026).
+    actions.slice(1).forEach(action => expect(action).toHaveBeenCalledOnce());
     expect(warning).toHaveBeenCalledOnce();
   });
 });

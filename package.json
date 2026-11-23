@@ -18,7 +18,7 @@
     "test:watch": "vitest",
     "copier:pilot": "tsx scripts/copier/pilot.ts",
     "copier:mac": "tsx scripts/copier/mac-install.ts",
-    "dev:live": "ALPHATRADE_LOCAL_TRADOVATE_READ_PROXY=1 vite"
+    "dev:live": "vite"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",

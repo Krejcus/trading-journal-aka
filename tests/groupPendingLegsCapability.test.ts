@@ -16,9 +16,4 @@ describe('skupinový posun SL/TP před vyplněním: nabídka v appce', () => {
     expect(liveLineMoveBlockReason(summary, 'stopLoss', 29_470, { pendingLegs: true })).toBeNull();
     expect(liveLineMoveBlockReason(summary, 'stopLoss', 29_510, { pendingLegs: true })).not.toBeNull();
   });
-  it('desk posílá posun čekajících nohou skupiny s množstvím vstupu a jen s capability', () => {
-    const desk = readFileSync(new URL('../components/TradovateLiveDesk.tsx', import.meta.url), 'utf8');
-    expect(desk).toContain('supportsCopierGroupPendingLegs(current.status)');
-    expect(desk).toContain("action === 'move-limit' || pendingLegMove ? groupLeader?.entry?.quantity");
-  });
 });

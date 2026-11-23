@@ -1,12 +1,10 @@
 import type { LabDecision, LabSession } from './labDataset.js';
 import type { LabExcursion } from './labExcursion.js';
-import type { EntryOrderOutcome } from './entryOrderOutcome.js';
-import type { TradeEntryOrder } from './journalEntryOrders.js';
 import { labStats, type LabStats, type LabUnit } from './labAnalysis.js';
 
 /**
- * Sekce C–F nového Labu. Co potřebuje svíčky (C, D), dostává výsledky
- * `labExcursion` / `cancelledOrderOutcome` hotové — tady se jen sčítá. Kde
+ * Sekce C, E a F nového Labu. Co potřebuje svíčky (C), dostává výsledky
+ * `labExcursion` hotové — tady se jen sčítá. Kde
  * data chybí (svíčky až od 26. 9., R jen se SL), vrací se pokrytí.
  */
 
@@ -98,67 +96,6 @@ export function labManagement(decisions: readonly LabDecision[], excursions: Rea
     holdWinners: { decisions: winners, extraUsd, reversedUsd, reversed, reached },
     withCandles: decisions.filter(d => ex(d)).length,
     withHistory: withHistory.length,
-  };
-}
-
-// ── D: nevzaté obchody ───────────────────────────────────────────────────────
-
-export interface LabUntakenItem {
-  id: string;
-  order: TradeEntryOrder;
-  pointValue: number;
-  reason: string | null;
-  outcome: EntryOrderOutcome | null;
-}
-
-/** Jaký výsledek důvod tvrdí — „trefa“ = výsledek odpovídá důvodu. */
-const REASON_EXPECTS: Record<string, (outcome: EntryOrderOutcome) => boolean> = {
-  'Cena nedošla': outcome => outcome.kind === 'nofill',
-  'Zrušil jsem předčasně': outcome => outcome.kind === 'fill' && outcome.result === 'tp',
-  'Setup přestal platit': outcome => outcome.kind === 'nofill' || (outcome.kind === 'fill' && outcome.result === 'sl'),
-};
-
-export const labUntakenUsd = (item: LabUntakenItem): number | null => {
-  const outcome = item.outcome;
-  if (outcome?.kind !== 'fill' || outcome.points == null || item.order.quantity == null) return null;
-  return outcome.points * item.order.quantity * item.pointValue;
-};
-
-export function labUntaken(items: readonly LabUntakenItem[]) {
-  let missed = 0, saved = 0, tp = 0, sl = 0, nofill = 0, unknown = 0;
-  for (const item of items) {
-    const usd = labUntakenUsd(item);
-    if (item.outcome?.kind === 'nofill') nofill += 1;
-    else if (item.outcome?.kind === 'fill' && item.outcome.result === 'tp') { tp += 1; missed += usd ?? 0; }
-    else if (item.outcome?.kind === 'fill' && item.outcome.result === 'sl') { sl += 1; saved -= usd ?? 0; }
-    else unknown += 1;
-  }
-  const heldMin = (item: LabUntakenItem) => item.order.end ? (item.order.end.at - item.order.placedAt) / 60_000 : null;
-  const bucket = (label: string, test: (minutes: number) => boolean) => {
-    const list = items.filter(item => { const m = heldMin(item); return m != null && test(m); });
-    return { label, items: list, tp: list.filter(i => i.outcome?.kind === 'fill' && i.outcome.result === 'tp').length,
-      sl: list.filter(i => i.outcome?.kind === 'fill' && i.outcome.result === 'sl').length,
-      nofill: list.filter(i => i.outcome?.kind === 'nofill').length,
-      netUsd: -list.reduce((sum, i) => sum + (labUntakenUsd(i) ?? 0), 0) };
-  };
-  const reasons = new Map<string, { reason: string; items: LabUntakenItem[]; hits: number; judged: number }>();
-  for (const item of items) {
-    if (!item.reason) continue;
-    const row = reasons.get(item.reason) ?? { reason: item.reason, items: [], hits: 0, judged: 0 };
-    row.items.push(item);
-    const expects = REASON_EXPECTS[item.reason];
-    if (expects && item.outcome && !(item.outcome.kind === 'fill' && (item.outcome.result === 'ambiguous' || item.outcome.result === 'open'))) {
-      row.judged += 1; if (expects(item.outcome)) row.hits += 1;
-    }
-    reasons.set(item.reason, row);
-  }
-  return {
-    count: items.length, missed, saved, tp, sl, nofill, unknown,
-    /** Správně zrušené = šel by do SL nebo se nevyplnil. */
-    correct: sl + nofill,
-    buckets: [bucket('do 2 min', m => m < 2), bucket('2–10 min', m => m >= 2 && m < 10), bucket('nad 10 min', m => m >= 10)],
-    reasons: [...reasons.values()].sort((a, b) => b.items.length - a.items.length),
-    unreviewed: items.filter(item => !item.reason).length,
   };
 }
 

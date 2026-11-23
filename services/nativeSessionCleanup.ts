@@ -4,7 +4,6 @@ import { deactivateNativeLiveActivityPush } from './nativeLiveActivityPush';
 import { deactivateNativeWidgetRemote } from './nativeWidgetRemote';
 import { clearNativeWidgetSnapshot } from './nativeWidgetSnapshot';
 import { cancelAllNativeNotifications } from './nativeNotifications';
-import { clearCopierNativeNotificationState } from './nativeCopierNotifications';
 import { clearNativeSessionReminderState } from './nativeSessionReminders';
 
 let cleanup: Promise<void> = Promise.resolve();
@@ -18,7 +17,6 @@ export function clearNativeSessionSurfaces(userId: string): Promise<void> {
     // before any service asks auth for a session (its internal lock is held).
     await new Promise<void>(resolve => setTimeout(resolve, 0));
     const actions: Array<() => unknown> = [
-      () => clearCopierNativeNotificationState(),
       () => clearNativeSessionReminderState(),
       () => deactivateNativeRemoteNotifications(userId),
       () => deactivateNativeLiveActivityPush(userId),

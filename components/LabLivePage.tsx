@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronRight, CircleSlash, ClipboardCheck, Clock3, Loader2, SlidersHorizontal, Tags, Wallet, X } from 'lucide-react';
+import { CalendarDays, ChevronRight, ClipboardCheck, Clock3, Loader2, SlidersHorizontal, Tags, Wallet, X } from 'lucide-react';
 import type { Account, Trade } from '../types';
 import type { TradeExecutionHistory } from '../lib/tradeExecutionHistory';
 import { buildLabDecisions, labMissingHistoryIds, type LabDecision } from '../lib/labDataset';
@@ -9,12 +9,11 @@ import {
 } from '../lib/labAnalysis';
 import { storageService } from '../services/storageService';
 import { labExcursion, type LabExcursion } from '../lib/labExcursion';
-import { cancelledOrderOutcome, type OutcomeCandle } from '../lib/entryOrderOutcome';
-import { LAB_SETUP_MIN, LAB_TAG_MIN, labManagement, labSetups, labTime, labUntaken, labUntakenUsd, type LabUntakenItem } from '../lib/labSections';
+import type { OutcomeCandle } from '../lib/entryOrderOutcome';
+import { LAB_SETUP_MIN, LAB_TAG_MIN, labManagement, labSetups, labTime } from '../lib/labSections';
 import { loadMarketCandles } from '../services/marketData';
 import { resolveMarketSymbol } from '../services/marketDataCalculations';
-import { futuresSymbolRoot, pointValueUsd } from '../services/futuresContractSpecs';
-import { loadUntakenOrders } from '../services/untakenOrders';
+import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 
 /**
  * Nový Lab (živý režim): jedna stránka, sekce podle otázek, každá karta =
@@ -23,8 +22,6 @@ import { loadUntakenOrders } from '../services/untakenOrders';
  * Čísla počítá `lib/labAnalysis.ts`.
  */
 type Period = 7 | 30 | 0;
-/** Začátek dat deníku Tradovate (nevzaté obchody se načítají od něj). */
-const LAB_DATA_SINCE_MS = Date.parse('2026-09-01T00:00:00Z');
 
 const PRAGUE_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit' });
 const pragueDayKey = (ms: number) => PRAGUE_DAY.format(ms);
@@ -145,21 +142,13 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
     const from = Date.now() - period * 86_400_000;
     return base.filter(decision => decision.entryAt >= from);
   }, [base, period]);
-  // Nevzaté obchody (vlastní tabulka) — od začátku dat, ne jen od 1. 10. jako fronta Hodnotit.
-  const [untakenTrades, setUntakenTrades] = useState<Trade[]>([]);
-  useEffect(() => { let alive = true; void loadUntakenOrders(LAB_DATA_SINCE_MS).then(rows => { if (alive) setUntakenTrades(rows); }); return () => { alive = false; }; }, []);
-  const untakenInPeriod = useMemo(() => {
-    const from = period ? Date.now() - period * 86_400_000 : 0;
-    return untakenTrades.filter(trade => trade.untaken && trade.untaken.order.placedAt >= from);
-  }, [period, untakenTrades]);
 
-  // Svíčky (1m) po dnech pro MFE/MAE, „kdybys držel“ a nevzaté obchody. Databento je až od 26. 9.
+  // Svíčky (1m) po dnech pro MFE/MAE a „kdybys držel“. Databento je až od 26. 9.
   const candleRequests = useMemo(() => {
     const keys = new Set<string>();
     for (const d of decisions) if (d.symbol) keys.add(`${d.symbol}|${d.dayKey}`);
-    for (const trade of untakenInPeriod) { const o = trade.untaken!.order; keys.add(`${o.symbol}|${pragueDayKey(o.placedAt)}`); }
     return [...keys].sort();
-  }, [decisions, untakenInPeriod]);
+  }, [decisions]);
   const { candles, loading: candlesLoading } = useLabCandles(candleRequests);
   const candlesFor = (symbol: string) => candles.get(futuresSymbolRoot(symbol)) ?? [];
   const excursions = useMemo(() => {
@@ -173,21 +162,6 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles, decisions]);
-  const untakenItems = useMemo<LabUntakenItem[]>(() => untakenInPeriod.filter((trade, index, list) => {
-    // Kopie zrušeného vstupu na followerech (jiné připojení nezná vazby kopírky):
-    // stejný směr, typ a cena zadané do 2 s = jeden nevzatý obchod.
-    const o = trade.untaken!.order;
-    return !list.slice(0, index).some(other => {
-      const p = other.untaken!.order;
-      return p.side === o.side && p.type === o.type && p.legs[0]?.price === o.legs[0]?.price && Math.abs(p.placedAt - o.placedAt) <= 2_000;
-    });
-  }).map(trade => {
-    const meta = trade.untaken!;
-    const list = candlesFor(meta.order.symbol);
-    return { id: String(trade.id), order: meta.order, pointValue: meta.review?.pointValue ?? pointValueUsd(meta.order.symbol) ?? 2, reason: meta.review?.reason ?? null,
-      outcome: meta.review?.outcome ?? (list.length ? cancelledOrderOutcome(meta.order, list) : null) };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [candles, untakenInPeriod]);
 
   const tradeById = useMemo(() => new Map(trades.map(trade => [String(trade.id), trade])), [trades]);
   const open = (decision: LabDecision) => { const trade = tradeById.get(decision.leaderTradeId); if (trade) onOpenTrade?.(trade); };
@@ -232,7 +206,7 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
 
       {/* Telefon: jeden řádek posuvný do strany; desktop: zalomení. */}
       <nav className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0">
-        {(['a', 'b', 'c', 'd', 'e', 'f'] as const).map(id => {
+        {(['a', 'b', 'c', 'e', 'f'] as const).map(id => {
           const { icon: Icon, title, color } = SECTION[id];
           return (
             <a key={id} href={`#lab-${id}`} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-bold text-[var(--text-primary)] transition-all hover:border-indigo-500/30 active:scale-95">
@@ -248,7 +222,6 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
       <PlanSection decisions={decisions} unit={unit} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
       <DisciplineSection decisions={decisions} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
       <ManagementSection decisions={decisions} excursions={excursions} candlesLoading={candlesLoading} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
-      <UntakenSection items={untakenItems} candlesLoading={candlesLoading} ui={ui} />
       <TimeSection decisions={decisions} unit={unit} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
       <SetupSection decisions={decisions} unit={unit} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
 
@@ -263,7 +236,6 @@ const SECTION = {
   a: { icon: ClipboardCheck, title: 'Plán vs. mimo plán', color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
   b: { icon: CalendarDays, title: 'Disciplína dne', color: 'text-rose-500', bg: 'bg-rose-500/10' },
   c: { icon: SlidersHorizontal, title: 'Řízení obchodu', color: 'text-amber-500', bg: 'bg-amber-500/10' },
-  d: { icon: CircleSlash, title: 'Nevzaté', color: 'text-violet-500', bg: 'bg-violet-500/10' },
   e: { icon: Clock3, title: 'Čas', color: 'text-sky-500', bg: 'bg-sky-500/10' },
   f: { icon: Tags, title: 'Setupy', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
 } as const;
@@ -596,66 +568,6 @@ function ManagementSection({ decisions, excursions, candlesLoading, ui, onDrill 
           <Meta ui={ui} onDrill={m.holdWinners.decisions.length ? () => onDrill('Vítězové před TP', m.holdWinners.decisions) : undefined}>„první magnet vs. daleký level“ · původní SL/TP</Meta>
         </div>
       </div>
-    </section>
-  );
-}
-
-// ── D ────────────────────────────────────────────────────────────────────────
-
-function UntakenSection({ items, candlesLoading, ui }: { items: LabUntakenItem[]; candlesLoading: boolean; ui: Ui }) {
-  const u = useMemo(() => labUntaken(items), [items]);
-  if (!items.length) {
-    return (
-      <section id="lab-d" className="scroll-mt-20">
-        <SectionHead letter="D" title="Nevzaté obchody" sub="Zrušené vstupy se SL/TP." ui={ui} />
-        <div className={ui.card}><p className={`text-xs ${ui.muted}`}>V tomto období žádný zrušený vstup se SL/TP.</p></div>
-      </section>
-    );
-  }
-  const judged = u.tp + u.sl + u.nofill;
-  return (
-    <section id="lab-d" className="scroll-mt-20">
-      <SectionHead letter="D" title="Nevzaté obchody" sub="Zrušené vstupy se SL/TP — kdybys je nezrušil." ui={ui} />
-      <div className="grid gap-3 lg:grid-cols-2">
-        <div className={ui.card}>
-          <p className={eyebrow}>Kdybys je nezrušil</p>
-          <Claim ui={ui}>Rušením jsi přišel o <span className="text-rose-500">{usd(u.missed, false)}</span> ({u.tp}× by šel do TP) a ušetřil <span className="text-emerald-500">{usd(u.saved, false)}</span> ({u.sl}× do SL). {u.nofill ? `${u.nofill}× by se nevyplnil.` : ''}</Claim>
-          {judged > 0 && <div className="mt-3 flex h-7 overflow-hidden rounded-lg text-[10.5px] font-bold text-white">
-            {u.tp > 0 && <span className="grid place-items-center bg-rose-500" style={{ flex: u.tp }}>{u.tp} × TP</span>}
-            {u.sl > 0 && <span className="grid place-items-center bg-emerald-500" style={{ flex: u.sl }}>{u.sl} × SL</span>}
-            {u.nofill > 0 && <span className="grid place-items-center bg-amber-500" style={{ flex: u.nofill }}>{u.nofill} × nevyplnil</span>}
-          </div>}
-          <div className="mt-3 grid gap-2">
-            {u.buckets.filter(b => b.items.length).map(b => (
-              <div key={b.label} className="grid grid-cols-[84px_1fr_72px] items-center gap-2 text-xs">
-                <span className={ui.muted}>stál {b.label}</span>
-                <span className={`flex h-4 overflow-hidden rounded bg-[var(--border-subtle)]`}>
-                  <span className="bg-rose-500" style={{ flex: b.tp }} /><span className="bg-emerald-500" style={{ flex: b.sl }} /><span className="bg-amber-500" style={{ flex: b.nofill }} />
-                  <span style={{ flex: Math.max(0, b.items.length - b.tp - b.sl - b.nofill) }} />
-                </span>
-                <b className={`text-right tabular-nums ${tone(b.netUsd)}`}>{usd(b.netUsd)}</b>
-              </div>
-            ))}
-          </div>
-          <Meta ui={ui}>z {plural(u.count, 'nevzatého', 'nevzatých', 'nevzatých')} · správně zrušené (SL / nevyplnil) {u.correct} z {judged}{candlesLoading && <span className="ml-1 text-indigo-500">· načítám svíčky</span>}</Meta>
-        </div>
-        <div className={ui.card}>
-          <p className={eyebrow}>Sedí tvoje důvody?</p>
-          {u.reasons.length ? <>
-            <Claim ui={ui}>Jak často výsledek odpovídá důvodu, který jsi dal.</Claim>
-            <div className="mt-3 grid gap-2">
-              {u.reasons.map(row => (
-                <div key={row.reason} className="grid grid-cols-[1fr_auto] items-center gap-2 text-xs">
-                  <span className={ui.ink}>{row.reason} <span className="text-[var(--text-muted)]">{row.items.length}×</span></span>
-                  <b className={`rounded-full px-2 py-0.5 text-[11px] ${row.judged ? row.hits / row.judged >= 0.6 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-500' : 'bg-[var(--border-subtle)] text-[var(--text-muted)]'}`}>{row.judged ? `${row.hits} / ${row.judged}` : '—'}</b>
-                </div>
-              ))}
-            </div>
-          </> : <Claim ui={ui}>Zatím žádný nevzatý obchod s důvodem — ohodnoť je v Hodnotit.</Claim>}
-          <Meta ui={ui}>{u.unreviewed ? `${u.unreviewed} bez důvodu (Hodnotit je bere od 1. 10.)` : 'všechny ohodnocené'} · nepočítá se do P&L ani statistik</Meta>
-        </div>
-      </div>
-      <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">Seznam nevzatých obchodů s grafem je v Hodnotit. {items.filter(i => labUntakenUsd(i) == null && i.outcome?.kind !== 'nofill').length > 0 && 'Část zatím bez výsledku (chybí svíčky).'}</p>
     </section>
   );
 }

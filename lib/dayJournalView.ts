@@ -22,7 +22,7 @@ const exitMs = (trade: Trade) => {
 /** Obchody, jejichž vstup padl na pražský den (bez nevzatých příkazů). */
 export function tradesForDay(trades: readonly Trade[], day: string): Trade[] {
   return trades
-    .filter(trade => !trade.untaken && trade.executionStatus !== 'Missed')
+    .filter(trade => trade.executionStatus !== 'Missed')
     .filter(trade => { const at = tradeTimeMs(trade); return at > 0 && pragueDayKey(at) === day; })
     .sort((a, b) => tradeTimeMs(a) - tradeTimeMs(b));
 }

@@ -81,16 +81,6 @@ describe('LIVE command end-to-end performance', () => {
     expect(liveCommandTraceReadyToComplete(trace({ resultMs: 300, resultStatus: 'blocked' }))).toBe(true);
   });
 
-  it('propíše stejnou exposure paint stopu do desktopového i telefonního grafu', () => {
-    const desk = readFileSync('components/TradovateLiveDesk.tsx', 'utf8');
-    const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
-    expect(desk).toMatch(/liveExposurePaint=\{liveExposurePaint\}/);
-    expect(desk).toMatch(/trade: phoneTrade,\s*\/\/[^\n]*\n\s*liveExposurePaint,/);
-    expect(phone).toMatch(/const paint = slots\.liveExposurePaint;/);
-    expect(phone).toMatch(/markLiveCommandPaint\(\{/);
-    expect(phone).toMatch(/requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame/);
-  });
-
   const orderPaint = (operationId: string) => markLiveCommandPaint({ operationId, stage: 'order', receivedPerformanceAt: performance.now() });
   it('pozdější fill Limitu i připravenost správy jdou do téže stopy s původní kotvou', () => {
     const operationId = 'entry:later-fill';

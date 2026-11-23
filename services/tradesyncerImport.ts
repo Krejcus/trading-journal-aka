@@ -13,11 +13,11 @@
  *      proto se spolehlivé SL/TP/R:R bere z napárovaného AlphaBridge leadera.
  *   5. link na AlphaBridge leader (cena + čas) → zdědí SL/TP/screen/tagy/session.
  *
- * Reuse: CONTRACT_SPECS / pointValueFor / parseContractRoot z tradovateImport.
+ * Reuse: CONTRACT_SPECS / pointValueFor / parseContractRoot z importedTrades.
  */
 import Papa from 'papaparse';
 import type { Trade } from '../types';
-import { pointValueFor, parseContractRoot } from './tradovateImport';
+import { pointValueFor, parseContractRoot } from './importedTrades';
 
 export const TS_IMPORT_TAG = 'tradesyncer';
 

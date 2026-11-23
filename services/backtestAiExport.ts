@@ -1,6 +1,6 @@
 import type { Account, Trade } from '../types';
 import type { BacktestRun } from './backtestTypes';
-import { pointValueFor } from './tradovateImport';
+import { pointValueFor } from './importedTrades';
 
 const derivePositionSize = (trade: Trade): number | null => {
   const t = trade as Trade & { quantity?: number };
