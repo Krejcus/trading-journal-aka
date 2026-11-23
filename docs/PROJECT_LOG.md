@@ -288,6 +288,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-23 — Claude: odstranění Tradovate, TradingView a IBKR z appky — fáze 0 a 1 (worker odinstalován)
+
+Rozhodnutí Filipa: přechod čistě na Rithmic (+ starší Databento). Tradovate (kopírka, OAuth, import deníku,
+LIVE), zdroje ceny/svíček z TradingView a IBKR a ruční Tradovate CSV import jdou z appky pryč. Zůstávají
+obchody v deníku včetně screenshotů z kopírky a Pine indikátory ve složce `tradingview/`. Přes Tradovate už
+Filipovi nic neběží. Budoucí Rithmic kopírka se nestaví na Tradovate architektuře (DB fronta, relay,
+REST čtení, rozpočty dotazů = zdroj latence); přebírá se jen `docs/COPIER_INVARIANTS.md`, scénáře testů
+a případně malé čisté funkce z archivu.
+
+- **Archiv kódu:** tag `archive/tradovate-final-20261123` (= 422a65e4, pushnut) a ověřený bundle všech
+  372 refů `~/AlphaTrade-backups/code/alphatrade-tradovate-final-20261123.bundle` (66 MB).
+- **Záloha DB (cílená):** `~/AlphaTrade-backups/supabase/manual-tradovate-20261123/tradovate-tables.dump`
+  (325 MB, 42 tabulek: tradovate_*, copier_*, copy_groups, tradecopia_*, tv_*, mac_companion_*, trades,
+  accounts, importy, soukromé poznámky; BEZ dat `tradovate_oauth_connections`). Noční úplná záloha
+  padá 21.–23. 11. (server zavírá spojení během pg_dump), poslední úplná 20. 11. — před DROP tabulek
+  je podmínkou čerstvá úplná záloha.
+- **Worker odinstalován 08:34** po verdiktu `copier-design-critic` (OPRAVIT PŘED PROVEDENÍM → opraveno):
+  tvrdá brána (armed=false, retiredGroup, nic rozpracovaného), `launchctl bootout` + `disable`, čistý
+  STOP v logu, plist i celý adresář stavu přesunuty do `~/AlphaTrade-backups/copier-final-20261123/`
+  (soubor NESPOUSTET.txt). Worker od 19. 11. běžel bez skupiny a účty 72663786/88/85 neviděl, takže
+  jeho „flat“ nic nedokazoval. Otevřený incident manualRecovery bb9faaa4 (18. 11., follower 72663788
+  pozice 10 MNQZ6, deník později 0) zůstává v archivu neuklizený.
+- **Zbývá na Filipovi:** ruční kontrola všech Tradovate loginů (Lucid, Tradeify, FundedNext; účty
+  72663784–88, 61038658) na pozice a working/Suspended příkazy PŘED zrušením OAuth; odvolat zařízení
+  „AlphaTrade Mac · FundedNext“ (c8b90c47) v LIVE → Připojení; pak zrušit OAuth na všech loginech.
+  Brzdy OFF/Kill v UI teď nic nebrzdí — jediná brzda je přímo v Tradovate.
+- **Neověřeno:** obsah `tradovate_copier_commands` (pending/claimed) a neodvolaná zařízení v produkci.
+- **Zmrazení obchodů (návrh, nic nezapsáno):** 5 455 obchodů, 1 784 z Tradovate importu
+  (`copierTradeId` `journal:*`). Deník jim čísla bere za běhu z `tradovate_journal_positions` a bez
+  záznamu je SCHOVÁ (`mergeJournalTradeFacts`); graf obchodu bere `executionHistory`, screenshoty jdou
+  přes view `journal_trade_snapshots` (bucket `copier-snapshots`). Před DROP se musí fakta,
+  historie a cesty screenshotů zapsat k obchodům.
+- Mazání kódu běží ve worktree `~/alphatrade-worktrees/remove-tradovate`, větev
+  `claude/remove-tradovate-20261123`; nic se nepushne, dokud nebude zmrazení hotové a ověřené
+  (push na main = produkce).
+
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
 - Příkaz z panelu nese množství zobrazené pozice a ID jejích ochran. Služba odmítne zastaralé přikoupení i po zásahu stopu. U částečného zavření ověří vybraný vstup, vyplnění jeho TP, zrušení sesterského SL, přesný zůstatek pozice a původní ochrany zbývajících kusů.
