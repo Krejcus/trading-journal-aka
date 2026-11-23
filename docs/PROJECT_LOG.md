@@ -389,6 +389,17 @@ a případně malé čisté funkce z archivu.
   a kopírku v `LiveTradingScreen`, `useLiveChartData`, `tradecopiaLiveService`, `tradovateLiveView`,
   `copierEngine` + outboxy přes `groupLimitLifecycle` a `manualEntryPreview` (~41 souborů s Tradovate
   nebo kopírkou v názvu). Dál vlna 4: DROP tabulek po čerstvé úplné záloze.
+- **Noční záloha opravena (23. 11. večer):** nepadala kvůli serveru. Běžela napevno ve 3:30 a spoléhala,
+  že Mac drží vzhůru worker kopírky; ten od 19. 11. běžel bez skupiny a 23. 11. zmizel, MacBook v noci na
+  baterii spal a budil se na 2 s (DarkWake, `pmset -g log`), takže `pg_dump` i `psql` ztrácely spojení
+  (FAIL 19., 21.; 22. a 23. mylně zapsáno jako PARTIAL „Storage neúplný“). Nově launchd kontroluje každou
+  hodinu v :30 a `scripts/backup/nightly.sh` rozhoduje: jedna záloha denně, nejraději 3:00–7:00; jen když
+  je Mac plně vzhůru (`pmset -g systemstate` s „Graphics“); zmeškanou noc dožene po 26 h, v obchodní
+  době až po 44 h; běh drží Mac vzhůru přes `caffeinate -i`; spadlé spojení = FAIL; upozornění nejvýš
+  jednou za 12 h. Test `tests/backupNightlyGate.test.ts` (falešná záloha, pmset a čas). Ověřeno naostro
+  přes launchd: záloha `20261123T204206Z` OK (378 MB, 147 tabulek, 5 087 314 řádků, Storage 2452/2452).
+  Tím je splněná podmínka čerstvé úplné zálohy pro DROP Tradovate tabulek (vlna 4). Zkušební obnova
+  této zálohy neproběhla. Volno na disku 12 GB — záloha odmítne pod 11 GB.
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
