@@ -314,9 +314,17 @@ a případně malé čisté funkce z archivu.
   72663784–88, 61038658) na pozice a working/Suspended příkazy PŘED zrušením OAuth; odvolat zařízení
   „AlphaTrade Mac · FundedNext“ (c8b90c47) v LIVE → Připojení; pak zrušit OAuth na všech loginech.
   Brzdy OFF/Kill v UI teď nic nebrzdí — jediná brzda je přímo v Tradovate.
-- **Neověřeno:** obsah `tradovate_copier_commands` (pending/claimed) a neodvolaná zařízení v produkci.
-- **Zmrazení obchodů (návrh, nic nezapsáno):** 5 455 obchodů, 1 784 z Tradovate importu
-  (`copierTradeId` `journal:*`). Deník jim čísla bere za běhu z `tradovate_journal_positions` a bez
+- **Doplněno týž den (souhlas Filipa):** Filip ověřil, že na žádném loginu není pozice ani příkaz.
+  Fronta `tradovate_copier_commands` bez pending (jen 2 staré `claimed` z 13. 9.). Jednou transakcí
+  zrcadlící `revokeTradovateCopierDevice` / `disconnectTradovateConnection` odvolána všechna 4 zařízení
+  (c8b90c47 + 3 stará z MacBooku) a odpojena 2 připojení (Lucid 33ae034f, 7cce8c5b): tokeny smazány,
+  `disconnected`/`user`. Grant na straně Tradovate formálně trvá, ale tokeny nikdo nedrží (ani záloha).
+  Cron `journal-import` od teď nemá co číst.
+- **Zmrazení obchodů (návrh, nic nezapsáno):** 5 455 obchodů, z toho 1 550 potvrzených z Tradovate
+  importu (`copierTradeId` `journal:*`, jediný uživatel). Všech 18 povolených polí faktů je v `trades.data`
+  už identických s `tradovate_journal_positions.facts` (P&L −35 024,60 USD na cent) → čísla netřeba
+  přepisovat. Přenést: historii fillů (1,8 MB, Filip: do soukromé tabulky) a 2 042 vazeb screenshotů
+  (1 016 obchodů). Deník jim čísla bere za běhu z `tradovate_journal_positions` a bez
   záznamu je SCHOVÁ (`mergeJournalTradeFacts`); graf obchodu bere `executionHistory`, screenshoty jdou
   přes view `journal_trade_snapshots` (bucket `copier-snapshots`). Před DROP se musí fakta,
   historie a cesty screenshotů zapsat k obchodům.
