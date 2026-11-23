@@ -499,6 +499,10 @@ describe('LIVE desk jen pro Rithmic (23. 11. 2026)', () => {
     expect(tab).toMatch(/const ACTIONS: CopierActions = \{ onArm: \(\) => \(\{ ok: false, gate: NOT_READY \}\), onDisarm: \(\) => undefined \};/);
     expect(tab).not.toMatch(/onKill|onFlatten|onClosePosition|onFixProtection|onTemplate/);
   });
+  it('odchod z grafu na „přehled“ (× Zavřít graf, Live Dashboard →) vede na Kopírku, ne do prázdna', () => {
+    expect(desk).toContain("const next = requested === 'overview' ? (configured ? 'copier' : null) : requested;");
+    expect(desk).toMatch(/\}, \[configured\]\);/);
+  });
   it('pád grafu se zapamatuje a ukáže chybu místo prázdné plochy', () => {
     expect(desk).toContain('rememberLiveChartCrash(); noteChartCrash();');
     expect(desk.match(/<LiveSlotFailure label="Rithmic graf" \/>/g)?.length).toBeGreaterThanOrEqual(2);

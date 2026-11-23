@@ -57,14 +57,17 @@ const LiveDesk: React.FC<LiveDeskProps> = ({ userId, theme, phoneChart }) => {
     ...(configured ? [{ id: 'copier' as const, label: 'Kopírka', icon: Network }] : []),
   ];
 
-  const navigateToTab = useCallback((next: LiveTradingTab['id']) => {
+  const navigateToTab = useCallback((requested: LiveTradingTab['id']) => {
+    // Sdílený LIVE graf zná ještě záložku „přehled“ (× Zavřít graf, „Live Dashboard →“ při načítání).
+    // Přehled už není, odchod z grafu vede na Kopírku; bez služby zůstane graf.
+    const next = requested === 'overview' ? (configured ? 'copier' : null) : requested;
     if (next !== 'chart' && next !== 'copier') return;
     setTab(next);
     const url = new URL(window.location.href);
     if (next === 'chart') url.searchParams.delete('liveTab'); else url.searchParams.set('liveTab', next);
     const href = `${url.pathname}${url.search}${url.hash}`;
     if (href !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.replaceState(null, '', href);
-  }, []);
+  }, [configured]);
 
   useEffect(() => {
     if (tab === 'chart' && !chartAvailable && configured) setTab('copier');

@@ -332,6 +332,18 @@ a případně malé čisté funkce z archivu.
   `claude/remove-tradovate-20261123`; nic se nepushne, dokud nebude zmrazení hotové a ověřené
   (push na main = produkce).
 
+- **Zmrazení provedeno a vlny 1–2 nasazeny (Filip „můžeš nasadit hned“):** migrace
+  `20261123100000_freeze_tradovate_journal` aplikována (1 550 historií v `trade_execution_history`,
+  1 016 obchodům vazby screenshotů v `trades.data.copierSnapshots`); deník čte jen `trades` + tuto tabulku.
+  Kód: ~836 souborů / ~200 500 řádků pryč (Tradovate API, worker, relay, OAuth, import deníku, nevzaté
+  obchody, `extension/`, `macos/AlphaTradeStatus`, Tradovate LIVE desk a UI kopírky). LIVE = nový
+  `components/LiveDesk.tsx` jen pro Rithmic (Graf + Kopírka), sdílené komponenty dostávají prázdný stav
+  kopírky `lib/liveNoCopier.ts`. `copier-design-critic`: OK s výhradami (INV-UI-01/02/03, INV-FRESH-03,
+  INV-DEFAULT-02); opravena mrtvá navigace „přehled“ → Kopírka. Výhrada: po pádu Rithmic grafu není
+  v appce brzda (platilo i dřív). tsc, 4 309+ testů, build zelené. Obchod z nového desku naostro NEOVĚŘEN.
+  Zbývá vlna 3 (~85 souborů s Tradovate/kopírka v názvu kvůli typům, AccountsManager OAuth, iOS widgety),
+  vlna 4 (DROP tabulek po čerstvé úplné záloze), úklid worktree.
+
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
 - Příkaz z panelu nese množství zobrazené pozice a ID jejích ochran. Služba odmítne zastaralé přikoupení i po zásahu stopu. U částečného zavření ověří vybraný vstup, vyplnění jeho TP, zrušení sesterského SL, přesný zůstatek pozice a původní ochrany zbývajících kusů.
