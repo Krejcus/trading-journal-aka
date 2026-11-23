@@ -92,7 +92,7 @@ s Filipem.
 | Vrstva | Co obsahuje | Kde a jak dlouho | Jak obnovit |
 |---|---|---|---|
 | Denní zálohy Supabase (plán Pro) | fyzická kopie celé DB | u Supabase, 7 dní; PITR vypnutý → ztráta až ~24 h | Dashboard → Database → Backups; jen celá DB, přepíše vše novější; nejde stáhnout |
-| Naše logická záloha | celá DB (`pg_dump -Fc`), role, schéma, soubory ze Storage, git bundle (jen ruční běh) | `~/AlphaTrade-backups/supabase/<UTC čas>/` (stará cesta `~/Documents/AlphaTrade-backups/supabase` je odkaz sem); každou noc ve 3:30, drží poslední 3 + poslední zkušebně obnovenou; soubory Storage ve sdíleném `storage-mirror/` | po tabulkách i celá, viz scénáře níže |
+| Naše logická záloha | celá DB (`pg_dump -Fc`), role, schéma, soubory ze Storage, git bundle (jen ruční běh) | `~/AlphaTrade-backups/supabase/<UTC čas>/` (stará cesta `~/Documents/AlphaTrade-backups/supabase` je odkaz sem); jednou denně (nejraději v noci, viz Noční záloha), drží poslední 3 + poslední zkušebně obnovenou; soubory Storage ve sdíleném `storage-mirror/` | po tabulkách i celá, viz scénáře níže |
 | Kód | všechny commitnuté větve | GitHub + `alphatrade-git.bundle` v každé záloze | `git clone alphatrade-git.bundle` |
 
 Ověřeno 25. 10. 2026: Supabase má 7 denních záloh (poslední 24. 10. 22:15 UTC),
@@ -158,12 +158,28 @@ denní zálohy); pro případ ztráty obojího občas zkopírovat poslední zál
 
 ### Noční záloha (launchd, od 26. 10. 2026)
 
-Úloha `com.alphatrade.supabase-backup` spouští zálohu každý den ve 3:30
-místního času (Mac je v noci vzhůru kvůli workeru kopírky, `caffeinate`).
+Úloha `com.alphatrade.supabase-backup` se spouští **každou hodinu v :30**
+a `scripts/backup/nightly.sh` sám rozhodne, jestli je čas. Cíl je jedna
+záloha denně, nejraději v noci (3:00–7:00).
+
+Do 23. 11. 2026 běžela napevno ve 3:30 a spoléhala na to, že Mac drží vzhůru
+worker kopírky. Ten od 19. 11. běžel bez skupiny a 23. 11. byl odinstalován;
+MacBook pak v noci na baterii spal a budil se jen na dvě vteřiny (DarkWake),
+takže záloze uprostřed práce padalo spojení s databází (19., 21.–23. 11.).
+Od 23. 11. proto:
+
+- v krátkém probuzení (`pmset -g systemstate` bez „Graphics“) se záloha
+  nespouští; zmeškanou noc dožene první celá hodina, kdy je Mac opravdu vzhůru
+  a poslední záloha je starší než 26 h;
+- v obchodní době (Po–Pá 8:00–22:30) se dohání jen se zálohou starší než 44 h;
+- během zálohy drží Mac vzhůru `caffeinate -i` (zavřené víko na baterii ho
+  uspí i tak — zkusí se znovu za hodinu);
+- spadlé spojení bez nové zálohy se zapisuje jako FAIL (dřív mylně PARTIAL
+  „Storage neúplný“); upozornění přijde nejvýš jednou za 12 h.
 
 ```bash
 ./scripts/backup/install-nightly.sh              # instalace, nebo aktualizace po změně skriptů zálohy
-./scripts/backup/install-nightly.sh --run-now    # navíc hned jeden běh přes launchd (mimo obchodní dobu)
+./scripts/backup/install-nightly.sh --run-now    # navíc hned jeden běh přes launchd (bez ohledu na čas a stáří zálohy)
 ./scripts/backup/install-nightly.sh --uninstall  # odebrat (zálohy zůstanou)
 ```
 
@@ -178,8 +194,8 @@ místního času (Mac je v noci vzhůru kvůli workeru kopírky, `caffeinate`).
 - Noční běh = `backup-supabase.sh --no-git --keep 3`: bez git bundle (repo je
   v `~/Documents` a na GitHubu), drží poslední 3 noční zálohy a navíc
   poslední zálohu se zkušební obnovou PASS. Ruční běh dál drží 5 a dělá bundle.
-- Když se Mac probudí až v obchodní době, běh se přeskočí; upozornění přijde,
-  jen když je poslední kompletní záloha starší než 2 dny.
+- Přeskočení (Mac spí, obchodní doba) se do `nightly-runs.log` zapíše jako
+  SKIP nejvýš jednou denně.
 - Selhání (kód 1) nebo neúplné soubory ze Storage (kód 2) = upozornění
   „AlphaTrade záloha“ v Centru oznámení. Nejčastější důvod je málo místa:
   záloha nezačne, když by zbylo méně než 10 GB (26. 10. bylo volno 11,9 GB,

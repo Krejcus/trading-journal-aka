@@ -89,7 +89,7 @@ if [ "$CHECK" = 1 ]; then
   [ "$TRADING_TIME" = 0 ] || log "Pozor: teď je obchodní doba — ostrá záloha bude chtít --force."
   log "Kontrola OK — záloha by šla spustit."; exit 0
 fi
-[ "$TRADING_TIME" = 0 ] || [ "$FORCE" = 1 ] || die "Obchodní doba (Po–Pá 8:00–22:30 Praha): pg_dump by zatížil DB, přes kterou jede kopírka. Spusť večer/o víkendu, nebo s --force."
+[ "$TRADING_TIME" = 0 ] || [ "$FORCE" = 1 ] || die "Obchodní doba (Po–Pá 8:00–22:30 Praha): pg_dump na pár minut zatíží databázi i tento Mac. Spusť večer/o víkendu, nebo s --force."
 
 # --- Zámek a pracovní adresář -------------------------------------------------
 if ! mkdir "$LOCK" 2>/dev/null; then
