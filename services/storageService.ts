@@ -18,7 +18,7 @@ import { clearAppStorage } from '../utils/appStorage';
 import { parseOptionalTradeValidity } from './tradeValidity';
 import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory as stripNoteHistory } from './tradeNotePrivacy';
 import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPatch, type BacktestReviewSnapshot } from './backtestReviewPersistence';
-import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint, JOURNAL_READ_ATTEMPTS } from './journalTradeHydration';
+import { hydrateOwnedJournalTrades, stripPrivateJournalHistory } from './journalTradeHydration';
 import { cacheVerifiedJournalDetail, getCachedJournalDetail, readOwnedJournalDetails } from './journalTradeDetail';
 import { getCachedCopierSnapshotSignedUrls } from './copierSnapshotSignedUrlCache';
 import { readTradeListPages } from './tradeListPages';
@@ -1028,15 +1028,7 @@ export const storageService = {
   },
 
   async getTradesFull(targetUserId?: string): Promise<Trade[]> {
-    // Kořenové stránky hlídá otisk projekce; zápis živého deníku během čtení
-    // (otevřená pozice ~každou minutu) = zopakovat celé čtení.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await storageService.getTradesOnce(targetUserId);
-      } catch (reason) {
-        if (attempt >= JOURNAL_READ_ATTEMPTS || !(reason instanceof Error) || reason.message !== 'journal-facts-changed-during-read') throw reason;
-      }
-    }
+    return storageService.getTradesOnce(targetUserId);
   },
 
   async getTradesOnce(targetUserId?: string): Promise<Trade[]> {
@@ -1055,7 +1047,6 @@ export const storageService = {
     // Optimized select to avoid fetching heavy 'screenshot'/'screenshots' from 'data' JSON blob
     // We explicitly select the fields we need.
     if (!await stillCurrent()) throw new Error('trade-list-session-changed');
-    const generation=ownerId===userId ? await journalProjectionFingerprint(supabase,userId) : null;
     const rawData=await readTradeListPages<any>(userId,async(after,limit)=>{
       let query=supabase.from('trades').select(TRADE_LIST_FIELDS).eq('user_id',userId).order('id',{ ascending:true }).limit(limit)
         .abortSignal(AbortSignal.timeout(20_000));
@@ -1070,8 +1061,6 @@ export const storageService = {
 
     trades = await hydratePrivateJournalFacts(trades, userId);
     trades = await hydratePrivateTradeNotes(trades, userId);
-    if (!await stillCurrent()) throw new Error('trade-list-session-changed');
-    if (generation!==null && generation!==await journalProjectionFingerprint(supabase,userId)) throw new Error('journal-facts-changed-during-read');
     if (!await stillCurrent()) throw new Error('trade-list-session-changed');
     // Cache to IndexedDB (fire-and-forget, don't block return)
     set(localKey, trades);

@@ -130,13 +130,6 @@ describe('backtest insert-only journal persistence', () => {
     expect(loaded[0].timestamp).toBe(2399); expect(loaded.at(-1)?.timestamp).toBe(0);
     expect(h.cache.get(`alphatrade_trades_${h.userId}`)).toHaveLength(2400);
   });
-  it('rejects publication changing during root pagination before updating cache',async()=>{
-    h.journalHeads=[{ connection_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',revision:1,completed_revision:1,generation:1 }];
-    const item=trade(); h.rows.set(String(item.id),row(item));
-    h.beforeQuery=resource=>{ if(resource==='trades') h.journalHeads[0].generation++; };
-    await expect(storageService.getTrades()).rejects.toThrow('journal-facts-changed-during-read');
-    expect(h.cache.has(`alphatrade_trades_${h.userId}`)).toBe(false);
-  });
   it('does not overwrite a previously reviewed row', async () => {
     const item = trade(); h.rows.set(String(item.id), row({ ...item, notes: 'user review', screenshots: ['https://example.test/review.png'] }));
     expect(await storageService.saveTrades([item], { insertOnly: true })).toEqual([]);

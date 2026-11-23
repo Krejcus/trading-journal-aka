@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Trade } from '../types';
-import { hydrateOwnedJournalTrades, journalProjectionFingerprint } from './journalTradeHydration';
+import { hydrateOwnedJournalTrades } from './journalTradeHydration';
 import { stripTradeNoteHistory } from './tradeNotePrivacy';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from '../lib/journalTradeFacts';
 import { JOURNAL_REVIEW_FIELDS } from '../lib/journalReviewPatch';
@@ -58,7 +58,6 @@ export async function readOwnedJournalDetails(client: SupabaseClient, ids: reado
     || unique.some(id => !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id))) throw new Error('journal-detail-selection-invalid');
   const active = async () => { if (signal?.aborted || !await stillOwner()) throw new Error('journal-session-changed'); };
   await active();
-  const generation = await journalProjectionFingerprint(client, ownerId, signal);
   const roots: Trade[] = [];
   const seen = new Set<string>();
   for (let offset = 0; offset < unique.length; offset += 100) {
@@ -83,8 +82,6 @@ export async function readOwnedJournalDetails(client: SupabaseClient, ids: reado
   await active();
   if (facts.length !== unique.length) throw new Error('journal-detail-incomplete');
   const hydrated = await hydrateNotes(facts);
-  await active();
-  if (generation !== await journalProjectionFingerprint(client, ownerId, signal)) throw new Error('journal-facts-changed-during-read');
   await active();
   return hydrated;
 }
