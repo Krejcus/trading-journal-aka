@@ -53,8 +53,19 @@ Archiv: tag `archive/tradovate-final-20261123`.
 - **Nové zjištění:** `tradovate_journal_untaken_orders` = 141 nevzatých příkazů (karty v Hodnotit),
   2 s hodnocením — před DROP rozhodnout, zda zmrazit.
 
+- **Vlna 2 (commit d9761e94 + bfe34d8e, zelené):** nový `components/LiveDesk.tsx` jen pro Rithmic (Graf + Kopírka),
+  sdílené LIVE komponenty dostávají prázdný stav kopírky `lib/liveNoCopier.ts`. Pryč: `TradovateLiveDesk`,
+  `LiveCopyTradeOverview` a celé UI kopírky, import deníku v `App.tsx`, párování Mac aplikace, nevzaté obchody,
+  `extension/`, Tradovate CSV parser (obecné pomocníky → `services/importedTrades.ts`). Proti `origin/main`
+  836 souborů / ~200 500 řádků pryč. tsc čistý, vitest 440 souborů / 4 309 testů, vite build OK. Rithmic graf
+  ověřen v lokální simulaci (QA stránka); samotný LiveDesk s živou službou neověřen (vyžaduje token a přihlášení).
+- **Mac:** AlphaTrade Status (liště) zastavena, aplikace i spouštěč v Koši.
+- **Zbývá vlna 3:** ~85 souborů s Tradovate/kopírka/TV v názvu, které sdílený LIVE kód importuje kvůli typům
+  (`copierRuntimeController`, `tradecopiaLiveService`, `localCopierAgentProtocol`, `tradovateOAuthConnection`…),
+  `AccountsManager` (OAuth připojení), klientské služby iOS widgetů a Live Activity (jejich API už neexistují).
+  Graf importů v esbuildu NEvidí importy jen pro typy — mazat vždy přes tsc.
+
 ## Otevřené otázky na Filipa
 
-- Rozšíření prohlížeče `extension/` („Alpha Bridge v2", TradingView/FX Replay → appka, naposledy
-  měněno 23. 7.) — smazat?
+- ~~Rozšíření `extension/`~~ smazáno (Filip 23. 11.); nevzaté obchody smazat (Filip 23. 11.).
 - Obchody z importu se cizím (sdílení, propojení) dál neukazují, stejně jako před zmrazením.
