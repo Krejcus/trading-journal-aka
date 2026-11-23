@@ -10,11 +10,11 @@ import {
 } from './tradovateLiveView';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { findTradovatePropPlanPreset, tradovateAccountFirm } from './tradovatePropPlanCatalog';
-import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+import { cmeDisplayTradeDate } from './cmeDisplayDay';
 
 const safeTradovateDisplayTradeDate = (value: string): string | null => {
   const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? tradovateDisplayTradeDate(parsed) : null;
+  return Number.isFinite(parsed) ? cmeDisplayTradeDate(parsed) : null;
 };
 
 const dailyRealizedPnl = (

@@ -1,5 +1,5 @@
 import type { LocalCopierAgentCommandResult } from './liveCopierTypes';
-import type { TradovateLiveTab } from './tradovateLiveTab';
+import type { LiveTabId } from './liveTab';
 import { isCopierBrakeQueuedError } from './copierBrakeDelivery';
 
 export type LiveSafetyAction = 'disarm' | 'kill-switch' | 'flatten-group';
@@ -109,7 +109,7 @@ export const LIVE_SAFETY_BAR_GRACE_MS = 3_000;
  * a ostatní záložky s daty mají cestu na Dashboard, proto `none`.
  */
 export function liveSafetyBarNeed(input: {
-  tab: TradovateLiveTab;
+  tab: LiveTabId;
   chartCrashed: boolean;
   checkingConnection: boolean;
   requiresConnection: boolean;

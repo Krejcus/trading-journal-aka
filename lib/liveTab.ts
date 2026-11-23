@@ -1,8 +1,8 @@
 /** `chart` = živý graf přes celou obrazovku (jen desktop, výchozí po kliku na LIVE). */
 /** `copier` = kopírka přes službu Rithmic (22. 11. 2026: zatím jen tvůj účet, kopírka ve službě se připravuje). */
-export type TradovateLiveTab = 'chart' | 'connections' | 'overview' | 'risk' | 'accounts' | 'orders' | 'events' | 'copier';
+export type LiveTabId = 'chart' | 'connections' | 'overview' | 'risk' | 'accounts' | 'orders' | 'events' | 'copier';
 
-const LIVE_TABS = new Set<TradovateLiveTab>([
+const LIVE_TABS = new Set<LiveTabId>([
   'chart',
   'connections',
   'overview',
@@ -13,17 +13,17 @@ const LIVE_TABS = new Set<TradovateLiveTab>([
   'copier',
 ]);
 
-export const tradovateLiveTabFromSearch = (search: string): TradovateLiveTab => {
+export const liveTabFromSearch = (search: string): LiveTabId => {
   const params = new URLSearchParams(search);
   if (params.get('open') === 'mac-companion-pairing') return 'connections';
 
   const requestedTab = params.get('tab');
-  return requestedTab && LIVE_TABS.has(requestedTab as TradovateLiveTab)
-    ? requestedTab as TradovateLiveTab
+  return requestedTab && LIVE_TABS.has(requestedTab as LiveTabId)
+    ? requestedTab as LiveTabId
     : 'overview';
 };
 
-export const tradovateLiveTabHref = (currentHref: string, tab: TradovateLiveTab): string => {
+export const liveTabHref = (currentHref: string, tab: LiveTabId): string => {
   const url = new URL(currentHref);
   url.searchParams.set('page', 'live');
   url.searchParams.set('tab', tab);
@@ -37,8 +37,8 @@ export const tradovateLiveTabHref = (currentHref: string, tab: TradovateLiveTab)
  * nevstupuje během zapínání kopírky, jeho vrstva by zakryla potvrzovací dialogy i přehled.
  */
 export const liveTabNavigationAllowed = (
-  current: TradovateLiveTab,
-  next: TradovateLiveTab,
+  current: LiveTabId,
+  next: LiveTabId,
   state: { configMutationPending: boolean; armFlowActive: boolean },
 ): boolean => {
   if (next === 'overview') return true;
@@ -52,12 +52,12 @@ export const liveTabNavigationAllowed = (
  * záložka z adresy, výchozí přehled. Telefon a nativní aplikace graf nemají.
  */
 export const initialLiveTab = (input: {
-  requestedTab: TradovateLiveTab | null;
+  requestedTab: LiveTabId | null;
   search: string;
   chartAvailable: boolean;
-}): TradovateLiveTab => {
+}): LiveTabId => {
   if (input.requestedTab && (input.requestedTab !== 'chart' || input.chartAvailable)) return input.requestedTab;
   if (input.chartAvailable) return 'chart';
-  const fromSearch = tradovateLiveTabFromSearch(input.search);
+  const fromSearch = liveTabFromSearch(input.search);
   return fromSearch === 'chart' ? 'overview' : fromSearch;
 };

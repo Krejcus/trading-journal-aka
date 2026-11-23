@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
-import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveTabId } from '../lib/liveTab';
 import type { LivePhoneCopierChip } from '../lib/livePhoneCopierChip';
 import SheetGrip from './day/SheetGrip';
 
@@ -44,8 +44,8 @@ export function LivePhoneHeader({ groupName, copier, onMenu, group, account, hid
 
 /** Menu LIVE záložek nad grafem (spodní list). Výběr přejde na záložku. */
 export function LivePhoneMenu({ tabs, onPick, onClose }: {
-  tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }>;
-  onPick: (tab: TradovateLiveTab) => void;
+  tabs: Array<{ id: LiveTabId; label: string; icon: React.ElementType }>;
+  onPick: (tab: LiveTabId) => void;
   onClose: () => void;
 }) {
   return (

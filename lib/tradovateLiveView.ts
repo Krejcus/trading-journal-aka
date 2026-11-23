@@ -6,7 +6,7 @@ import type {
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
 import { fundedTradovateTrailingDrawdownLimit } from './tradovatePropPlanCatalog';
-import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+import { cmeDisplayTradeDate } from './cmeDisplayDay';
 
 export interface TradovateLiveTotals {
   balance: number;
@@ -142,7 +142,7 @@ export const accountRiskPeak = (
     // but only next to the broker watermark. Without it the conservative
     // (higher) peak stays: the cushion feeds the inferred `breached` guard.
     const brokerWatermark = account.risk.maxNetLiq != null && Number.isFinite(account.risk.maxNetLiq) && account.risk.maxNetLiq > 0;
-    const openSession = tradovateDisplayTradeDate(now);
+    const openSession = cmeDisplayTradeDate(now);
     return highestFinite([
       accountSize,
       account.risk.maxNetLiq,

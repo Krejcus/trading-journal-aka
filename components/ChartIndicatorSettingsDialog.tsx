@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import TradingViewColorPicker, { colorWithAlpha } from './TradingViewColorPicker';
+import ChartColorPicker, { colorWithAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 
 import { DEFAULT_INDICATOR_SETTINGS, HTF_FVG_TIMEFRAMES, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
@@ -44,7 +44,7 @@ const ColorInput: React.FC<{
   onChange: (value: string, opacity: number) => void;
   label: string;
 }> = ({ value, opacity, onChange, label }) => {
-  return <TradingViewColorPicker
+  return <ChartColorPicker
     value={value}
     opacity={opacity}
     label={label}

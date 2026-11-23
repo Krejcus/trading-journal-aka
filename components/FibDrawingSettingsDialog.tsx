@@ -3,7 +3,7 @@ import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow } from '
 import type { DrawingEngine } from '@getcandlekit/charts';
 import { ArrowDownToLine, ArrowUpToLine, Copy, Eye, EyeOff, GripVertical, Lock, MoreHorizontal, RotateCcw, Settings, Trash2, Unlock, X } from 'lucide-react';
 import { drawingDialogLayerClass, drawingDialogSectionClass } from '../lib/drawingDialogLayout';
-import TradingViewColorPicker from './TradingViewColorPicker';
+import ChartColorPicker from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
   DEFAULT_FIB_SETTINGS,
@@ -71,7 +71,7 @@ const FibLevelEditor: React.FC<{
     disabled={!level.visible}
     onChange={event => onChange({ ...level, value: Number(event.target.value) })}
   />
-  <TradingViewColorPicker
+  <ChartColorPicker
     value={level.color}
     opacity={level.opacity}
     onChange={(color, opacity) => onChange({ ...level, color, opacity })}
@@ -207,7 +207,7 @@ export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> =
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <CheckRow checked={settings.trendLineVisible} onChange={checked => update({ ...settings, trendLineVisible: checked })} label="Trend line" />
             <div className="flex items-center gap-2 opacity-100">
-              <TradingViewColorPicker value={settings.trendLineColor} opacity={settings.trendLineOpacity} onChange={(color, opacity) => update({ ...settings, trendLineColor: color, trendLineOpacity: opacity })} label="Barva trend line" />
+              <ChartColorPicker value={settings.trendLineColor} opacity={settings.trendLineOpacity} onChange={(color, opacity) => update({ ...settings, trendLineColor: color, trendLineOpacity: opacity })} label="Barva trend line" />
               <Select value={settings.trendLineWidth} onChange={event => update({ ...settings, trendLineWidth: Number(event.target.value) })} disabled={!settings.trendLineVisible}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}px</option>)}</Select>
               <Select value={settings.trendLineStyle} onChange={event => update({ ...settings, trendLineStyle: event.target.value as FibLineStyle })} disabled={!settings.trendLineVisible}><option value="solid">—</option><option value="dashed">– –</option><option value="dotted">···</option></Select>
             </div>
@@ -235,7 +235,7 @@ export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> =
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
             <CheckRow checked={settings.oneColor} onChange={checked => update({ ...settings, oneColor: checked })} label="Use one color">
-              <TradingViewColorPicker value={settings.oneColorValue} opacity={settings.oneColorOpacity} onChange={(color, opacity) => update({ ...settings, oneColorValue: color, oneColorOpacity: opacity })} label="Jedna barva všech úrovní" />
+              <ChartColorPicker value={settings.oneColorValue} opacity={settings.oneColorOpacity} onChange={(color, opacity) => update({ ...settings, oneColorValue: color, oneColorOpacity: opacity })} label="Jedna barva všech úrovní" />
             </CheckRow>
             <CheckRow checked={settings.backgroundVisible} onChange={checked => update({ ...settings, backgroundVisible: checked })} label="Background">
               <Numeric className="w-16" min={0} max={100} value={settings.backgroundOpacity} onChange={event => update({ ...settings, backgroundOpacity: Number(event.target.value) })} />
@@ -372,7 +372,7 @@ export const FibDrawingFloatingToolbar: React.FC<{
   return <div ref={toolbarRef} className={`absolute z-[120] flex items-center gap-0 rounded-xl p-1 ${chartGlassBar(isDark)} ${toolbarPosition ? '' : 'left-1/2 top-1 -translate-x-1/2'}`} style={toolbarPosition ?? undefined} role="toolbar" aria-label="Nástroje Fibonacci" data-chart-overlay-menu>
     <button type="button" aria-label="Přesunout nástroje Fibonacci" title="Přesunout" onPointerDown={startToolbarDrag} className={`flex h-7 w-5 shrink-0 cursor-move touch-none items-center justify-center rounded-lg ${isDark ? 'text-slate-600 hover:bg-white/5 hover:text-slate-300' : 'text-slate-400 hover:bg-white/60 hover:text-slate-700'}`}><GripVertical size={13} strokeWidth={1.5} /></button>
     <IndicatorTemplateMenu compact placement="bottom" indicator="drawing:fib-retracement" value={settings} defaultValue={DEFAULT_FIB_SETTINGS} onApply={value => update(normalizeFibSettings(value as FibRetracementSettings))} />
-    <TradingViewColorPicker compact value={settings.oneColor ? settings.oneColorValue : settings.levels.find(level => level.visible)?.color ?? '#2962ff'} opacity={settings.oneColor ? settings.oneColorOpacity : 100} onChange={(color, opacity) => update({ ...settings, oneColor: true, oneColorValue: color, oneColorOpacity: opacity })} label="Barva Fibonacci" />
+    <ChartColorPicker compact value={settings.oneColor ? settings.oneColorValue : settings.levels.find(level => level.visible)?.color ?? '#2962ff'} opacity={settings.oneColor ? settings.oneColorOpacity : 100} onChange={(color, opacity) => update({ ...settings, oneColor: true, oneColorValue: color, oneColorOpacity: opacity })} label="Barva Fibonacci" />
     <Select className="h-7 px-1 text-[11px]" aria-label="Tloušťka Fibonacci čar" value={settings.levelLineWidth} onChange={event => update({ ...settings, levelLineWidth: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}px</option>)}</Select>
     <button type="button" className={toolbarButton} onClick={onOpenSettings} title="Settings" aria-label="Nastavení Fibonacci"><Settings size={14} /></button>
     <button type="button" className={toolbarButton} onClick={() => {

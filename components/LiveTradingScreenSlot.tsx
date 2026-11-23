@@ -6,7 +6,7 @@ import { QuantumSpinner } from './QuantumLoader';
 import type { LiveTradingCopierState, LiveTradingCopyEvent, LiveTradingMarketData, LiveTradingSolo, LiveTradingTab } from './LiveTradingScreen';
 import type { TradeToast } from '../lib/liveTradeToasts';
 import type { LiveAccountBarData } from './LiveAccountBar';
-import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveTabId } from '../lib/liveTab';
 import type { LiveTradeGroup, LiveTradeTarget } from '../lib/liveTradeTarget';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
 import type { LiveChartDisarm } from '../lib/liveTradeGroupSource';
@@ -77,7 +77,7 @@ interface Props {
   open: boolean;
   isDark: boolean;
   tabs: LiveTradingTab[];
-  onNavigate: (tab: TradovateLiveTab) => void;
+  onNavigate: (tab: LiveTabId) => void;
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;
   /** Události kopírky pro karty obchodů (poll ∪ expozice přímo z workeru, F2a) — jen zobrazení. */
@@ -166,7 +166,7 @@ interface Props {
 }
 
 /** Vrstva přes celou obrazovku pro načítání a pád — vždy s cestou na přehled. */
-const FallbackLayer: React.FC<{ isDark: boolean; failed: boolean; leaving: boolean; onNavigate: (tab: TradovateLiveTab) => void }> = ({ isDark, failed, leaving, onNavigate }) => createPortal(
+const FallbackLayer: React.FC<{ isDark: boolean; failed: boolean; leaving: boolean; onNavigate: (tab: LiveTabId) => void }> = ({ isDark, failed, leaving, onNavigate }) => createPortal(
   <div
     className={`fixed inset-0 z-[300] grid place-items-center ${leaving ? 'live-chart-leave' : 'live-chart-enter'} ${isDark ? 'bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}
     aria-busy={!failed}

@@ -7,7 +7,7 @@ import {
   normalizeDrawingStyle,
   rememberDrawingStyleDefault,
 } from '../services/chartDrawingStyleDefaults';
-import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
+import ChartColorPicker, { colorWithAlpha, splitColorAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 
 type Tab = 'style' | 'text' | 'coordinates';
@@ -198,7 +198,7 @@ const GenericDrawingSettingsDialog: React.FC<GenericDrawingSettingsDialogProps> 
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <span className="text-[13px] text-slate-800">{drawing.tool === 'Text' ? 'Text color' : 'Line'}</span>
             <div className="flex items-center gap-2">
-              <TradingViewColorPicker
+              <ChartColorPicker
                 value={lineColor.color}
                 opacity={lineColor.opacity}
                 label="Line color"
@@ -223,7 +223,7 @@ const GenericDrawingSettingsDialog: React.FC<GenericDrawingSettingsDialogProps> 
           </div>
           {drawingToolSupportsFill(drawing.tool) && <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-t border-slate-200 pt-4">
             <span className="text-[13px] text-slate-800">Background</span>
-            <TradingViewColorPicker
+            <ChartColorPicker
               value={fillColor.color}
               opacity={fillColor.opacity}
               label="Background color"
@@ -248,7 +248,7 @@ const GenericDrawingSettingsDialog: React.FC<GenericDrawingSettingsDialogProps> 
         </div>}
         {tab === 'text' && drawing.tool !== 'Text' && <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <TradingViewColorPicker
+            <ChartColorPicker
               value={textColor.color}
               opacity={textColor.opacity}
               label="Text color"

@@ -3,7 +3,7 @@ import {
   DEFAULT_INDICATOR_SETTINGS,
   indicatorVisibleOnTimeframe,
 } from '../components/ChartIndicatorSettingsDialog';
-import { colorWithAlpha, splitColorAlpha } from '../components/TradingViewColorPicker';
+import { colorWithAlpha, splitColorAlpha } from '../components/ChartColorPicker';
 import { matchingIndicatorTemplateName, upsertIndicatorTemplate, type IndicatorTemplateRecord } from '../components/IndicatorTemplateMenu';
 
 describe('indicatorVisibleOnTimeframe', () => {

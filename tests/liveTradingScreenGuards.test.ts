@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { initialLiveTab, liveTabNavigationAllowed } from '../lib/tradovateLiveTab';
+import { initialLiveTab, liveTabNavigationAllowed } from '../lib/liveTab';
 import { buildLiveStatusStrip, liveAttentionReasons } from '../services/liveStatusStrip';
 import type { CopierControllerStatus } from '../lib/liveCopierTypes';
 

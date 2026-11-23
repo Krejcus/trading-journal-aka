@@ -49,7 +49,7 @@ interface TradingViewColorPickerProps {
   compact?: boolean;
 }
 
-const TradingViewColorPicker: React.FC<TradingViewColorPickerProps> = ({ value, opacity, onChange, label, compact = false }) => {
+const ChartColorPicker: React.FC<TradingViewColorPickerProps> = ({ value, opacity, onChange, label, compact = false }) => {
   const parsed = splitColorAlpha(value);
   const color = parsed.color;
   const activeOpacity = opacity ?? parsed.opacity;
@@ -158,4 +158,4 @@ const TradingViewColorPicker: React.FC<TradingViewColorPickerProps> = ({ value, 
   </>;
 };
 
-export default TradingViewColorPicker;
+export default ChartColorPicker;

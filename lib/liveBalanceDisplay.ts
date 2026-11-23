@@ -1,4 +1,4 @@
-import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+import { cmeDisplayTradeDate } from './cmeDisplayDay';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { sameTradovateSession } from '../services/copierArmSession';
 import { isLiveAccountReadVerified, LIVE_READ_MAX_AGE_MS } from './liveReadFreshness';
@@ -115,7 +115,7 @@ export function liveDailyPnlDisplay(account: LiveAccount | null | undefined, now
   pending ||= account.dailyPnlPending === true;
   if (!Number.isFinite(account.realizedPnl) || account.dailyPnlAvailable === false || (pending && account.dailyPnlAvailable !== true)) return missing;
   if (account.cashAvailability == null) return { value: account.realizedPnl, stale: false, confirmedAt: null };
-  if (account.dailyPnlTradeDate && account.dailyPnlTradeDate !== tradovateDisplayTradeDate(now)) return missing;
+  if (account.dailyPnlTradeDate && account.dailyPnlTradeDate !== cmeDisplayTradeDate(now)) return missing;
   const at = Date.parse(account.dailyPnlUpdatedAt ?? account.cashUpdatedAt ?? '');
   if (!Number.isFinite(at) || at > now + 1_000 || !sameTradovateSession(at, now)) return missing;
   return vouched({ value: account.realizedPnl, stale: now - at > LIVE_READ_MAX_AGE_MS, confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! }, account, 'dailyRealizedPnL', now);

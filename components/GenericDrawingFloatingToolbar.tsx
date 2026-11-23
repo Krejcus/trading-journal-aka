@@ -7,7 +7,7 @@ import {
   normalizeDrawingStyle,
   updateDrawingStyleAndDefault,
 } from '../services/chartDrawingStyleDefaults';
-import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
+import ChartColorPicker, { colorWithAlpha, splitColorAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 
 interface GenericDrawingFloatingToolbarProps {
@@ -134,7 +134,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
           normalizeDrawingStyle(value, DEFAULT_STYLE),
         )}
       />
-      <TradingViewColorPicker
+      <ChartColorPicker
         compact
         value={lineColor.color}
         opacity={lineColor.opacity}
@@ -172,7 +172,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
         </select>
       </>}
       {drawingToolSupportsFill(drawing.tool) && (
-        <TradingViewColorPicker
+        <ChartColorPicker
           compact
           value={fillColor.color}
           opacity={fillColor.opacity}

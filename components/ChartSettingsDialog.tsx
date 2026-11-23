@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CandlestickChart, LayoutGrid, PlayCircle, Rows3, Ruler, X, Zap } from 'lucide-react';
-import TradingViewColorPicker from './TradingViewColorPicker';
+import ChartColorPicker from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
   CHART_PRECISIONS,
@@ -138,7 +138,7 @@ const LineAppearance: React.FC<{
   onChange: (value: ChartLineAppearance) => void;
 }> = ({ label, value, onChange }) => (
   <>
-    <TradingViewColorPicker label={label} value={value.color} onChange={color => onChange({ ...value, color })} />
+    <ChartColorPicker label={label} value={value.color} onChange={color => onChange({ ...value, color })} />
     <Select
       value={value.width}
       width="w-[56px]"
@@ -346,18 +346,18 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                   />
                   <Row label="">
                     <Check checked={symbol.bodyVisible} onChange={bodyVisible => update('symbol', { bodyVisible })} label="Tělo" />
-                    <TradingViewColorPicker label="Tělo rostoucí svíčky" value={symbol.bodyUpColor} onChange={bodyUpColor => update('symbol', { bodyUpColor })} />
-                    <TradingViewColorPicker label="Tělo klesající svíčky" value={symbol.bodyDownColor} onChange={bodyDownColor => update('symbol', { bodyDownColor })} />
+                    <ChartColorPicker label="Tělo rostoucí svíčky" value={symbol.bodyUpColor} onChange={bodyUpColor => update('symbol', { bodyUpColor })} />
+                    <ChartColorPicker label="Tělo klesající svíčky" value={symbol.bodyDownColor} onChange={bodyDownColor => update('symbol', { bodyDownColor })} />
                   </Row>
                   <Row label="">
                     <Check checked={symbol.bordersVisible} onChange={bordersVisible => update('symbol', { bordersVisible })} label="Obrys" />
-                    <TradingViewColorPicker label="Obrys rostoucí svíčky" value={symbol.borderUpColor} onChange={borderUpColor => update('symbol', { borderUpColor })} />
-                    <TradingViewColorPicker label="Obrys klesající svíčky" value={symbol.borderDownColor} onChange={borderDownColor => update('symbol', { borderDownColor })} />
+                    <ChartColorPicker label="Obrys rostoucí svíčky" value={symbol.borderUpColor} onChange={borderUpColor => update('symbol', { borderUpColor })} />
+                    <ChartColorPicker label="Obrys klesající svíčky" value={symbol.borderDownColor} onChange={borderDownColor => update('symbol', { borderDownColor })} />
                   </Row>
                   <Row label="">
                     <Check checked={symbol.wickVisible} onChange={wickVisible => update('symbol', { wickVisible })} label="Knot" />
-                    <TradingViewColorPicker label="Knot rostoucí svíčky" value={symbol.wickUpColor} onChange={wickUpColor => update('symbol', { wickUpColor })} />
-                    <TradingViewColorPicker label="Knot klesající svíčky" value={symbol.wickDownColor} onChange={wickDownColor => update('symbol', { wickDownColor })} />
+                    <ChartColorPicker label="Knot rostoucí svíčky" value={symbol.wickUpColor} onChange={wickUpColor => update('symbol', { wickUpColor })} />
+                    <ChartColorPicker label="Knot klesající svíčky" value={symbol.wickDownColor} onChange={wickDownColor => update('symbol', { wickDownColor })} />
                   </Row>
                 </Section>
                 <Section title="Úprava dat">
@@ -483,7 +483,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                           ]}
                           onChange={weight => update('scales', { countdownBox: { ...scales.countdownBox, bold: weight === 'bold' } })}
                         />
-                        <TradingViewColorPicker
+                        <ChartColorPicker
                           label="Barva číslic"
                           value={scales.countdownBox.color}
                           onChange={color => update('scales', { countdownBox: { ...scales.countdownBox, color } })}
@@ -500,7 +500,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                           onChange={background => update('scales', { countdownBox: { ...scales.countdownBox, background } })}
                         />
                         {scales.countdownBox.background === 'filled' && (
-                          <TradingViewColorPicker
+                          <ChartColorPicker
                             label="Barva výplně"
                             value={scales.countdownBox.backgroundColor}
                             onChange={backgroundColor => update('scales', { countdownBox: { ...scales.countdownBox, backgroundColor } })}
@@ -734,11 +734,11 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                       onChange={backgroundType => update('canvas', { backgroundType })}
                     />
                     {canvas.backgroundType === 'solid'
-                      ? <TradingViewColorPicker label="Barva pozadí" value={canvas.backgroundColor} onChange={backgroundColor => update('canvas', { backgroundColor })} />
+                      ? <ChartColorPicker label="Barva pozadí" value={canvas.backgroundColor} onChange={backgroundColor => update('canvas', { backgroundColor })} />
                       : (
                         <>
-                          <TradingViewColorPicker label="Přechod nahoře" value={canvas.backgroundGradientTop} onChange={backgroundGradientTop => update('canvas', { backgroundGradientTop })} />
-                          <TradingViewColorPicker label="Přechod dole" value={canvas.backgroundGradientBottom} onChange={backgroundGradientBottom => update('canvas', { backgroundGradientBottom })} />
+                          <ChartColorPicker label="Přechod nahoře" value={canvas.backgroundGradientTop} onChange={backgroundGradientTop => update('canvas', { backgroundGradientTop })} />
+                          <ChartColorPicker label="Přechod dole" value={canvas.backgroundGradientBottom} onChange={backgroundGradientBottom => update('canvas', { backgroundGradientBottom })} />
                         </>
                       )}
                   </Row>
@@ -754,8 +754,8 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                       ] as [ChartGridLines, string][]).map(([value, label]) => ({ value, label }))}
                       onChange={gridLines => update('canvas', { gridLines })}
                     />
-                    <TradingViewColorPicker label="Svislé čáry mřížky" value={canvas.gridVertColor} onChange={gridVertColor => update('canvas', { gridVertColor })} />
-                    <TradingViewColorPicker label="Vodorovné čáry mřížky" value={canvas.gridHorzColor} onChange={gridHorzColor => update('canvas', { gridHorzColor })} />
+                    <ChartColorPicker label="Svislé čáry mřížky" value={canvas.gridVertColor} onChange={gridVertColor => update('canvas', { gridVertColor })} />
+                    <ChartColorPicker label="Vodorovné čáry mřížky" value={canvas.gridHorzColor} onChange={gridHorzColor => update('canvas', { gridHorzColor })} />
                   </Row>
                   <div className="grid min-h-10 grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
                     <Check checked={canvas.sessionBreaks} onChange={sessionBreaks => update('canvas', { sessionBreaks })} label="Předěly seancí" />
@@ -778,7 +778,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                       ] as [ChartWatermarkMode, string][]).map(([value, label]) => ({ value, label }))}
                       onChange={watermark => update('canvas', { watermark })}
                     />
-                    <TradingViewColorPicker label="Barva vodoznaku" value={canvas.watermarkColor} onChange={watermarkColor => update('canvas', { watermarkColor })} />
+                    <ChartColorPicker label="Barva vodoznaku" value={canvas.watermarkColor} onChange={watermarkColor => update('canvas', { watermarkColor })} />
                   </Row>
                 </Section>
 
@@ -790,10 +790,10 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                       options={[8, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 40].map(size => ({ value: size, label: String(size) }))}
                       onChange={scalesTextSize => update('canvas', { scalesTextSize })}
                     />
-                    <TradingViewColorPicker label="Barva textu os" value={canvas.scalesTextColor} onChange={scalesTextColor => update('canvas', { scalesTextColor })} />
+                    <ChartColorPicker label="Barva textu os" value={canvas.scalesTextColor} onChange={scalesTextColor => update('canvas', { scalesTextColor })} />
                   </Row>
                   <Row label="Čáry">
-                    <TradingViewColorPicker label="Barva čar os" value={canvas.scalesLineColor} onChange={scalesLineColor => update('canvas', { scalesLineColor })} />
+                    <ChartColorPicker label="Barva čar os" value={canvas.scalesLineColor} onChange={scalesLineColor => update('canvas', { scalesLineColor })} />
                   </Row>
                 </Section>
 

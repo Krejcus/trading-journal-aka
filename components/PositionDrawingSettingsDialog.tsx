@@ -3,7 +3,7 @@ import { chartGlassBar, chartGlassButton, chartGlassMenu, chartGlassRow, chartGl
 import type { DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
 import { ChevronDown, GripVertical, ListChecks, Settings, Trash2, X, Zap } from 'lucide-react';
 import { drawingDialogLayerClass, drawingDialogSectionClass } from '../lib/drawingDialogLayout';
-import TradingViewColorPicker, { colorWithAlpha, splitColorAlpha } from './TradingViewColorPicker';
+import ChartColorPicker, { colorWithAlpha, splitColorAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import { useFloatingToolbarDrag } from '../hooks/useFloatingToolbarDrag';
 import {
@@ -98,8 +98,8 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
       defaultValue={positionStyleDefaults(drawing.style)}
       onApply={value => updateDrawingStyleAndDefault(engine, drawing, normalizePositionStyleTemplate(value, drawing.style))}
     />
-    <TradingViewColorPicker compact value={splitColorAlpha(settings.targetColor).color} opacity={splitColorAlpha(settings.targetColor).opacity} label="Target color" onChange={(color, opacity) => setPosition({ targetColor: colorWithAlpha(color, opacity) })} />
-    <TradingViewColorPicker compact value={splitColorAlpha(settings.stopColor).color} opacity={splitColorAlpha(settings.stopColor).opacity} label="Stop color" onChange={(color, opacity) => setPosition({ stopColor: colorWithAlpha(color, opacity) })} />
+    <ChartColorPicker compact value={splitColorAlpha(settings.targetColor).color} opacity={splitColorAlpha(settings.targetColor).opacity} label="Target color" onChange={(color, opacity) => setPosition({ targetColor: colorWithAlpha(color, opacity) })} />
+    <ChartColorPicker compact value={splitColorAlpha(settings.stopColor).color} opacity={splitColorAlpha(settings.stopColor).opacity} label="Stop color" onChange={(color, opacity) => setPosition({ stopColor: colorWithAlpha(color, opacity) })} />
     <div ref={labelsRef} className="relative">
       <button
         type="button"
@@ -181,7 +181,7 @@ const PositionDrawingSettingsDialog: React.FC<Props & { fullScreen?: boolean }> 
 
   const color = (key: 'lineColor' | 'targetColor' | 'stopColor' | 'textColor', label: string) => {
     const current = splitColorAlpha(settings[key]);
-    return <TradingViewColorPicker value={current.color} opacity={current.opacity} label={label} onChange={(next, opacity) => setStyle({ [key]: colorWithAlpha(next, opacity) })} />;
+    return <ChartColorPicker value={current.color} opacity={current.opacity} label={label} onChange={(next, opacity) => setStyle({ [key]: colorWithAlpha(next, opacity) })} />;
   };
   const tabButton = (id: Tab, label: string) => <button type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`relative h-11 text-[13px] font-semibold ${tab === id ? 'text-slate-950 after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:bg-[#2962ff]' : 'text-slate-600'}`}>{label}</button>;
   const field = (label: string, node: React.ReactNode) => <div className="grid grid-cols-[1fr_190px] items-center gap-4"><span className="text-[13px] text-slate-800">{label}</span>{node}</div>;

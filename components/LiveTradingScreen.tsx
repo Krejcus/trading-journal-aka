@@ -97,7 +97,7 @@ import type { LeaderEntryPreviewResult, LiveEntryPreviewDraft } from '../lib/lea
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
 import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, type LiveStatusTone } from '../services/liveStatusStrip';
-import type { TradovateLiveTab } from '../lib/tradovateLiveTab';
+import type { LiveTabId } from '../lib/liveTab';
 import type { LiveScreenThemePreference } from '../services/liveScreenTheme';
 import LiveThemeToggle from './LiveThemeToggle';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
@@ -146,7 +146,7 @@ export type LiveTradingCopierState = Pick<LiveStatusStripInput, 'status' | 'avai
 export type LiveTradingCopyEvent = NonNullable<NonNullable<LiveTradingCopierState['status']>['recentCopyEvents']>[number];
 
 export interface LiveTradingTab {
-  id: TradovateLiveTab;
+  id: LiveTabId;
   label: string;
   icon: React.ElementType;
 }
@@ -156,7 +156,7 @@ interface Props {
   /** Volba motivu LIVE (přepínač v liště grafu); isDark už je podle ní. */
   themePreference?: LiveScreenThemePreference;
   tabs: LiveTradingTab[];
-  onNavigate: (tab: TradovateLiveTab) => void;
+  onNavigate: (tab: LiveTabId) => void;
   /** Záložky jsou dočasně zamčené (desk čeká na potvrzení změny konfigurace); přehled zůstává dostupný. */
   navigationBlocked?: boolean;
   copier: LiveTradingCopierState;

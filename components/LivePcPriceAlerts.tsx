@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { AudioLines, Bell, Check, ChevronDown, Monitor, Play, Smartphone, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import './day/dayJournal.css';
-import TradingViewColorPicker from './TradingViewColorPicker';
+import ChartColorPicker from './ChartColorPicker';
 import { LivePhoneAlertLines } from './day/LivePhoneAlerts';
 import {
   PRICE_ALERT_PC_OPACITY, alertConditionText, alertTitle, movedAlert, newPriceAlert, pcAlertFiredActions, priceAlertEventTitle, quickAlertCardStatus,
@@ -511,7 +511,7 @@ function AlertSettingsWindow({ alert, market, isDark, onSave, onTest, onDelete, 
           </div>
         </Row>
         <Row label="Barva" isDark={isDark}>
-          <TradingViewColorPicker compact label="Barva čáry" value={draft.line.color} opacity={draft.line.opacity ?? PRICE_ALERT_PC_OPACITY} onChange={(color, opacity) => set({ line: { ...draft.line, color, opacity } })} />
+          <ChartColorPicker compact label="Barva čáry" value={draft.line.color} opacity={draft.line.opacity ?? PRICE_ALERT_PC_OPACITY} onChange={(color, opacity) => set({ line: { ...draft.line, color, opacity } })} />
         </Row>
         <Row label="Kam poslat" isDark={isDark}>
           <div className="flex shrink-0 gap-1">
