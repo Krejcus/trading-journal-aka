@@ -382,7 +382,9 @@ a případně malé čisté funkce z archivu.
   (`LiveTabId`), `lib/cmeDisplayDay.ts`. `docs/COPIER_INVARIANTS.md` má hlavičku: pravidla jsou zadání
   pro budoucí Rithmic kopírku, dnes je žádný kód nevynucuje. `copier-design-critic`: OK s výhradami
   (INV-UI-01/03, INV-FRESH-03, INV-DEFAULT-01), výhrady k testům opraveny. LIVE graf PC i telefon ověřen
-  v lokální simulaci (falešný broker). **Nenasazeno** (Filip: „zatím ne“) — větev čeká na „nasaď“.
+  v lokální simulaci (falešný broker). **Nasazeno 23. 11. večer** po Filipově „Ano, nasadit“: web eee0e3fd
+  (Vercel už builduje jen jeden projekt, `oauth-data-probe` Filip smazal), iPhone čistá instalace téhož
+  commitu. NEOVĚŘENO: graf deníku s běžící službou v přihlášené appce a na iPhonu.
   Co ve sdíleném LIVE kódu zbývá (další kolo, zásah do obrazovky s penězi): větve pro skupinu
   a kopírku v `LiveTradingScreen`, `useLiveChartData`, `tradecopiaLiveService`, `tradovateLiveView`,
   `copierEngine` + outboxy přes `groupLimitLifecycle` a `manualEntryPreview` (~41 souborů s Tradovate
