@@ -1,6 +1,6 @@
 import { liveUnverifiedActionBlock } from '../lib/liveChartRiskPolicy';
 import { describe, expect, it } from 'vitest';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from '../lib/liveCopierTypes';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { workerConnectionReadPlan } from '../lib/tradovateWorkerCoverage';

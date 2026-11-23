@@ -1,4 +1,4 @@
-import type { LocalCopierAgentCommandResult } from './localCopierAgentProtocol';
+import type { LocalCopierAgentCommandResult } from './liveCopierTypes';
 import type { TradovateLiveTab } from './tradovateLiveTab';
 import { isCopierBrakeQueuedError } from './copierBrakeDelivery';
 

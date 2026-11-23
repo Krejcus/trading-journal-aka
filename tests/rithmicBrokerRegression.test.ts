@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { BrokerRequestNotSentError, type BrokerEvent } from '../services/brokerPort';
-import { CopierLeaderEventSource } from '../services/copierLeaderEventSource';
+import { CopierLeaderEventSource } from './helpers/copierLeaderEventSource';
 import {
   RithmicAccountRegistry,
   type RithmicAccountRegistryEntry,

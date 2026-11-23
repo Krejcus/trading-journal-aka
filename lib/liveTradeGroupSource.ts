@@ -1,6 +1,6 @@
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
-import type { CopierControllerStatus } from '../services/copierRuntimeController';
+import type { CopierControllerStatus } from './liveCopierTypes';
 import { liveDailyLossRemainingDisplay, liveDailyPnlDisplay } from './liveBalanceDisplay';
 import { isLiveAccountReadVerified } from './liveReadFreshness';
 import { livePositionMatchesRoot } from './journalLivePosition';

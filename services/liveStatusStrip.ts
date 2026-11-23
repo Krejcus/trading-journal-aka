@@ -1,7 +1,7 @@
-import type { CopierControllerStatus } from './copierRuntimeController';
+import type { CopierControllerStatus } from '../lib/liveCopierTypes';
 import { isRecentCopierDisarm } from '../lib/copierDisarmNotice';
 import { resolveCopierDisarmRecord } from '../lib/copierDisarmReason';
-import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
+import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/liveCopierTypes';
 
 export type LiveStatusTone = 'muted' | 'ok' | 'warn' | 'danger';
 

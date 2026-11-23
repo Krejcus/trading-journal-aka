@@ -1,4 +1,4 @@
-import type { CopierControllerStatus } from '../services/copierRuntimeController';
+import type { CopierControllerStatus } from './liveCopierTypes';
 import { copierValue, type LiveStatusTone } from '../services/liveStatusStrip';
 import { copierProvablyOff } from './liveTradeGroupSource';
 

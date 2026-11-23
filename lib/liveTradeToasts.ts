@@ -1,4 +1,4 @@
-import type { CopierCopyEvent } from '../services/copierRuntimeController';
+import type { CopierCopyEvent } from './liveCopierTypes';
 
 /**
  * Notifikace obchodů v LIVE grafu (karta B, vlevo dole). Jen zobrazení

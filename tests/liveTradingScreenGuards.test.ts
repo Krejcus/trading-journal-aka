@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { initialLiveTab, liveTabNavigationAllowed } from '../lib/tradovateLiveTab';
 import { buildLiveStatusStrip, liveAttentionReasons } from '../services/liveStatusStrip';
-import type { CopierControllerStatus } from '../services/copierRuntimeController';
+import type { CopierControllerStatus } from '../lib/liveCopierTypes';
 
 const root = join(__dirname, '..');
 const source = (path: string) => readFileSync(join(root, path), 'utf8');
@@ -138,7 +138,8 @@ describe('LIVE → Graf je jen UI', () => {
   });
 
   it('výpočty panelu nikdo z cest příkazů nepoužívá', () => {
-    for (const file of ['services/copierRunner.ts', 'services/copierRiskGate.ts', 'services/copierRuntimeController.ts']) {
+    // Runner a controller Tradovate kopírky jsou smazané (23. 11. 2026); hlídá se zbylá brána rizika a Rithmic služba.
+    for (const file of ['services/copierRiskGate.ts', 'services/rithmic/localExec.ts', 'services/rithmic/rithmicBroker.ts']) {
       expect(source(file), file).not.toMatch(/liveOrderTicket|liveTradeTarget/);
     }
   });

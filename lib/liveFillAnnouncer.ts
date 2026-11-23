@@ -1,4 +1,4 @@
-import type { CopierCopyEvent } from '../services/copierRuntimeController';
+import type { CopierCopyEvent } from './liveCopierTypes';
 import type { LiveFillMarker } from './liveFillMarkers';
 
 /**

@@ -1,4 +1,4 @@
-import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from './liveCopierTypes';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from './tradovateAccountDataTypes';
 import { coveredWorkerAccounts, type WorkerCoverageOwner } from './tradovateWorkerCoverage';
 import type { TradovateWorkerAccountCoverage } from './tradovateRequestControl';

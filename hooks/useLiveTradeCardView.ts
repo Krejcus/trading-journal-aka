@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from '../lib/liveCopierTypes';
 import {
   buildJournalLiveView, confirmWorkerMismatches, EMPTY_JOURNAL_LIVE_VIEW, journalCopierArmed,
   type JournalLiveTarget, type JournalLiveView, type WorkerMismatches,

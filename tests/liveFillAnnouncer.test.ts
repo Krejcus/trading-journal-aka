@@ -19,7 +19,7 @@ import {
   type LiveFillAnnouncerInput,
 } from '../lib/liveFillAnnouncer';
 import type { LiveFillMarker } from '../lib/liveFillMarkers';
-import type { CopierCopyEvent } from '../services/copierRuntimeController';
+import type { CopierCopyEvent } from '../lib/liveCopierTypes';
 
 const NOW = 1_800_000_000_000;
 const NB = ' ';

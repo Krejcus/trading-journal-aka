@@ -4,7 +4,7 @@ import {
   COPIER_RISK_CONFIG_CAPABILITY,
   supportsCopierRiskConfig,
 } from '../lib/copierWorkerCapabilities';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from '../lib/liveCopierTypes';
 import { sanitizeCopyGroups, type CopyGroupConfig } from '../services/liveCopyTrading';
 
 const group = (): CopyGroupConfig => sanitizeCopyGroups([{

@@ -1,4 +1,4 @@
-import type { LocalCopierAgentStatus } from './localCopierAgentProtocol.js';
+import type { LocalCopierAgentStatus } from './liveCopierTypes.js';
 import { sanitizeCopyGroups, type CopyGroupConfig } from '../services/liveCopyTrading.js';
 
 export const COPIER_RISK_CONFIG_CAPABILITY = 'risk-config-v1';

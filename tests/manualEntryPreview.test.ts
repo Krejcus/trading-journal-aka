@@ -241,15 +241,6 @@ describe('fáze 1a: strážní pravidla', () => {
     for (const path of imports) expect(path).not.toMatch(/tradovateBroker|brokerRouter|copierRuntimeController|copierRunner|copierOutbox/);
     expect(source).not.toMatch(/placeOrder|placeOso|placeOco|modifyOrder|cancelOrder|liquidatePosition|dispatchBroker/);
   });
-
-  it('controller náhled jen sbírá stav bez IO a vyhodnotí čistou funkcí', () => {
-    const controller = readFileSync('services/copierRuntimeController.ts', 'utf8');
-    const start = controller.indexOf('    previewLeaderEntry(command: LeaderEntryPreviewCommand): LeaderEntryPreviewResult {');
-    const body = controller.slice(start, controller.indexOf('\n    prepareArm,', start));
-    expect(start).toBeGreaterThan(0);
-    expect(body).not.toMatch(/await |dispatchBroker|options\.broker|persist|onAudit|lastError =|failClosed/);
-    expect(body).toMatch(/return evaluateManualEntryPreview\(/);
-  });
 });
 
 describe('C12: denní pauza CME v náhledu vstupu (oponentura P2)', () => {

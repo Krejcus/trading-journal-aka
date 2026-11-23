@@ -1,7 +1,10 @@
-import type { BrokerEvent, BrokerFill, BrokerOrder } from './brokerPort';
-import type { LeaderEvent, LeaderEventKind } from './copierEngine';
+import type { BrokerEvent, BrokerFill, BrokerOrder } from '../../services/brokerPort';
+import type { LeaderEvent, LeaderEventKind } from '../../services/copierEngine';
 
 /**
+ * JEN PRO TESTY (od 23. 11. 2026): referenční příjemce událostí brokera ze smazané Tradovate kopírky.
+ * Testy Rithmic brokera jím hlídají, že adaptér vydává události ve stejném tvaru a pořadí.
+ *
  * Překládá broker lifecycle na stabilní leader události.
  *
  * Všechny entity z počátečního `user/syncrequest` jsou pouze baseline.

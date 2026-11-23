@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { copyEventToast, newCopyEvents, TRADE_TOAST_MS } from '../lib/liveTradeToasts';
-import type { CopierCopyEvent } from '../services/copierRuntimeController';
+import type { CopierCopyEvent } from '../lib/liveCopierTypes';
 
 const event = (patch: Partial<CopierCopyEvent>): CopierCopyEvent => ({
   id: 'e1', at: 1_000, kind: 'entry', symbol: 'MNQZ6', side: 'Short', quantity: 1, followers: 3, ...patch,

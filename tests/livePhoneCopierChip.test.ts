@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { livePhoneCopierChip } from '../lib/livePhoneCopierChip';
 import { createCopierDisarmRecord } from '../lib/copierDisarmReason';
-import type { CopierControllerStatus } from '../services/copierRuntimeController';
+import type { CopierControllerStatus } from '../lib/liveCopierTypes';
 
 const now = Date.UTC(2026, 10, 2, 15, 0, 0);
 const status = (patch: Partial<CopierControllerStatus> = {}): CopierControllerStatus => ({

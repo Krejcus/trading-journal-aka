@@ -1,8 +1,8 @@
 import { LiveCommandNotSentError } from './liveCommandErrors';
-import type { CopierControllerStatus } from '../services/copierRuntimeController';
+import type { CopierControllerStatus } from './liveCopierTypes';
 import type { LiveEntryPreviewDraft } from './leaderEntryPreview';
 import { supportsCopierManualEntryScaleIn } from './copierWorkerCapabilities';
-import type { LocalCopierAgentStatus } from './localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from './liveCopierTypes';
 
 /**
  * Přikoupení do otevřené pozice v UI (3. 11. 2026, docs/reviews/scale-in-design-20261102.md):

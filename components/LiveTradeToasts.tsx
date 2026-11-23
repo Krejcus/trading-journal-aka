@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import './day/dayJournal.css';
-import type { CopierCopyEvent } from '../services/copierRuntimeController';
+import type { CopierCopyEvent } from '../lib/liveCopierTypes';
 import { TRADE_TOAST_MS, capExtraToasts, copyEventToast, keepStickyToasts, newCopyEvents, type TradeToast, type TradeToastTone } from '../lib/liveTradeToasts';
 
 const TONE: Record<TradeToastTone, string> = {

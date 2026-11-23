@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from '../lib/liveCopierTypes';
 import type { LiveAccount, LiveOrder } from '../services/tradecopiaLiveService';
 import type { LiveFillMarker } from '../lib/liveFillMarkers';
 import {

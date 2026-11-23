@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentStatus } from '../lib/liveCopierTypes';
 import type { TradovateAccountDataAccount, TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import {
   WORKER_POSITION_DIVERGENT_DETAIL, WORKER_POSITION_MISMATCH_DETAIL, WORKER_POSITION_UNKNOWN_DETAIL, overlayWorkerExposure as overlayWorkerExposureRaw, WORKER_EXPOSURE_MAX_AGE_MS,
@@ -257,27 +257,5 @@ describe('worker exposure overlay', () => {
       expect(follower.positions, String(verdict.detail)).toEqual([]);
       expect(follower.readState.positionsAsOf).toBe(iso(NOW - 1_000));
     }
-  });
-
-  it('každý OK verdikt followera ve workeru před kontrolou pozice je jeden ze známých (jinak by znamenal „ověřeně flat“)', () => {
-    const worker = readFileSync(join(__dirname, '..', 'services/copierRuntimeController.ts'), 'utf8');
-    const start = worker.indexOf('const followers = group.followers.map(follower => {');
-    const heldCheck = worker.indexOf("if (!held) return { accountId: id, ok: false, detail: 'pozice neověřena' };", start);
-    expect(start).toBeGreaterThan(0);
-    expect(heldCheck).toBeGreaterThan(start);
-    const beforeHeld = worker.slice(start, heldCheck);
-    const okDetails = [...beforeHeld.matchAll(/ok: true, detail: '([^']*)'/g)].map(match => match[1]).sort();
-    // „vyřazen“ a „ručně vypnutý“ vyžadují held != null; „vypnutý follower“ (režim off) overlay vynechá.
-    expect(okDetails).toEqual(['ručně vypnutý follower', 'vypnutý follower', 'vyřazen — vlastní pozice, kopírka ji neřídí'].sort());
-    expect(beforeHeld.match(/ok: true\b/g)).toHaveLength(3);
-  });
-
-  it('texty verdiktů followera jsou přesně ty, které posílá worker', () => {
-    const worker = readFileSync(join(__dirname, '..', 'services/copierRuntimeController.ts'), 'utf8');
-    expect(worker).toContain(`detail: '${WORKER_POSITION_UNKNOWN_DETAIL}'`);
-    expect(worker).toContain(`detail: '${WORKER_POSITION_DIVERGENT_DETAIL}'`);
-    expect(worker).toContain("detail: 'vypnutý follower' }");
-    expect(worker).toContain('detail: `${symbol}: drží ${actual}, očekáváno ${expected}`');
-    expect(WORKER_POSITION_MISMATCH_DETAIL.test('MNQZ6: drží -2, očekáváno 0')).toBe(true);
   });
 });
