@@ -56,6 +56,8 @@ function drawDust(width: number, height: number, dark: boolean): HTMLCanvasEleme
  */
 function drawDepths(canvas: HTMLCanvasElement, colors: string[], dark: boolean, dust: HTMLCanvasElement, time = 0, dim = 1) {
   const width = dust.width, height = dust.height;
+  // Okno bez rozměru (skrytý panel, minimalizace) — drawImage s plátnem 0×0 vyhodí výjimku a shodí appku.
+  if (width === 0 || height === 0) return;
   // Světla jsou rozmazaná, ostrost by jen stála výkon — stačí hustota 1.
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
   const ctx = canvas.getContext('2d');
