@@ -6,16 +6,18 @@ import { HISTORICAL_LAG_MS, composeDayCandles, dayCandleWindow, loadDayHistorica
 import type { MarketCandle } from '../services/marketData';
 import { storageService } from '../services/storageService';
 import { tradeChartTiming } from '../services/tradeChartData';
-import { useLiveCandles } from './useLiveCandles';
-import { useTvLiveCandleFeed } from './useTvLiveCandleFeed';
+import { useRithmicDayCandles } from './useRithmicDayCandles';
 import { perfDuration } from '../lib/perfTrace';
 import { chartDataQuality } from '../lib/chartDataQuality';
 import { createChartHistoryRefresh } from '../services/chartHistoryRefresh';
 
+const liveSource = (symbol: string | null) => (symbol ? `Rithmic:${symbol}` : null);
+
 /**
  * Data grafu dne: obchody dne s historií plnění (šipky, SL/TP) a svíčky
- * — historie Databento + živé čtení TradingView pro posledních 25 h.
- * `liveFeed`: rozpracovaná poslední svíčka z kanálu ceny (jen překreslení
+ * — historie Databento + pro posledních ~25 h svíčky z místní služby Rithmicu
+ * (jen čtení; bez běžící služby poslední část dne chybí).
+ * `liveFeed`: rozpracovaná poslední svíčka ze služby (jen překreslení
  * v grafu, do `candles` se nikdy nepřidává).
  */
 export function useDayChartData(
@@ -93,27 +95,25 @@ export function useDayChartData(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- klíč pokrývá den, kotvu i hranici historie
   }, [historicalKey, detailsReady, perfScope, disabled]);
 
-  const { live, status: liveStatus, problem: liveProblem, requestData } = useLiveCandles('MNQ', {
-    enabled: candleWindow.needsLive && !disabled,
-    perfScope,
-  });
+  const live = useRithmicDayCandles(candleWindow.needsLive && !disabled);
+  const liveStatus = live.status;
   // Během obnovení (posun hranice, ověřený kontrakt) zůstávají svíčky téhož dne —
   // graf se neodpojí ani neztratí záběr.
   const sameDay = historyReadyForChart(historical?.day === day ? historical : null, candleWindow.needsLive, liveStatus === 'loading');
   const candles = useMemo(
-    () => composeDayCandles(candleWindow, sameDay?.candles ?? [], live?.response.candles ?? null),
-    [candleWindow, live, sameDay],
+    () => composeDayCandles(candleWindow, sameDay?.candles ?? [], live.candles),
+    [candleWindow, live.candles, sameDay],
   );
   const loading = !sameDay || (candleWindow.needsLive && liveStatus === 'loading');
   const qualityMinute = Math.floor(now / 60_000) * 60_000;
   const quality = useMemo(() => chartDataQuality({
     candles, dayStart: candleWindow.dayStart, dayEnd: candleWindow.dayEnd, now: qualityMinute,
-    needsLive: candleWindow.needsLive, liveStatus, liveCapturedAt: live?.capturedAt ?? null,
-    liveSource: live?.response.sourceSymbol ?? null, liveProblem, validation: live?.validation,
+    needsLive: candleWindow.needsLive, liveStatus, liveCapturedAt: live.capturedAt,
+    liveSource: liveSource(live.symbol),
     historicalError: sameDay?.error, historicalLoading: !sameDay || sameDay.key !== historicalKey,
-  }), [candles, candleWindow, qualityMinute, liveStatus, live, liveProblem, sameDay, historicalKey]);
+  }), [candles, candleWindow, qualityMinute, liveStatus, live.capturedAt, live.symbol, sameDay, historicalKey]);
   // Jen dokud den běží (včerejšek v živém okně ani sobota už živou svíčku nemají).
-  const liveFeed = useTvLiveCandleFeed(candleWindow.needsLive && !disabled && now < candleWindow.dayEnd, candleWindow.dayEnd, requestData, live?.response.sourceSymbol ?? null);
+  const liveFeed = candleWindow.needsLive && !disabled && now < candleWindow.dayEnd ? live.feed : null;
   return {
     candles,
     quality,
@@ -122,10 +122,9 @@ export function useDayChartData(
     loading,
     error: sameDay?.error ?? null,
     liveStatus: candleWindow.needsLive ? liveStatus : null,
-    liveCapturedAt: live?.capturedAt ?? null,
-    /** Odkud jsou živé svíčky dne (`IBKR:MNQZ2026`, `CME_MINI:MNQ1!`) — štítek
-     *  a kontrakt náhledu ručního vstupu (worker ho ověří proti front kontraktu). */
-    liveSource: live?.response.sourceSymbol ?? null,
+    liveCapturedAt: live.capturedAt,
+    /** Odkud jsou živé svíčky dne (`Rithmic:MNQZ6`) — štítek grafu. */
+    liveSource: liveSource(live.symbol),
     liveFeed,
   };
 }

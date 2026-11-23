@@ -8,7 +8,6 @@ import {
   type MarketCandle,
   type MarketCandleResponse,
 } from './marketData';
-import { stitchLiveCandles } from './liveCandles';
 
 /**
  * Svíčky pro graf dne: 14 dní kontextu (PDH/PDL, týdenní úrovně) až do
@@ -146,6 +145,12 @@ export async function loadDayHistoricalCandles(params: {
     ? await deps.loadForTrade({ root, tradeSymbol: anchor.symbol, start: window.start, end: window.historicalEnd, entryMs: anchor.at, entryPrice: anchor.price })
     : await deps.loadContinuous(resolveMarketSymbol(root), window.start, window.historicalEnd);
   return { window, response: { ...response, candles: candlesBefore(response.candles, window.dayEnd) } };
+}
+
+/** Živé svíčky navazují za poslední historickou; překryv se bere z historie. */
+export function stitchLiveCandles(historical: readonly MarketCandle[], live: readonly MarketCandle[]): MarketCandle[] {
+  const lastHistorical = historical.length ? historical[historical.length - 1].time : -Infinity;
+  return [...historical, ...live.filter(candle => candle.time > lastHistorical)];
 }
 
 /** Historie + živé svíčky, obojí oříznuté na konec dne. */

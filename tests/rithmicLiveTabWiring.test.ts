@@ -121,7 +121,10 @@ describe('obrazovka v režimu jednoho účtu', () => {
     // Starší historie appky (skutečný MNQ) se k cizímu zdroji svíček nepřipojuje; kanál TV se neodebírá.
     expect(screen).toMatch(/externalMarketData: marketData != null && solo\?\.historyFromApp !== true,/);
     expect(readFileSync('components/AlphaTradeChartWorkspace.tsx', 'utf8')).toMatch(/const htf = externalMarketData \? EXTERNAL_HTF : htfRead;/);
-    expect(readFileSync('hooks/useDayChartData.ts', 'utf8')).toMatch(/useTvLiveCandleFeed\(candleWindow\.needsLive && !disabled && now < candleWindow\.dayEnd,/);
+    // Graf dne si dnešní svíčky bere ze služby Rithmic sám; s vlastním zdrojem (LIVE graf) se druhé spojení neotevírá.
+    const dayData = readFileSync('hooks/useDayChartData.ts', 'utf8');
+    expect(dayData).toMatch(/const live = useRithmicDayCandles\(candleWindow\.needsLive && !disabled\);/);
+    expect(dayData).toMatch(/const liveFeed = candleWindow\.needsLive && !disabled && now < candleWindow\.dayEnd \? live\.feed : null;/);
     expect(screen).toMatch(/layoutScope=\{solo \? 'live-trading-rithmic' : 'live-trading'\}/);
   });
 });

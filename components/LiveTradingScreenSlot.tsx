@@ -51,19 +51,8 @@ const loadLiveTradingScreen = (): Promise<LiveTradingScreenModule> => {
   return liveTradingScreenPromise;
 };
 
-/** Samostatný import dovolí začít číst snapshot souběžně se stahováním grafu. */
-const preloadLiveTradingCandles = (): Promise<void> => import('../services/liveCandles')
-  .then(module => module.preloadLiveCandles('MNQ'));
-
-/**
- * Zahřeje JS grafu a jednorázový snapshot svíček bez mountu nebo živých
- * odběrů. Datové čtení je po přihlášeném uživateli a graf ho po mountu
- * spotřebuje; při chybě pozdější otevření zkusí standardní cestu znovu.
- */
-export const preloadLiveTradingScreen = (): Promise<void> => Promise.all([
-  loadLiveTradingScreen(),
-  preloadLiveTradingCandles(),
-]).then(() => undefined);
+/** Zahřeje JS grafu bez mountu a bez živých odběrů; při chybě pozdější otevření zkusí standardní cestu znovu. */
+export const preloadLiveTradingScreen = (): Promise<void> => loadLiveTradingScreen().then(() => undefined);
 
 const LiveTradingScreen = React.lazy(loadLiveTradingScreen);
 

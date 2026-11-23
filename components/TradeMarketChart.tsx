@@ -61,7 +61,6 @@ import {
 import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScope';
 import { detailIndicatorStyleSnapshot, onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators, type TradeChartIndicators } from '../services/detailIndicators';
 import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
-import { loadProvisionalCandles } from '../services/provisionalCandles';
 import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
@@ -466,25 +465,11 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     if (detail) { setFullHistory(levelsWanted || isFullscreen || snapshotMode); setHistoryReady(false); }
     setHistorySettled(false);
     if (!tradeChartDataAvailable(timing)) {
-      let retryTimer: number | undefined;
-      loadProvisionalCandles(trade, timing).then(response => {
-        if (cancelled) return;
-        if (!response) {
-          setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
-          // Čerstvý obchod: worker čte svíčky z TradingView 65 s a 20 min po
-          // výstupu — dokud může ještě přijít, zkusit to znovu.
-          if (Date.now() - timing.exitMs < 25 * 60_000) retryTimer = window.setTimeout(() => setRetry(value => value + 1), 45_000);
-          return;
-        }
-        setRawCandles(response.candles);
-        setLoadedSymbol(response.symbol);
-        setProviderSymbol(response.sourceSymbol || response.symbol);
-        setProvisional(true);
-        // Plná historie přijde až s Databentem — nedotahovat.
-        setHistoryReady(true);
-        setHistorySettled(true);
-      }).finally(() => { if (!cancelled) setLoading(false); });
-      return () => { cancelled = true; window.clearTimeout(retryTimer); };
+      // Předběžné svíčky z TradingView psal worker Tradovate kopírky (odstraněn 23. 11. 2026); čerstvý obchod
+      // dostane graf, až ho zpřístupní Databento.
+      setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
+      setLoading(false);
+      return undefined;
     }
     Promise.resolve().then(() => loadTradeChartCandles(trade, root, detail ? 'session' : 'full', timing)).then(response => {
       if (cancelled) return;

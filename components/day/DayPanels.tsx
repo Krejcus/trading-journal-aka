@@ -35,7 +35,7 @@ const label11: React.CSSProperties = { margin: 0, fontSize: 11, fontWeight: 600,
 const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 12.5, fontWeight: 700 };
 
 export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, compact = false }: { status: DayController['chart']['liveStatus']; capturedAt: number | null; source?: string | null; weekendMarketDay?: string | null; compact?: boolean; restartable?: boolean }) {
-  // O víkendu je trh zavřený — „TradingView stojí“ by jen strašilo.
+  // O víkendu je trh zavřený — „Rithmic stojí“ by jen strašilo.
   if (weekendMarketDay) {
     const full = `Víkend · graf ukazuje ${dayTitle(weekendMarketDay).toLowerCase()}`;
     return (
@@ -47,13 +47,12 @@ export function LiveChip({ status, capturedAt, source = null, weekendMarketDay, 
   }
   if (!status) return null;
   const live = status === 'live';
-  const ibkr = !!source && source.startsWith('IBKR:');
-  const text = status === 'live' ? `${compact ? (ibkr ? 'Živě · IBKR' : 'Živě') : ibkr ? 'Živě z IBKR' : 'Živě z TradingView'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
+  const text = status === 'live' ? `${compact ? 'Živě' : 'Živě z Rithmicu'}${capturedAt ? ` · ${clock(capturedAt)}` : ''}`
     : status === 'loading' ? (compact ? 'Načítám…' : 'Načítám živé svíčky…')
-      : status === 'stale' ? `${ibkr ? (compact ? 'IBKR stojí' : 'Svíčky z IBKR stojí') : compact ? 'TV stojí' : 'TradingView stojí'}${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
-        : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — zkontroluj worker a IB Gateway';
+      : status === 'stale' ? `${compact ? 'Rithmic stojí' : 'Svíčky z Rithmicu stojí'}${capturedAt ? ` od ${clock(capturedAt)}` : ''}`
+        : compact ? 'Bez živých svíček' : 'Živé svíčky nejsou — spusť službu Rithmic na Macu';
   return (
-    <span title={ibkr ? 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z IBKR (jen zobrazení).' : 'Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z grafu TradingView (jen zobrazení).'} style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
+    <span title={`Databento má zpoždění ~24 h; dnešek a včerejší NY jdou z místní služby Rithmicu${source ? ` (${source.replace(/^Rithmic:/, '')})` : ''} — jen zobrazení.`} style={{ flex: 'none', height: 24, padding: '0 8px', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 7, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: live ? 'var(--dj-green-text)' : 'var(--dj-amber-text)', background: live ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)' }}>
       <span style={{ width: 6, height: 6, borderRadius: 9, background: live ? '#10b981' : '#f59e0b', animation: live ? 'dj-blink 2s ease-in-out infinite' : undefined }} />
       {text}
     </span>
