@@ -36,6 +36,23 @@ Archiv: tag `archive/tradovate-final-20261123`.
    tabulky čtou — ochrana čísel zmrazených obchodů má zůstat. Podmínka: čerstvá úplná záloha.
 5. **Úklid:** staré worktree a větve, `docs`, paměť, iOS build (widgety / Live Activity).
 
+## Průběh vln
+
+- **Vlna 1 (commit 87bb5bf2, WIP — zatím se nebuildí):** smazáno 176 souborů / ~45 500 řádků:
+  `api/tradovate`, `api/tradingview`, `api/mac-companion`, `api/price-alerts`, `api/native-widget-*`,
+  `api/native-live-activity-*`, `api/native-snapshot-test`, cron `journal-import`, `scripts/copier`,
+  `server/tradovate*`, `server/*copier*`, `server/native(LiveActivity|Widget|Snapshot…)*`,
+  `server/priceAlert*`, `server/tvAlert*`, `macos/AlphaTradeStatus`, TradeCopia funkce.
+  `api/cron/send-alerts` ponechává jen plánovaná upozornění; `server/notificationDelivery` bez kopírky.
+- **Zbývá z vlny 1:** klientská strana importu deníku v `App.tsx` (`runCopierJournalSync`,
+  `JournalImportStatus`, `JournalSourceStatus`, `journalSourceConnections`), `nativeCopierNotifications`
+  v `TradovateLiveDesk` a `nativeSessionCleanup`, smazání testů mazaných modulů.
+- **Vlna 2 — LIVE:** Rithmic dnes žije uvnitř `components/TradovateLiveDesk.tsx` (3 074 ř.): záložky
+  Graf (`RithmicLiveChart` / `RithmicPhoneChart`) a Kopírka (`RithmicCopierTab`), přehled = Tradovate
+  `LiveCopyTradeOverview` (7 677 ř.). Cíl: nový štíhlý LIVE desk jen pro Rithmic, Tradovate desk smazat.
+- **Nové zjištění:** `tradovate_journal_untaken_orders` = 141 nevzatých příkazů (karty v Hodnotit),
+  2 s hodnocením — před DROP rozhodnout, zda zmrazit.
+
 ## Otevřené otázky na Filipa
 
 - Rozšíření prohlížeče `extension/` („Alpha Bridge v2", TradingView/FX Replay → appka, naposledy
