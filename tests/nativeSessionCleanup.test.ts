@@ -4,9 +4,8 @@ const actions = vi.hoisted(() => Array.from({ length: 7 }, () => vi.fn().mockRes
 vi.mock('../utils/runtimeConfig', () => ({ isNativeBuild: true }));
 vi.mock('../services/nativeSessionReminders', () => ({ clearNativeSessionReminderState: actions[1] }));
 vi.mock('../services/nativePushNotifications', () => ({ deactivateNativeRemoteNotifications: actions[2] }));
-vi.mock('../services/nativeLiveActivityPush', () => ({ deactivateNativeLiveActivityPush: actions[3] }));
-vi.mock('../services/nativeWidgetRemote', () => ({ deactivateNativeWidgetRemote: actions[4] }));
-vi.mock('../services/nativeWidgetSnapshot', () => ({ clearNativeWidgetSnapshot: actions[5] }));
+vi.mock('../services/alphaTradeNativePlugin', () => ({ alphaTradeNativePlugin: { clearWidgetSnapshot: actions[5] } }));
+vi.mock('../services/nativeCapabilities', () => ({ endNativeLiveActivity: actions[3] }));
 vi.mock('../services/nativeNotifications', () => ({ cancelAllNativeNotifications: actions[6] }));
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); actions.forEach(action => action.mockReset().mockResolvedValue(undefined)); });
@@ -32,12 +31,12 @@ describe('native logout boundary', () => {
     vi.resetModules(); vi.useFakeTimers();
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     actions[2].mockImplementation(() => { throw new Error('offline'); });
-    actions[4].mockResolvedValue({ revoked: false });
+    actions[5].mockResolvedValue({ revoked: false });
     const { clearNativeSessionSurfaces } = await import('../services/nativeSessionCleanup');
     const cleanup = clearNativeSessionSurfaces('user-a');
     await vi.runAllTimersAsync(); await cleanup;
-    // actions[0] patřil notifikacím Tradovate kopírky (odstraněno 23. 11. 2026).
-    actions.slice(1).forEach(action => expect(action).toHaveBeenCalledOnce());
+    // actions[0] = notifikace Tradovate kopírky, [4] = vzdálené widgety (odstraněno 23. 11. 2026).
+    [1, 2, 3, 5, 6].forEach(index => expect(actions[index]).toHaveBeenCalledOnce());
     expect(warning).toHaveBeenCalledOnce();
   });
 });

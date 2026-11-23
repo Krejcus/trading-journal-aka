@@ -1,9 +1,7 @@
 import type { Account } from '../types';
 import type { CopierAccountSnapshotRow } from '../services/copierAccountSnapshots';
-import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
-import type { TradovateAccountDataAccount } from './tradovateAccountDataTypes';
+import type { PropAccountProfile } from './propAccountProfile';
 import type { FirmPayoutRules } from './propFirmRules';
-import { accountRiskFloor, accountRiskPeak } from './tradovateLiveView';
 import {
   breachDetector,
   chicagoTradingDate,
@@ -34,17 +32,13 @@ interface CockpitDrawdownSnapshot {
 const finite = (value: number | null | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
-/** Stejný floor jako LIVE desk, následovaný broker snapshotem a až pak výpočtem. */
+/** Floor z broker snapshotu, jinak výpočet ze snapshotů a profilu. */
 export function resolveCockpitDrawdown({
   snapshots,
   profile,
-  liveAccount,
-  liveCapturedAt,
 }: {
   snapshots: readonly CockpitDrawdownSnapshot[];
-  profile: TradovateAccountProfile;
-  liveAccount?: TradovateAccountDataAccount | null;
-  liveCapturedAt?: string | null;
+  profile: PropAccountProfile;
 }): DrawdownFloorResult | null {
   if (profile.drawdownType == null || profile.drawdownType === 'none') return null;
   const computed = drawdownFloor(snapshots, profile);
@@ -54,23 +48,6 @@ export function resolveCockpitDrawdown({
     floor: snapshot.autoLiqLevel,
     distance: snapshot.balance - snapshot.autoLiqLevel,
   }] : []);
-  const liveFloor = liveAccount ? accountRiskFloor(liveAccount, profile) : null;
-  const liveBalance = liveAccount?.balance.netLiq ?? liveAccount?.balance.totalCashValue ?? null;
-  if (finite(liveFloor) && finite(liveBalance)) {
-    const at = liveCapturedAt && Number.isFinite(Date.parse(liveCapturedAt))
-      ? new Date(liveCapturedAt).toISOString() : new Date().toISOString();
-    const history = brokerHistory.length > 0 ? brokerHistory : [...(computed?.history ?? [])];
-    history.push({ at, balance: liveBalance, floor: liveFloor, distance: liveBalance - liveFloor });
-    return {
-      floor: liveFloor,
-      balance: liveBalance,
-      distance: liveBalance - liveFloor,
-      highWatermark: accountRiskPeak(liveAccount, profile) ?? liveFloor + (profile.maxLoss ?? 0),
-      highWatermarkBasis: profile.drawdownType === 'static' ? 'static'
-        : profile.drawdownType === 'trailing' ? 'intraday' : 'eod',
-      history,
-    };
-  }
   const latestBroker = brokerHistory.at(-1);
   if (latestBroker) {
     return {
@@ -113,16 +90,12 @@ export function buildAccountCockpitModel({
   rows,
   profile,
   rules,
-  liveAccount,
-  liveCapturedAt,
   now = new Date(),
 }: {
   account: Account;
   rows: readonly CopierAccountSnapshotRow[];
-  profile: TradovateAccountProfile | null;
+  profile: PropAccountProfile | null;
   rules: FirmPayoutRules | null;
-  liveAccount?: TradovateAccountDataAccount | null;
-  liveCapturedAt?: string | null;
   now?: Date;
 }): AccountCockpitModel {
   const ordered = rows
@@ -141,7 +114,7 @@ export function buildAccountCockpitModel({
 
   const dailyLimit = todayPnl != null && profile?.dailyLossLimit != null
     ? dailyLimitUsage(todayPnl, profile.dailyLossLimit) : null;
-  const floor = profile ? resolveCockpitDrawdown({ snapshots, profile, liveAccount, liveCapturedAt }) : null;
+  const floor = profile ? resolveCockpitDrawdown({ snapshots, profile }) : null;
   const floorUsage = floor && profile?.maxLoss != null ? drawdownUsage(floor, profile.maxLoss) : null;
   const drawdown = floor && floorUsage ? { ...floor, usage: floorUsage } : null;
   const breach = floor ? breachDetector(snapshots, floor) : { breached: false as const };

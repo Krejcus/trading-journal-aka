@@ -75,9 +75,7 @@ import {
   presentNativeCalendarEvent,
 } from '../services/nativeCapabilities';
 import { shareTextNative } from '../services/nativeShare';
-import TradingViewAlertSettings from './TradingViewAlertSettings';
 import NativeShellTabsSettings from './NativeShellTabsSettings';
-import { requestNativeLiveActivityRestart } from '../services/nativeLiveActivityPush';
 import AppearanceSettings from './AppearanceSettings';
 import type { AppearanceSettings as AppearanceValue } from '../lib/appearance';
 import { ruleAdherenceRecent } from '../lib/ruleAdherence';
@@ -673,8 +671,6 @@ const Settings: React.FC<SettingsProps> = ({
       let state: NativeLiveActivityState;
       if (action === 'end') {
         state = await endNativeLiveActivity();
-        // Ukončení sebere i ostrou aktivitu; server ji smí znovu nastartovat.
-        void requestNativeLiveActivityRestart();
       } else if (action === 'risk') {
         state = await updateNativeLiveActivity({
           symbol: 'MNQ',
@@ -1211,7 +1207,6 @@ const Settings: React.FC<SettingsProps> = ({
           </>}
         </SettingsSection>
       </div>
-      <TradingViewAlertSettings onToast={showToast} />
     </div>
   );
 

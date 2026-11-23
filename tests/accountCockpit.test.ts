@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '../types';
-import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import type { PropAccountProfile } from '../lib/propAccountProfile';
 import { buildAccountCockpitModel, resolveCockpitDrawdown, sortAccountsRiskFirst } from '../lib/accountCockpit';
 import type { FirmPayoutRules } from '../lib/propFirmRules';
 
@@ -9,12 +9,9 @@ const account = (id: string, name: string, phase: 'Challenge' | 'Funded' = 'Fund
   oauth: { provider: 'tradovate', environment: 'demo', externalAccountId: id, connectionId: 'connection', firm: 'Tradeify' },
 });
 
-const profile = (id: string): TradovateAccountProfile => ({
-  id: `profile-${id}`, provider: 'tradovate', environment: 'demo', externalAccountId: id,
-  accountName: id, displayName: null, propFirm: 'Tradeify', planName: 'Growth', accountType: 'funded',
-  accountSize: 50_000, drawdownType: 'static', maxLoss: 2_000, dailyLossLimit: 1_000,
-  consistencyPct: 35, profitTarget: 3_000, maxMini: null, maxMicro: null, mappedAccountId: id,
-  status: 'active', lastSeenAt: '2026-08-22T10:00:00Z', createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-22T10:00:00Z',
+const profile = (_id: string): PropAccountProfile => ({
+  planName: 'Growth', accountSize: 50_000, drawdownType: 'static', maxLoss: 2_000, dailyLossLimit: 1_000,
+  consistencyPct: 35, profitTarget: 3_000,
 });
 
 const rules: FirmPayoutRules = {
@@ -73,19 +70,12 @@ describe('account cockpit mapping', () => {
     expect(sortAccountsRiskFirst(accounts, models).map(item => item.id)).toEqual(['danger', 'warning', 'ok']);
   });
 
-  it('prefers live broker floor, then snapshot auto-liq and finally computed floor', () => {
+  it('prefers snapshot auto-liq, then the computed floor', () => {
     const snapshots = [
       { capturedAt: '2026-08-21T21:00:00.000Z', balance: 50_600, autoLiqLevel: null },
       { capturedAt: '2026-08-22T21:00:00.000Z', balance: 50_900, autoLiqLevel: 49_250 },
     ];
     const floorProfile = { ...profile('floor'), drawdownType: 'eod_trailing' as const };
-    const liveAccount = {
-      balance: { autoLiqLevel: 49_700, netLiq: 50_950, totalCashValue: 50_900 },
-      risk: { trailingMaxDrawdown: 2_000, maxNetLiq: 51_100 },
-      daily: [],
-    } as never;
-    expect(resolveCockpitDrawdown({ snapshots, profile: floorProfile, liveAccount, liveCapturedAt: '2026-08-22T22:00:00Z' }))
-      .toMatchObject({ floor: 49_700, balance: 50_950, distance: 1_250 });
     expect(resolveCockpitDrawdown({ snapshots, profile: floorProfile }))
       .toMatchObject({ floor: 49_250, balance: 50_900, distance: 1_650 });
     expect(resolveCockpitDrawdown({

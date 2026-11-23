@@ -1,5 +1,5 @@
 import type { FirmPayoutRules } from './propFirmRules';
-import type { TradovateAccountProfileInput } from './tradovateAccountProfileTypes';
+import type { PropAccountProfile } from './propAccountProfile';
 import { trailingFloorFromHighWatermark } from '../services/propDrawdown';
 
 export interface PropFirmAccountSnapshot {
@@ -261,7 +261,7 @@ export function payoutEligibility(
  */
 export function drawdownFloor(
   snapshots: readonly PropFirmAccountSnapshot[],
-  profile: Pick<TradovateAccountProfileInput, 'accountSize' | 'maxLoss' | 'drawdownType'>,
+  profile: Pick<PropAccountProfile, 'accountSize' | 'maxLoss' | 'drawdownType'>,
   highWatermarkBasis: HighWatermarkBasis = profile.drawdownType === 'trailing' ? 'intraday' : 'eod',
 ): DrawdownFloorResult | null {
   const ordered = sortedSnapshots(snapshots);

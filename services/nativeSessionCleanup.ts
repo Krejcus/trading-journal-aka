@@ -1,13 +1,24 @@
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { deactivateNativeRemoteNotifications } from './nativePushNotifications';
-import { deactivateNativeLiveActivityPush } from './nativeLiveActivityPush';
-import { deactivateNativeWidgetRemote } from './nativeWidgetRemote';
-import { clearNativeWidgetSnapshot } from './nativeWidgetSnapshot';
+import { alphaTradeNativePlugin } from './alphaTradeNativePlugin';
+import { endNativeLiveActivity } from './nativeCapabilities';
 import { cancelAllNativeNotifications } from './nativeNotifications';
 import { clearNativeSessionReminderState } from './nativeSessionReminders';
 
 let cleanup: Promise<void> = Promise.resolve();
 export const waitForNativeSessionCleanup = () => cleanup;
+
+/**
+ * Widgety a Live Activity plnila Tradovate kopírka se serverovou registrací (odstraněno 23. 11. 2026).
+ * Při odhlášení se jen smažou, co po starší verzi zůstalo v telefonu.
+ */
+async function clearNativeWidgetLeftovers(): Promise<void> {
+  for (const key of ['alphatrade-native-widget-snapshot-v2', 'alphatrade-native-widget-owner-v1', 'alphatrade-native-widget-access-token-v1']) {
+    try { localStorage.removeItem(key); } catch { /* storage nedostupná */ }
+  }
+  await alphaTradeNativePlugin.clearWidgetSnapshot();
+  await endNativeLiveActivity().catch(() => undefined);
+}
 
 /** A new login waits for this boundary so late cleanup cannot clear its data. */
 export function clearNativeSessionSurfaces(userId: string): Promise<void> {
@@ -19,9 +30,7 @@ export function clearNativeSessionSurfaces(userId: string): Promise<void> {
     const actions: Array<() => unknown> = [
       () => clearNativeSessionReminderState(),
       () => deactivateNativeRemoteNotifications(userId),
-      () => deactivateNativeLiveActivityPush(userId),
-      () => deactivateNativeWidgetRemote(userId),
-      () => clearNativeWidgetSnapshot(),
+      () => clearNativeWidgetLeftovers(),
       () => cancelAllNativeNotifications(),
     ];
     const results = await Promise.allSettled(actions.map(action => Promise.resolve().then(action)));

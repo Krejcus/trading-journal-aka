@@ -32,16 +32,13 @@ import { firmOf, firmInitials, firmColor, firmLabel, FIRM_LOGOS, KNOWN_FIRMS } f
 import { adjustmentForAccount, adjustmentTotal, directAdjustmentForFirm, getFinancialAdjustments } from '../services/tradingIncidents';
 import { calculateAccountDrawdown, inferDrawdownConfig } from '../services/propDrawdown';
 import { accountRemovalDecision } from '../lib/oauthAccountArchivePolicy';
-import type { OAuthAccountLiveState } from '../lib/oauthAccountLiveState';
-import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
-import type { TradovatePreflightResult } from '../services/tradovateOAuthConnection';
 import type { FirmPayoutRules } from '../lib/propFirmRules';
 import { defaultRulesForFirm, loadFirmPayoutRules, saveFirmPayoutRules } from '../services/firmPayoutRules';
 import { loadCopierAccountSnapshots, type CopierAccountSnapshotRow } from '../services/copierAccountSnapshots';
+import type { PropAccountProfile } from '../lib/propAccountProfile';
 import { buildAccountCockpitModel, sortAccountsRiskFirst, summarizeAccountCockpit, type AccountCockpitModel } from '../lib/accountCockpit';
 import { funeralAccountScope, planMultiAccountFuneral } from '../lib/accountFuneralPlan';
 import FirmPayoutRulesDialog from './FirmPayoutRulesDialog';
-import TradovateAccountOnboarding from './TradovateAccountOnboarding';
 import AccountHistory from './AccountHistory';
 import { accountLifecycles, pairAccountsWithPurchases } from '../lib/accountPurchases';
 
@@ -60,25 +57,11 @@ interface AccountsManagerProps {
   payouts: BusinessPayout[];
   reviews: DailyReview[];
   user: User;
-  oauthLiveStates?: Record<string, OAuthAccountLiveState>;
-  tradovateProfiles?: TradovateAccountProfile[];
-  tradovateConnectionData?: Record<string, TradovatePreflightResult>;
-  onTradovateProfilesChanged?: (profiles: TradovateAccountProfile[]) => void;
   /** Všechny účty včetně archivovaných — pro Historii (App předává `accounts` bez archivu). */
   historyAccounts?: Account[];
   /** Náklady z Byznysu; cena účtu se z nich dopočítá, nezadává se. */
   expenses?: BusinessExpense[];
 }
-
-const formatOAuthLastSeen = (value: string | null | undefined) => {
-  if (!value || !Number.isFinite(Date.parse(value))) return null;
-  return new Intl.DateTimeFormat('cs-CZ', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-};
 
 // Sparkline Helper Component
 const AccountSparkline = ({ trades, initialBalance, color, theme }: { trades: Trade[], initialBalance: number, theme: string, color: string }) => {
@@ -223,10 +206,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   user,
   onAddExpense,
   onOpenInDashboard,
-  oauthLiveStates = {},
-  tradovateProfiles = [],
-  tradovateConnectionData = {},
-  onTradovateProfilesChanged,
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -287,37 +266,18 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firmKeySignature]);
 
-  const profileByAccountId = useMemo(() => new Map(accounts.flatMap(account => {
-    if (!account.oauth) return [];
-    const profile = tradovateProfiles.find(candidate => candidate.provider === account.oauth!.provider
-      && candidate.environment === account.oauth!.environment
-      && candidate.externalAccountId === account.oauth!.externalAccountId) ?? null;
-    return [[account.id, profile] as const];
-  })), [accounts, tradovateProfiles]);
-
-  const liveBrokerByAccountId = useMemo(() => new Map(accounts.flatMap(account => {
-    if (!account.oauth || oauthLiveStates[account.id]?.status !== 'connected') return [];
-    const dataset = tradovateConnectionData[account.oauth.connectionId]
-      ?? Object.values(tradovateConnectionData).find(candidate => candidate.environment === account.oauth!.environment
-        && candidate.accounts.some(brokerAccount => String(brokerAccount.id) === account.oauth!.externalAccountId));
-    const brokerAccount = dataset?.accounts.find(candidate => String(candidate.id) === account.oauth!.externalAccountId);
-    return brokerAccount && dataset ? [[account.id, { account: brokerAccount, capturedAt: dataset.capturedAt }] as const] : [];
-  })), [accounts, oauthLiveStates, tradovateConnectionData]);
-
   const cockpitByAccount = useMemo(() => new Map(accounts.flatMap(account => {
     if (!account.oauth) return [];
     const firm = firmOf(account);
     const rules = Object.prototype.hasOwnProperty.call(firmRules, firm) ? firmRules[firm] : defaultRulesForFirm(firm);
-    const live = liveBrokerByAccountId.get(account.id);
     return [[account.id, buildAccountCockpitModel({
       account,
       rows: snapshotRows,
-      profile: profileByAccountId.get(account.id) ?? null,
+      // Profily plnil Tradovate onboarding (odstraněno 23. 11. 2026); kokpit jede ze snapshotů a pravidel firmy.
+      profile: null,
       rules,
-      liveAccount: live?.account,
-      liveCapturedAt: live?.capturedAt,
     })] as const];
-  })), [accounts, firmRules, liveBrokerByAccountId, profileByAccountId, snapshotRows]);
+  })), [accounts, firmRules, snapshotRows]);
 
   const activeCockpitModels = useMemo(() => accounts.filter(account => account.status === 'Active').flatMap(account => cockpitByAccount.get(account.id) ? [cockpitByAccount.get(account.id)!] : []), [accounts, cockpitByAccount]);
   const cockpitSummary = useMemo(() => summarizeAccountCockpit(activeCockpitModels), [activeCockpitModels]);
@@ -647,10 +607,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const inputClass = `w-full px-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white placeholder-slate-700' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900 placeholder-slate-400'}`;
 
   const renderOAuthAccountCard = (acc: Account, model: AccountCockpitModel) => {
-    const profile = profileByAccountId.get(acc.id) ?? null;
+    const profile: PropAccountProfile | null = null;
     const rules = firmRules[firmOf(acc)] ?? defaultRulesForFirm(firmOf(acc));
-    const oauthState = oauthLiveStates[acc.id];
-    const oauthLastSeen = formatOAuthLastSeen(oauthState?.lastSeenAt);
     const accTrades = trades.filter(trade => trade.accountId === acc.id);
     const phaseFunded = acc.phase === 'Funded';
     const border = model.risk === 'danger' ? 'border-rose-500/55 shadow-[0_0_24px_rgba(244,63,94,0.07)]'
@@ -661,12 +619,12 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       : model.consistency.breached ? 'danger'
         : model.consistency.pct >= model.consistency.limit * 0.8 ? 'warning' : 'ok';
 
-    return <div key={acc.id} onClick={() => acc.status === 'Active' ? setActiveAccountId(acc.id) : setArchivedDetail(acc)} className={`group relative cursor-pointer rounded-xl border bg-[var(--bg-card)] p-5 transition-all hover:border-indigo-500/35 ${border} ${oauthState?.status === 'disconnected' ? 'opacity-60' : ''}`}>
+    return <div key={acc.id} onClick={() => acc.status === 'Active' ? setActiveAccountId(acc.id) : setArchivedDetail(acc)} className={`group relative cursor-pointer rounded-xl border bg-[var(--bg-card)] p-5 transition-all hover:border-indigo-500/35 ${border}`}>
       <div className="flex items-start gap-2">
-        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${oauthState?.status === 'connected' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,.8)]' : 'bg-slate-500'}`} />
+        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-slate-500" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2"><h3 className="truncate text-sm font-black text-[var(--text-primary)]">{acc.name}</h3>{model.breached && <span className="rounded-full border border-rose-500/35 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-500">Breach?</span>}</div>
-          <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">{acc.oauth?.externalAccountId}{profile?.accountSize != null ? ` · ${money(profile.accountSize)}` : ''}{(acc.copyMultiplier ?? 1) > 1 ? ` · ×${acc.copyMultiplier}` : ''}{oauthState?.status === 'disconnected' && oauthLastSeen ? ` · naposledy ${oauthLastSeen}` : ''}</p>
+          <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">{acc.oauth?.externalAccountId}{profile?.accountSize != null ? ` · ${money(profile.accountSize)}` : ''}{(acc.copyMultiplier ?? 1) > 1 ? ` · ×${acc.copyMultiplier}` : ''}</p>
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${phaseFunded ? 'border-violet-500/30 bg-violet-500/10 text-violet-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-500'}`}>{phaseFunded ? 'Funded' : 'Challenge'}</span>
         <button type="button" onClick={event => { event.stopPropagation(); startEditing(event, acc); }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={14} /></button>
@@ -714,8 +672,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     const currentPlatformBalance = acc.initialBalance + totalPnL - accumulatedChallengePnL - grossWithdrawals;
     const propDrawdown = drawdownByAccount.get(acc.id) || null;
     const performanceColor = totalPnL >= 0 ? 'emerald' : 'rose';
-    const oauthState = acc.oauth ? oauthLiveStates[acc.id] : undefined;
-    const oauthLastSeen = formatOAuthLastSeen(oauthState?.lastSeenAt);
 
     const cardPadding = isSlave ? 'p-4' : 'p-6';
     const cardHeight = isSlave ? 'min-h-[240px]' : 'min-h-[320px]';
@@ -760,11 +716,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[8px] font-bold text-slate-500">
                     <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-blue-400">
                       Tradovate{acc.oauth.firm ? ` · ${acc.oauth.firm}` : ''}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className={`h-1.5 w-1.5 rounded-full ${oauthState?.status === 'connected' ? 'bg-emerald-500' : 'bg-slate-500'}`} />
-                      {oauthState?.status === 'connected' ? 'připojen' : oauthState?.status === 'disconnected' ? 'odpojen' : 'stav nedostupný'}
-                      {oauthLastSeen ? ` · naposledy viděn ${oauthLastSeen}` : ''}
                     </span>
                   </div>
                 )}
@@ -900,18 +851,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {onTradovateProfilesChanged && <TradovateAccountOnboarding
-        profiles={tradovateProfiles}
-        firms={[...new Set([
-          ...KNOWN_FIRMS.map(firm => firm.label),
-          ...accounts.map(firmOf).filter(firm => firm !== 'OSTATNÍ').map(firmLabel),
-        ])].sort((a, b) => a.localeCompare(b, 'cs'))}
-        onProfilesSaved={onTradovateProfilesChanged}
-        onRulesSaved={entries => setFirmRules(current => ({
-          ...current,
-          ...Object.fromEntries(entries.map(entry => [entry.firmKey, entry.rules])),
-        }))}
-      />}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[11px] font-semibold text-slate-500">Celková equity</p><p className="mt-1 text-2xl font-black text-[var(--text-primary)] tabular-nums">{cockpitSummary.totalEquity == null ? '—' : `$${Math.round(cockpitSummary.totalEquity).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">{activeCockpitModels.length} OAuth účtů · {new Set(accounts.filter(account => account.status === 'Active' && account.oauth).map(firmOf)).size} firem</p></div>
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[11px] font-semibold text-slate-500">Dnes</p><p className={`mt-1 text-2xl font-black tabular-nums ${cockpitSummary.todayPnl == null ? 'text-[var(--text-primary)]' : cockpitSummary.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{cockpitSummary.todayPnl == null ? '—' : `${cockpitSummary.todayPnl >= 0 ? '+' : '−'}$${Math.round(Math.abs(cockpitSummary.todayPnl)).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">z denních snapshot ledgerů</p></div>

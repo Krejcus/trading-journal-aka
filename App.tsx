@@ -129,7 +129,7 @@ import {
   appDeepLinkIntentFromSearch,
   consumeAppDeepLinkUrl,
   type AppDeepLinkIntent,
-} from './lib/macCompanionDeepLink';
+} from './lib/appDeepLink';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader, { QuantumSpinner } from './components/QuantumLoader';
@@ -189,17 +189,6 @@ import {
   initializeNativeRemoteNotifications,
   resetNativeRemoteNotificationListeners,
 } from './services/nativePushNotifications';
-import {
-  buildNativeJournalWidgetState,
-  syncNativeJournalWidgetSnapshot,
-} from './services/nativeWidgetSnapshot';
-import {
-  initializeNativeLiveActivityPush,
-  resetNativeLiveActivityPushListener,
-} from './services/nativeLiveActivityPush';
-import {
-  initializeNativeWidgetRemote,
-} from './services/nativeWidgetRemote';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
@@ -837,14 +826,6 @@ const App: React.FC = () => {
     }
   }, [isUserFromDb, currentUser.id]);
 
-  // Home/Lock Screen widgety používají poslední potvrzený snapshot skutečných
-  // journal dat. Výchozí placeholder se nikdy nezapíše do App Group.
-  useEffect(() => {
-    if (!isUserFromDb || currentUser.id === 'default_user' || sessionRef.current?.user.id !== currentUser.id || logoutInProgressRef.current) return;
-    const state = buildNativeJournalWidgetState({ trades, accounts });
-    void syncNativeJournalWidgetSnapshot(state);
-  }, [accounts, currentUser.id, isUserFromDb, trades]);
-
   // Avatar nad 256 kB nechává lehké načtení deníku stranou; dotáhnout ho po prvním vykreslení.
   useEffect(() => {
     if (!currentUser.avatarDeferred || currentUser.avatar || currentUser.id === 'default_user') return;
@@ -991,7 +972,6 @@ const App: React.FC = () => {
       setIsPushActive(false);
       if (isNativeShell()) {
         void resetNativeRemoteNotificationListeners();
-        void resetNativeLiveActivityPushListener();
       }
       return;
     }
@@ -1003,9 +983,7 @@ const App: React.FC = () => {
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
         await waitForNativeSessionCleanup();
         if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
-        const [, , pushResult] = await Promise.allSettled([
-          initializeNativeLiveActivityPush(userId),
-          initializeNativeWidgetRemote(userId),
+        const [pushResult] = await Promise.allSettled([
           includePush ? initializeNativeRemoteNotifications(userId) : Promise.resolve(null),
         ]);
         if (!includePush) return;
