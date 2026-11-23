@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { initialLiveTab, liveTabNavigationAllowed } from '../lib/liveTab';
@@ -139,7 +139,9 @@ describe('LIVE → Graf je jen UI', () => {
 
   it('výpočty panelu nikdo z cest příkazů nepoužívá', () => {
     // Runner a controller Tradovate kopírky jsou smazané (23. 11. 2026); hlídá se zbylá brána rizika a Rithmic služba.
-    for (const file of ['services/copierRiskGate.ts', 'services/rithmic/localExec.ts', 'services/rithmic/rithmicBroker.ts']) {
+    const rithmic = readdirSync(join(root, 'services/rithmic')).filter(name => name.endsWith('.ts')).map(name => `services/rithmic/${name}`);
+    expect(rithmic.length).toBeGreaterThan(10);
+    for (const file of ['services/copierRiskGate.ts', 'scripts/rithmic/devTradeServer.ts', ...rithmic]) {
       expect(source(file), file).not.toMatch(/liveOrderTicket|liveTradeTarget/);
     }
   });

@@ -273,8 +273,8 @@ describe('U7: jen zobrazení (INV-UI-01) — statická kontrola', () => {
     expect(imports.length).toBeGreaterThan(0);
     for (const item of imports) {
       expect(item.from).not.toMatch(FORBIDDEN_MODULE);
-      // Typ události smí (jako karty obchodů), hodnota z kontroleru kopírky ne.
-      if (/copierRuntimeController/.test(item.from)) expect(item.typeOnly).toBe(true);
+      // Typ události smí (jako karty obchodů); soubor typů kopírky se nikdy neimportuje jako hodnota.
+      if (/liveCopierTypes/.test(item.from)) expect(item.typeOnly).toBe(true);
     }
     expect(source).not.toMatch(/\b(previewLeaderEntry|placeLeaderEntry|manageLeaderEntry|attachBrackets|runStaticSafetyAction|onPlaceEntry|sendDirect)\b/);
     expect(source).not.toMatch(/\bfetch\s*\(|WebSocket|sendBeacon|XMLHttpRequest/);

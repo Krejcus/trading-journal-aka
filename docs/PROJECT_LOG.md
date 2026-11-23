@@ -373,6 +373,20 @@ a případně malé čisté funkce z archivu.
   opraveny (backoff, lhůta, žádné měření, kontrakt, díry ve skriptu pro Vercel: prázdná větev a redeploy
   téhož commitu se buildí). NEOVĚŘENO: graf deníku s běžící službou v přihlášené appce a na iPhonu.
   Zbývá z vlny 3: typy Tradovate kopírky ve sdíleném LIVE kódu (`copierRuntimeController` aj. — jen typy).
+- **Vlna 3, třetí část — jádro Tradovate kopírky smazáno:** ~31 700 řádků (`copierRuntimeController`,
+  `copierRunner`, `copierManualActions`, `copierStore`, korelátory a outboxy závorek/OSO/cancel,
+  `localCopierAgentProtocol`, `copierRiskConfig`…) drželo v kódu jen šest typů, které čte sdílený LIVE kód.
+  Ty jsou i se svým uzávěrem (21 deklarací, beze změny pole či volitelnosti) v `lib/liveCopierTypes.ts` —
+  jen typy, hlídá to test. `copierLeaderEventSource` zůstal jako referenční příjemce událostí v
+  `tests/helpers/` (testy Rithmic brokera). Přejmenováno: `ChartColorPicker`, `lib/liveTab.ts`
+  (`LiveTabId`), `lib/cmeDisplayDay.ts`. `docs/COPIER_INVARIANTS.md` má hlavičku: pravidla jsou zadání
+  pro budoucí Rithmic kopírku, dnes je žádný kód nevynucuje. `copier-design-critic`: OK s výhradami
+  (INV-UI-01/03, INV-FRESH-03, INV-DEFAULT-01), výhrady k testům opraveny. LIVE graf PC i telefon ověřen
+  v lokální simulaci (falešný broker). **Nenasazeno** (Filip: „zatím ne“) — větev čeká na „nasaď“.
+  Co ve sdíleném LIVE kódu zbývá (další kolo, zásah do obrazovky s penězi): větve pro skupinu
+  a kopírku v `LiveTradingScreen`, `useLiveChartData`, `tradecopiaLiveService`, `tradovateLiveView`,
+  `copierEngine` + outboxy přes `groupLimitLifecycle` a `manualEntryPreview` (~41 souborů s Tradovate
+  nebo kopírkou v názvu). Dál vlna 4: DROP tabulek po čerstvé úplné záloze.
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 

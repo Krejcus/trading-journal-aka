@@ -11,7 +11,7 @@ import { tradovateAccountReadState } from './tradovateLiveReadState.js';
 
 /** Starší doručení důkazu kontinuity už nepokrývá webové čtení. */
 export const WORKER_EXPOSURE_MAX_AGE_MS = 8_000;
-/** Text workeru (`services/copierRuntimeController.ts`) pro followera bez ověřené pozice. */
+/** Text workeru (smazaný controller Tradovate kopírky) pro followera bez ověřené pozice. */
 export const WORKER_POSITION_UNKNOWN_DETAIL = 'pozice neověřena';
 /** Texty workeru, které vznikají jen z porovnání skutečně držené pozice followera. */
 export const WORKER_POSITION_DIVERGENT_DETAIL = 'pozice se liší od leadera';

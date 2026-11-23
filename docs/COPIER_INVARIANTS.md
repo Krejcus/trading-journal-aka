@@ -1,5 +1,12 @@
 # Invarianty jádra kopírky
 
+> **Stav od 23. 11. 2026:** Tradovate kopírka je z appky odstraněná (worker odinstalován, jádro smazáno;
+> archiv: tag `archive/tradovate-final-20261123`). Odkazy na soubory jako `services/copierRuntimeController.ts`,
+> `services/copierRunner.ts`, `scripts/copier/**` nebo `server/tradovate*` níže proto míří do archivu a žádný
+> běžící kód tato pravidla dnes nevynucuje. Dokument zůstává jako **zadání pro budoucí Rithmic kopírku**:
+> pravidla `INV-*` popisují, co se v provozu osvědčilo a co se muselo opravit. Živá zůstávají pravidla
+> `INV-UI-*` pro sdílený LIVE kód (viz doplněk u INV-UI-04) a pravidla místní služby Rithmicu.
+
 Stav ověření: 8. 10. 2026, větev `codex/copier-invariants-20261008` nad
 `origin/main`. Tento dokument popisuje aktuální kód, ne pouze zamýšlenou
 architekturu. `OTÁZKA` a `NEOVĚŘENO` označují mezeru, kterou nelze vydávat za

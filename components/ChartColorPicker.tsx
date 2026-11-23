@@ -41,7 +41,7 @@ export const splitColorAlpha = (value: string): { color: string; opacity: number
   return { color: `#${match[1].toLowerCase()}`, opacity: Math.round(Number.parseInt(match[2], 16) / 255 * 100) };
 };
 
-interface TradingViewColorPickerProps {
+interface ChartColorPickerProps {
   value: string;
   opacity?: number;
   onChange: (color: string, opacity: number) => void;
@@ -49,7 +49,7 @@ interface TradingViewColorPickerProps {
   compact?: boolean;
 }
 
-const ChartColorPicker: React.FC<TradingViewColorPickerProps> = ({ value, opacity, onChange, label, compact = false }) => {
+const ChartColorPicker: React.FC<ChartColorPickerProps> = ({ value, opacity, onChange, label, compact = false }) => {
   const parsed = splitColorAlpha(value);
   const color = parsed.color;
   const activeOpacity = opacity ?? parsed.opacity;
