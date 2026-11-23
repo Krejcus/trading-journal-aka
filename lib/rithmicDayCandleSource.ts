@@ -45,6 +45,8 @@ export interface RithmicDayCandleSourceOptions {
   root?: string;
   now?: () => number;
   connect?: (options: RithmicLinkOptions) => Connection;
+  /** Jen pro zkoušky: falešný socket pod skutečným spojením. */
+  socketFactory?: RithmicLinkOptions['socketFactory'];
 }
 
 /** Zkušební systém Rithmicu je simulovaný trh — ke skutečné historii deníku nepatří. */
@@ -194,6 +196,7 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
     auth: options.auth,
     handlers,
     now,
+    socketFactory: options.socketFactory,
   });
 
   return {

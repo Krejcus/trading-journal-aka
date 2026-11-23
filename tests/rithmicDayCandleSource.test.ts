@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRithmicDayCandleSource } from '../lib/rithmicDayCandleSource';
-import type { RithmicLinkHandlers, RithmicLinkOptions } from '../lib/rithmicLocalConnection';
+import type { RithmicLinkHandlers, RithmicLinkOptions, RithmicLinkSocket } from '../lib/rithmicLocalConnection';
 
 const T0 = Date.parse('2026-11-23T15:00:00Z');
 const bar = (minute: number, close = 100 + minute) => ({ time: T0 / 1000 + minute * 60, open: 100, high: 200, low: 50, close, volume: 5 });
@@ -143,5 +143,84 @@ describe('dnešní svíčky deníku z Rithmic služby (jen čtení)', () => {
     expect(t.calls).toEqual(['start', 'stop']);
     const code = readFileSync(new URL('../lib/rithmicDayCandleSource.ts', import.meta.url), 'utf8');
     expect(code).not.toMatch(/\.send\(|\.command\(|flatten|placeEntry/);
+  });
+});
+
+class FakeSocket implements RithmicLinkSocket {
+  readyState = 0;
+  sent: Array<Record<string, unknown>> = [];
+  onopen: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  send(data: string): void { this.sent.push(JSON.parse(data)); }
+  close(): void { this.readyState = 3; this.onclose?.({}); }
+  open(): void { this.readyState = 1; this.onopen?.({}); }
+  push(message: unknown): void { this.onmessage?.({ data: JSON.stringify(message) }); }
+}
+
+describe('zdroj svíček deníku přes skutečné spojení se službou', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('poslouchá hello, ticky a tep; službě nepošle žádný příkaz a po výpadku se sám připojí znovu', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0 + 3 * 60_000 + 20_000);
+    const sockets: FakeSocket[] = [];
+    const source = createRithmicDayCandleSource({
+      url: 'ws://127.0.0.1:3311/?token=x',
+      socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
+    });
+    source.start();
+    expect(source.snapshot().status).toBe('loading');
+    sockets[0].open();
+    sockets[0].push({ type: 'hello', system: 'Lucid', account: 'A1', symbol: 'MNQZ6', feed: true, price: 103, bars: [bar(1), bar(2), bar(3)] });
+    sockets[0].push({ type: 'state', state: { blocked: null } });
+    expect(source.snapshot()).toMatchObject({ status: 'live', symbol: 'MNQZ6' });
+    expect(source.snapshot().candles).toHaveLength(2);
+    sockets[0].push({ type: 'tick', symbol: 'MNQZ6', price: 104, bar: bar(3, 104), at: Date.now() });
+    sockets[0].push({ type: 'beat', at: Date.now(), feed: true });
+    expect(source.feed.lastPrice('MNQ')).toBe(104);
+    // Odchozí zprávy: jen měření otevření (čísla do výpisu služby) — nikdy příkaz ani přihlášení.
+    for (const message of sockets[0].sent) {
+      expect(message.command).toBeUndefined();
+      expect(message.auth).toBeUndefined();
+      expect(Object.keys(message)).toEqual(['metric']);
+    }
+    // Služba umlkne → cena je stará, svíčky zůstávají.
+    vi.advanceTimersByTime(6_000);
+    expect(source.snapshot().status).toBe('stale');
+    expect(source.feed.current('MNQ')).toBeNull();
+    // Výpadek spojení a návrat: nové spojení, po hello zase živě.
+    sockets[0].close();
+    vi.advanceTimersByTime(2_500);
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    sockets[1].push({ type: 'hello', system: 'Lucid', account: 'A1', symbol: 'MNQZ6', feed: true, price: 105, bars: [bar(2), bar(3)] });
+    expect(source.snapshot().status).toBe('live');
+    expect(source.snapshot().candles).toHaveLength(2);
+    source.stop();
+    vi.advanceTimersByTime(10_000);
+    expect(sockets).toHaveLength(2);
+    expect(source.feed.current('MNQ')).toBeNull();
+  });
+
+  it('služba neběží: první neúspěšný pokus skončí stavem nedostupné, další pokusy běží potichu', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const sockets: FakeSocket[] = [];
+    const source = createRithmicDayCandleSource({
+      url: 'ws://127.0.0.1:3311/?token=x',
+      socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
+    });
+    let notified = 0;
+    source.subscribe(() => { notified += 1; });
+    source.start();
+    sockets[0].close();
+    expect(source.snapshot().status).toBe('unavailable');
+    vi.advanceTimersByTime(2_500);
+    sockets[1].close();
+    vi.advanceTimersByTime(2_500);
+    expect(sockets.length).toBeGreaterThanOrEqual(3);
+    expect(notified).toBe(1);
+    source.stop();
   });
 });
