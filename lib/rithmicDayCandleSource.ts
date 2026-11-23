@@ -1,8 +1,15 @@
 /**
  * Dnešní svíčky grafu deníku z místní služby Rithmicu — JEN ČTENÍ a jen zobrazení (INV-UI-01).
  *
- * Zdroj se ke službě připojí stejným spojením jako LIVE graf, ale nikdy jí neposílá příkaz: jen poslouchá
- * úvodní zprávu (`hello` se svíčkami), ticky a tep. Nic odsud nesmí rozhodovat o obchodu ani o riziku.
+ * Zdroj se ke službě připojí stejným spojením jako LIVE graf, ale neposílá jí NIC (ani měření; spárované
+ * zařízení jen svůj klíč při přihlášení): poslouchá úvodní zprávu (`hello` se svíčkami), ticky a tep.
+ * Nic odsud nesmí rozhodovat o obchodu ani o riziku.
+ *
+ * Služba drží na jedno spárované zařízení nejvýš dvě spojení a třetí vyhodí nejstarší. Deník a LIVE graf jsou
+ * různé stránky (nikdy nejsou otevřené zároveň), takže obchodní spojení zůstává samo; další pasivní čtenář
+ * vedle LIVE grafu by ho mohl vyhodit — nepřidávat bez změny služby.
+ *
+ * Když služba neběží, zkouší se spojení jen jednou za 20 s a graf po 5 s přestane čekat.
  *
  * Stav:
  *  - `loading`      první pokus o spojení ještě nedoběhl;
@@ -51,6 +58,10 @@ export interface RithmicDayCandleSourceOptions {
 
 /** Zkušební systém Rithmicu je simulovaný trh — ke skutečné historii deníku nepatří. */
 const SIMULATED_SYSTEM = 'Rithmic Test';
+/** Pasivní čtenář nespěchá: s vypnutou službou jeden pokus za 20 s (obchodní spojení zkouší po 2 s). */
+const RECONNECT_MS = 20_000;
+/** Jak dlouho smí graf čekat na první odpověď služby, než řekne „nedostupné“ (visící spojení, spící Mac). */
+const FIRST_REPLY_TIMEOUT_MS = 5_000;
 
 const family = (root: string): string => (root === 'MNQ' || root === 'NQ' ? 'NQ' : root === 'MES' || root === 'ES' ? 'ES' : root);
 
@@ -79,6 +90,7 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
   let feedLive = false;
   let forming: MarketCandle | null = null;
   let lastPrice: number | null = null;
+  let firstReplyTimer: ReturnType<typeof setTimeout> | null = null;
 
   const publish = (next: Partial<RithmicDayCandleSnapshot>) => {
     const merged = { ...snapshot, ...next };
@@ -103,8 +115,9 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
     current: root => (accepted && feedLive && family(root.trim().toUpperCase()) === wantedFamily ? forming : null),
     lastPrice: root => (accepted && feedLive && family(root.trim().toUpperCase()) === wantedFamily ? lastPrice : null),
     front: () => (accepted ? snapshot.symbol : null),
-    // Svíčky i živá cena jdou z téhož spojení a téhož kontraktu služby.
-    contractMatchesData: () => accepted,
+    // Důkaz stejného kontraktu jen když poslední svíčky grafu dala tatáž služba (jinak navazuje na historii
+    // jiného zdroje a pojistka skoku ceny zůstává zapnutá).
+    contractMatchesData: () => accepted && snapshot.candles.length > 0,
   };
 
   const handlers: RithmicLinkHandlers = {
@@ -135,7 +148,7 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
         const symbol = typeof message.symbol === 'string' ? message.symbol : '';
         const system = typeof message.system === 'string' ? message.system : '';
         const nextScope = JSON.stringify([system, message.account ?? null, symbol]);
-        const fits = Boolean(symbol) && system !== SIMULATED_SYSTEM && family(futuresSymbolRoot(symbol)) === wantedFamily;
+        const fits = Boolean(symbol) && Boolean(system) && system !== SIMULATED_SYSTEM && family(futuresSymbolRoot(symbol)) === wantedFamily;
         if (!fits) {
           accepted = false;
           scope = null;
@@ -197,6 +210,8 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
     handlers,
     now,
     socketFactory: options.socketFactory,
+    reconnectMs: RECONNECT_MS,
+    measure: false,
   });
 
   return {
@@ -206,8 +221,15 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
     },
     snapshot: () => snapshot,
     feed,
-    start: () => connection.start(),
+    start: () => {
+      connection.start();
+      if (firstReplyTimer === null) firstReplyTimer = setTimeout(() => {
+        firstReplyTimer = null;
+        if (snapshot.status === 'loading') publish({ status: 'unavailable' });
+      }, FIRST_REPLY_TIMEOUT_MS);
+    },
     stop: () => {
+      if (firstReplyTimer !== null) { clearTimeout(firstReplyTimer); firstReplyTimer = null; }
       connection.stop();
       linkOpen = false;
       dropLive();

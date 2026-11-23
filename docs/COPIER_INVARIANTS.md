@@ -3144,6 +3144,15 @@ existující ochranu.
 
 ### INV-UI-04: Data z TradingView jsou jen pro zobrazení; nikdy nevstupují do read modelu, rozhodování ani úložišť (26. 10. 2026)
 
+- **Stav od 23. 11. 2026:** kanál ceny z TradingView a IBKR je z appky odstraněn (soubory `tvPrice*`,
+  `ibkrDisplayPnl`, `LiveOpenPnlValue`, `useTvLiveCandleFeed` už neexistují; odkazy na ně níže jsou historie).
+  Pravidlo platí dál pro jediný zbylý zdroj ceny mimo příkazovou cestu: **svíčky grafu deníku z místní služby
+  Rithmicu** (`lib/rithmicDayCandleSource.ts`, `hooks/useRithmicDayCandles.ts`). Je to pasivní čtenář — službě
+  neposílá nic, jeho data jsou jen pro kreslení grafu deníku a nesmí ocenit ani povolit příkaz. LIVE graf si
+  cenu, kotaci a kontrakt bere jen ze svého obchodního spojení (slot `market`); bez něj kotace není a nic se
+  neodešle. Služba drží nejvýš dvě spojení na spárované zařízení: další pasivní čtenář vedle LIVE grafu se
+  nesmí přidat bez změny služby (vyhodil by obchodní spojení).
+
 - Proč: Filip 26. 10. povolil cenu z TV pro P&L zobrazené na obrazovce, nikdy
   pro risk, day lock, limity ani kopírku. Veřejný Realtime kanál je
   podvrhnutelný, proto se zprávy podepisují.

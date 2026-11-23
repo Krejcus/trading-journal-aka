@@ -47,6 +47,11 @@ export interface RithmicLinkOptions {
   reconnectMs?: number;
   replyTimeoutMs?: number;
   beatTimeoutMs?: number;
+  /**
+   * Měření otevření appky se službě posílá jen z obchodního spojení. Pasivní čtenář (graf deníku) ho vypíná
+   * (`false`), aby službě neposlal vůbec nic a nekazil výpis měření.
+   */
+  measure?: boolean;
 }
 
 const OPEN = 1;
@@ -141,7 +146,7 @@ export class RithmicLocalConnection {
   /** Odešle měření službě (ta ho jen vypíše). Selhání se ignoruje — měření nesmí nic rozbít. */
   private report(link: RithmicLinkSocket, stage: 'cena' | 'historie', extra: Record<string, number> = {}): void {
     const t = this.trace;
-    if (!t) return;
+    if (!t || this.options.measure === false) return;
     const now = this.now();
     const since = (at: number | undefined, from: number | undefined): number | null => (at === undefined || from === undefined ? null : Math.round(at - from));
     const metric: Record<string, number | boolean | string | null> = {

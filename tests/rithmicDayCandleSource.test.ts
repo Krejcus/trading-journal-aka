@@ -45,6 +45,11 @@ describe('dnešní svíčky deníku z Rithmic služby (jen čtení)', () => {
     expect(t.source.feed.current('ES')).toBeNull();
     expect(t.source.feed.lastPrice('MNQ')).toBe(103.5);
     expect(t.source.feed.contractMatchesData?.()).toBe(true);
+    const bare = setup();
+    bare.handlers().onLink('open');
+    bare.hello({ bars: [] });
+    // Bez svíček služby navazuje živá cena na historii jiného zdroje: důkaz stejného kontraktu není.
+    expect(bare.source.feed.contractMatchesData?.()).toBe(false);
   });
 
   it('tick uvnitř minuty deník nepřekresluje; nová minuta zapíše dokončenou svíčku', () => {
@@ -179,12 +184,8 @@ describe('zdroj svíček deníku přes skutečné spojení se službou', () => {
     sockets[0].push({ type: 'tick', symbol: 'MNQZ6', price: 104, bar: bar(3, 104), at: Date.now() });
     sockets[0].push({ type: 'beat', at: Date.now(), feed: true });
     expect(source.feed.lastPrice('MNQ')).toBe(104);
-    // Odchozí zprávy: jen měření otevření (čísla do výpisu služby) — nikdy příkaz ani přihlášení.
-    for (const message of sockets[0].sent) {
-      expect(message.command).toBeUndefined();
-      expect(message.auth).toBeUndefined();
-      expect(Object.keys(message)).toEqual(['metric']);
-    }
+    // Službě neodejde vůbec nic: žádný příkaz ani měření.
+    expect(sockets[0].sent).toEqual([]);
     // Služba umlkne → cena je stará, svíčky zůstávají.
     vi.advanceTimersByTime(6_000);
     expect(source.snapshot().status).toBe('stale');
@@ -192,6 +193,8 @@ describe('zdroj svíček deníku přes skutečné spojení se službou', () => {
     // Výpadek spojení a návrat: nové spojení, po hello zase živě.
     sockets[0].close();
     vi.advanceTimersByTime(2_500);
+    expect(sockets).toHaveLength(1); // pasivní čtenář zkouší až za 20 s
+    vi.advanceTimersByTime(18_000);
     expect(sockets).toHaveLength(2);
     sockets[1].open();
     sockets[1].push({ type: 'hello', system: 'Lucid', account: 'A1', symbol: 'MNQZ6', feed: true, price: 105, bars: [bar(2), bar(3)] });
@@ -201,6 +204,28 @@ describe('zdroj svíček deníku přes skutečné spojení se službou', () => {
     vi.advanceTimersByTime(10_000);
     expect(sockets).toHaveLength(2);
     expect(source.feed.current('MNQ')).toBeNull();
+  });
+
+  it('visící spojení (spící Mac): po 5 s graf přestane čekat; úvodní zpráva bez systému se nepřijme', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const sockets: FakeSocket[] = [];
+    const source = createRithmicDayCandleSource({
+      url: 'ws://127.0.0.1:3311/?token=x',
+      socketFactory: () => { const socket = new FakeSocket(); sockets.push(socket); return socket; },
+    });
+    source.start();
+    vi.advanceTimersByTime(4_900);
+    expect(source.snapshot().status).toBe('loading');
+    vi.advanceTimersByTime(200);
+    expect(source.snapshot().status).toBe('unavailable');
+    sockets[0].open();
+    sockets[0].push({ type: 'hello', symbol: 'MNQZ6', feed: true, price: 103, bars: [bar(1), bar(2)] });
+    expect(source.snapshot().status).toBe('unavailable');
+    sockets[0].push({ type: 'hello', system: 'Lucid', symbol: 'MNQZ6', feed: true, price: 103, bars: [bar(1), bar(2)] });
+    expect(source.snapshot().status).toBe('live');
+    expect(sockets[0].sent).toEqual([]);
+    source.stop();
   });
 
   it('služba neběží: první neúspěšný pokus skončí stavem nedostupné, další pokusy běží potichu', () => {
@@ -216,10 +241,10 @@ describe('zdroj svíček deníku přes skutečné spojení se službou', () => {
     source.start();
     sockets[0].close();
     expect(source.snapshot().status).toBe('unavailable');
-    vi.advanceTimersByTime(2_500);
+    vi.advanceTimersByTime(20_500);
     sockets[1].close();
-    vi.advanceTimersByTime(2_500);
-    expect(sockets.length).toBeGreaterThanOrEqual(3);
+    vi.advanceTimersByTime(20_500);
+    expect(sockets).toHaveLength(3);
     expect(notified).toBe(1);
     source.stop();
   });

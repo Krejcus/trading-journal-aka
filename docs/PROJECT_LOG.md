@@ -360,6 +360,19 @@ a případně malé čisté funkce z archivu.
   čtení stavu workeru, IBKR klient, skripty TradeCopia. Otevřené: odkud má graf deníku brát dnešní
   živé svíčky (soubor z workeru už nikdo nezapisuje) — čeká na Filipa; na tom visí smazání kanálu
   ceny TradingView/IBKR a zbytku typů kopírky.
+- **Vlna 3, druhá část — dnešní svíčky deníku z Rithmicu (Filip: „Z Rithmic služby“):** graf dne bral
+  posledních ~25 h ze souboru, který psal odinstalovaný worker (TradingView/IBKR). Nově
+  `lib/rithmicDayCandleSource.ts` + `hooks/useRithmicDayCandles.ts`: pasivní druhé spojení na místní službu
+  (jen poslouchá `hello`, ticky a tep; neposílá nic, ani měření — `measure: false` v `RithmicLocalConnection`).
+  Rithmic Test, cizí kontrakt a zpráva bez systému se odmítnou; bez služby stav „nedostupné“ po 5 s
+  a další pokus jednou za 20 s. Bez nákladů na Vercelu (spojení jde z prohlížeče přímo na Mac).
+  Smazán kanál ceny TradingView/IBKR, živý překryv P&L, předběžné svíčky z TV v detailu obchodu
+  (čerstvý obchod má graf až z Databenta) a Tradovate OAuth klient. Telefonní LIVE graf bere cenu,
+  kotaci i kontrakt jen ze slotu služby; bez něj kotace není a nic se neodešle (přísnější než dřív).
+  `copier-design-critic`: OK s výhradami (INV-UI-01/03/04, INV-FRESH-03, INV-DEFAULT-02), výhrady
+  opraveny (backoff, lhůta, žádné měření, kontrakt, díry ve skriptu pro Vercel: prázdná větev a redeploy
+  téhož commitu se buildí). NEOVĚŘENO: graf deníku s běžící službou v přihlášené appce a na iPhonu.
+  Zbývá z vlny 3: typy Tradovate kopírky ve sdíleném LIVE kódu (`copierRuntimeController` aj. — jen typy).
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 
