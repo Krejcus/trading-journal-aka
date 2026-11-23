@@ -1,46 +1,12 @@
-import { idleBrokerSnapshotUsers } from '../../server/nativeIdleBrokerSnapshot.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, randomUUID } from 'node:crypto';
 import webpush from 'web-push';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import {
-    evaluateCopierIncidents,
-    planCopyEventNotifications,
-    RELAY_STUCK_BRAKE_AFTER_MS,
-    RELAY_STUCK_CLAIMED_WINDOW_MS,
-    RELAY_STUCK_HEARTBEAT_FRESH_MS,
-    reportedRelayCommandIds,
-    type CopierAlertStateRow,
-    type CopierRelayCommandRow,
-    type CopierRelayQueueSnapshot,
-    type CopierRuntimeRow,
-} from '../../server/copierIncidentWatchdog.js';
+import { createClient } from '@supabase/supabase-js';
 import {
     type ApnsDevice,
 } from '../../server/apns.js';
-import {
-    createNativeBrokerSnapshotLoader,
-    latestNativeRuntimeByUser,
-    updateNativeLiveActivities,
-    type NativeLiveActivityRuntimeRow,
-} from '../../server/nativeLiveActivityUpdater.js';
-import { startNativeLiveActivities } from '../../server/nativeLiveActivityStarter.js';
-import {
-    MAX_NOTIFY_AGE_MS,
-    planBrokerAccountLockNotifications,
-    planClosedTradePnlNotifications,
-    type NativeClosedTradeAlertRow,
-    type NativeFinancialAlertStateRow,
-    type NativeFinancialMarker,
-    type NativeFinancialNotification,
-} from '../../server/nativeFinancialAlertPlanner.js';
-import { copierEventDeliveryKey, drainNotificationDeliveries, enqueueNotificationDelivery, incidentDeliveryKey, markerForIncident, notificationEventKey, persistNotificationMarkers, type NotificationPayload, type VersionedAlertState } from '../../server/notificationDelivery.js';
+import { drainNotificationDeliveries, enqueueNotificationDelivery, notificationEventKey } from '../../server/notificationDelivery.js';
 import { shouldSendNativeScheduledAlert, isSessionEndAuditTime } from '../../server/notificationSchedule.js';
-import { updateNativeWidgetPushes } from '../../server/nativeWidgetPushUpdater.js';
-import { readTradovateServerConfig } from '../../server/tradovateOAuthStore.js';
-import { collectConnectedAccountSnapshots } from '../../server/copierAccountSnapshotStore.js';
-import { purgeExpiredTvAlerts, shouldRunTvAlertPurge } from '../../server/tvAlertPurge.js';
-import { drainPriceAlertOutbox } from '../../server/priceAlertOutbox.js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
@@ -174,15 +140,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         const now = new Date();
-        if (shouldRunTvAlertPurge(now)) {
-            try {
-                const purged = await purgeExpiredTvAlerts({ db: supabase, now: now.getTime() });
-                if (purged.alerts > 0) console.log('[Cron] TV alert purge', purged);
-            } catch (error) {
-                // Úklid příloh nikdy nesmí shodit minutové alerty/watchdog.
-                console.warn('[Cron] TV alert purge failed:', error instanceof Error ? error.message : String(error));
-            }
-        }
         const pragueTime = new Intl.DateTimeFormat('cs-CZ', {
             timeZone: 'Europe/Prague',
             hour: 'numeric',
@@ -476,7 +433,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 payload: { title: job.title, body: job.body, route: 'dashboard', threadId: 'alphatrade',
                     category: 'ALPHATRADE_GENERAL', interruptionLevel: 'active' } });
         }
-        // Drain before optional broker snapshot work too: its outage cannot prevent retries.
+        // Trvalé fronty doručení (web + APNs) přečkají přechodné výpadky.
         sentCount += (await drainNotificationDeliveries({ db: supabase, channel: 'web', sendWebPush: sendPush })).sent;
         nativeSentCount += (await drainNotificationDeliveries({ db: supabase, channel: 'apns' })).sent;
 
@@ -491,203 +448,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             `);
         }
 
-        // --- COPIER REMOTE WATCHDOG ---------------------------------------
-        // Lokální watchdog hlásí na obrazovku Macu, tedy stroje, který právě
-        // umřel. Tady se heartbeat workera převádí na push do telefonu.
-        // Vyhodnocení je čistá funkce (server/copierIncidentWatchdog.ts),
-        // dedupe drží copier_alert_state — incident se hlásí jednou při
-        // vzniku a jednou při zotavení, ne každou minutu.
-        let copierAlertsSent = 0;
-        let liveActivityResult = { registered: 0, sent: 0, ended: 0, skipped: 0, failed: 0 };
-        let liveActivityStartResult = { registered: 0, sent: 0, skipped: 0, failed: 0, expired: 0 };
-        let widgetPushResult = { registered: 0, sent: 0, skipped: 0, failed: 0, expired: 0 };
-        let accountSnapshotResult = { connections: 0, inserted: 0, failed: 0 };
-        try {
-            const [runtimesResult, alertStatesResult, closedTradesResult] = await Promise.all([
-                supabase
-                    .from('tradovate_copier_device_runtime')
-                    .select('device_id, user_id, connection_id, status, last_seen_at, started_at'),
-                supabase
-                    .from('copier_alert_state')
-                    .select('device_id, user_id, incident_key, active, detail, updated_at, notification_version'),
-                // Okno podle času, ne globální limit 500 řádků (ten by u více dat
-                // vytlačil čerstvé obchody jiných uživatelů). Okno je delší než
-                // MAX_NOTIFY_AGE_MS, aby oznámené ID zůstala v markeru, dokud stárnou.
-                supabase
-                    .from('tradovate_copier_trades')
-                    .select('user_id,device_id,trade_id,symbol,side,quantity,realized_pnl_usd,follower_count,closed_at,created_at')
-                    .gte('closed_at', new Date(now.getTime() - MAX_NOTIFY_AGE_MS - 5 * 60_000).toISOString())
-                    .order('closed_at', { ascending: false })
-                    .limit(5_000),
-            ]);
-            if (runtimesResult.error) throw new Error(runtimesResult.error.message);
-            if (alertStatesResult.error) throw new Error(alertStatesResult.error.message);
-            if (closedTradesResult.error) throw new Error(closedTradesResult.error.message);
-            const runtimes = (runtimesResult.data ?? []) as NativeLiveActivityRuntimeRow[];
-            const alertStates = (alertStatesResult.data ?? []) as VersionedAlertState[];
-            // Zaseknutá fronta relaye: jen čtení nevyřízených příkazů živých
-            // workerů a koncového stavu už ohlášených. Hned po heartbeatu, ne
-            // až po pomalém broker snapshotu — jinak by heartbeat vždy vyšel
-            // starý. Chyba nebo plný limit = undefined: výstraha se nemění.
-            const relayQueue = await readCopierRelayQueue(supabase, runtimes, alertStates).catch((error: unknown) => {
-                console.error('[Cron] Copier relay queue read threw:', error);
-                return undefined;
-            });
-            const tradovateConfig = readTradovateServerConfig();
-            const brokerSnapshot = createNativeBrokerSnapshotLoader({
-                db: supabase,
-                config: tradovateConfig,
-                now: now.getTime(),
-            });
-
-            // Klid podle VŠECH čerstvých workerů uživatele: zobrazovací čtení brokera jen každou pátou minutu.
-            const idleSnapshotUsers = idleBrokerSnapshotUsers(runtimes, now.getTime());
-
-            accountSnapshotResult = await collectConnectedAccountSnapshots({
-                db: supabase,
-                environment: tradovateConfig.environment,
-                runtimes,
-                brokerSnapshot,
-                now: now.getTime(),
-            });
-
-            const evaluation = evaluateCopierIncidents({
-                runtimes: runtimes as CopierRuntimeRow[],
-                alertStates,
-                now: now.getTime(),
-                relayQueue,
-            });
-
-            const enqueueForUser = async (userId: string, eventKey: string, payload: NotificationPayload) => {
-                for (const device of devicesByUser.get(userId) ?? []) {
-                    await enqueueNotificationDelivery({ db: supabase, userId, eventKey, channel: 'web', subscriptionId: device.id, payload });
-                }
-                for (const device of nativeDevicesByUser.get(userId) ?? []) {
-                    await enqueueNotificationDelivery({ db: supabase, userId, eventKey, channel: 'apns', subscriptionId: device.id, payload });
-                }
-            };
-            for (const notification of evaluation.notifications) {
-                const previous = alertStates.find(row => row.user_id === notification.userId && row.device_id === notification.deviceId
-                    && row.incident_key === markerForIncident(notification.incidentKey));
-                const eventKey = incidentDeliveryKey({ deviceId: notification.deviceId, key: notification.incidentKey, kind: notification.kind }, previous);
-                await enqueueForUser(notification.userId, eventKey, { title: notification.title, body: notification.body,
-                    route: 'live', threadId: 'alphatrade-copier', category: 'ALPHATRADE_RISK',
-                    interruptionLevel: 'time-sensitive', badge: notification.kind === 'opened' ? 1 : 0 });
-            }
-
-            const closedPnl = planClosedTradePnlNotifications({
-                trades: (closedTradesResult.data ?? []) as NativeClosedTradeAlertRow[],
-                alertStates: alertStates as NativeFinancialAlertStateRow[],
-                runtimes,
-                now: now.getTime(),
-            });
-
-            // Trade notifikace (vstup/exit/otočka) — stejná data, vlastní marker.
-            const copyEvents = planCopyEventNotifications({
-                runtimes: runtimes as CopierRuntimeRow[],
-                alertStates,
-                now: now.getTime(),
-                replayBoundary: true,
-            });
-            for (const notification of copyEvents.notifications) {
-                // Přesný broker-confirmed P&L nahrazuje obecné „výstup
-                // zkopírován“, aby jeden close neposlal dvě zprávy.
-                if ((notification.kind === 'exit' || notification.kind === 'flip') && closedPnl.notifications.some(item =>
-                    item.userId === notification.userId && item.deviceId === notification.deviceId)) continue;
-                await enqueueForUser(notification.userId, copierEventDeliveryKey(notification), {
-                    title: notification.title, body: notification.body, route: 'live', threadId: 'alphatrade-copier-trades',
-                    category: 'ALPHATRADE_TRADE', interruptionLevel: 'active', collapseId: notification.collapseId,
-                });
-            }
-
-            // Přesné uzavřené P&L a broker lock/unlock hrany. Na rozdíl od
-            // lokálního widget planneru tato větev funguje i při force-quit.
-            const financialNotifications: NativeFinancialNotification[] = [...closedPnl.notifications];
-            const financialMarkers: NativeFinancialMarker[] = [...closedPnl.markers];
-            const latestRuntimes = latestNativeRuntimeByUser(runtimes);
-            for (const [userId, runtime] of latestRuntimes) {
-                // Broker polling navíc děláme jen pro uživatele s aktivní
-                // nativní registrací; stejný snapshot sdílí Live Activity.
-                if ((nativeDevicesByUser.get(userId) ?? []).length === 0) continue;
-                const runtimeLastSeen = Date.parse(runtime.last_seen_at);
-                if (!Number.isFinite(runtimeLastSeen) || now.getTime() - runtimeLastSeen > 90_000) continue;
-                // Klid podle workeru: zámky účtů stačí číst každou pátou minutu.
-                if (idleSnapshotUsers.has(runtime.user_id)) continue;
-                const broker = await brokerSnapshot(runtime);
-                if (!broker || broker.accountStatusComplete !== true || broker.accountLockStatusComplete !== true) continue;
-                const accountLocks = planBrokerAccountLockNotifications({
-                    userId,
-                    deviceId: runtime.device_id,
-                    accounts: broker.accounts.map(account => ({
-                        accountId: account.accountId,
-                        accountName: account.accountName,
-                        locked: account.changesLocked || !account.canTrade,
-                        reason: account.changesLocked
-                            ? 'Změny účtu jsou zamčené brokerem.'
-                            : !account.canTrade ? 'Broker účet nepovoluje pro obchodování.' : null,
-                    })),
-                    alertStates: alertStates as NativeFinancialAlertStateRow[],
-                });
-                financialNotifications.push(...accountLocks.notifications);
-                if (accountLocks.marker) financialMarkers.push(accountLocks.marker);
-            }
-            for (const notification of financialNotifications) {
-                const previous = alertStates.find(row => row.user_id === notification.userId && row.device_id === notification.deviceId
-                    && row.incident_key === 'state:broker-account-locks');
-                const eventKey = notification.kind === 'trade'
-                    ? notificationEventKey('financial-trade', notification.deviceId, notification.key)
-                    : incidentDeliveryKey({ deviceId: notification.deviceId, key: notification.key, kind: notification.kind }, previous);
-                await enqueueForUser(notification.userId, eventKey, { title: notification.title, body: notification.body, route: 'live',
-                    threadId: notification.kind === 'trade' ? 'alphatrade-live-pnl' : 'alphatrade-account-locks',
-                    category: notification.kind === 'trade' ? 'ALPHATRADE_TRADE' : 'ALPHATRADE_RISK',
-                    interruptionLevel: notification.kind === 'risk' ? 'time-sensitive' : 'active',
-                    badge: notification.kind === 'risk' ? 1 : undefined });
-            }
-            // A marker means all targets were durably enqueued. It never means a failed send succeeded.
-            await persistNotificationMarkers(supabase, [...evaluation.upserts, ...copyEvents.markers, ...financialMarkers], alertStates);
-            copierAlertsSent += (await drainNotificationDeliveries({ db: supabase, sendWebPush: sendPush })).sent;
-
-            // Silent ActivityKit updates use the same read-only heartbeat plus
-            // a bounded Tradovate snapshot. No broker command exists on this path.
-            liveActivityResult = await updateNativeLiveActivities({
-                db: supabase,
-                runtimes,
-                config: tradovateConfig,
-                now: now.getTime(),
-                brokerSnapshot,
-            });
-            liveActivityStartResult = await startNativeLiveActivities({
-                db: supabase,
-                runtimes,
-                now: now.getTime(),
-                brokerSnapshot,
-                skipBrokerRead: runtime => idleSnapshotUsers.has(runtime.user_id),
-            });
-            // iOS 26 WidgetKit push requests complement the timeline. Urgent
-            // user alerts and ActivityKit remain independent instant channels;
-            // only changing P&L is throttled to protect WidgetKit's daily budget.
-            widgetPushResult = await updateNativeWidgetPushes({
-                db: supabase,
-                runtimes,
-                now: now.getTime(),
-                brokerSnapshot,
-                skipBrokerRead: runtime => idleSnapshotUsers.has(runtime.user_id),
-            });
-        } catch (copierWatchdogError) {
-            // Watchdog nesmí shodit zbytek alertů — selhání jen zalogovat.
-            console.error('[Cron] Copier watchdog failed:', copierWatchdogError);
-        }
-
-        // Upozornění na cenu: vlastní fronta a vlastní try/catch, nikdy neovlivní alerty kopírky (INV-WATCH-01).
-        let priceAlertsSent = 0;
-        try {
-            await supabase.rpc('expire_price_alerts', { p_user: null });
-            priceAlertsSent = (await drainPriceAlertOutbox({ db: supabase })).sent;
-        } catch (priceAlertError) {
-            console.error('[Cron] Price alert delivery failed:', priceAlertError instanceof Error ? priceAlertError.message : String(priceAlertError));
-        }
-
-        console.log(`[Cron] Done: ${sentCount} web sent, ${nativeSentCount} APNs sent, ${duplicateCount} deduped, ${pushJobs.length + nativePushJobs.length} total jobs, ${profiles.length} profiles, ${(subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0)} devices, ${copierAlertsSent} copier alerts, ${liveActivityStartResult.sent} live activity starts, ${liveActivityResult.sent} live activity updates, ${widgetPushResult.sent} widget pushes, ${accountSnapshotResult.inserted} account snapshots`);
+        console.log(`[Cron] Done: ${sentCount} web sent, ${nativeSentCount} APNs sent, ${duplicateCount} deduped, ${pushJobs.length + nativePushJobs.length} total jobs, ${profiles.length} profiles, ${(subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0)} devices`);
         return res.status(200).json({
             success: true,
             sent: sentCount,
@@ -697,12 +458,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             devices: (subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0),
             time: pragueTime,
             profiles: profiles.length,
-            copierAlerts: copierAlertsSent,
-            priceAlerts: priceAlertsSent,
-            liveActivities: liveActivityResult,
-            liveActivityStarts: liveActivityStartResult,
-            widgetPushes: widgetPushResult,
-            accountSnapshots: accountSnapshotResult,
         });
 
     } catch (err: any) {
@@ -720,59 +475,6 @@ type PushResult = {
     statusCode?: number;
     error?: string;
 };
-
-const RELAY_QUEUE_READ_LIMIT = 500;
-const RELAY_COMMAND_COLUMNS = 'id,device_id,user_id,command_type,status,created_at,claimed_at,error';
-
-/**
- * Čtení relay fronty pro výstrahu `relay-stuck` (server/copierIncidentWatchdog.ts).
- * Jen SELECT — fronta se tady nikdy neexpiruje, neopakuje ani nemění.
- * Čas čtení se bere až teď, ne na začátku cronu, aby stáří nebylo podhodnocené.
- */
-async function readCopierRelayQueue(
-    db: SupabaseClient,
-    runtimes: ReadonlyArray<{ device_id: string; last_seen_at: string }>,
-    alertStates: readonly CopierAlertStateRow[],
-): Promise<CopierRelayQueueSnapshot | undefined> {
-    const readAt = Date.now();
-    const liveDeviceIds = runtimes
-        .filter(runtime => readAt - Date.parse(runtime.last_seen_at) <= RELAY_STUCK_HEARTBEAT_FRESH_MS)
-        .map(runtime => runtime.device_id);
-    if (liveDeviceIds.length === 0) return { open: [], reported: [], readAt };
-    // Claimed jen v2 (v1 už nikdo nedokončí) a z posledních 24 h (osiřelé
-    // delivery nesmí výstrahu držet věčně); pending expiruje claim sám.
-    const claimedSince = new Date(readAt - RELAY_STUCK_CLAIMED_WINDOW_MS).toISOString();
-    const openResult = await db
-        .from('tradovate_copier_commands')
-        .select(RELAY_COMMAND_COLUMNS)
-        .in('device_id', liveDeviceIds)
-        .in('status', ['pending', 'claimed'])
-        .lt('created_at', new Date(readAt - RELAY_STUCK_BRAKE_AFTER_MS).toISOString())
-        .or(`status.eq.pending,and(delivery_id.not.is.null,claimed_at.gte.${claimedSince})`)
-        .order('created_at', { ascending: true })
-        .limit(RELAY_QUEUE_READ_LIMIT);
-    if (openResult.error) {
-        console.error('[Cron] Copier relay queue read failed:', openResult.error.message);
-        return undefined;
-    }
-    const open = (openResult.data ?? []) as CopierRelayCommandRow[];
-    // Oříznutý výsledek by jinému zařízení ukázal prázdnou frontu = falešné „vyřešeno“.
-    if (open.length >= RELAY_QUEUE_READ_LIMIT) {
-        console.error('[Cron] Copier relay queue read hit the row limit; relay-stuck left unchanged');
-        return undefined;
-    }
-    const reportedIds = reportedRelayCommandIds(alertStates);
-    if (reportedIds.length === 0) return { open, reported: [], readAt };
-    const reportedResult = await db
-        .from('tradovate_copier_commands')
-        .select(RELAY_COMMAND_COLUMNS)
-        .in('id', reportedIds);
-    if (reportedResult.error) {
-        console.error('[Cron] Copier relay reported-command read failed:', reportedResult.error.message);
-        return undefined;
-    }
-    return { open, reported: (reportedResult.data ?? []) as CopierRelayCommandRow[], readAt };
-}
 
 async function sendPush(sub: any, title: string, body: string, alertType: string): Promise<PushResult> {
     const payload = JSON.stringify({ title, body, url: '/', tag: `alpha-${alertType}` });

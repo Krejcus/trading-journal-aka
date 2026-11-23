@@ -4,13 +4,11 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { proxyLocalTradovateRead } from './server/localTradovateReadOnlyProxy';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const isNativeBuild = env.VITE_NATIVE_BUILD === 'true';
   const nativeOutDir = 'dist-native';
-  const localTradovateReadProxy = process.env.ALPHATRADE_LOCAL_TRADOVATE_READ_PROXY === '1';
   return {
     server: {
       // PORT env má přednost (preview/harness si přiděluje vlastní port),
@@ -47,18 +45,6 @@ export default defineConfig(({ mode }) => {
           rmSync(path.resolve(__dirname, nativeOutDir, 'sw.js'), { force: true });
         },
       },
-      ...(localTradovateReadProxy ? [{
-        name: 'alphatrade-local-tradovate-read-proxy',
-        configureServer(server) {
-          server.middlewares.use((request, response, next) => {
-            if (!request.url?.startsWith('/api/tradovate/')) {
-              next();
-              return;
-            }
-            void proxyLocalTradovateRead(request, response);
-          });
-        },
-      }] : []),
       react(),
       tailwindcss(),
       VitePWA({
