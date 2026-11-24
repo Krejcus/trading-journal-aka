@@ -8,7 +8,7 @@ import {
   type CopierGate, type CopierGroup, type CopierTableSettings, type CopierView,
 } from '../../lib/rithmicCopierView';
 import {
-  CopierAccountDetail, CopierFollowerTable, CopierGroupMenu, CopierGroupStrip, CopierPowerSwitch, CopierSettingsPanel, CopierTiles,
+  CopierAccountDetail, CopierFollowerTable, CopierGroupTabs, CopierGroupWizard, CopierPhoneFlow, type CopierNewGroup, CopierGroupMenu, CopierGroupStrip, CopierPowerSwitch, CopierSettingsPanel, CopierTiles,
   FirmDot, SltpValue, shownName, statusChip, type PowerState,
 } from './CopierParts';
 import { playCopierEnergy } from './copierFx';
@@ -28,6 +28,13 @@ export interface CopierActions {
   /** Oprava brány „Účty způsobilé“: vypnout účet a zkusit znovu. */
   onDisableAccount?: (accountId: string) => void;
   onNewGroup?: () => void;
+  /** Založí skupinu z průvodce (vzniká VYPNUTÁ). Bez napojení se tlačítko „Nová skupina“ neukáže. */
+  onCreateGroup?: (group: CopierNewGroup) => void;
+  onRenameGroup?: (groupId: string, name: string) => void;
+  /** Smaže skupinu (účty zůstávají). Obrazovka ji nabídne jen u vypnuté skupiny bez otevřených pozic. */
+  onDeleteGroup?: (groupId: string) => void;
+  /** Otevře kartu dne (rozpad dnešního P&L po účtech); bez ní je „Skupina dnes“ jen číslo. */
+  onOpenDay?: () => void;
 }
 
 export function useCopierTableSettings(): [CopierTableSettings, (next: CopierTableSettings) => void] {
@@ -39,6 +46,13 @@ export function useCopierTableSettings(): [CopierTableSettings, (next: CopierTab
     try { window.localStorage.setItem(COPIER_TABLE_STORAGE_KEY, JSON.stringify(next)); } catch { /* jen v tomto zařízení */ }
   }, []);
   return [settings, save];
+}
+
+/** Přepnutí skupiny se směrem: obsah další skupiny přijede zprava, předchozí zleva. */
+function useGroupSwitch(gi: number, set: (i: number) => void): { dir: 'right' | 'left' | 'none'; select: (i: number) => void } {
+  const [dir, setDir] = useState<'right' | 'left' | 'none'>('none');
+  const select = useCallback((i: number) => { setDir(i > gi ? 'right' : i < gi ? 'left' : 'none'); set(i); }, [gi, set]);
+  return { dir, select };
 }
 
 const powerOf = (g: CopierGroup): { state: PowerState; sub: string } => (
@@ -82,10 +96,15 @@ function FailNote({ gate, onClose, onFix }: { gate: CopierGate; onClose: () => v
 
 // ─────────────────────────────── PC
 export function RithmicCopierScreen({ view, actions, isDark = true, note = null, emptyNote = 'Žádná kopírovací skupina.' }: { view: CopierView; actions: CopierActions; isDark?: boolean; note?: React.ReactNode; emptyNote?: React.ReactNode }) {
-  const [gi, setGi] = useState(0);
+  const [gi, setGiRaw] = useState(0);
   const group = view.groups[Math.min(gi, view.groups.length - 1)];
+  const sw8 = useGroupSwitch(gi, setGiRaw);
+  const setGi = sw8.select;
+  const [renaming, setRenaming] = useState<string | null>(null), [fresh, setFresh] = useState<string | null>(null), [removing, setRemoving] = useState<string | null>(null);
+  const freshId = fresh?.startsWith('#') ? view.groups[Number(fresh.slice(1))]?.id ?? null : fresh;
+  useEffect(() => { if (!fresh) return undefined; const t = window.setTimeout(() => setFresh(null), 1600); return () => window.clearTimeout(t); }, [fresh]);
   const [settings, setSettings] = useCopierTableSettings();
-  const [panel, setPanel] = useState<null | 'settings' | { id: string }>(null), [menu, setMenu] = useState(false), [edit, setEdit] = useState(false);
+  const [panel, setPanel] = useState<null | 'settings' | { id: string }>(null), [menu, setMenu] = useState(false), [edit, setEdit] = useState(false), [wizard, setWizard] = useState(false);
   const root = useRef<HTMLDivElement>(null), sw = useRef<HTMLButtonElement>(null);
   const arm = useArm(group, actions, root, [sw]);
   useEffect(() => {
@@ -101,10 +120,14 @@ export function RithmicCopierScreen({ view, actions, isDark = true, note = null,
     <div ref={root} className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 640 }} onClick={() => { setPanel(null); setMenu(false); }} data-rithmic-copier>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 850, letterSpacing: '-.02em' }}>Kopírka</h1>
-        <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Skupina dnes <b className={`cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.day)}</b></span>
+        {actions.onOpenDay
+          ? <button type="button" className="cp-chip" data-cp-day style={{ height: 26, fontSize: 11.5, cursor: 'pointer' }} title="Karta dne — rozpad dnešního P&L po účtech" onClick={(e) => { e.stopPropagation(); actions.onOpenDay!(); }}>Skupina dnes <b className={`cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.day)}</b><span style={{ marginLeft: 6, opacity: 0.6 }}>›</span></button>
+          : <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Skupina dnes <b className={`cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.day)}</b></span>}
         <span className="cp-chip" style={{ height: 26, fontSize: 11.5 }}>Otevřeno <b className={`cp-num ${sum.open >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ marginLeft: 6 }}>{usdText(sum.open)}</b></span>
         <span style={{ flex: 1 }} />
-        {actions.onNewGroup && <button type="button" className="cp-btn" onClick={actions.onNewGroup}>＋ Nová skupina</button>}
+        {actions.onCreateGroup
+          ? <button type="button" className="cp-btn" onClick={(e) => { e.stopPropagation(); setPanel(null); setMenu(false); setWizard(true); }}>＋ Nová skupina</button>
+          : actions.onNewGroup && <button type="button" className="cp-btn" onClick={actions.onNewGroup}>＋ Nová skupina</button>}
         <span style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
           <CopierPowerSwitch ref={sw} state={pw.state} sub={pw.sub} onClick={arm.toggle} shakeKey={arm.shake} fx={arm.fx} />
           {arm.fail && <FailNote gate={arm.fail} onClose={() => arm.setFail(null)} onFix={actions.onDisableAccount ? (id) => { arm.setFail(null); actions.onDisableAccount!(id); window.setTimeout(arm.toggle, 250); } : undefined} />}
@@ -115,24 +138,36 @@ export function RithmicCopierScreen({ view, actions, isDark = true, note = null,
       {note && <div className="cp-card" style={{ padding: '10px 14px', fontSize: 12.5, borderColor: 'color-mix(in srgb,var(--cp-accent) 40%,transparent)' }}>{note}</div>}
       <div className="cp-card" style={{ padding: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <div className="cp-gtabs">{view.groups.map((g, i) => <button key={g.id} type="button" className={i === gi ? 'on' : ''} onClick={(e) => { e.stopPropagation(); setGi(i); setPanel(null); }}><i className={`cp-dot ${g.state}`} />{g.name} <small>1 → {g.followerIds.length}</small></button>)}</div>
+          <CopierGroupTabs groups={view.groups} index={Math.min(gi, view.groups.length - 1)} onSelect={(i) => { setGi(i); setPanel(null); setMenu(false); }}
+            renamingId={renaming} onRename={actions.onRenameGroup} onRenameEnd={() => setRenaming(null)} freshId={freshId} removingId={removing} />
         </div>
-        <CopierTiles view={view} group={group} settings={settings} selectedId={openId} onOpen={(id) => setPanel({ id })} />
+        <div key={group.id} className={`cp-gswap ${sw8.dir}${removing === group.id ? ' out' : ''}`}>
+          <CopierTiles view={view} group={group} settings={settings} selectedId={openId} onOpen={(id) => setPanel({ id })} />
+        </div>
       </div>
 
-      <div className="cp-card" style={{ padding: 12, display: 'flex', flexDirection: 'column', minHeight: 0 }} onClick={(e) => e.stopPropagation()}>
+      <div key={`t-${group.id}`} className={`cp-card cp-gswap ${sw8.dir}${removing === group.id ? ' out' : ''}`} style={{ padding: 12, display: 'flex', flexDirection: 'column', minHeight: 0 }} onClick={(e) => e.stopPropagation()}>
         <CopierGroupStrip view={view} group={group} settings={settings}
           onSettings={() => { setMenu(false); setPanel(p => (p === 'settings' ? null : 'settings')); }} settingsOpen={panel === 'settings'}
           onMenu={() => setMenu(m => !m)} menuOpen={menu}
           onToggleSltp={() => setSettings({ ...settings, sltp: settings.sltp === 'avg' ? 'sum' : 'avg' })}
           onOpenAccount={(id) => setPanel({ id })}
           menu={menu ? <CopierGroupMenu openPositions={openPositions} editOn={edit} onClose={() => setMenu(false)}
-            onEdit={() => { setEdit(e => !e); setMenu(false); }} onTemplate={actions.onTemplate ? (r, m) => { setMenu(false); actions.onTemplate!(group.id, r, m); } : undefined} onFlatten={actions.onFlatten ? () => { setMenu(false); actions.onFlatten!(group.id); } : undefined} /> : null} />
+            onEdit={() => { setEdit(e => !e); setMenu(false); }} onTemplate={actions.onTemplate ? (r, m) => { setMenu(false); actions.onTemplate!(group.id, r, m); } : undefined} onFlatten={actions.onFlatten ? () => { setMenu(false); actions.onFlatten!(group.id); } : undefined}
+            onRename={actions.onRenameGroup ? () => { setMenu(false); setRenaming(group.id); } : undefined}
+            groupName={group.name}
+            deleteBlocked={group.state === 'armed' ? 'Nejdřív kopírku skupiny vypni.' : openPositions > 0 ? `Skupina má ${openPositions} ${openPositions === 1 ? 'otevřenou pozici' : 'otevřené pozice'} — nejdřív je zavři.` : null}
+            onDelete={actions.onDeleteGroup ? () => {
+              setMenu(false); const id = group.id, at = Math.max(0, Math.min(gi, view.groups.length - 1) - 1);
+              setRemoving(id);
+              window.setTimeout(() => { actions.onDeleteGroup!(id); setRemoving(null); setGiRaw(at); }, 340);
+            } : undefined} /> : null} />
         <CopierFollowerTable view={view} group={group} settings={settings} edit={edit} selectedId={openId} onOpen={(id) => setPanel({ id })}
           onToggleCopy={actions.onToggleCopy} onBulk={actions.onBulk ? (a, ids, v) => actions.onBulk!(group.id, a, ids, v) : undefined} />
       </div>
 
       {panel === 'settings' && <CopierSettingsPanel settings={settings} onChange={setSettings} onClose={() => setPanel(null)} sample={view.accounts[group.followerIds[0]]?.name ?? 'Flex 50K •002'} />}
+      {wizard && actions.onCreateGroup && <CopierGroupWizard view={view} onClose={() => setWizard(false)} onCreate={(g) => { const at = view.groups.length; actions.onCreateGroup!(g); setWizard(false); setGi(at); setPanel(null); setFresh(`#${at}`); }} />}
       {openId && <CopierAccountDetail view={view} group={group} id={openId} settings={settings} asSheet={false} onClose={() => setPanel(null)}
         onToggleCopy={actions.onToggleCopy} onFixProtection={actions.onFixProtection} onClosePosition={actions.onClosePosition} />}
     </div>
@@ -144,7 +179,11 @@ export function RithmicCopierPhone({ view, actions, isDark = true, note = null, 
   const [gi, setGi] = useState(0);
   const group = view.groups[Math.min(gi, view.groups.length - 1)];
   const [settings, setSettings] = useCopierTableSettings();
-  const [sheet, setSheet] = useState<null | 'settings' | { id: string }>(null), [filter, setFilter] = useState<'all' | 'prob'>('all');
+  const [sheet, setSheet] = useState<null | 'settings' | 'group' | { id: string }>(null), [filter, setFilter] = useState<'all' | 'prob'>('all');
+  const [phoneDir, setPhoneDir] = useState<'right' | 'left' | 'none'>('none');
+  const [wizard, setWizard] = useState(false), [renaming, setRenaming] = useState<string | null>(null), [fresh, setFresh] = useState<string | null>(null), [removing, setRemoving] = useState<string | null>(null);
+  const freshId = fresh?.startsWith('#') ? view.groups[Number(fresh.slice(1))]?.id ?? null : fresh;
+  useEffect(() => { if (!fresh) return undefined; const t = window.setTimeout(() => setFresh(null), 1600); return () => window.clearTimeout(t); }, [fresh]);
   const root = useRef<HTMLDivElement>(null), sw = useRef<HTMLButtonElement>(null);
   const arm = useArm(group, actions, root, [sw]);
   if (!group) return <div className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ padding: 16 }}><div className="cp-card" style={{ padding: 16, fontSize: 13 }}>{emptyNote}</div></div>;
@@ -159,7 +198,8 @@ export function RithmicCopierPhone({ view, actions, isDark = true, note = null, 
   const stLabel = { armed: 'ARMED', disarmed: 'DISARMED', halted: 'ZASTAVENO', kill: 'KILL' }[group.state];
   const sync = sum.unprotectedIds.length ? <span className="cp-loss">SL/TP chybí u {sum.unprotectedIds.length} {sum.unprotectedIds.length === 1 ? 'účtu' : 'účtů'}</span>
     : <span className="cp-win">SL/TP sedí {sum.protectedCount}/{sum.inPosition} ✓</span>;
-  const lo = leader ? copierOpenPnl(leader, view.price, view.pointValue) : 0;
+  const openPositions = copierGroupMembers(group).filter(id => view.accounts[id]?.position).length;
+  const deleteBlocked = group.state === 'armed' ? 'Nejdřív kopírku skupiny vypni.' : openPositions > 0 ? `Skupina má ${openPositions} ${openPositions === 1 ? 'otevřenou pozici' : 'otevřené pozice'} — nejdřív je zavři.` : null;
   return (
     <div ref={root} className={`cp-root${isDark ? '' : ' cp-light'}`} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px 110px' }} data-rithmic-copier-phone>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -167,10 +207,15 @@ export function RithmicCopierPhone({ view, actions, isDark = true, note = null, 
         <span className="cp-chip" style={{ height: 26 }}><i className={`cp-dot ${group.state}`} style={{ marginRight: 6 }} />{stLabel}</span>
         <button type="button" className="cp-btn" style={{ width: 32, padding: 0, justifyContent: 'center' }} onClick={() => setSheet('settings')} aria-label="Nastavení">⚙</button>
       </div>
-      <div className="cp-pchips">{view.groups.map((g, i) => <button key={g.id} type="button" className={i === gi ? 'on' : ''} onClick={() => { setGi(i); setSheet(null); }}><i className={`cp-dot ${g.state}`} />{g.name} <span className="cp-mut">{g.followerIds.length}</span></button>)}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <div className="cp-ptabs"><CopierGroupTabs groups={view.groups} index={Math.min(gi, view.groups.length - 1)} onSelect={(i) => { setPhoneDir(i > gi ? 'right' : i < gi ? 'left' : 'none'); setGi(i); setSheet(null); }}
+          renamingId={renaming} onRename={actions.onRenameGroup} onRenameEnd={() => setRenaming(null)} freshId={freshId} removingId={removing} /></div>
+        {(actions.onRenameGroup || actions.onDeleteGroup) && <button type="button" className="cp-btn" style={{ width: 34, height: 34, padding: 0, justifyContent: 'center', flex: 'none', fontWeight: 900 }} onClick={() => setSheet('group')} aria-label="Akce skupiny">⋯</button>}
+        {actions.onCreateGroup && <button type="button" className="cp-btn pri" style={{ width: 34, height: 34, padding: 0, justifyContent: 'center', flex: 'none', fontSize: 18 }} onClick={() => { setSheet(null); setWizard(true); }} aria-label="Nová skupina">＋</button>}
+      </div>
 
-      <div className={`cp-card cp-grpc${inTrade ? ' intrade' : ''}`}>
-        <div className="ga"><div className="l">Skupina dnes</div><b className={`v cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.day)}</b><div className="sync" style={{ fontSize: 10.5 }}>{sync}</div></div>
+      <div key={group.id} className={`cp-card cp-grpc cp-gswap ${phoneDir}${removing === group.id ? ' out' : ''}${inTrade ? ' intrade' : ''}`}>
+        <div className="ga" data-cp-day={actions.onOpenDay ? '' : undefined} style={actions.onOpenDay ? { cursor: 'pointer' } : undefined} onClick={actions.onOpenDay}><div className="l">Skupina dnes{actions.onOpenDay ? ' ›' : ''}</div><b className={`v cp-num ${sum.day == null ? '' : sum.day >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.day)}</b><div className="sync" style={{ fontSize: 10.5 }}>{sync}</div></div>
         <span className="sp" />
         <div className="gb"><div className="l">Otevřeno · {sum.inPosition} účtů</div><b className={`v cp-num ${sum.open >= 0 ? 'cp-win' : 'cp-loss'}`}>{usdText(sum.open)}</b>
           <div className="sub"><SltpValue sl={sum.sl} tp={sum.tp} mode={settings.sltp} unit={false} onToggle={() => setSettings({ ...settings, sltp: settings.sltp === 'avg' ? 'sum' : 'avg' })}
@@ -179,17 +224,8 @@ export function RithmicCopierPhone({ view, actions, isDark = true, note = null, 
         </div>
       </div>
 
-      <div className="cp-card" style={{ padding: 10 }}>
-        {leader && <div data-cp-tile style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setSheet({ id: leader.id })}>
-          <span className="cp-chip a">Leader</span><b style={{ fontSize: 13 }}>{shownName(leader, settings)}</b>
-          <span className="cp-mut" style={{ fontSize: 12 }}>{leader.position ? `${leader.position.side === 'long' ? 'Long' : 'Short'} ${leader.position.quantity}` : 'bez pozice'}</span>
-          <span style={{ flex: 1 }} /><b className={`cp-num ${lo >= 0 ? 'cp-win' : 'cp-loss'}`} style={{ fontSize: 13 }}>{leader.position ? usdText(lo) : '—'}</b>
-        </div>}
-        <div className="cp-mgrid">{followers.map(a => { const o = copierOpenPnl(a, view.price, view.pointValue); return (
-          <button key={a.id} type="button" data-cp-tile className={`cp-mt ${copierTileKind(a)}`} onClick={() => setSheet({ id: a.id })}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><FirmDot firm={a.firm} />{settings.redact ? shownName(a, settings) : `•${a.name.split('•').pop()}`}</span>
-            <b className={`cp-num ${a.position ? (o >= 0 ? 'cp-win' : 'cp-loss') : 'cp-mut'}`}>{a.position ? usdText(o) : '—'}</b>
-          </button>); })}</div>
+      <div key={`f-${group.id}`} className={`cp-card cp-gswap ${phoneDir}${removing === group.id ? ' out' : ''}`} style={{ padding: 10 }}>
+        <CopierPhoneFlow view={view} group={group} settings={settings} onOpen={(id) => setSheet({ id })} />
       </div>
 
       <div className="cp-card" style={{ padding: 12, position: 'relative' }}>
@@ -214,6 +250,17 @@ export function RithmicCopierPhone({ view, actions, isDark = true, note = null, 
           </div>); })}
       </div>
 
+      {sheet === 'group' && <><div className="cp-scrim" onClick={() => setSheet(null)} /><div className="cp-sheet cp-gsheet" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 2px 8px' }}><i className={`cp-dot ${group.state}`} /><b style={{ fontSize: 15 }}>{group.name}</b><span className="cp-mut" style={{ fontSize: 12 }}>1 → {group.followerIds.length}</span></div>
+        <CopierGroupMenu openPositions={openPositions} editOn={false} onClose={() => undefined} groupName={group.name} deleteBlocked={deleteBlocked}
+          onRename={actions.onRenameGroup ? () => { setSheet(null); setRenaming(group.id); } : undefined}
+          onDelete={actions.onDeleteGroup ? () => {
+            setSheet(null); const id = group.id, at = Math.max(0, Math.min(gi, view.groups.length - 1) - 1);
+            setRemoving(id); setPhoneDir('left');
+            window.setTimeout(() => { actions.onDeleteGroup!(id); setRemoving(null); setGi(at); }, 340);
+          } : undefined} />
+      </div></>}
+      {wizard && actions.onCreateGroup && <CopierGroupWizard view={view} onClose={() => setWizard(false)} onCreate={(g) => { const at = view.groups.length; actions.onCreateGroup!(g); setWizard(false); setPhoneDir('right'); setGi(at); setFresh(`#${at}`); }} />}
       {sheet === 'settings' && <CopierSettingsPanel asSheet settings={settings} onChange={setSettings} onClose={() => setSheet(null)} sample={followers[0]?.name ?? 'Flex 50K •002'} />}
       {sheet && typeof sheet === 'object' && <CopierAccountDetail view={view} group={group} id={sheet.id} settings={settings} asSheet onClose={() => setSheet(null)}
         onToggleCopy={actions.onToggleCopy} onFixProtection={actions.onFixProtection} onClosePosition={actions.onClosePosition} />}

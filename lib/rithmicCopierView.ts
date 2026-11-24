@@ -35,8 +35,8 @@ export interface CopierAccount {
   copyOn: boolean;
   /** Poměr k leaderovi. */
   ratio: number;
-  /** Strop kontraktů. */
-  maxContracts: number;
+  /** Strop kontraktů; null = bez stropu (výchozí u nové skupiny). */
+  maxContracts: number | null;
   /** Poslední zpoždění kopie (ms); null = není. */
   latencyMs: number | null;
   /** Neshoda pozice: broker hlásí jiné množství, než kopírka čekala. */
