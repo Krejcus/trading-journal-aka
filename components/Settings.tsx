@@ -22,7 +22,7 @@ import ConfirmationModal from './ConfirmationModal';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyPrep, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
-import { initializeNativeRemoteNotifications, sendNativeRemoteTestPush, sendNativeSnapshotTestPush } from '../services/nativePushNotifications';
+import { initializeNativeRemoteNotifications, sendNativeRemoteTestPush } from '../services/nativePushNotifications';
 
 
 import { isNativeBuild } from '../utils/runtimeConfig';
@@ -165,7 +165,7 @@ const NATIVE_COPIER_ALERT_SAMPLES: NativeCopierAlertSample[] = [
   { label: 'Stuck outbox', title: 'Copier: STUCK OUTBOX', body: 'Objednávka s nejasným výsledkem čeká na ruční kontrolu.', kind: 'risk' },
   { label: 'Divergence', title: 'Copier: ÚČTY NESOUHLASÍ', body: 'Dva účty mají rozdílnou pozici. ARM je zamčený.', kind: 'risk' },
   { label: 'Auto-flatten hotový', title: 'Copier: ARM vypršel — kopie zavřeny', body: 'Zrušeny 2 příkazy, zavřeno 5 pozic. Vše flat.', kind: 'risk' },
-  { label: 'Auto-flatten selhal', title: 'Copier: AUTO-FLATTEN SELHAL', body: 'Účty nejsou potvrzené flat. Okamžitě zkontroluj Tradovate!', kind: 'risk' },
+  { label: 'Auto-flatten selhal', title: 'Copier: AUTO-FLATTEN SELHAL', body: 'Účty nejsou potvrzené flat. Okamžitě zkontroluj účty u brokera!', kind: 'risk' },
 ];
 
 const NATIVE_ALERT_GALLERY_COUNT = NATIVE_COPIER_ALERT_SAMPLES.length;
@@ -469,17 +469,6 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleSnapshotTestPush = async () => {
-    setPushBusy(true);
-    try {
-      const result = await sendNativeSnapshotTestPush();
-      showToast(result.ok
-        ? 'Mac worker fotí TradingView — čekej na jednu notifikaci s obrázkem'
-        : (result.message || 'Test snapshotu se nepodařilo spustit'));
-    } finally {
-      setPushBusy(false);
-    }
-  };
 
   const handleNativeBadge = async (count: number) => {
     setPushBusy(true);
@@ -1373,9 +1362,6 @@ const Settings: React.FC<SettingsProps> = ({
           <span className="text-xs font-medium text-[var(--text-muted)]">testy pro ladění</span>
           <ChevronRight size={15} className="ml-auto text-[var(--text-muted)] transition-transform group-open/diag:rotate-90" />
         </summary>
-        <SettingsRow label="Test snapshotu TradingView" desc="Bez ARMu a bez obchodu: vyfotí layout AlphaTrade Snapshoty, pošle obrázkový APNs test a nic nezapíše do deníku." keywords="snapshot">
-          <button type="button" onClick={handleSnapshotTestPush} disabled={pushBusy} className={btn}>{pushBusy ? 'Čekám…' : 'Poslat'}</button>
-        </SettingsRow>
         {isNativeBuild && <>
           <SettingsRow label="Galerie iOS alertů kopírky" desc={`${NATIVE_ALERT_GALLERY_COUNT} scénářů během dvou minut — patří současnému copieru.`} keywords="galerie alertu">
             <button type="button" disabled={pushBusy} onClick={() => void handleNativeAlertGallery()} className={btn}>{pushBusy ? 'Plánuji…' : 'Naplánovat'}</button>

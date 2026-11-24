@@ -180,8 +180,8 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
   const withR = decisions.filter(d => d.r != null).length;
 
   if (!base.length) {
-    return <div className={`${card} text-center py-12`}><p className={`text-sm font-bold ${ink}`}>Zatím tu nejsou obchody z deníku Tradovate.</p>
-      <p className={`mt-1 text-xs ${muted}`}>Lab počítá jen obchody, které importuje deník z Tradovate.</p></div>;
+    return <div className={`${card} text-center py-12`}><p className={`text-sm font-bold ${ink}`}>Zatím tu nejsou obchody importované od brokera.</p>
+      <p className={`mt-1 text-xs ${muted}`}>Lab počítá jen obchody, které do deníku přišly importem od brokera.</p></div>;
   }
 
   return (
@@ -189,7 +189,7 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
       <div className="flex flex-wrap items-center gap-3">
         <p className={`text-xs font-medium ${muted}`}>
           <b className={ink}>{decisions.length}</b> rozhodnutí · <b className={ink}>{reviewed}</b> ohodnocených · R u <b className={ink}>{withR}</b>
-          {first ? <> · data z Tradovate od {new Date(first).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })}</> : null}
+          {first ? <> · data od {new Date(first).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })}</> : null}
           {historyState === 'loading' && <span className="ml-2 inline-flex items-center gap-1 text-indigo-500"><Loader2 size={11} className="animate-spin" />dotahuji SL z historie</span>}
           {historyState === 'error' && <span className="ml-2 text-amber-600">historii se nepodařilo načíst — R může chybět</span>}
         </p>

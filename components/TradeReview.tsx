@@ -304,7 +304,7 @@ export default function TradeReview({
   const invalidMonth = useMemo(() => monthlyInvalidSummary(display), [display]);
 
   if (!items.length) {
-    return <Shell isDark={isDark}><Empty isDark={isDark} text="Nic nečeká na hodnocení. Všechny obchody z Tradovate jsou ohodnocené." onClose={onClose} /></Shell>;
+    return <Shell isDark={isDark}><Empty isDark={isDark} text="Nic nečeká na hodnocení. Všechny importované obchody jsou ohodnocené." onClose={onClose} /></Shell>;
   }
   if (finished || !current || !draft) {
     return <Shell isDark={isDark}><DoneScreen isDark={isDark} reviewed={reviewed} total={items.length} onClose={onClose} /></Shell>;
@@ -348,7 +348,7 @@ export default function TradeReview({
       <Pill isDark={isDark}>{current.instrument || '—'}</Pill>
       <Pill isDark={isDark}>{new Date(facts.entryAt).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })} · {clock(facts.entryAt)}–{clock(facts.exitAt)}</Pill>
       {noSL && <Pill className="text-amber-600 bg-amber-500/10 border-amber-500/40">⚠ Bez SL</Pill>}
-      {!narrow && <Pill isDark={isDark}><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Tradovate</Pill>}
+      {!narrow && <Pill isDark={isDark}><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Import</Pill>}
       <span className="flex-1" />
       {narrow && <button type="button" onClick={close} aria-label="Zavřít hodnocení" className={`h-8 w-8 -mr-1.5 grid place-items-center rounded-md ${muted}`}><X size={17} /></button>}
       {narrow && <span className="basis-full h-0" />}
@@ -378,7 +378,7 @@ export default function TradeReview({
         {hasFees && <p className={`mt-2 text-[11.5px] ${muted}`}>Hrubě <b className={`font-medium tabular-nums ${ink}`}>{money(net + feeTotal)}</b> · poplatky <b className={`font-medium tabular-nums ${ink}`}>${fmt(feeTotal)}</b></p>}
         {draft.valid === 'bad' && <span className="mt-2 inline-flex h-[22px] items-center whitespace-nowrap rounded border border-rose-500/30 bg-rose-500/10 px-2 text-[9.5px] font-semibold text-rose-500">✕ Mimo plán · mimo statistiky</span>}
       </div>
-      <Section title="Plnění" aux={<><Lock size={10} /> z Tradovate</>} />
+      <Section title="Plnění" aux={<><Lock size={10} /> od brokera</>} />
       <Cells isDark={isDark}>
         <Cell label="Vstup" value={price(facts.entryPrice)} sub={clockS(facts.entryAt)} />
         <Cell label="Výstup" value={price(facts.exitPrice)} sub={clockS(facts.exitAt)} />

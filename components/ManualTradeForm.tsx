@@ -425,7 +425,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             </div>
 
             {/* Zbytek formuláře zůstává stejný */}
-            {reviewOnly && <p className="mb-5 text-xs text-[var(--text-muted)]">Ceny, časy, objem a P&amp;L přebíráme z Tradovate. Zde upravujete hodnocení a vlastní obrázky.</p>}
+            {reviewOnly && <p className="mb-5 text-xs text-[var(--text-muted)]">Ceny, časy, objem a P&amp;L přebíráme od brokera. Zde upravujete hodnocení a vlastní obrázky.</p>}
             <form onSubmit={handleSubmit} className="space-y-8">
               <div className={`grid grid-cols-1 md:grid-cols-2 ${reviewOnly ? '' : 'xl:grid-cols-4'} gap-6 md:gap-8 items-start`}>
                 {!reviewOnly && <>

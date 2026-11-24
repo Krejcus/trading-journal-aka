@@ -715,7 +715,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 {acc.oauth && (
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[8px] font-bold text-slate-500">
                     <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-blue-400">
-                      Tradovate{acc.oauth.firm ? ` · ${acc.oauth.firm}` : ''}
+                      Import od brokera{acc.oauth.firm ? ` · ${acc.oauth.firm}` : ''}
                     </span>
                   </div>
                 )}
@@ -1160,9 +1160,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         isOpen={!!accountToDelete}
         onClose={() => setAccountToDelete(null)}
         onConfirm={executeDelete}
-        title={accountToDelete?.oauth ? 'Archivovat OAuth účet' : 'Smazat Účet'}
+        title={accountToDelete?.oauth ? 'Archivovat účet' : 'Smazat Účet'}
         message={accountToDelete?.oauth
-          ? `Účet "${accountToDelete.name}" je trvale propojený s Tradovate a mohou se na něj vázat obchody. Místo smazání bude bezpečně přesunut do archivu.`
+          ? `Účet "${accountToDelete.name}" má obchody importované od brokera. Místo smazání bude bezpečně přesunut do archivu.`
           : `Opravdu chcete smazat účet "${accountToDelete?.name}"? Smažou se i VŠECHNY jeho obchody — nevratně. Pro archivaci s historií použij lebku (Fail).`}
         theme={theme}
       />

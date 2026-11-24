@@ -4512,7 +4512,7 @@ const App: React.FC = () => {
                         <p className="text-xs text-slate-500 font-bold">
                           {dashboardMode === 'backtesting'
                             ? 'Analytická laboratoř · counterfactual · bias · leaky — čísla počítá kód, ne AI'
-                            : 'Tvoje rozhodnutí z deníku Tradovate · kopie se nesčítají · čísla počítá kód, ne AI'}
+                            : 'Tvoje rozhodnutí z deníku · kopie se nesčítají · čísla počítá kód, ne AI'}
                         </p>
                       </div>
                       {dashboardMode !== 'backtesting' ? (

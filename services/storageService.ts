@@ -1229,7 +1229,7 @@ export const storageService = {
   async saveTrades(trades: Trade[], options?: { insertOnly?: boolean }): Promise<Trade[]> {
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
-    if (trades.some(isEvidenceJournalTrade)) throw new Error('Obchody z Tradovate upravujte přes hodnocení obchodu.');
+    if (trades.some(isEvidenceJournalTrade)) throw new Error('Importované obchody upravujte přes hodnocení obchodu.');
 
     // NOTE: Cache is written AFTER successful DB upsert (not before) to prevent phantom data.
     // If DB fails, cache stays consistent with what's actually persisted.
@@ -1300,7 +1300,7 @@ export const storageService = {
       if (!realAccId) return null;
 
       const existingData = existingDataMap.get(String(t.id));
-      if (isEvidenceJournalTrade(existingData ?? {})) throw new Error('Obchody z Tradovate upravujte přes hodnocení obchodu.');
+      if (isEvidenceJournalTrade(existingData ?? {})) throw new Error('Importované obchody upravujte přes hodnocení obchodu.');
       // Replay outbox retries create missing rows only. Never overwrite a
       // confirmed trade's subsequent review, even when another tab saved it.
       if (options?.insertOnly && existingDataMap.has(String(t.id))) return null;

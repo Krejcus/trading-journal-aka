@@ -312,7 +312,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         <tr key={f.key} onClick={() => setFirmDetail(f.key)} className="cursor-pointer hover:bg-[var(--bg-page)]/60">
                                             <td className={td}>
                                                 <span className="inline-flex items-center gap-2 font-semibold text-[var(--text-primary)]"><FirmMark firm={f.key} size={20} />{firmDisplayName(f.key)}</span>
-                                                {life?.bought && !life.inApp ? <span className="block pl-7 text-[10.5px] text-[var(--text-muted)]">účty před napojením Tradovate</span> : null}
+                                                {life?.bought && !life.inApp ? <span className="block pl-7 text-[10.5px] text-[var(--text-muted)]">účty z doby před importem od brokera</span> : null}
                                             </td>
                                             <td className={`${td} text-right font-mono text-xs tabular-nums`}>{life?.bought || muted}</td>
                                             <td className={`${td} text-right font-mono text-xs tabular-nums`}>{formatValue(f.cost)}</td>
