@@ -288,6 +288,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-24 — Claude: obrazovka Kopírka (Rithmic) — čáry, skupiny, průvodce, ukázka; úklid textů
+
+- Web b1b521c3 (+ f91693af) NASAZEN, iPhone přeinstalován ze stejného commitu.
+- Texty: zbylé „Tradovate“ v deníku, Labu, účtech, hodnocení obchodu a formuláři pryč (neutrálně „import od brokera“); mrtvý „Test snapshotu TradingView“ z Nastavení i `sendNativeSnapshotTestPush` smazány. LIVE texty ve skupinových větvích zůstaly (zmizí s tím kódem).
+- Kopírka (jen zobrazení, `components/copier/*`): čáry leader → followeři podle náhledu 22. 11. (do 3 followerů karty s čarou, jinak mřížka se sběrnicí; teče jen u zapnuté skupiny, červená u problému), na telefonu „kmen“ s odbočkami k řadám; záložky skupin s animací, průvodce novou skupinou (4 kroky, účet jen v jedné skupině, strop kontraktů výchozí VYPNUTÝ → `maxContracts: number | null`), přejmenování a smazání skupiny z ⋯ (smazat jen vypnutou bez pozic); karta dne přes „Skupina dnes ›“.
+- Ukázková data (`CopierDemo.tsx`, scénáře před / v obchodu / po / problém, 3 skupiny + volné účty): lišta „Ukázka“ jen ve vývojové appce a v appce v iPhonu (Filip chtěl vidět v telefonu); webový build ji neobsahuje (ověřeno grepem buildu). Akce mění jen stav v paměti; skutečná záložka dál nemá napojené žádné akce (INV-UI-01). Critic se nespouštěl — jádro kopírky se neměnilo.
+- Past: nová třída `.cp-sw` přebila přepínače v tabulce followerů → přejmenováno na `.cp-capsw`.
+
 ### 2026-11-23 — Claude: odstranění Tradovate, TradingView a IBKR z appky — fáze 0 a 1 (worker odinstalován)
 
 Rozhodnutí Filipa: přechod čistě na Rithmic (+ starší Databento). Tradovate (kopírka, OAuth, import deníku,
