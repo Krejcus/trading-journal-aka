@@ -20,7 +20,7 @@
 import type { MarketCandle } from '../services/marketDataCalculations';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { LiveCandleFeed } from './liveCandleFeed';
-import { mergeSeedCandles } from './rithmicCandleSeed';
+import { mergeSeedCandles, patchSeedCandles } from './rithmicCandleSeed';
 import { RithmicLocalConnection, type RithmicLinkHandlers, type RithmicLinkOptions } from './rithmicLocalConnection';
 
 export type RithmicDayCandleStatus = 'loading' | 'live' | 'stale' | 'unavailable';
@@ -183,6 +183,13 @@ export function createRithmicDayCandleSource(options: RithmicDayCandleSourceOpti
         const live = message.feed === true;
         if (!live) dropLive(); else feedLive = true;
         publish({ status: status(), capturedAt: live ? stamp() : snapshot.capturedAt });
+        return;
+      }
+      if (message.type === 'bars') {
+        // Opravené svíčky po výpadku cen ve službě: dokončené minuty nahradit správnými z historie.
+        if (message.symbol !== snapshot.symbol || !Array.isArray(message.bars) || !finite(message.through)) return;
+        const repaired = message.bars.map(candleOf).filter((bar): bar is MarketCandle => bar !== null);
+        if (repaired.length) publish({ candles: patchSeedCandles(snapshot.candles, repaired, message.through) });
         return;
       }
       if (message.type !== 'tick' || message.symbol !== snapshot.symbol) return;

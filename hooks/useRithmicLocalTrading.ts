@@ -2,7 +2,7 @@
 // LiveTradingScreen: spojení, stav, cena a svíčky, karty obchodů a příkazy.
 // Stav v prohlížeči slouží JEN k zobrazení — každý příkaz ověřuje místní proces (LocalExec).
 // Žádné opakování: příkaz bez odpovědi končí „unknown" a nikdy se neposílá znovu.
-import { mergeSeedCandles } from '../lib/rithmicCandleSeed';
+import { mergeSeedCandles, patchSeedCandles } from '../lib/rithmicCandleSeed';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LiveTradingCopyEvent, LiveTradingMarketData } from '../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
@@ -370,6 +370,16 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             if (bar) ui.bar = bar;
             ui.dirty = true;
             if (ui.timer === null) ui.timer = setTimeout(() => flushUiTick(), 100);
+          } else if (message.type === 'bars') {
+            // Opravené svíčky po výpadku cen ve službě (jen zobrazení): dokončené minuty nahradit správnými z historie.
+            if (message.symbol === symbolRef.current && Array.isArray(message.bars) && typeof message.through === 'number') {
+              const through = message.through;
+              const repaired = (message.bars as unknown[]).filter((raw): raw is Bar => {
+                const b = raw as Partial<Bar> | null;
+                return !!b && [b.time, b.open, b.high, b.low, b.close].every((v) => typeof v === 'number' && Number.isFinite(v));
+              }).map(candle);
+              if (repaired.length) setCandles((current) => patchSeedCandles(current, repaired, through));
+            }
           } else if (message.type === 'limits') {
             setLimits(message.limits as Limits | null);
           } else if (message.type === 'beat') {

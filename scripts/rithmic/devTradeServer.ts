@@ -23,6 +23,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
+import { barRepairWindow, mergeRepairedBars, mergeRepairWindows, repairedBarsFrom, type BarRepairWindow } from '../../services/rithmic/barRepair';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
 import { LocalExec, type LocalExecCommand } from '../../services/rithmic/localExec';
 import type { ProtectionState, ProtectionStore } from '../../services/rithmic/rithmicProtection';
@@ -349,6 +350,43 @@ async function main(): Promise<void> {
   const restoring = new Set<'ticker' | 'history'>();
   /** Stejným jménem se přihlásil někdo jiný: od té chvíle se proces k cenám ani historii sám nepřipojuje. */
   let forcedOut = false;
+  /** Kdy spojení pro ceny spadlo (ms); null = běží. Svíčky od té minuty po minutu obnovy jsou z ticků neúplné. */
+  let feedGapFrom: number | null = null;
+  /**
+   * Oprava svíček po (znovu)připojení cen — JEN ZOBRAZENÍ. Minuta, ve které ceny naběhly, začíná až prvním tickem
+   * (chybí jí otevření a kus rozsahu) a minuty z výpadku chybí celé. Po skončení té minuty se dotčené svíčky jedním
+   * malým dotazem přečtou z historie a pošlou stránkám zprávou `bars`.
+   * Čeká nejvýš JEDNA oprava: další obnova cen její okno jen rozšíří (rozpadající se spojení nesmí násobit dotazy).
+   * Nejvýš 2 dotazy na opravu; když historie minutu obnovy nemá ani napodruhé (zavřený trh), pošle se, co je.
+   */
+  let pendingRepair: { window: BarRepairWindow; timer: ReturnType<typeof setTimeout> } | null = null;
+  function scheduleBarRepair(window: BarRepairWindow): void {
+    if (pendingRepair) { clearTimeout(pendingRepair.timer); window = mergeRepairWindows(pendingRepair.window, window); }
+    const timer = setTimeout(() => { pendingRepair = null; void runBarRepair(window, 1); }, Math.max(0, window.dueAtMs - Date.now()));
+    timer.unref();
+    pendingRepair = { window, timer };
+  }
+  async function runBarRepair(window: BarRepairWindow, attempt: number): Promise<void> {
+    if (forcedOut) return;
+    const again = (why: string): void => {
+      if (attempt >= 2 || pendingRepair) { console.log(`[svíčky] oprava po obnově cen se nepodařila (${why}) — správné svíčky přinese další připojení stránky`); return; }
+      console.log(`[svíčky] oprava po obnově cen zatím nejde (${why}) — ještě jeden pokus za 30 s`);
+      setTimeout(() => { if (!pendingRepair) void runBarRepair(window, attempt + 1); }, 30_000).unref();
+    };
+    try {
+      if (!historyOk) { again('historie není připojená'); return; }
+      const rows = await ticker.timeBarReplay({ symbol: CONTRACT, exchange: 'CME', barType: 'MINUTE_BAR', period: 1, fromSec: window.fromSec, toSec: window.lastSec + 120, timeoutMs: 20_000 });
+      const { bars, complete } = repairedBarsFrom(rows, window);
+      if (!complete && attempt < 2 && !pendingRepair) { again('historie svíčku minuty obnovy ještě nemá'); return; }
+      if (!bars.length) { console.log('[svíčky] po obnově cen není co opravit (v historii žádná svíčka z výpadku)'); return; }
+      if (historyCache.bars.length > 0) historyCache = { bars: mergeRepairedBars(historyCache.bars, bars), at: historyCache.at };
+      // `through` = poslední minuta, kterou služba pokládá za dokončenou (stránka nepoužívá hodiny zařízení).
+      broadcast({ type: 'bars', symbol: CONTRACT, bars, through: bars[bars.length - 1].time });
+      console.log(`[svíčky] opraveno ${bars.length} svíček po obnově cen (${new Date(bars[0].time * 1_000).toTimeString().slice(0, 5)}–${new Date(bars[bars.length - 1].time * 1_000).toTimeString().slice(0, 5)})${complete ? '' : ' — minuta obnovy v historii není'}`);
+    } catch (error) {
+      again(error instanceof Error ? error.message : String(error));
+    }
+  }
   /** Po výpadku (uspání počítače, síť) se spojení pro ceny a historii obnoví samo: 5 s, 10 s … nejvýš 60 s. */
   function scheduleFeedRestore(plant: 'ticker' | 'history', delayMs: number): void {
     if (forcedOut || restoring.has(plant)) return;
@@ -362,6 +400,8 @@ async function main(): Promise<void> {
             await ticker.subscribeMarketData(CONTRACT, 'CME');
             feedOpen = true;
             console.log('[ticker] ceny obnoveny');
+            scheduleBarRepair(barRepairWindow(feedGapFrom ?? Date.now(), Date.now()));
+            feedGapFrom = null;
             // Stránky se připojí znovu a dostanou čerstvé svíčky včetně těch z doby výpadku.
             for (const socket of clients) socket.close(4000, 'feed restored');
           } else {
@@ -407,6 +447,7 @@ async function main(): Promise<void> {
       onPlantClosed: (plant, info) => {
         if (plant === 'ticker') {
           feedOpen = false;
+          if (feedGapFrom === null) feedGapFrom = Date.now();
           candles.reset(CONTRACT);
           tickDirty = false;
           lastBar = null;
@@ -443,8 +484,11 @@ async function main(): Promise<void> {
   }
   const ref = await ticker.referenceData(CONTRACT, 'CME');
   const tickSize = ref?.tickSize ?? 0.25;
+  const feedStartedAt = Date.now();
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
+  // I první minuta po startu procesu je z ticků neúplná.
+  scheduleBarRepair(barRepairWindow(feedStartedAt, Date.now()));
 
   // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
   const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);

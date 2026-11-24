@@ -34,3 +34,38 @@ describe('svíčky po znovupřipojení ke službě', () => {
     expect(new Set(merged.map((bar) => bar.time)).size).toBe(merged.length);
   });
 });
+
+describe('patchSeedCandles — opravené svíčky po výpadku cen', () => {
+  const bar = (time: number, open: number) => ({ time, open });
+  const M = (n: number) => 999_000 + n * 60;
+
+  it('nahradí neúplnou dokončenou svíčku správnou z historie', async () => {
+    const { patchSeedCandles } = await import('../lib/rithmicCandleSeed');
+    const current = [bar(M(13), 1), bar(M(14), 26898.25), bar(M(15), 3), bar(M(16), 4)];
+    expect(patchSeedCandles(current, [bar(M(14), 26903.25)], M(14))).toEqual([bar(M(13), 1), bar(M(14), 26903.25), bar(M(15), 3), bar(M(16), 4)]);
+  });
+
+  it('doplní minuty, které z výpadku chybí, a řadu nechá seřazenou', async () => {
+    const { patchSeedCandles } = await import('../lib/rithmicCandleSeed');
+    const current = [bar(M(10), 1), bar(M(14), 9)];
+    expect(patchSeedCandles(current, [bar(M(12), 3), bar(M(11), 2), bar(M(13), 4)], M(13)).map((b) => b.time)).toEqual([M(10), M(11), M(12), M(13), M(14)]);
+  });
+
+  it('co je dokončené, říká služba: minutu za její hranicí nepřepíše (tu skládají ticky)', async () => {
+    const { patchSeedCandles } = await import('../lib/rithmicCandleSeed');
+    const current = [bar(M(15), 1), bar(M(16), 2)];
+    expect(patchSeedCandles(current, [bar(M(16), 777)], M(15))).toEqual(current);
+  });
+
+  it('nezávisí na hodinách zařízení: poslední svíčku grafu opraví, když ji služba označí za dokončenou', async () => {
+    const { patchSeedCandles } = await import('../lib/rithmicCandleSeed');
+    expect(patchSeedCandles([bar(M(13), 1), bar(M(14), 26898.25)], [bar(M(14), 26903.25)], M(14))).toEqual([bar(M(13), 1), bar(M(14), 26903.25)]);
+  });
+
+  it('nepřidává nic před začátek řady, prázdný graf a zprávu bez hranice nechá být', async () => {
+    const { patchSeedCandles } = await import('../lib/rithmicCandleSeed');
+    expect(patchSeedCandles([bar(M(10), 1)], [bar(M(5), 9)], M(9))).toEqual([bar(M(10), 1)]);
+    expect(patchSeedCandles([], [bar(M(5), 9)], M(9))).toEqual([]);
+    expect(patchSeedCandles([bar(M(10), 1), bar(M(11), 2)], [bar(M(10), 9)], Number.NaN)).toEqual([bar(M(10), 1), bar(M(11), 2)]);
+  });
+});

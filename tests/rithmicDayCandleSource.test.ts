@@ -101,6 +101,23 @@ describe('dnešní svíčky deníku z Rithmic služby (jen čtení)', () => {
     expect(t.source.snapshot().candles).toHaveLength(3);
   });
 
+  it('opravené svíčky po výpadku cen (zpráva bars): dokončená minuta se nahradí; cizí kontrakt, zpráva bez hranice a zpráva před úvodní se ignorují', () => {
+    const t = setup();
+    t.handlers().onLink('open');
+    t.handlers().onMessage({ type: 'bars', symbol: 'MNQZ6', through: bar(1).time, bars: [{ ...bar(1), open: 777 }] }); // před úvodní zprávou
+    expect(t.source.snapshot().candles).toEqual([]);
+    t.hello();
+    const before = t.source.snapshot().candles;
+    t.handlers().onMessage({ type: 'bars', symbol: 'MESZ6', through: bar(1).time, bars: [{ ...bar(1), open: 777 }] });
+    t.handlers().onMessage({ type: 'bars', symbol: 'MNQZ6', bars: [{ ...bar(1), open: 777 }] });
+    expect(t.source.snapshot().candles).toBe(before);
+    t.handlers().onMessage({ type: 'bars', symbol: 'MNQZ6', through: bar(1).time, bars: [{ ...bar(1), open: 777 }, { ...bar(2), open: 888 }] });
+    const after = t.source.snapshot().candles;
+    expect(after.find((c) => c.time === bar(1).time)?.open).toBe(777);
+    expect(after.find((c) => c.time === bar(2).time)?.open).toBe(100); // za hranicí služby → beze změny
+    expect(after.map((c) => c.time)).toEqual(before.map((c) => c.time));
+  });
+
   it('druhá úvodní zpráva s historií se se svíčkami spojí; návrat po výpadku graf nezkrátí', () => {
     const t = setup();
     t.handlers().onLink('open');
