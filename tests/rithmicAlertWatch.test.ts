@@ -228,6 +228,12 @@ describe('hlídání upozornění: část v appce', () => {
 
 describe('hlídání upozornění je oddělené od příkazů (INV-UI-01)', () => {
   const source = (path: string) => readFileSync(path, 'utf8');
+  it('služba předává hlídači cenu obchodu z tiku (pole tradePrice — `scripts/` typová kontrola nehlídá)', () => {
+    const server = source('scripts/rithmic/devTradeServer.ts');
+    expect(server).toContain('if (tick.tradePrice !== null) alertWatch?.onTrade(tick.tradePrice, tick.receivedAt, CONTRACT);');
+    expect(source('services/rithmic/rithmicClient.ts')).toMatch(/interface RithmicTick \{[^}]*tradePrice: number \| null;[^}]*receivedAt: number;/s);
+    expect(server).not.toMatch(/tick\.price\b/);
+  });
   it('hlídač neimportuje nic z obchodní části služby a zprávy o upozorněních nejsou sledovaný příkaz', () => {
     const watch = source('services/rithmic/alertWatch.ts');
     expect(watch).not.toMatch(/from '\.\/(localExec|rithmicBroker|rithmicClient|rithmicProtection)/);
