@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: větev služby Rithmic v main (4c18fd86, web NASAZEN)
+
+- Na výslovný pokyn Filipa pushnuta `claude/rithmic-service-20261125` do main (`f10453a8..4c18fd86`). Main teď obsahuje i kód, ze kterého služba běží: Touch ID převzetí souhlasu, teplá historie a sdílená telefonní session, deník příkazů, zavření pozice × z telefonu, Rithmic graf na produkčním webu (jen PC prohlížeč).
+- Před pushem: celá sada (4099 testů; `backupNightlyGate` jednou vypršel na čas v plné sadě, samostatně prošel), `tsc` bez chyb vč. služby (dočasný `tsconfig.service-check.json`), `npm run build` OK. Critic k merge větve: OK s výhradami (viz zápis o spojení větve s main).
+- Služba se nerestartovala (běží z `bdb8aeac`, rozdíl proti main je jen dokumentace). iPhone zůstává na buildu z `09d28b73` — změny telefonu z této větve v něm nejsou, dokud se nepřestaví.
+- Alerty: Filip potvrdil, že okamžitá karta cinká hned a rychlost (~0,5 s do přijetí Applem) stačí; přímé odesílání APNs z Macu se nestaví.
+
 ### 2026-11-25 — Claude: zrychlení cesty alertu do iPhonu — předem navázané spojení k Applu, předehřátí ze služby (NENASAZENO)
 
 - Oprava předchozího zápisu: arn1 POMOHLO. Měření z logu funkce (7 spuštění 16:08–16:20): obchod → server 230–440 ms, RPC 35–200 ms, čtení před odesláním 110–280 ms, volání APNs 350–500 ms → obchod → Apple přijal ≈ 0,9–1,1 s (před arn1 ~2–2,5 s). Vzorek 15:32 (2,5 s) byl studený start po nasazení; sandbox APNs není pomalý. Poučení: nesoudit z jednoho vzorku.
