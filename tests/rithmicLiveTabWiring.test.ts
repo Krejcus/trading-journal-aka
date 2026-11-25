@@ -357,7 +357,9 @@ describe('hook místního procesu', () => {
 
   it('noční změny 17./18. 11.: šipky z vyplnění, přikoupení Limitem jen na testu, samočinné zrušení až po potvrzení účtu, varování před koncem seance', () => {
     // šipky vstupu a výstupu: data ze služby (`marks`), do grafu jen jako zobrazení
-    expect(hook).toMatch(/const liveFills = useMemo\(\(\) => liveChartFills\(marks && marks\.fills\.length \? \{ fills: marks\.fills, open: marks\.open, symbol \} : null\)/);
+    expect(hook).toMatch(/const liveFills = useMemo\(\(\) => liveChartFills\(marks && marks\.fills\.length \? \{ fills: marks\.fills, open: marks\.open, symbol, past: pastMarks\.map\(\(item\) => item\.fills\) \} : null\)/);
+    // dřívější obchody: jen ZAVŘENÉ záznamy téhož kontraktu za prvním (25. 11. 2026)
+    expect(hook).toMatch(/const pastMarks = symbolMarks\.slice\(1\)\.filter\(\(item\) => item\.open === false && item\.fills\.length > 0\)/);
     expect(chart).toMatch(/liveFills=\{trading\.liveFills\}/);
     // čekající přikoupení Limitem, dělení vstupu, výměna nohy za pár a víc částí: Rithmic Test vždy; skutečný účet jen
     // v obchodním režimu (opsaná věta), nikdy jen pro čtení ani jen pro zavírání — Filip schválil 19. 11. pro test na Lucidu

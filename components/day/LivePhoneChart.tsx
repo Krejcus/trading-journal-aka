@@ -81,6 +81,8 @@ export interface LivePhoneChartSlots {
   fills?: readonly LiveFillMarker[];
   /** Obchod plnění je otevřený (šipky bez výstupu). */
   fillsOpen?: boolean;
+  /** Dřívější zavřené obchody téhož kontraktu — jen šipky (bez zvuku). */
+  fillsPast?: readonly (readonly LiveFillMarker[])[];
   /** Kontrakt plnění (`MNQZ6`) — šipky jen nad stejným kontraktem grafu. */
   fillsSymbol?: string;
   /** Kdo hlídá upozornění (text do seznamu); null = zatím nikdo. */
@@ -140,7 +142,7 @@ const CANCEL_PENDING_CHIP_SPACE = 38;
 interface PhoneOrder { key: number; draft: TicketDraft; mode: 'sheet' | 'chart'; template: boolean }
 
 /** Šipky plnění (hook uvnitř vrstvy grafu, kde je API panelu). */
-function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean }) {
+function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; past?: readonly (readonly LiveFillMarker[])[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean }) {
   useLiveFillArrows(props);
   return null;
 }
@@ -375,6 +377,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const chartContract = marketSlot?.contract ?? null;
   const shownFills = useMemo(() => (ctl.isToday && slots.fillsSymbol != null && slots.fillsSymbol === chartContract
     ? liveFillsNotInJournal(slots.fills ?? NO_FILLS, journalFillIds) : NO_FILLS), [ctl.isToday, slots.fills, slots.fillsSymbol, chartContract, journalFillIds]);
+  const shownPastFills = useMemo(() => (ctl.isToday && slots.fillsSymbol != null && slots.fillsSymbol === chartContract
+    ? (slots.fillsPast ?? []).map(trade => liveFillsNotInJournal(trade, journalFillIds)).filter(trade => trade.length > 0) : []), [ctl.isToday, slots.fillsPast, slots.fillsSymbol, chartContract, journalFillIds]);
   // Pojistky utažení SL a BE jako PC (LiveTradingScreen.guardSummaryAt): bez ceny z P&L brokera
   // čerstvá kotace služby téhož kontraktu (≤ 3 s). Jen blokuje, nic neautorizuje (INV-UI-04).
   const guardAt = useCallback((at: number) => (chartPosition.summary
@@ -755,7 +759,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         </> : null),
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>
-          <LiveFillArrows api={api} fills={shownFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && shownFills.length > 0} isDark={isDark} />
+          <LiveFillArrows api={api} fills={shownFills} past={shownPastFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && (shownFills.length > 0 || shownPastFills.length > 0)} isDark={isDark} />
           {!replay && <LivePhoneWorkingBadges badges={working.badges} top={(positionBarShown(replay) ? BELOW_POSITION_BAR : 8) + (cancelPendingChip ? CANCEL_PENDING_CHIP_SPACE : 0)} />}
           {/* C7: „Zrušit čekající“ jen s pohledem desku a mimo přehrávání; sdílený zámek čar. */}
           {!replay && cancelPendingChip && trade?.cancelPending && trade.cancelPendingEntries && <LivePhoneCancelPendingChip

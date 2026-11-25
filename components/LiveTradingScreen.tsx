@@ -764,7 +764,7 @@ const LiveTradingScreen: React.FC<Props> = ({
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
   const shownFills = useMemo(() => (liveFills && liveFills.fills.length > 0 && liveFills.symbol != null && liveFills.symbol === chartContract
-    ? { key: liveFills.key, fills: liveFills.fills, open: liveFills.open }
+    ? { key: liveFills.key, fills: liveFills.fills, open: liveFills.open, ...(liveFills.past ? { past: liveFills.past } : {}) }
     : null), [chartContract, liveFills]);
   const shownWorking = workingOrders && workingOrders.contract != null && workingOrders.contract === chartContract
     && (workingOrders.lines.length > 0 || workingOrders.badges.length > 0) ? workingOrders : null;

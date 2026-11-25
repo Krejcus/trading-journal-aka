@@ -13,10 +13,13 @@ const TAP_MS = 450;
  * deníku (primitiva deníku). Klepnutí na šipku ji zvýrazní a ukáže přesnou
  * cenu ve svíčce (čárka + tečka, spojnice, štítek s časem, cena na ose);
  * klepnutí jinam výběr zruší. Překreslí se jen s novým plněním nebo svíčkou.
+ * `past` = dřívější zavřené obchody, každý jako vlastní vrstva (25. 11. 2026) —
+ * dřív zůstaly v grafu jen šipky posledního obchodu.
  */
-export function useLiveFillArrows({ api, fills, open, candles, intervalSeconds, enabled, isDark }: {
+export function useLiveFillArrows({ api, fills, past, open, candles, intervalSeconds, enabled, isDark }: {
   api: ChartViewApi | null;
   fills: readonly LiveFillMarker[];
+  past?: readonly (readonly LiveFillMarker[])[];
   open: boolean;
   candles: readonly MarketCandle[];
   intervalSeconds: number;
@@ -27,27 +30,38 @@ export function useLiveFillArrows({ api, fills, open, candles, intervalSeconds, 
   candlesRef.current = candles;
   const fillsRef = useRef(fills);
   fillsRef.current = fills;
-  const fillKey = liveFillKey(fills);
+  const pastRef = useRef(past);
+  pastRef.current = past;
+  const fillKey = [liveFillKey(fills), ...(past ?? []).map(liveFillKey)].join('/');
+  const hasFills = fills.length > 0 || (past ?? []).some(trade => trade.length > 0);
   // Nová svíčka mění promítnutí času na svíčky; tick v téže svíčce ne.
   const candleKey = `${candles.length}:${candles[0]?.time ?? 0}`;
   useEffect(() => {
-    if (!api || !enabled || !fillKey || !candlesRef.current.length) return undefined;
-    const history = liveFillHistory(fillsRef.current, open);
-    if (!history) return undefined;
+    if (!api || !enabled || !hasFills || !candlesRef.current.length) return undefined;
+    // Poslední (případně otevřený) obchod + dřívější zavřené; každý obchod = vlastní historie a primitiva.
+    const histories = [liveFillHistory(fillsRef.current, open), ...(pastRef.current ?? []).map(trade => liveFillHistory(trade, false))]
+      .filter((history): history is NonNullable<typeof history> => history !== null);
+    if (!histories.length) return undefined;
     let series: ISeriesApi<'Candlestick'>;
-    let primitive: JournalChartPrimitive;
     let element: HTMLElement;
+    const primitives: JournalChartPrimitive[] = [];
     try {
       const chart = api.controller.getChart();
       series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
       element = chart.chartElement();
-      const firstEntry = history.fills.find(fill => fill.role === 'entry');
-      primitive = createJournalChartPrimitive(history, candlesRef.current, intervalSeconds, chart, series, undefined, {
-        direction: firstEntry?.side === 'Sell' ? 'Short' : 'Long',
-        resultBox: false, hideResultLabel: true, isDark, pointValue: 2, instrument: 'MNQ',
-      });
-      series.attachPrimitive(primitive);
-    } catch { return undefined; }
+      for (const history of histories) {
+        const firstEntry = history.fills.find(fill => fill.role === 'entry');
+        const primitive = createJournalChartPrimitive(history, candlesRef.current, intervalSeconds, chart, series, undefined, {
+          direction: firstEntry?.side === 'Sell' ? 'Short' : 'Long',
+          resultBox: false, hideResultLabel: true, isDark, pointValue: 2, instrument: 'MNQ',
+        });
+        series.attachPrimitive(primitive);
+        primitives.push(primitive);
+      }
+    } catch {
+      for (const primitive of primitives) { try { series!.detachPrimitive(primitive); } catch { /* graf už je pryč */ } }
+      return undefined;
+    }
     // Klepnutí (krátký dotyk bez posunu) = najetí kurzorem na tom bodě. Až po
     // zpracování dotyku grafem (ten na klepnutí schová crosshair a zrušil by výběr).
     let down: { x: number; y: number; at: number } | null = null;
@@ -60,7 +74,7 @@ export function useLiveFillArrows({ api, fills, open, candles, intervalSeconds, 
       const rect = element.getBoundingClientRect();
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => primitive.hoverAt(point), 40);
+      timer = window.setTimeout(() => { for (const primitive of primitives) primitive.hoverAt(point); }, 40);
     };
     element.addEventListener('pointerdown', onDown);
     element.addEventListener('pointerup', onUp);
@@ -68,7 +82,7 @@ export function useLiveFillArrows({ api, fills, open, candles, intervalSeconds, 
       window.clearTimeout(timer);
       element.removeEventListener('pointerdown', onDown);
       element.removeEventListener('pointerup', onUp);
-      try { series.detachPrimitive(primitive); } catch { /* graf už je pryč */ }
+      for (const primitive of primitives) { try { series.detachPrimitive(primitive); } catch { /* graf už je pryč */ } }
     };
-  }, [api, enabled, fillKey, candleKey, open, intervalSeconds, isDark]);
+  }, [api, enabled, hasFills, fillKey, candleKey, open, intervalSeconds, isDark]);
 }

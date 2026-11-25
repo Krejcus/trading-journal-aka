@@ -270,17 +270,21 @@ export interface LiveChartFills {
   open: boolean | undefined;
   /** Kontrakt plnění (`MNQZ6`) — šipky jen nad stejným kontraktem grafu. */
   symbol?: string;
+  /** Dřívější ZAVŘENÉ obchody téhož kontraktu (každý zvlášť), jen šipky — nikdy zvuk ani příkaz. */
+  past?: readonly (readonly LiveFillMarker[])[];
 }
 
 /** Výstup `liveFillMarkersFromStatus` s obsahovým klíčem; bez šipek = prázdný pohled (`key: 'none'`). */
-export function liveChartFills(input: { fills: readonly LiveFillMarker[]; open: boolean | undefined; symbol?: string } | null | undefined): LiveChartFills {
+export function liveChartFills(input: { fills: readonly LiveFillMarker[]; open: boolean | undefined; symbol?: string; past?: readonly (readonly LiveFillMarker[])[] } | null | undefined): LiveChartFills {
   const fills = input?.fills ?? [];
   if (fills.length === 0) return { key: 'none', fills: [], open: undefined };
+  const past = (input?.past ?? []).filter((trade) => trade.length > 0);
   return {
-    key: JSON.stringify([input?.symbol ?? null, input?.open ?? null, fills]),
+    key: JSON.stringify(past.length ? [input?.symbol ?? null, input?.open ?? null, fills, past] : [input?.symbol ?? null, input?.open ?? null, fills]),
     fills,
     open: input?.open,
     ...(input?.symbol ? { symbol: input.symbol } : {}),
+    ...(past.length ? { past } : {}),
   };
 }
 

@@ -147,6 +147,9 @@ export interface LocalExecState {
   marks: Array<{ symbol: string; open: boolean; fills: LocalExecFillMark[] }>;
 }
 
+/** Kolik dřívějších zavřených obchodů si služba drží pro šipky v grafu (na kontrakt). */
+const PAST_MARK_TRADES = 40;
+const PAST_MARK_MAX_AGE_MS = 20 * 60 * 60 * 1000;
 export interface LocalExecFillMark { id: string; orderId: string; at: number; price: number; side: OrderSide; role: 'entry' | 'exit'; quantity: number }
 
 /** Zavřený obchod: průměry z vyplnění, výsledek v bodech × kusech (bez poplatků). `reason` jen když je jistý. */
@@ -283,11 +286,14 @@ export class LocalExec {
     if (trip.seen.has(fill.fillId)) return;
     if (trip.net === 0) trip.sign = Math.sign(signed) as 1 | -1;
     trip.seen.add(fill.fillId);
-    // Šipky v grafu: nový obchod (z nuly) smaže šipky předchozího; vyplnění ve směru obchodu = vstup, proti = výstup.
-    if (trip.net === 0) this.marks.set(fill.symbol, { open: true, fills: [] });
-    const mark = this.marks.get(fill.symbol) ?? { open: true, fills: [] };
+    // Šipky v grafu: nový obchod (z nuly) odloží šipky předchozího mezi dřívější obchody (25. 11. 2026 — dřív je
+    // smazal a v grafu zůstal jen poslední obchod); vyplnění ve směru obchodu = vstup, proti = výstup.
+    // `whole` = záznam začal z POTVRZENÉ nuly a nic z něj nevypadlo; jen takový se smí odložit jako celý obchod
+    // (po mezeře nebo restartu s otevřenou pozicí začíná záznam uprostřed — půlka obchodu by se tvářila jako celá).
+    if (trip.net === 0) { this.shelveMark(fill.symbol); this.marks.set(fill.symbol, { open: true, fills: [], whole: trip.known }); }
+    const mark = this.marks.get(fill.symbol) ?? { open: true, fills: [], whole: false };
     mark.fills.push({ id: fill.fillId, orderId: fill.brokerOrderId, at: fill.filledAt, price: fill.price, side: fill.side, role: Math.sign(signed) === trip.sign ? 'entry' : 'exit', quantity: fill.quantity });
-    if (mark.fills.length > 60) mark.fills.shift();
+    if (mark.fills.length > 60) { mark.fills.shift(); mark.whole = false; }
     mark.open = trip.net + signed !== 0;
     this.marks.set(fill.symbol, mark);
     const next = trip.net + signed;
@@ -407,6 +413,7 @@ export class LocalExec {
           this.loadedCloseAccount = name;
           this.pendingClose.clear();
           this.closes.length = 0;
+          this.pastMarks.clear(); // šipky jiného účtu do grafu nepatří
           try {
             const saved = this.config.closeStore?.load(name);
             for (const close of saved?.closed ?? []) this.publishClose(close);
@@ -428,6 +435,8 @@ export class LocalExec {
           this.positions.set(position.symbol, { netQuantity: position.netQuantity, ...(average !== null ? { averagePrice: average } : {}) });
         }
         // Šipky v grafu: v mezeře se obchod mohl zavřít — staré šipky by tvrdily, že je otevřený.
+        // Zavřené obchody (celé, s výstupem) v grafu zůstávají jako dřívější.
+        for (const symbol of [...this.marks.keys()]) this.shelveMark(symbol);
         this.marks.clear();
       }
     } else if (event.type === 'fill') this.onFill(event.fill);
@@ -451,7 +460,21 @@ export class LocalExec {
   /** Rozpracovaný obchod složený z vyplnění (jen pro kartu zavření). `known` = vstupní cena je celá podložená. */
   private readonly trips = new Map<string, { net: number; sign: 1 | -1; inQty: number; inValue: number; outQty: number; outValue: number; known: boolean; seen: Set<string> }>();
   private readonly closes: LocalExecClose[] = [];
-  private readonly marks = new Map<string, { open: boolean; fills: LocalExecFillMark[] }>();
+  private readonly marks = new Map<string, { open: boolean; fills: LocalExecFillMark[]; whole: boolean }>();
+  /** Šipky dřívějších ZAVŘENÝCH obchodů od startu služby, nejnovější první. Jen zobrazení. */
+  private readonly pastMarks = new Map<string, LocalExecFillMark[][]>();
+  /** Zavřený obchod odloží mezi dřívější; otevřený (nebo prázdný) ne — po mezeře by tvrdil, že je celý. */
+  private shelveMark(symbol: string): void {
+    const mark = this.marks.get(symbol);
+    if (!mark || mark.open || !mark.whole || mark.fills.length === 0) return;
+    // Jen obchody posledních 20 hodin — služba běžící přes noc nekreslí včerejšek.
+    const newest = mark.fills[mark.fills.length - 1].at;
+    const past = (this.pastMarks.get(symbol) ?? []).filter((trade) => newest - trade[trade.length - 1].at < PAST_MARK_MAX_AGE_MS);
+    past.unshift([...mark.fills]);
+    if (past.length > PAST_MARK_TRADES) past.length = PAST_MARK_TRADES;
+    this.pastMarks.set(symbol, past);
+    this.marks.delete(symbol);
+  }
   /** Kolikrát služba poslala zavření kontraktu — výměna vstupu si číslo pamatuje a po brzdě nepokračuje. */
   private readonly flattenCount = new Map<string, number>();
   private consentWatchAt = 0;
@@ -755,7 +778,12 @@ export class LocalExec {
       brackets: accountId === null ? [] : brackets.filter((b) => !b.closed).map((b) => ({ entryId: b.entryId, symbol: b.symbol, ...this.broker.bracketState(accountId, b.entryId) })),
       incidents: [...this.incidents],
       closes: [...this.closes],
-      marks: [...this.marks].map(([symbol, mark]) => ({ symbol, open: mark.open, fills: [...mark.fills] })),
+      // Pořadí: nejdřív poslední (nebo otevřený) obchod každého kontraktu, pak dřívější zavřené od nejnovějšího —
+      // starší appka bere první záznam kontraktu a kreslí jako dřív jen poslední obchod.
+      marks: [
+        ...[...this.marks].map(([symbol, mark]) => ({ symbol, open: mark.open, fills: [...mark.fills] })),
+        ...[...this.pastMarks].flatMap(([symbol, trades]) => trades.map((fills) => ({ symbol, open: false, fills: [...fills] }))),
+      ],
       rejections: [...this.rejections],
       blocked: this.blocked,
       maxParts: this.maxParts(),

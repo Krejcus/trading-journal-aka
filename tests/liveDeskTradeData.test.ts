@@ -172,3 +172,21 @@ describe('B1: obálka PC grafu propouští nové podklady a porovnává je', () 
     expect(comparator).toMatch(/\(left\.liveFills\?\.key \?\? 'none'\) === \(right\.liveFills\?\.key \?\? 'none'\)/);
   });
 });
+
+describe('šipky dřívějších obchodů v LIVE grafu (25. 11. 2026)', () => {
+  const fill = (id: string, role: 'entry' | 'exit', price: number) => ({ id, orderId: `o-${id}`, at: 1_000, price, side: role === 'entry' ? 'Buy' as const : 'Sell' as const, role, quantity: 1 });
+  it('dřívější zavřené obchody jdou do pohledu zvlášť a mění klíč překreslení', async () => {
+    const { liveChartFills } = await import('../hooks/useLiveChartData');
+    const current = [fill('c1', 'entry', 100)];
+    const alone = liveChartFills({ fills: current, open: true, symbol: 'MNQZ6' });
+    const withPast = liveChartFills({ fills: current, open: true, symbol: 'MNQZ6', past: [[fill('p1', 'entry', 90), fill('p2', 'exit', 95)], []] });
+    expect(alone.past).toBeUndefined();
+    expect(withPast.past).toHaveLength(1); // prázdný obchod se zahodí
+    expect(withPast.fills).toEqual(current); // zvuk a „otevřeno" dál jen z posledního obchodu
+    expect(withPast.key).not.toBe(alone.key);
+  });
+  it('bez posledního obchodu se nekreslí nic (ani dřívější)', async () => {
+    const { liveChartFills } = await import('../hooks/useLiveChartData');
+    expect(liveChartFills({ fills: [], open: undefined, past: [[fill('p1', 'entry', 90)]] })).toEqual({ key: 'none', fills: [], open: undefined });
+  });
+});

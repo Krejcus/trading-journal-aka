@@ -354,7 +354,7 @@ export interface LiveOrderEntryBridge {
    */
   onReplayActiveChange?: (active: boolean) => void;
   /** U4: šipky plnění leadera (jen kontrakt grafu, jen zobrazení — nikdy do příkazů). */
-  liveFills?: { key: string; fills: readonly LiveFillMarker[]; open: boolean | undefined } | null;
+  liveFills?: { key: string; fills: readonly LiveFillMarker[]; open: boolean | undefined; past?: readonly (readonly LiveFillMarker[])[] } | null;
   /**
    * U5: pracující příkazy mimo spravovaný obchod a rozjeté nohy SL/TP — JEN ZOBRAZENÍ.
    * Kreslí je vlastní vrstva bez jakéhokoli ovládání (tečkovaně, s tooltipem); do overlaye
@@ -1102,6 +1102,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   useLiveFillArrows({
     api: chartApi,
     fills: liveFills?.fills ?? NO_LIVE_FILLS,
+    past: liveFills?.past,
     open: liveFills?.open === true,
     candles,
     intervalSeconds: timeframeMinutes(config.timeframe) * 60,

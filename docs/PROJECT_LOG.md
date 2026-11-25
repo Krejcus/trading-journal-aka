@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: šipky všech obchodů v LIVE grafu, ne jen posledního (NENASAZENO)
+
+- Hlášení Filipa: šipky vstupu/výstupu jsou vidět jen u posledního obchodu, další obchod je přepíše. Příčina: služba (`services/rithmic/localExec.ts`) při novém obchodu z nuly šipky kontraktu schválně smazala.
+- Nově služba zavřený obchod odloží mezi dřívější (`pastMarks`, nejvýš 40 na kontrakt, 20 hodin, jen paměť — restart služby je smaže). `state().marks` = nejdřív poslední/otevřený obchod, pak dřívější zavřené; starší appka bere první záznam a kreslí jako dřív.
+- Klient: `LiveChartFills.past`, `useLiveFillArrows` kreslí každý obchod vlastní primitivou (PC i telefon). Zvuk při vyplnění dál jen z posledního obchodu; pojistka „šipky jen se známým stavem obchodu“ zůstala. Jen zobrazení (INV-UI-01, INV-UI-03).
+- Critic: OPRAVIT PŘED COMMITEM → opraveno: odkládá se jen obchod, který začal z potvrzené nuly a nic z něj nevypadlo (po výpadku spojení nebo restartu s otevřenou pozicí by se půlka obchodu tvářila jako celá — test s výpadkem), změna účtu dřívější šipky maže. Druhé kolo critica neproběhlo.
+- Ověřeno: celá sada (4104), `tsc` web i služba, lokální simulace (dva obchody po sobě, šipky obou v grafu). Neověřeno: skutečný účet, telefon, reverz jedním vyplněním (kreslí se jako jeden obchod, původní chování).
+- Nasazení má tři části: web (push), restart služby Filipem (`lucid.sh obnovit`), iPhone build.
+
 ### 2026-11-25 — Claude: větev služby Rithmic v main (4c18fd86, web NASAZEN)
 
 - Na výslovný pokyn Filipa pushnuta `claude/rithmic-service-20261125` do main (`f10453a8..4c18fd86`). Main teď obsahuje i kód, ze kterého služba běží: Touch ID převzetí souhlasu, teplá historie a sdílená telefonní session, deník příkazů, zavření pozice × z telefonu, Rithmic graf na produkčním webu (jen PC prohlížeč).

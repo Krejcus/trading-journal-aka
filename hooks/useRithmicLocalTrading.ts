@@ -831,9 +831,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const standalone = orders.filter((order) => order.status === 'working' && order.tag?.startsWith('uiprot-') === true);
   const legsRemovable = standalone.length === 1 && orders.filter((order) => order.status === 'working' && (order.role === 'stop' || order.role === 'target')).length === 1;
   // Šipky vstupu a výstupu v grafu z vyplnění brokera (poslední nebo právě otevřený obchod). Jen zobrazení.
-  const marks = state?.marks?.find((item) => item.symbol === symbol) ?? null;
-  const marksKey = marks ? `${marks.open}:${marks.fills.map((fill) => `${fill.id}@${fill.price}`).join('|')}` : 'none';
-  const liveFills = useMemo(() => liveChartFills(marks && marks.fills.length ? { fills: marks.fills, open: marks.open, symbol } : null), [marksKey, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
+  // První záznam kontraktu = poslední/otevřený obchod, další = dřívější zavřené (služba od 25. 11. 2026).
+  const symbolMarks = state?.marks?.filter((item) => item.symbol === symbol) ?? [];
+  const marks = symbolMarks[0] ?? null;
+  const pastMarks = symbolMarks.slice(1).filter((item) => item.open === false && item.fills.length > 0);
+  const marksKey = marks ? `${marks.open}:${[marks, ...pastMarks].map((item) => item.fills.map((fill) => `${fill.id}@${fill.price}`).join('|')).join('/')}` : 'none';
+  const liveFills = useMemo(() => liveChartFills(marks && marks.fills.length ? { fills: marks.fills, open: marks.open, symbol, past: pastMarks.map((item) => item.fills) } : null), [marksKey, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
     alertWatch, sendAlertCommand, onAlertFired,
     liveFills,

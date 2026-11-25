@@ -803,6 +803,62 @@ describe('místní služba: výsledek zavřeného obchodu z vyplnění (jen zobr
     expect(t.exec.state().marks).toEqual([{ symbol: 'ESZ6', open: false, fills: [expect.objectContaining({ role: 'entry', side: 'Buy', price: 6990, quantity: 1 }), expect.objectContaining({ role: 'exit', side: 'Sell', price: 6980, quantity: 1 })] }]);
     t.broker.stop();
   });
+
+  it('šipky: nový obchod předchozí nesmaže — poslední je první, dřívější zavřené za ním (25. 11. 2026)', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    t.server.fill(t.exec.state().orders.find((o) => o.role === 'stop' && o.status === 'working')!.orderId, 6980);
+    await sleep(120);
+    expect(t.exec.state().closes).toHaveLength(1);
+    const second = await t.run(entry({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7030 }));
+    await flush();
+    t.server.fill((second as { result: { orderId: string } }).result.orderId, 6985);
+    await sleep(120);
+    const marks = t.exec.state().marks;
+    expect(marks).toHaveLength(2);
+    // první záznam kontraktu = právě otevřený obchod (starší appka bere jen ten)
+    expect(marks[0]).toMatchObject({ symbol: 'ESZ6', open: true, fills: [expect.objectContaining({ role: 'entry', price: 6985 })] });
+    expect(marks[0].fills).toHaveLength(1);
+    expect(marks[1]).toMatchObject({ symbol: 'ESZ6', open: false, fills: [expect.objectContaining({ role: 'entry', price: 6990 }), expect.objectContaining({ role: 'exit', price: 6980 })] });
+    t.broker.stop();
+  });
+
+  it('šipky: obchod, do kterého spadl výpadek spojení, se mezi dřívější nedostane (půlka by se tvářila jako celá)', async () => {
+    const t = await setup({ config: { positionSettleMs: 20 } });
+    try {
+      // 1. obchod celý: po výpadku zůstane jako dřívější
+      const first = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7030 }));
+      await flush();
+      t.server.fill((first as { result: { orderId: string } }).result.orderId, 6990);
+      await sleep(120);
+      t.server.fill(t.exec.state().orders.find((o) => o.role === 'stop' && o.status === 'working')!.orderId, 6980);
+      await sleep(120);
+      // 2. obchod otevřený, pak výpadek
+      const second = await t.run(entry({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7030 }));
+      await flush();
+      t.server.fill((second as { result: { orderId: string } }).result.orderId, 6985);
+      await sleep(120);
+      t.server.sockets.find(s => s.readyState === 1 && s.infra === 2)!.drop();
+      await sleep(220);
+      expect(t.broker.isConnected()).toBe(true);
+      // otevřený obchod po mezeře šipky nemá; celý první zůstal (zavřený)
+      expect(t.exec.state().marks).toEqual([{ symbol: 'ESZ6', open: false, fills: [expect.objectContaining({ price: 6990 }), expect.objectContaining({ price: 6980 })] }]);
+      // výstup 2. obchodu po mezeře = záznam bez vstupu
+      t.server.fill(t.exec.state().orders.find((o) => o.role === 'stop' && o.status === 'working')!.orderId, 6975);
+      await sleep(120);
+      // 3. obchod z nuly: neúplný 2. se NEodloží, dřívější zůstává jen první
+      const third = await t.run(entry({ limitPrice: 6970, stopPrice: 6960, targetPrice: 7030 }));
+      await flush();
+      t.server.fill((third as { result: { orderId: string } }).result.orderId, 6970);
+      await sleep(120);
+      const marks = t.exec.state().marks;
+      expect(marks[0]).toMatchObject({ open: true, fills: [expect.objectContaining({ role: 'entry', price: 6970 })] });
+      expect(marks.slice(1)).toEqual([{ symbol: 'ESZ6', open: false, fills: [expect.objectContaining({ price: 6990 }), expect.objectContaining({ price: 6980 })] }]);
+    } finally { t.exec.detach(); t.broker.stop(); }
+  });
 });
 
 describe('místní služba: výsledek zavření jen s potvrzenou nulovou pozicí', () => {

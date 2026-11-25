@@ -362,6 +362,7 @@ const PhoneChartView: React.FC<Props & { session: ReturnType<typeof usePhoneSess
         copyEvents: trading.events,
         copierArmed: false,
         fills: trading.liveFills.fills,
+        fillsPast: trading.liveFills.past,
         fillsOpen: trading.liveFills.open,
         fillsSymbol: trading.liveFills.symbol,
         // Příkazy zadané jinde: jen čáry pro zobrazení, nikdy do mostu příkazů.

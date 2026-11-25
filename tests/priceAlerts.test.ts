@@ -165,7 +165,7 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
   });
 
   it('šipky jen se známým stavem obchodu (neznámý = schované)', () => {
-    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/enabled=\{!replay && slots\.fillsOpen != null && shownFills\.length > 0\}/);
+    expect(readFileSync('components/day/LivePhoneChart.tsx', 'utf8')).toMatch(/enabled=\{!replay && slots\.fillsOpen != null && \(shownFills\.length > 0 \|\| shownPastFills\.length > 0\)\}/);
   });
 });
 
