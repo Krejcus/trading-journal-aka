@@ -2,7 +2,7 @@
  * Místní služba nad Rithmic adaptérem: validace příkazů z appky (nic se tiše nedomýšlí ani
  * nezaokrouhluje), stropy, idempotence přes restart, zastavení po kritickém incidentu.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   RithmicAccountRegistry,
   type RithmicAccountRegistryEntry,
@@ -58,6 +58,21 @@ async function setup(options: { server?: Server; registryStore?: RithmicAccountR
 }
 
 const entry = (extra: Record<string, unknown> = {}) => ({ op: 'entry', clientId: `c${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 6990, stopPrice: 6980, targetPrice: 7010, ...extra });
+
+it('údržba: vyžaduje flat potvrzené exekucemi i pozicí a odmítá pracující vstup', async () => {
+  const t = await setup();
+  try {
+    expect(t.exec!.canRestart('ESZ6')).toBe(true);
+    const net = vi.spyOn(t.broker, 'executionNet').mockReturnValueOnce(null).mockReturnValueOnce(1);
+    expect(t.exec!.canRestart('ESZ6')).toBe(false);
+    expect(t.exec!.canRestart('ESZ6')).toBe(false);
+    net.mockRestore();
+    vi.spyOn(t.broker, 'hasPendingWrites').mockReturnValueOnce(true);
+    expect(t.exec!.canRestart('ESZ6')).toBe(false);
+    expect((await t.run(entry())).ok).toBe(true);
+    expect(t.exec!.canRestart('ESZ6')).toBe(false);
+  } finally { t.broker.stop(); }
+});
 
 describe('místní služba: opakované přikoupení (víc než dvě části) a přikoupení do pozice bez SL/TP', () => {
   const fillOf = async (t: Awaited<ReturnType<typeof setup>>, reply: unknown, price: number) => {

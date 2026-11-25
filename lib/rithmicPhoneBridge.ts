@@ -101,6 +101,7 @@ export function rithmicPhoneBridge(input: RithmicPhoneBridgeInput): LivePhoneTra
     moveBareEntry: true,
     manage: (action, expectPrice, newPrice) => input.onManageEntry(action, expectPrice, newPrice),
     closeSupported: true,
+    closeWithoutStop: true,
     entryAvg: input.averagePrice,
     scaleIn: input.scaleIn,
     leaderAccountId: input.soloAccountId,

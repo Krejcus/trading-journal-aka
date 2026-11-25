@@ -288,6 +288,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: alerty a oprava svíček NASAZENY (web + iPhone 537c0d47); větev služby spojena s main
+
+- Web: push main 537c0d47, Vercel READY, `/api/price-alerts/watch` bez tokenu vrací 401. iPhone: build z 537c0d47 nainstalován přes stávající appku (bez odinstalace, přihlášení i spárování zůstává).
+- Zjištění: služba nad Lucidem běží z větve `claude/rithmic-night-20261117` (6a2ad307), která má 8 commitů mimo main (Touch ID převzetí běhu, zahřátí historie a sdílená telefonní session, `hasPendingWrites`, deník příkazů, zavření × z telefonu bez SL). Pouhý přechod služby na main by je ztratil.
+- Řešení: větev `claude/rithmic-service-20261125` = main + merge té větve (worktree `~/alphatrade-worktrees/rithmic-service`). Konflikty: `rithmicBroker.ts` (obě metody), `devTradeServer.ts` (alerty + oprava svíček vedle převzetí běhu), `rithmicCandleSeed.ts`, `RithmicPhoneChart.tsx` (sdílená session + alerty + lišta účtu). tsc čisté, 4064 testů zelených.
+- Critic (`copier-design-critic`): OPRAVIT PŘED COMMITEM kvůli nenastageovanému testu (opraveno), jinak OK S VÝHRADAMI. Ověřil, že obchodní cesta služby se proti 6a2ad307 nezměnila (`localExec`, `orderJournal`, `lucidHandoff`, ochrana beze změny; v `devTradeServer.ts` přibyly jen alerty, oprava svíček a `pnl`). Výhrady (jen zobrazení/oznámení): rozpracované čtení historie může přepsat opravenou svíčku v cache; změna alertů těsně před převzetím se nemusí uložit (appka ji pošle znovu); alerty smí poslat i zařízení s rozsahem jen pro čtení; chybí testy chování pořadí zpráv a souběhu opravy s historií.
+- NENASAZENO / NEOVĚŘENO: spojená větev není v main (klientské části 8 commitů — sdílená telefonní session, rychlejší reconnect — tedy nejsou na webu ani v iPhonu). Služba se z ní spustí až restartem, který dělá jen Filip (`scripts/rithmic/lucid.sh obnovit`). Naživo neověřeno: převzetí běhu ze 6a2ad307, alerty na Lucidu, oprava svíček po skutečném výpadku.
+
 ### 2026-11-25 — Claude: upozornění na cenu hlídá služba Rithmic; oprava svíček po výpadku cen (NENASAZENO)
 
 - Lokální commity ve větvi `claude/remove-tradovate-20261123` nad main: f7cf3266 (svíčky) + commit upozornění. Nic není pushnuto; služba nad skutečným účtem běží dál ve staré verzi z `~/alphatrade-worktrees/rithmic` (6a2ad307) — restart dělá jen Filip a ten checkout je před tím potřeba aktualizovat.
@@ -420,6 +428,37 @@ a případně malé čisté funkce z archivu.
   přes launchd: záloha `20261123T204206Z` OK (378 MB, 147 tabulek, 5 087 314 řádků, Storage 2452/2452).
   Tím je splněná podmínka čerstvé úplné zálohy pro DROP Tradovate tabulek (vlna 4). Zkušební obnova
   této zálohy neproběhla. Volno na disku 12 GB — záloha odmítne pod 11 GB.
+### 2026-11-19 — Obnova na Macu bez zaregistrovaného otisku
+
+Filipův Mac vrátil biometryNotEnrolled (−7). Režim obnovy používá systémové ověření vlastníka Macu, které umožňuje i místní heslo. Používá pouze již vydaný a dosud platný souhlas.
+
+### 2026-11-19 — Diagnostika Touch ID
+
+Po opravě URL se Filipův start zastavil u obecné chyby biometrie. Obnova sestaví samostatný lokální program v soukromé dočasné složce a rozliší chybu překladu, nedostupnou biometrii a výsledek ověření včetně chybového kódu macOS. Původní příčina na Macu zatím není známá.
+
+### 2026-11-19 — Oprava spuštění Touch ID
+
+Při prvním spuštění obnova skončila před biometrickou výzvou. Řetězec s adresou brány překrýval konstruktor URL potřebný pro nalezení souboru Swift. Adresa má nyní vlastní název.
+
+### 2026-11-19 — Obnova služby Lucid na Macu (Codex)
+
+Filip chce při restartu použít už vydaný souhlas. Režim `scripts/rithmic/lucid.sh obnovit` vyžádá Touch ID před předáním služby a zachová původní účet, limity a expiraci. Nová verze předá běh jen při ověřeném prázdném účtu bez příkazů a bez rozpracované operace. Při první migraci čeká až dvě minuty na ruční ukončení původní verze. Lokální změna prošla oponenturou, převzetí na skutečném účtu zatím neověřeno.
+
+### 2026-11-19 — iPhone: spojení během načítání LIVE a historie z paměti Macu
+
+Na nativním LIVE probíhá připojení po obnově přihlášeného uživatele souběžně s načítáním UI.
+Graf převezme stejnou relaci. Když se graf neotevře, po 10 s předběžný odběr skončí.
+Značka rithmic:phone-chart-live rozlišuje připojení od připojeného panelu s živými daty.
+Služba čte historii jednou po startu; na připojení zařízení hned vydá poslední historii s novými svíčkami.
+Případná nová historie přijde následně. Čtení má stejný společný požadavek a odstup po chybě.
+Aktivace na Macu vyžaduje Filipův restart služby; časy na skutečném zařízení se znovu změří po aktivaci.
+
+### 2026-11-19 — iPhone: změřený návrat do grafu
+
+Pět návratů na telefonu: staré spojení skončilo za 1–100 ms, nový pokus začal za 2023–2101 ms.
+První tick přišel za 2169–2570 ms. Příčinou společné prodlevy je dvousekundový reconnect po pozdě doručeném close.
+Lokální oprava jednou přeskočí prodlevu při zániku původního spojení těsně po návratu. Další selhání používá běžný odstup.
+Instalace potvrzena na skutečném iPhonu. Čtyři návraty po 6,0 / 6,0 / 119,4 / 33,2 s: start připojení 65 / 48 / 107 / 99 ms, první tick nebo heartbeat 277 / 237 / 366 / 348 ms (tick / heartbeat / heartbeat / tick), historie 276 / 237 / 2370 / 347 ms. Při studeném startu první tick 3213 ms od startu stránky, z toho 238 ms od zahájení spojení. Měření končí příjmem zprávy na telefonu.
 
 ### 2026-11-17 — Rithmic na localhostu po výpadku spojení
 

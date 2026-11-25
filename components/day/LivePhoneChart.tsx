@@ -721,6 +721,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             moveBareEntry={trade?.moveBareEntry === true}
             pendingLegs={trade?.pendingLegs === true}
             canClose={trade?.closeSupported === true}
+            closeWithoutStop={trade?.closeWithoutStop === true}
             entryAvg={trade?.entryAvg ?? null}
             pendingAdd={trade?.scaleIn?.pendingAdd ?? trade?.barePartial ?? null}
             closeExpect={trade?.scaleIn?.stopLoss ?? null}

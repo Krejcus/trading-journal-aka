@@ -6,13 +6,15 @@
  *
  * Spuštění: RITHMIC_USER=... npx tsx scripts/rithmic/devTradeServer.ts [--contract ESZ6] [--port 3311]
  */
-import { execFileSync } from 'node:child_process';
+import { requestLucidHandoff } from './lucidHandoff';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
 import { scopeProblem, type DeviceScope } from '../../services/rithmic/devicePairing';
@@ -22,6 +24,8 @@ import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent }
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
 import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
+import { createOrderJournal } from '../../services/rithmic/orderJournal';
+import { mergeRithmicDisplayHistory } from '../../lib/rithmicCandleSeed';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
 import { barRepairWindow, mergeRepairedBars, mergeRepairWindows, repairedBarsFrom, type BarRepairWindow } from '../../services/rithmic/barRepair';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
@@ -55,7 +59,7 @@ const LIVE_TRADING = process.argv.includes('--live-trading') || CLOSE_ONLY;
 const HISTORY_HOURS = 168;
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
 const APP_NAME = (() => { const i = process.argv.indexOf('--app-name'); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : 'fikr:AlphaTrade'; })();
-const URL = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
+const gatewayUrl = SYSTEM === 'Rithmic Test' ? 'wss://rituz00100.rithmic.com:443' : `wss://${GATEWAY}:443`;
 const KEYCHAIN_SERVICE = cli('keychain') ?? (SYSTEM === 'Rithmic Test' ? 'alphatrade-rithmic-test' : 'alphatrade-rithmic-prop');
 const arg = (name: string, fallback: string): string => {
   const i = process.argv.indexOf(`--${name}`);
@@ -134,16 +138,8 @@ async function main(): Promise<void> {
   const lockFile = join(stateDir, `service-${instanceKey}.lock`);
   mkdirSync(stateDir, { recursive: true });
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
-  let heldBy: number | null = null;
-  try { const pid = Number(readFileSync(lockFile, 'utf8').trim()); heldBy = Number.isInteger(pid) && pid > 0 ? pid : null; } catch { heldBy = null; }
-  if (heldBy !== null && heldBy !== process.pid && alive(heldBy)) {
-    throw new Error(`služba pro ${SYSTEM} už běží (proces ${heldBy}) — druhou nespouštím. Když neběží, smaž ${lockFile}`);
-  }
-  // Zápis zámku je ATOMICKÝ (vytvořit jen když neexistuje): dva starty ve stejný okamžik neprojdou oba.
-  if (heldBy !== null) rmSync(lockFile, { force: true }); // starý zámek po procesu, který už neběží
-  try { writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' }); }
-  catch { throw new Error(`službu pro ${SYSTEM} právě spouští jiný proces — druhou nespouštím. Když neběží, smaž ${lockFile}`); }
-  process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
+  const resumeWithTouch = process.argv.includes('--resume-touch-id');
+  if (resumeWithTouch && (!LIVE_TRADING || CLOSE_ONLY || SYSTEM !== 'LucidTrading' || process.platform !== 'darwin')) throw new Error('Obnovení vyžaduje obchodní režim Lucidu na Macu.');
   let startConsent: LiveTradingConsent | null = null;
   if (LIVE_TRADING) {
     // Obchodování na skutečném účtu spouští jen člověk u terminálu: po přihlášení opíše větu s číslem účtu.
@@ -160,6 +156,57 @@ async function main(): Promise<void> {
     if (problem && !CLOSE_ONLY) throw new Error(`Obchodování na skutečném účtu není povolené: ${problem}`);
     if (!CLOSE_ONLY) startConsent = early as LiveTradingConsent; // prošel kontrolou (strop kusů i povinnost SL jsou ověřené)
   }
+  if (resumeWithTouch) {
+    const account = startConsent!.account;
+    if (cli('resume-account') !== account) {
+      throw new Error('Obnovení po ověření uživatele vyžaduje souhlas pro zvolený účet Lucidu na Macu.');
+    }
+    const message = `Obnovit obchodování AlphaTrade na ${SYSTEM}, účet ${account}, strop ${startConsent!.maxQuantity}, SL ${startConsent!.requireStop ? 'povinný' : 'nepovinný'}, do ${new Date(startConsent!.expiresAt).toLocaleTimeString('cs-CZ')}.`;
+    const helper = fileURLToPath(new URL('./confirmResume.swift', import.meta.url));
+    const temp = mkdtempSync(join(tmpdir(), 'alphatrade-touch-'));
+    const binary = join(temp, 'AlphaTrade');
+    const run = promisify(execFile);
+    let stage = 'Příprava systémového ověření';
+    try {
+      console.log(stage + '…');
+      await run('/usr/bin/swiftc', ['-module-cache-path', join(temp, 'modules'), helper, '-o', binary], { timeout: 120_000 });
+      stage = 'Potvrď obnovení v systémovém dialogu Macu';
+      console.log(stage + '…');
+      await run(binary, [message], { timeout: 90_000 });
+    } catch (error) {
+      const failure = error as { stderr?: string; code?: string | number; killed?: boolean };
+      const detail = failure.stderr?.trim() || (failure.killed ? 'Vypršel čas pro dokončení.' : String(failure.code ?? 'Neznámá chyba.'));
+      throw new Error(stage + ' — ' + detail);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }
+  let heldBy: number | null = null;
+  try { const pid = Number(readFileSync(lockFile, 'utf8').trim()); heldBy = Number.isInteger(pid) && pid > 0 ? pid : null; } catch { heldBy = null; }
+  const grantUnchanged = () => {
+    try {
+      const current = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'results', 'live-trading-consent.json'), 'utf8'));
+      return !!startConsent && JSON.stringify(current) === JSON.stringify(startConsent) && Date.now() < startConsent.expiresAt;
+    } catch { return false; }
+  };
+  if (resumeWithTouch && !grantUnchanged()) throw new Error('Souhlas po potvrzení už neplatí.');
+  if (resumeWithTouch && heldBy !== null && alive(heldBy)) {
+    const token = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'results', 'dev-token'), 'utf8').trim();
+    const outcome = await requestLucidHandoff(PORT, token, startConsent!.account, heldBy, startConsent!.grantedAt);
+    if (outcome === 'legacy') console.log('Původní verze předání neumí. Až bude účet flat bez příkazů, ukonči starou službu v jejím terminálu Ctrl+C. Tady počkám dvě minuty.');
+    const deadline = Date.now() + (outcome === 'legacy' ? 120_000 : 5_000);
+    while (alive(heldBy) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
+    if (alive(heldBy) || !grantUnchanged()) throw new Error('Původní relace ještě běží nebo souhlas vypršel.');
+    heldBy = null; // Original instance removes its own lock. Never unlink a successor's lock.
+  }
+  if (heldBy !== null && heldBy !== process.pid && alive(heldBy)) {
+    throw new Error(`služba pro ${SYSTEM} už běží (proces ${heldBy}) — druhou nespouštím. Když neběží, smaž ${lockFile}`);
+  }
+  // Zápis zámku je ATOMICKÝ (vytvořit jen když neexistuje): dva starty ve stejný okamžik neprojdou oba.
+  if (heldBy !== null) rmSync(lockFile, { force: true }); // starý zámek po procesu, který už neběží
+  try { writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' }); }
+  catch { throw new Error(`službu pro ${SYSTEM} právě spouští jiný proces — druhou nespouštím. Když neběží, smaž ${lockFile}`); }
+  process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
   const socketFactory = (url: string): RithmicSocketLike => {
     const raw = new WebSocket(url, { perMessageDeflate: false });
     // Pojistka: chyba spojení k Rithmicu nikdy nesmí shodit proces (o výpadku rozhoduje obnova spojení výš).
@@ -235,15 +282,20 @@ async function main(): Promise<void> {
     if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
     return spendBudget();
   };
+  // Diagnostika: každá notifikace příkazu do souboru na den (results/orders-<systém>-<den>.jsonl). Nic neřídí.
+  const orderJournal = createOrderJournal(results, SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase());
+  console.log(`[záznam] Notifikace příkazů se zapisují do ${orderJournal.file()}`);
   const broker = createRithmicBroker({
     loginAllowed,
+    onOrderJournal: (entry) => orderJournal.write('order', entry),
     // Odběr změn účtu: Rithmic sám pošle zprávu, když se účet změní → limity se přečtou znovu (ne dotazováním v čase).
     onAccountUpdate: () => { accountSignalAt = Date.now(); accountSignals += 1; console.log(`[účet] Rithmic oznámil změnu účtu (${accountSignals}×) — limity přečtu znovu`); },
-    url: URL, credentials: creds, socketFactory, registry,
+    url: gatewayUrl, credentials: creds, socketFactory, registry,
     // Každý systém má vlastní záznam ochrany (záznamy z testu nesmí platit pro skutečný účet a naopak).
     protectionStore: fileProtectionStore(join(results, SYSTEM === 'Rithmic Test' ? 'dev-protection.json' : `dev-protection-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`)),
     onIncident: (incident) => {
       console.log(`[incident] ${incident.kind}: ${incident.message}`);
+      orderJournal.write('incident', incident);
       exec?.onIncident(incident);
     },
   });
@@ -290,6 +342,11 @@ async function main(): Promise<void> {
     return candles.marketPrice(CONTRACT, now, 30_000);
   };
   const clients = new Set<WebSocket>();
+  let draining = false;
+  let activeCommands = 0;
+  let commandEpoch = 0;
+  let uncertainWrite = false;
+  let checkingRestart = false;
   type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number };
   /** Historie se drží v paměti procesu: dotaz na Rithmic nejvýš jednou za minutu, souběžná připojení sdílí jeden. */
   let historyCache: { bars: Bar[]; at: number } = { bars: [], at: 0 };
@@ -447,7 +504,7 @@ async function main(): Promise<void> {
     }, delayMs);
   }
   const ticker = new RithmicClient({
-    url: URL, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
+    url: gatewayUrl, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
     events: {
       onTick: (tick) => {
         if (tick.symbol !== CONTRACT) return;
@@ -515,6 +572,7 @@ async function main(): Promise<void> {
   feedOpen = true;
   // I první minuta po startu procesu je z ticků neúplná.
   scheduleBarRepair(barRepairWindow(feedStartedAt, Date.now()));
+  void recentHistory(); // Warm the shared display cache after the live feed is subscribed.
 
   // Značka rozdělané výměny ochrany — zvlášť pro každý systém (jako záznam ochrany).
   const replaceMarkerFile = join(results, `protect-replace-${SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}.json`);
@@ -638,11 +696,15 @@ async function main(): Promise<void> {
     const phrase = CLOSE_ONLY ? `ZAVIRAT ${account}` : liveConsentPhrase(account);
     console.log(`\nSlužba je přihlášená k ${SYSTEM}, účet ${account}. ${CLOSE_ONLY ? 'Z appky půjde na SKUTEČNÉM účtu jen zavírat, rušit vlastní příkazy a spravovat SL/TP.' : 'Příkazy z appky půjdou na SKUTEČNÝ účet.'}`);
     console.log('Ochranu (SL/TP) zadanou odsud ruš tady; když pozici zavřeš v jiné platformě, zruš i její ochranu.');
-    const typed = await new Promise<string>((resolve) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      rl.question(`Pro spuštění opiš přesně:  ${phrase}\n> `, (answer) => { rl.close(); resolve(answer.trim()); });
-    });
-    if (typed !== phrase) { broker.stop(); throw new Error('Věta nesouhlasí — služba se nespustila.'); }
+    if (resumeWithTouch) {
+      if (JSON.stringify(readConsent()) !== JSON.stringify(startConsent)) throw new Error('Souhlas se od potvrzení změnil.');
+    } else {
+      const typed = await new Promise<string>((resolve) => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        rl.question(`Pro spuštění opiš přesně:  ${phrase}\n> `, (answer) => { rl.close(); resolve(answer.trim()); });
+      });
+      if (typed !== phrase) { broker.stop(); throw new Error('Věta nesouhlasí — služba se nespustila.'); }
+    }
     setInterval(() => exec?.checkConsent(), 10_000).unref();
     console.log(CLOSE_ONLY
       ? `\n*** SKUTEČNÝ ÚČET ${SYSTEM} / ${account}: JEN ZAVÍRÁNÍ (vstupy vypnuté) ***\n`
@@ -683,6 +745,16 @@ async function main(): Promise<void> {
    * (telefon) se svým rozsahem. Rozsah je jen PRVNÍ síto — každý příkaz dál ověřuje služba.
    */
   interface ClientAccess { scope: DeviceScope; local: boolean; label: string; deviceId?: string }
+  function restartBudgetAvailable(): boolean {
+    const now = Date.now();
+    try {
+      const stored = JSON.parse(readFileSync(budgetFile, 'utf8'));
+      const logins = JSON.parse(readFileSync(loginWindowFile, 'utf8'));
+      const login = spendRmsQuery(stored, now);
+      return Array.isArray(logins) && logins.every(Number.isFinite) && rmsLoginAllowed(logins, now).allowed
+        && login.allowed && spendRmsQuery(login.state, now).allowed;
+    } catch { return false; }
+  }
   const serveClient = (socket: WebSocket, access: ClientAccess): void => {
     clients.add(socket);
     if (!access.local) {
@@ -703,27 +775,64 @@ async function main(): Promise<void> {
     let recent: number[] = [];
     /** Zprávy o upozorněních mají vlastní strop (12 za 10 s) — rozpočet příkazů neberou. */
     let recentAlertOps: number[] = [];
+    let prepared: { commandEpoch: number; routeEpoch: number | undefined; until: number } | null = null;
+    const mayHandOff = () => access.local && LIVE_TRADING && !CLOSE_ONLY && !draining && !activeCommands
+      && !uncertainWrite && grantUnchanged() && restartBudgetAvailable() && exec?.canRestart(CONTRACT);
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', ...(access.local && LIVE_TRADING && !CLOSE_ONLY ? { maintenancePid: process.pid } : {}), readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     if (alertWatch) send(socket, { type: 'alerts', ...alertWatch.status() });
-    void (async () => {
-      const history = await recentHistory();
+    const sendHistory = (history: Bar[]) => {
       if (!history.length || socket.readyState !== WebSocket.OPEN) return;
       const at = Date.now();
-      hello([...history, ...liveBars(at, history[history.length - 1].time)], at);
-    })();
+      hello(mergeRithmicDisplayHistory(history, liveBars(at, history[history.length - 1].time - 1)), at);
+    };
+    const cached = historyCache.bars;
+    sendHistory(cached);
+    void recentHistory().then(history => {
+      if (history !== cached) sendHistory(history);
+    });
     socket.on('close', () => clients.delete(socket));
     socket.on('message', (raw) => {
       void (async () => {
         const receivedAt = performance.now();
         let id: unknown = null;
         try {
-          const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand; metric?: unknown };
+          const message = JSON.parse(String(raw)) as { id?: unknown; command?: LocalExecCommand; metric?: unknown; maintenanceCommit?: boolean; maintenanceRestart?: { pid?: number; grantedAt?: number } };
           id = message.id ?? null;
+          if (message.maintenanceCommit === true) {
+            const candidate = prepared;
+            prepared = null;
+            const accepted = !!candidate && Date.now() <= candidate.until && commandEpoch === candidate.commandEpoch
+              && broker.routeEpoch?.(broker.accountIds()[0]) === candidate.routeEpoch && mayHandOff() === true;
+            send(socket, { type: 'maintenanceReply', accepted });
+            if (accepted) stop();
+            return;
+          }
+          if (message.maintenanceRestart) {
+            const { pid, grantedAt } = message.maintenanceRestart;
+            let accepted = false;
+            if (!checkingRestart && pid === process.pid && grantedAt === startConsent?.grantedAt && mayHandOff()) {
+              checkingRestart = true;
+              const epoch = commandEpoch;
+              const routeEpoch = broker.routeEpoch?.(broker.accountIds()[0]);
+              try {
+                const [account] = broker.accountIds();
+                const positions = await broker.listPositions(account);
+                const orders = await broker.listOrders(account, { fresh: true });
+                accepted = positions.every(p => p.netQuantity === 0) && orders.every(o => ['filled', 'canceled', 'rejected'].includes(o.status))
+                  && epoch === commandEpoch && routeEpoch === broker.routeEpoch?.(account)
+                  && socket.readyState === WebSocket.OPEN && mayHandOff() === true;
+                if (accepted) prepared = { commandEpoch: epoch, routeEpoch, until: Date.now() + 1_500 };
+              } catch { /* no confirmed flat state */ }
+              finally { checkingRestart = false; }
+            }
+            send(socket, accepted ? { type: 'maintenanceReady' } : { type: 'maintenanceReply', accepted: false });
+            return;
+          }
           // Měření otevření appky (kroky od návratu po první cenu): jen výpis, nic neřídí. Bere jen čísla a ano/ne.
           if (message.metric && typeof message.metric === 'object' && !message.command) {
             const parts = Object.entries(message.metric as Record<string, unknown>).slice(0, 20)
@@ -775,7 +884,16 @@ async function main(): Promise<void> {
           // Potvrzení incidentu uvolňuje blokaci, rezervace i nejistotu noh najednou → jen u Macu, ne z telefonu.
           if (rawCommand.op === 'ack' && !access.local) throw new Error('incident jde potvrdit jen na Macu, kde služba běží — z telefonu jde pozici zavřít');
           if (READ_ONLY) throw new Error('účet je připojený jen pro čtení — příkazy jsou vypnuté');
-          const result = await exec!.execute(message.command);
+          if (draining) throw new Error('Probíhá potvrzený restart služby.');
+          activeCommands++;
+          commandEpoch++;
+          let result;
+          try {
+            result = await exec!.execute(message.command);
+            if ((!result.ok && result.sent === 'unknown') || (result.ok && rawCommand.op === 'flatten' && (result.result as { status?: string } | null)?.status === 'indeterminate')) uncertainWrite = true;
+            if (result.ok && access.local && rawCommand.op === 'ack') uncertainWrite = false;
+          } catch (error) { uncertainWrite = true; throw error; }
+          finally { activeCommands--; }
           send(socket, { type: 'reply', id, ...result, serverMs: Math.round(performance.now() - receivedAt) });
         } catch (error) {
           send(socket, { type: 'reply', id, ok: false, sent: false, error: error instanceof Error ? error.message : String(error) });
@@ -817,16 +935,19 @@ async function main(): Promise<void> {
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
   console.log(`Stránka: http://127.0.0.1:${QA_PORT}/tests/qa/rithmic-live.html#token=<viz ${tokenPath}>`);
   if (MOBILE_PORT !== null) console.log(`Zařízení (telefon): ws://127.0.0.1:${MOBILE_PORT} — ven jen přes Tailscale Serve; ${gateway.summary()}${TAILSCALE_LOGIN ? ` · jen pro ${TAILSCALE_LOGIN}` : ' · POZOR: bez --tailscale-login port ověřuje jen klíč zařízení'}`);
-  const stop = (): void => {
+  const stop = (exitCode = 0): void => {
+    if (draining) return;
+    draining = true;
     console.log('Končím (příkazy u Rithmicu zůstávají, jak jsou).');
     server.close();
     mobileServer?.close();
     broker.stop();
     ticker.close();
-    setTimeout(() => process.exit(0), 200);
+    setTimeout(() => process.exit(exitCode), 200);
   };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  process.on('SIGINT', () => stop());
+  process.on('SIGTERM', () => stop());
+
 }
 
 main().catch((error) => {

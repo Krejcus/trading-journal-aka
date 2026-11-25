@@ -325,7 +325,7 @@ describe('hook místního procesu', () => {
     // Klíč zařízení nejde do adresy: adresa spárovaného zařízení je holý endpoint, klíč dodává `auth`.
     expect(link).toMatch(/return readRithmicDeviceLink\(\)\?\.endpoint \?\? null;/);
     expect(link).toMatch(/return readRithmicDeviceLink\(\) \? \(\) => readRithmicDeviceKey\(\) : null;/);
-    expect(phone).toMatch(/const deviceAuth = useMemo\(\(\) => \(simulationUrl \? null : rithmicLocalAuth\(\)\)/);
+    expect(readFileSync('components/RithmicPhoneSession.tsx', 'utf8')).toMatch(/const deviceAuth = useMemo\(\(\) => \(simulationUrl \? null : rithmicLocalAuth\(\)\)/);
     // Potvrzení incidentu se ze spárovaného zařízení neposílá a služba ho odmítá.
     expect(phone).toMatch(/if \(deviceAuth\) \{ setAckNote\(/);
     expect(server).toMatch(/if \(rawCommand\.op === 'ack' && !access\.local\) throw new Error\(/);
@@ -454,7 +454,7 @@ describe('Rithmic graf na telefonu', () => {
   });
 
   it('obal: spojení jen s otevřenou záložkou, účet jen pro čtení bez mostu příkazů, žádný stav kopírky', () => {
-    expect(wrapper).toMatch(/useRithmicLocalTrading\(\{ url, enabled: open, auth: deviceAuth \}\)/);
+    expect(readFileSync('components/RithmicPhoneSession.tsx', 'utf8')).toMatch(/useRithmicLocalTrading\(\{ url, enabled: open, auth: deviceAuth \}\)/);
     // Bez mostu příkazů: účet jen pro čtení i zařízení spárované jen pro čtení.
     expect(wrapper).toMatch(/const viewOnly = trading\.readOnly \|\| deviceScope === 'read';/);
     expect(wrapper).toMatch(/trade: viewOnly \|\| !trade \? null : deviceScope === 'close' \?/);

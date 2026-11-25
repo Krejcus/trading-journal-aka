@@ -13,6 +13,7 @@ import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import { perfMark, perfMarkOnce } from './lib/perfTrace';
+import { RithmicPhoneSession } from './components/RithmicPhoneSession';
 import { isNativeBuild } from './utils/runtimeConfig';
 import { afterLivePriority } from './lib/livePriority';
 import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
@@ -3910,8 +3911,12 @@ const App: React.FC = () => {
   // Pozadí Aurory jako jedna vrstva pro načítání i appku: obě větve vrací fragment
   // s pozadím na stejném místě, takže se při přechodu nepřekreslí (žádné černé probliknutí).
   const auroraBackground = theme !== 'oled' ? <AppBackground settings={appearance} dark={theme !== 'light'} /> : null;
+  // Keep the same paired session across the splash → chart transition. A user switch unmounts it.
+  const withPhoneSession = (content: React.ReactNode) => isNativeBuild && session && !renderedUserMismatch
+    ? <RithmicPhoneSession key={session.user.id} livePage={activePage === 'live'}>{content}</RithmicPhoneSession>
+    : content;
   if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
-    return <>{auroraBackground}<QuantumLoader theme={theme} /></>;
+    return withPhoneSession(<>{auroraBackground}<QuantumLoader theme={theme} /></>);
   }
   if (session) perfMarkOnce('boot:splash-end');
 
@@ -3919,7 +3924,7 @@ const App: React.FC = () => {
     return <Auth onLogin={(user) => { }} theme={theme} />;
   }
 
-  return (
+  return withPhoneSession(
     <>
     {auroraBackground}
     <div

@@ -8,12 +8,14 @@ import type { BacktestChartOrderLine } from '../services/backtestOrderLines';
 import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../services/liveChartAutomation';
 import type { LiveDeskPhoneChartSlots } from './LiveDesk';
 import { rithmicScreenInstrumentIssue } from './RithmicLiveChart';
-import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
+import { RITHMIC_SOLO_ACCOUNT } from '../hooks/useRithmicLocalTrading';
 import { useRithmicAlertWatch } from '../hooks/useRithmicAlertWatch';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
-import { rithmicLocalAuth, rithmicLocalUrl, rithmicPairingOffered } from '../lib/rithmicLocalLink';
+import { PhoneSessionContext, usePhoneSession } from './RithmicPhoneSession';
+import { rithmicPairingOffered } from '../lib/rithmicLocalLink';
 import RithmicPairingPanel from './RithmicPairingPanel';
 import { readRithmicDeviceLink } from '../lib/rithmicDeviceLink';
+import { perfMarkOnce } from '../lib/perfTrace';
 import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import {
   rithmicPhoneBridge, rithmicPhoneCards, rithmicPhoneCloseText, rithmicPhoneModeLabel, rithmicPhoneQuote, rithmicPhoneWaiting,
@@ -97,13 +99,26 @@ function RithmicPhoneStatus({ cards, onAction, brake, floating }: {
 /** Jak dlouho po rozpadu spojení držet poslední známý obraz, než obrazovka ohlásí výpadek. */
 const RECONNECT_GRACE_MS = 4_000;
 
-const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl, accountBar: accountBarProp = null }) => {
-  // Spárování se čte znovu po každé změně (nové spárování, zrušení) — jinak by obrazovka držela starou adresu.
-  const [linkVersion, setLinkVersion] = useState(0);
-  const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Spárované zařízení (telefon) se službě prokazuje klíčem z Klíčenky; PC a simulace klíč zařízení nemají.
-  const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
-  const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });
+function StandalonePhoneChart(props: Props) {
+  const session = usePhoneSession(props.open, props.simulationUrl);
+  return <PhoneChartView {...props} session={session} />;
+}
+
+function RithmicPhoneChart(props: Props) {
+  const shared = React.useContext(PhoneSessionContext);
+  const setChartOpen = shared?.setChartOpen;
+  useEffect(() => {
+    if (!setChartOpen || props.simulationUrl || !props.open) return;
+    setChartOpen(true);
+    return () => setChartOpen(false);
+  }, [setChartOpen, props.open, props.simulationUrl]);
+  return shared && !props.simulationUrl
+    ? <PhoneChartView {...props} session={shared} />
+    : <StandalonePhoneChart {...props} />;
+}
+
+const PhoneChartView: React.FC<Props & { session: ReturnType<typeof usePhoneSession> }> = ({ open, isDark, onLeave, phoneChart, header, overlay, userId, simulationUrl, session, accountBar: accountBarProp = null }) => {
+  const { url, deviceAuth, trading, refreshPairing } = session;
   // Upozornění na cenu hlídá služba jen na skutečném trhu (zkušební systém i simulace mají smyšlené ceny).
   const alertWatch = useRithmicAlertWatch(trading, !simulationUrl && trading.system != null && trading.system !== 'Rithmic Test');
   // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
@@ -127,6 +142,12 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   const quotePrice = feedLive ? tick?.price ?? trading.price : null;
   const quoteAt = feedLive ? tick?.at ?? (marketData?.liveCapturedAt || null) : null;
   const quote = useMemo(() => rithmicPhoneQuote({ price: quotePrice, at: quoteAt, symbol, tickSize: trading.tickSize }), [quotePrice, quoteAt, symbol, trading.tickSize]);
+  const lastLiveQuote = useRef<{ scope: string; price: number; at: number } | null>(null);
+  const quoteScope = JSON.stringify([url, trading.system, trading.accountName, symbol]);
+  useEffect(() => {
+    if (quotePrice != null && quoteAt != null) lastLiveQuote.current = { scope: quoteScope, price: quotePrice, at: quoteAt };
+  }, [quoteScope, quotePrice, quoteAt]);
+  const lastSeen = !feedLive && lastLiveQuote.current?.scope === quoteScope ? lastLiveQuote.current : null;
   const market = useMemo(() => (marketData ? {
     data: marketData, quote, contract: symbol || null,
     // Rithmic Test je simulovaný trh: starší historie appky (skutečný MNQ) ani obchody deníku k němu nepatří.
@@ -284,16 +305,26 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   // Hlavička grafu jde schovat (režim bez lišt): karty a brzda se pak kreslí nad grafem, ať nikdy nezmizí.
   const [headerShown, setHeaderShown] = useState(false);
   const headerRef = useCallback((node: HTMLDivElement | null) => setHeaderShown(node != null), []);
-  const status = (floating: boolean) => <RithmicPhoneStatus cards={cards} onAction={onCardAction} brake={brake} floating={floating} />;
+  const status = (floating: boolean) => <RithmicPhoneStatus cards={lastSeen ? [...cards, {
+    id: 'stale-price', tone: 'amber', title: `Poslední známá cena ${lastSeen.price}`,
+    text: `V ${new Date(lastSeen.at).toLocaleTimeString('cs-CZ')} · čekám na živou cenu.`,
+  }] : cards} onAction={onCardAction} brake={brake} floating={floating} />;
+
+  const waiting = rithmicPhoneWaiting({ url, instrumentIssue, hasMarket: marketData != null, link });
+  const showingLiveChart = open && !waiting && !!market && !!trading.position && feedLive && !trading.authFailed;
+  useEffect(() => {
+    if (!showingLiveChart) return;
+    // Mark when the chart view has mounted with live data; receipt on the socket can precede it.
+    const frame = requestAnimationFrame(() => perfMarkOnce('rithmic:phone-chart-live'));
+    return () => cancelAnimationFrame(frame);
+  }, [showingLiveChart]);
 
   if (!open) return null;
-  // Prázdný stav jen dokud graf nemá co kreslit; pozdější výpadek graf NEodmontuje (karta + štítek).
-  const waiting = rithmicPhoneWaiting({ url, instrumentIssue, hasMarket: marketData != null, link });
   // Nespárováno, nebo služba toto zařízení odmítla (odvoláno): nabídnout spárování s Macem.
   if (!simulationUrl && rithmicPairingOffered() && (!url || trading.authFailed)) {
     return (
       <div data-rithmic-phone-pairing className={`grid gap-3 rounded-xl p-3 ${isDark ? 'bg-[#0b0f16]' : 'bg-slate-50'}`}>
-        <RithmicPairingPanel isDark={isDark} notice={trading.authFailed ? `Mac toto zařízení odmítl: ${trading.authFailed}. Máš-li otevřenou pozici, zavři ji v platformě propky nebo na Macu.` : null} onChanged={() => setLinkVersion((version) => version + 1)} />
+        <RithmicPairingPanel isDark={isDark} notice={trading.authFailed ? `Mac toto zařízení odmítl: ${trading.authFailed}. Máš-li otevřenou pozici, zavři ji v platformě propky nebo na Macu.` : null} onChanged={refreshPairing} />
         <button type="button" onClick={onLeave} className={`mx-auto rounded-lg border px-3 py-2 text-[12px] font-bold opacity-80 ${isDark ? 'border-white/20 text-slate-300' : 'border-slate-300 text-slate-700'}`}>Zpět na Live Dashboard</button>
       </div>
     );

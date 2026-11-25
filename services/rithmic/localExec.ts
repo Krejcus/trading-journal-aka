@@ -186,6 +186,8 @@ export type LocalExecCommand =
 
 export type LocalExecResult = { ok: true; result: unknown } | { ok: false; sent: boolean | 'unknown'; error: string };
 
+/** Co dělat s pozicí bez ochrany po nedokončené výměně: přidání SL čeká na potvrzení incidentu (`legsUncertain`), zavření ne. */
+const NO_PROTECTION_HINT = 'je BEZ ochrany: zavři ji (× u pozice nebo Zavřít), nebo potvrď incident a pak přidej SL';
 const TERMINAL: ReadonlySet<string> = new Set(['filled', 'canceled', 'rejected']);
 /** Incidenty, po kterých služba nepřijme nový vstup, dokud je obsluha nepotvrdí (INV-DEFAULT-02). */
 const BLOCKING: ReadonlySet<string> = new Set([
@@ -558,6 +560,17 @@ export class LocalExec {
   private addTimer: ReturnType<typeof setTimeout> | null = null;
   private automation = false;
   /** Povolí samočinné zápisy služby (dnes jen zrušení čekajícího přikoupení). Volá spouštěč po potvrzení účtu. */
+  /** Is it safe for the local service to leave this account for a requested maintenance restart? */
+  canRestart(symbol: string): boolean {
+    const state = this.state();
+    return this.connected && state.connected && !state.halted && state.accountId !== null && !state.blocked
+      && !state.positions.length && !state.orders.length && !state.brackets.length
+      && !this.reserved.size && !this.legsUncertain.size && !this.legsMoving.size
+      && !this.pendingResize.size && !this.splitRunning.size
+      && !this.broker.hasPendingWrites(state.accountId, symbol) && this.broker.executionNet(state.accountId, symbol) === 0
+      && this.broker.unresolvedBracketTags(state.accountId, symbol).length === 0;
+  }
+
   enableAutomation(): void {
     this.automation = true;
     this.watchPendingAdds();
@@ -1390,8 +1403,20 @@ export class LocalExec {
               const others = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status));
               const fresh = this.config.serverPrice?.(symbol) ?? null;
               const elsewhere = [...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag !== tag);
-              const stillOk = netNow === net && this.broker.executionNet(accountId, symbol) === net && others.length === 0 && !elsewhere && fresh !== null && (long ? stopPrice < fresh && fresh < targetPrice : targetPrice < fresh && fresh < stopPrice);
-              if (!stillOk) return fail('protection-removed', `původní ochrana je zrušená a nový pár SL+TP neodešel (stav se mezitím změnil) — pozice ${netNow === 0 ? 'je zavřená' : 'je BEZ ochrany: přidej SL nebo ji zavři'}`);
+              const execNow = this.broker.executionNet(accountId, symbol);
+              const priceOk = fresh !== null && (long ? stopPrice < fresh && fresh < targetPrice : targetPrice < fresh && fresh < stopPrice);
+              const stillOk = netNow === net && execNow === net && others.length === 0 && !elsewhere && priceOk;
+              if (!stillOk) {
+                // Co přesně se změnilo — jen do textu incidentu (diagnostika), rozhodnutí výše se tím nemění.
+                const why = [
+                  netNow !== net ? `pozice ${net} → ${netNow}` : '',
+                  execNow !== net ? `vyplnění dávají ${execNow ?? 'neznámo'} místo ${net}` : '',
+                  others.length ? `pracuje jiný příkaz (${others.map((order) => order.brokerOrderId).join(', ')})` : '',
+                  elsewhere ? 'na cestě je jiný příkaz' : '',
+                  !priceOk ? (fresh === null ? 'chybí čerstvá cena' : `cena ${fresh} není mezi SL ${stopPrice} a TP ${targetPrice}`) : '',
+                ].filter(Boolean).join('; ');
+                return fail('protection-removed', `původní ochrana je zrušená a nový pár SL+TP neodešel — pozice ${netNow === 0 ? 'je zavřená' : NO_PROTECTION_HINT} (změnilo se: ${why.slice(0, 200) || 'neurčeno'})`);
+              }
               // 3) Jeden zápis: svázaný pár. Neodeslaný i nejistý výsledek = pozice může být bez ochrany → incident, nic se neopakuje.
               const stopTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-s`;
               const targetTag = `${PROTECT_TAG}${clientId.slice(0, 26)}-t`;
@@ -1401,7 +1426,7 @@ export class LocalExec {
               } catch (error) {
                 const text = error instanceof Error ? error.message : String(error);
                 return fail('protection-removed', error instanceof BrokerRequestNotSentError
-                  ? `původní ochrana je zrušená a nový pár SL+TP neodešel (${text}) — pozice je BEZ ochrany: přidej SL nebo ji zavři`
+                  ? `původní ochrana je zrušená a nový pár SL+TP neodešel — pozice ${NO_PROTECTION_HINT} (${text})`
                   : `původní ochrana je zrušená a výsledek nového páru SL+TP není znám (${text}) — ověř u brokera, jakou ochranu pozice má`);
               }
               // 4) Úspěch až podle stavu: obě nohy pracují.

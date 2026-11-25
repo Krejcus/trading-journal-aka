@@ -297,6 +297,36 @@ describe('chybějící exekuce', () => {
     t.broker.stop();
   });
 
+  it('záznam notifikací: každá zpráva s výsledkem knihy; stejné ID vyplnění u JINÉHO příkazu je vidět jako duplikát s chybějícím kusem', async () => {
+    const journal: Array<{ basket: string; notify: string; fill: boolean; duplicateFill: boolean; gap: number | null }> = [];
+    const t = await setup({ config: { reconnectMinMs: 5_000, onOrderJournal: (entry) => journal.push({ basket: entry.update.basketId, notify: entry.update.notifyType, fill: entry.fill, duplicateFill: entry.duplicateFill, gap: entry.gap }) } });
+    const first = await t.broker.placeOrder(limit(t.account(), 'tag-j1', 1));
+    await flush();
+    t.server.notifyLive(first.brokerOrderId, 5, fillExtra('SAME', 1, 1));
+    const second = await t.broker.placeOrder(limit(t.account(), 'tag-j2', 1));
+    await flush();
+    t.server.notifyLive(second.brokerOrderId, 5, fillExtra('SAME', 1, 1));
+    await sleep(140);
+    const fills = journal.filter((row) => row.notify === 'FILL');
+    expect(fills.map((row) => [row.basket, row.fill, row.duplicateFill])).toEqual([[first.brokerOrderId, true, false], [second.brokerOrderId, false, true]]);
+    expect(fills[1].gap).toBe(1);
+    // Dnešní chování (zdokumentované, ne žádoucí): kolize ID končí jako fill-missing a odpojení.
+    expect(t.kinds()).toContain('fill-missing');
+    t.broker.stop();
+  });
+
+  it('výjimka v záznamu notifikací příjem neruší', async () => {
+    const t = await setup({ config: { onOrderJournal: () => { throw new Error('disk plný'); } } });
+    const ack = await t.broker.placeOrder(limit(t.account(), 'tag-jx', 1));
+    await flush();
+    t.server.notifyLive(ack.brokerOrderId, 5, fillExtra('FX', 1, 1));
+    await sleep(100);
+    expect(t.events.filter((e) => e.type === 'fill')).toHaveLength(1);
+    expect(t.kinds()).not.toContain('fill-missing');
+    expect(t.broker.isConnected()).toBe(true);
+    t.broker.stop();
+  });
+
   it('dílčí fill hlídání nezruší: chybí-li zbytek, je to fill-missing', async () => {
     const t = await setup({ config: { reconnectMinMs: 5_000 } });
     const ack = await t.broker.placeOrder(limit(t.account(), 'tag-p', 3));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSeedCandles } from '../lib/rithmicCandleSeed';
+import { mergeRithmicDisplayHistory, mergeSeedCandles } from '../lib/rithmicCandleSeed';
 
 const bars = (...times: number[]) => times.map((time) => ({ time, close: time }));
 
@@ -68,4 +68,15 @@ describe('patchSeedCandles — opravené svíčky po výpadku cen', () => {
     expect(patchSeedCandles([], [bar(M(5), 9)], M(9))).toEqual([]);
     expect(patchSeedCandles([bar(M(10), 1), bar(M(11), 2)], [bar(M(10), 9)], Number.NaN)).toEqual([bar(M(10), 1), bar(M(11), 2)]);
   });
+});
+
+it('joins cached replay to newer ticks without duplicating the boundary minute or adding overlapping volume', () => {
+  const cached = { time: 60, open: 10, high: 16, low: 8, close: 11, volume: 20 };
+  const overlap = { time: 60, open: 12, high: 15, low: 7, close: 13, volume: 12 };
+  const next = { ...overlap, time: 120 };
+  expect(mergeRithmicDisplayHistory([cached], [overlap, next])).toEqual([
+    { ...cached, low: 7, close: 13 }, next,
+  ]);
+  expect(mergeRithmicDisplayHistory([cached], [next])).toEqual([cached, next]);
+  expect(mergeRithmicDisplayHistory([], [next])).toEqual([next]);
 });

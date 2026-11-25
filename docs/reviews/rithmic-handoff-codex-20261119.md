@@ -70,3 +70,7 @@ Podrobně v `docs/reviews/rithmic-live-account-runbook-20261117.md`:
 - iPhone build: `npm run ios:sync` + `xcodebuild … -derivedDataPath ~/alphatrade-build/ios-dd` +
   `xcrun devicectl device install app --device 00008160-000A7C613E900036 …/App.app` (jen s `.env.local`).
   Vercel deploy telefon NEaktualizuje — appka je bundlovaná.
+
+## Doplnění 19. 11. — obnova s platným souhlasem
+
+Na Macu lze po aktualizaci spustit `scripts/rithmic/lucid.sh obnovit` a potvrdit obnovení systémovým ověřením macOS (heslo k Macu nebo Touch ID). Při prvním přechodu ukonči původní verzi na výzvu pomocí Ctrl+C, až bude účet bez pozice a příkazů. Další předání mezi podporovanými verzemi provede služba sama po kontrole účtu. Vydání nového souhlasu po expiraci vyžaduje původní ruční postup.

@@ -176,8 +176,6 @@ export function rithmicTradeEvents(before: Seen, now: Seen, context: { symbol: s
 
 export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }: RithmicLocalTradingOptions) {
   const candleScopeRef = useRef<string | null>(null);
-  const authRef = useRef(auth);
-  authRef.current = auth;
   /** Služba zařízení odmítla (nespárované / odvolané) — obrazovka nabídne nové spárování. */
   const [authFailed, setAuthFailed] = useState<string | null>(null);
   const [hello, setHello] = useState<Hello | null>(null);
@@ -268,7 +266,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     }
     const connection = new RithmicLocalConnection({
       url,
-      ...(authRef.current ? { auth: () => authRef.current?.() ?? null } : {}),
+      ...(auth ? { auth } : {}),
       reconnectMs: RECONNECT_MS, replyTimeoutMs: REPLY_TIMEOUT_MS, beatTimeoutMs: BEAT_TIMEOUT_MS, newId,
       handlers: {
         beforeSend: (id, command) => {
@@ -423,7 +421,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
       if (typeof window !== 'undefined') { window.removeEventListener('pageshow', wake); window.removeEventListener('online', wake); }
     };
-  }, [url, enabled, feedBox, flushUiTick]);
+  }, [url, enabled, auth, feedBox, flushUiTick]);
 
   useEffect(() => {
     if (!state || !symbolRef.current) return;

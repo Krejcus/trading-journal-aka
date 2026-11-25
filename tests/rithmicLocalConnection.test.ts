@@ -41,6 +41,27 @@ describe('spojení s místní službou Rithmicu', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
   afterEach(() => { vi.useRealTimers(); });
 
+  it('retries once immediately if iOS delivers the old close just after resume', () => {
+    const { connection, sockets } = setup();
+    connection.start();
+    sockets[0].open();
+    connection.visibility(false);
+    vi.advanceTimersByTime(7_000);
+    connection.visibility(true);
+    connection.kick();
+    expect(sockets).toHaveLength(1);
+    vi.advanceTimersByTime(45);
+    sockets[0].drop();
+    vi.advanceTimersByTime(0);
+    expect(sockets).toHaveLength(2);
+    sockets[1].drop();
+    vi.advanceTimersByTime(1_999);
+    expect(sockets).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(sockets).toHaveLength(3);
+    connection.stop();
+  });
+
   it('po uspání odmítne vstup už při kliku a stará zpráva neobnoví stav účtu', async () => {
     const t = setup();
     t.connection.start();

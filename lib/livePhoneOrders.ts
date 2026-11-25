@@ -55,6 +55,8 @@ export interface LivePhoneTradeBridge {
   manage?: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number, seenGroupLimitStateHash?: string) => Promise<LeaderOrderManageResult>;
   /** × u pozice: worker umí zavřít a kopírka je čerstvě zapnutá (ne shadow) — jako PC. */
   closeSupported?: boolean;
+  /** × u pozice bez SL smí jít s odkazem na vstup (Rithmic: zavření nečeká na cenu; Tradovate ne — tam brána C8). */
+  closeWithoutStop?: boolean;
   /** Průměrný vstup leadera od workeru (BE). */
   entryAvg?: number | null;
   /** Přikoupení do otevřené pozice (worker `manual-entry-scale-in-v1`): SL/TP pozice a stav. */

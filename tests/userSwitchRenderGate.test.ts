@@ -29,6 +29,8 @@ describe('přepnutí uživatele A→B bez odhlášení', () => {
   it('data jiného uživatele než aktuální session se nevykreslí', () => {
     expect(app).toContain('const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);');
     // Loader se vrací spolu se sdíleným pozadím Aurory (fragment), obsah appky ne.
-    expect(app).toMatch(/\|\| renderedUserMismatch\) \{\n\s*return <>\{auroraBackground\}<QuantumLoader/);
+    expect(app).toMatch(/\|\| renderedUserMismatch\) \{\n\s*return withPhoneSession\(<>\{auroraBackground\}<QuantumLoader/);
+    // Sdílená telefonní session se při neshodě uživatele nepřipojí (obal vrací jen načítání).
+    expect(app).toContain('isNativeBuild && session && !renderedUserMismatch');
   });
 });
