@@ -288,6 +288,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: iPhone build z větve `claude/chart-tf-duplicates-20261125` (ef3c1d3c) nainstalován; web NENASAZEN
+
+- Na Filipovo „dej do telefonu“: `ios:sync` + `xcodebuild` z worktree `~/alphatrade-worktrees/chart-tf-dup` (vlastní `node_modules`, `.env.local` symlinkem), instalace přes stávající appku bez odinstalace (přihlášení a spárování zůstává), spuštěno na `alphatrade-native://live`. Větev obsahuje celý `origin/main` (4c18fd86) + opravy grafu z dnešních zápisů níže.
+- Web (push na main) čeká na Filipovo „nasaď“ — telefon je teď napřed před webem. Volné místo na disku po buildu 6,4 GB.
+
 ### 2026-11-25 — Claude: telefon — magnet a vodicí čára při úpravě position boxu (NENASAZENO, stejná větev)
 
 - Zjištění: magnet při tahu úchytu SL/TP hledal jen u svíčky pod ukazatelem ±1. Na PC si myš k cílové svíčce dojede, prst na telefonu ale drží úchyt u levého okraje boxu → chytit šly jen tři svíčky u vstupu, což vypadá jako „magnet nefunguje“.
