@@ -240,7 +240,7 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
       }}
       // Hranatější pilulka těsně u cenové osy (Filip 25. 11.). Sklo Aurora s vlastní výplní —
       // prohlížeč bez backdrop-filter ji musí ukázat stejně čitelně, rozmazání je jen navíc.
-      style={{ position: 'absolute', left: paneWidth - PLUS_WIDTH - 1, top: point.y, transform: 'translateY(-50%)', zIndex: 130, pointerEvents: 'auto', width: PLUS_WIDTH, height: PLUS_HEIGHT, borderRadius: 7, padding: 0, display: 'grid', placeItems: 'center', color: '#dfe5ff', background: 'linear-gradient(180deg, rgba(72,86,150,.92), rgba(40,48,92,.92))', border: '1px solid rgba(168,182,255,.6)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.22), 0 2px 8px rgba(0,0,0,.35)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
+      style={{ position: 'absolute', left: paneWidth - PLUS_WIDTH - 1, top: point.y, transform: 'translateY(-50%)', zIndex: 130, pointerEvents: 'auto', width: PLUS_WIDTH, height: PLUS_HEIGHT, borderRadius: 7, padding: 0, display: 'grid', placeItems: 'center', color: 'var(--dj-plus-ink)', background: 'var(--dj-plus-bg)', border: '1px solid var(--dj-plus-line)', boxShadow: 'var(--dj-plus-shadow)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
     >
       <svg aria-hidden width="13" height="13" viewBox="0 0 13 13"><path d="M6.5 1.5v10M1.5 6.5h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
       <span aria-hidden style={{ position: 'absolute', inset: -10 }} />
