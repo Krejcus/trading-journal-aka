@@ -72,3 +72,15 @@ describe('jeden crosshair', () => {
     expect(source).toMatch(/chartCursorShowsCrosshairLines\(cursorModeRef\.current\)/);
   });
 });
+
+describe('hideExactCrosshairOverlays', () => {
+  it('schová čáry i štítky kříže pod daným kořenem', async () => {
+    const { hideExactCrosshairOverlays } = await import('../services/chartCrosshairPrecision');
+    const elements = [{ style: { opacity: '1' } }, { style: { opacity: '1' } }];
+    let selector = '';
+    hideExactCrosshairOverlays({ querySelectorAll: (value: string) => { selector = value; return elements; } } as unknown as ParentNode);
+    expect(elements.map(element => element.style.opacity)).toEqual(['0', '0']);
+    expect(selector).toContain('[data-exact-crosshair-time-label]');
+    expect(selector).toContain('[data-exact-crosshair-price-label]');
+  });
+});
