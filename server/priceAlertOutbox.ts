@@ -107,6 +107,8 @@ export async function drainPriceAlertOutbox(options: {
             collapseId, silent: alert.data?.channels?.sound === false, timeoutMs: options.timeoutMs ?? 7_000,
             // Neukládat u Applu: nevytlačí rizikovou notifikaci kopírky a nepřijde pozdě (INV-WATCH-01).
             expirationSeconds: 0,
+            // Spojení k Applu se drží mezi upozorněními a předehřívá se už při zápisu spuštění.
+            keepSession: true,
           });
           // Měření zpoždění (25. 11.): kolik z cesty do iPhonu stojí server Applu (sandbox bývá o řád pomalejší).
           console.log(`[price-alerts] apns ${device.data.environment} ${result.status} ${Date.now() - apnsStartedAt} ms (fronta ${apnsStartedAt - claimAt} ms)`);

@@ -13,6 +13,7 @@ import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
 import { scopeProblem, type DeviceScope } from '../../services/rithmic/devicePairing';
@@ -350,14 +351,34 @@ async function main(): Promise<void> {
   // Zkušební systém má smyšlený trh: tam se nehlídá, aby do telefonu nechodila oznámení z cen, které neexistují.
   const alertFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'price-alerts.json');
   const ALERT_APP_URL = (process.env.ALPHATRADE_APP_URL ?? 'https://alphatrade-mentor-15.vercel.app').replace(/\/+$/, '');
+  const alertHttpsAgent = new HttpsAgent({ keepAlive: true, keepAliveMsecs: 15_000, maxSockets: 2 });
+  const alertWatchPost = (url: string, headers: Record<string, string>, body: string, agent: HttpsAgent): Promise<{ status: number; json: unknown }> => new Promise((resolve, reject) => {
+    const request = httpsRequest(url, { method: 'POST', agent, timeout: 8_000, headers: { ...headers, 'Content-Length': Buffer.byteLength(body) } }, (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= 65_536) chunks.push(chunk); });
+      response.on('error', reject);
+      response.on('end', () => {
+        let json: unknown = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { json = null; }
+        resolve({ status: response.statusCode ?? 0, json });
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('timeout')));
+    request.on('error', (reason) => reject(Object.assign(reason, { reusedSocket: request.reusedSocket })));
+    request.end(body);
+  });
   const alertWatch = IS_TEST_SYSTEM ? null : createRithmicAlertWatch({
     uuid: randomUUID,
     apiBase: ALERT_APP_URL,
     sign: signPriceAlertWatchRequest,
-    post: async (url, headers, body) => {
-      const response = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(8_000) });
-      return { status: response.status, json: await response.json().catch(() => null) };
-    },
+    // Držené spojení na server (keep-alive): ohlášení křížení nečeká na nové TLS spojení. Držené spojení mohl
+    // server mezitím zavřít: chyba na znovupoužitém = hned jednou zkusit na novém (stejné `triggerId`, server
+    // opakování pozná). Jinak by ohlášení čekalo na opakování po 5 s. Vypršení času se takhle neopakuje.
+    post: (url, headers, body) => alertWatchPost(url, headers, body, alertHttpsAgent)
+      .catch((reason: { reusedSocket?: boolean; message?: string }) => (reason?.reusedSocket === true && reason.message !== 'timeout'
+        ? alertWatchPost(url, headers, body, new HttpsAgent({ keepAlive: false }))
+        : Promise.reject(reason))),
     load: () => { try { return JSON.parse(readFileSync(alertFile, 'utf8')) as AlertWatchPersisted; } catch { return null; } },
     save: (state) => {
       mkdirSync(dirname(alertFile), { recursive: true });

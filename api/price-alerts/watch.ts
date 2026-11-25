@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { PRICE_ALERT_WATCH_HEADER, priceAlertWatchGrant, verifyPriceAlertWatchRequest } from '../../server/priceAlertWatchKey.js';
 import { drainPriceAlertOutbox } from '../../server/priceAlertOutbox.js';
+import { prewarmApns } from '../../server/apns.js';
 import { handleNativeCors } from '../../server/nativeCors.js';
 
 /**
@@ -70,12 +71,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!payloadText) return res.status(400).json({ error: 'invalid-payload' });
     let payload: Record<string, unknown>;
     try { payload = JSON.parse(payloadText) as Record<string, unknown>; } catch { return res.status(400).json({ error: 'invalid-payload' }); }
-    if (payload?.action !== 'trigger') return res.status(400).json({ error: 'invalid-action' });
+    if (payload?.action !== 'trigger' && payload?.action !== 'warm') return res.status(400).json({ error: 'invalid-action' });
     const auth = verifyPriceAlertWatchRequest(req.headers[PRICE_ALERT_WATCH_HEADER], payloadText, now);
     if (!auth) return res.status(401).json({ error: 'invalid-alert-auth' });
+    // `warm`: služba hlásí, že cena je blízko úrovně — jen probudit funkci a udržet spojení ze služby. Nic nečte,
+    // nezapisuje a k Applu se nepřipojuje.
+    if (payload.action === 'warm') return res.status(200).json({ warm: true, serverNow: now });
     const triggers = parsePriceAlertTriggers(payload.triggers, now);
     if (!triggers) return res.status(400).json({ error: 'invalid-triggers' });
 
+    // Spojení k Applu se navazuje hned (souběžně se zápisem), ať odeslání nečeká na jeho ustavení; na konci
+    // požadavku se zavře — mezi požadavky se nedrží.
+    const apns = prewarmApns();
+    try {
     const db = createClient(supabaseUrl(), requiredEnv('SUPABASE_SERVICE_ROLE_KEY'), {
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -102,6 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (eventIds.length) console.log(`[price-alerts] spuštění ${eventIds.length}: zápis ${rpcDoneAt - startedAt} ms, doručení ${Date.now() - rpcDoneAt} ms`);
     return res.status(200).json({ results, serverNow: now });
+    } finally { apns.release(); }
   } catch (error) {
     console.error('[price-alerts] watch failed', error instanceof Error ? error.message : String(error));
     return res.status(500).json({ error: 'price-alert-watch-failed' });
