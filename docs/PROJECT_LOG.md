@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: zdvojené FVG a pozice po přepnutí timeframu — oprava (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
+
+- Příznak (Filip, PC i telefon): po přepnutí 1m → jiný → 1m jsou FVG sytější a pozice v grafu dvakrát, „přichycené“.
+- Příčina: `CandleKitTradeChart.handleReadyLatest` bral nový objekt `api` jako nový graf a evidenci vrstev jen vynuloval. ChartView ale vydá nové `api` i nad STEJNÝM grafem, kdykoli se změní objekt nastavení kreslení — tj. při sdílené vrstvě kreseb pokaždé, když se změní okno dnů (`layer:od:do`) nebo se vrstva zapne: v LIVE na PC při přepnutí timeframu (jeden graf přes všechny intervaly), na telefonu a v deníku když se dočte starší historie / přejde půlnoc / vrstva naběhne po startu. Staré vrstvy (FVG, levely, popisky struktury, průběh pozic, značky) zůstaly na sérii a kreslily se znovu; stará vrstva průběhu pozic navíc držela starý kreslicí engine.
+- Oprava: `services/chartOverlayArtifacts.ts` — před každou přestavbou se vše z evidence odpojí od grafu, ke kterému to bylo připojeno (zaniklý graf = chyba se spolkne). Značky vstup/výstup (`createSeriesMarkers`) se nově evidují taky; dřív přibývaly při každé přestavbě i bez změny api. Test `tests/chartOverlayArtifacts.test.ts`.
+- Ověřeno v náhledu (simulace Rithmic, `?vrstva=1`): PC 4× přepnutí 1m↔5m — dřív 10 → 16 → 22 → 28 vrstev na sérii a neprůhledné FVG, teď 10 → 13; telefon 6 změn vrstvy — dřív 11 → 31, teď stále 11. Backtest s jedním grafem chybu neměl (nový graf na každý timeframe, kresby tam jsou per timeframe).
+- Zbývá (neviditelné): `IndicatorController` v CandleKitu při odpojení zahodí svůj prázdný plugin značek bez `detach()` → +1 prázdná vrstva na každou výměnu kreslicího ovladače. Chce úpravu patche knihovny.
+- QA: `tests/qa/start.mjs` bere `QA_PORT` a `QA_CACHE_DIR` (víc worktree vedle sebe); syntetické svíčky backtestu mají každých 45 min skok 5 b → vznikají FVG; `rithmic-simulation.html` a `rithmic-phone-simulation.html` s `?vrstva=1` zapnou sdílenou vrstvu kreseb se smyšleným uživatelem (tabulky zůstávají zavřené). Počítání vrstev: obalit `attachPrimitive`/`detachPrimitive` na prototypu série; na telefonní stránce se api hledá přes React fiber (není tam `__atPanels`).
+
 ### 2026-11-25 — Claude: zrychlení cesty alertu do iPhonu — předem navázané spojení k Applu, předehřátí ze služby (NENASAZENO)
 
 - Oprava předchozího zápisu: arn1 POMOHLO. Měření z logu funkce (7 spuštění 16:08–16:20): obchod → server 230–440 ms, RPC 35–200 ms, čtení před odesláním 110–280 ms, volání APNs 350–500 ms → obchod → Apple přijal ≈ 0,9–1,1 s (před arn1 ~2–2,5 s). Vzorek 15:32 (2,5 s) byl studený start po nasazení; sandbox APNs není pomalý. Poučení: nesoudit z jednoho vzorku.

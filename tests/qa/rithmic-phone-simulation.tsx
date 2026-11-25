@@ -8,6 +8,7 @@ import LivePhoneChart from '../../components/day/LivePhoneChart';
 import { LivePhoneHeader } from '../../components/LivePhoneChrome';
 import { SIMULATION_ACCOUNT_BAR, simulationAccountBarNearLimit } from './rithmic-simulation-accounts';
 import '../../index.css';
+import { startChartDrawingLayer } from '../../services/chartDrawingLayer';
 
 // Stejné přepínače výpadků jako PC simulace (?drop=1, ?drop=cancel).
 const query = ['?drop=1', '?drop=cancel'].includes(location.search) ? location.search : '';
@@ -16,6 +17,11 @@ const note = (text: string) => { document.title = text; };
 // a přihlášení klíčem zařízení (brána pro zařízení běží na portu o jedna výš než stránka).
 const asDevice = location.search === '?device=1';
 
+// `?vrstva=1`: kresby jako na skutečném účtu — jedna vrstva společná pro všechny timeframy.
+if (location.search.includes('vrstva=1')) {
+  window.localStorage.setItem('alphatrade:chart-drawings-migrated:v1:user:qa-layer-user', 'qa');
+  startChartDrawingLayer();
+}
 createRoot(document.getElementById('root')!).render(
   <RithmicPhoneChart
     open isDark

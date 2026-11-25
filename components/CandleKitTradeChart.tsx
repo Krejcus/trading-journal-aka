@@ -88,6 +88,12 @@ import {
   subscribeDrawingLayer,
   windowDrawings,
 } from '../services/chartDrawingLayer';
+import {
+  emptyOverlayArtifacts,
+  releaseOverlayArtifacts,
+  restartOverlayArtifacts,
+  type OverlayArtifacts,
+} from '../services/chartOverlayArtifacts';
 import { normalizeDrawingForLayer, type StoredDrawingLike } from '../services/chartAnnotationMigration';
 import {
   calculateMarketStructure,
@@ -2287,11 +2293,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const magnetPendingSnapRef = useRef<{ time: number; price: number } | null>(null);
   const magnetCrosshairUpdatingRef = useRef(false);
   const magnetFirstAnchorPreviewRef = useRef(false);
-  const overlayArtifactsRef = useRef<{
-    api: ChartViewApi | null;
-    lines: ISeriesApi<'Line'>[];
-    primitives: ISeriesPrimitive<Time>[];
-  }>({ api: null, lines: [], primitives: [] });
+  const overlayArtifactsRef = useRef<OverlayArtifacts<ChartViewApi, ISeriesApi<'Line'>, ISeriesPrimitive<Time>>>(
+    emptyOverlayArtifacts(),
+  );
   const ohlcValuesRef = useRef<HTMLSpanElement>(null);
   const ohlcChangeRef = useRef<HTMLSpanElement>(null);
   const legendFollowsCrosshairRef = useRef(false);
@@ -3063,18 +3067,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (magnetCrosshairFrameRef.current !== null) window.cancelAnimationFrame(magnetCrosshairFrameRef.current);
     magnetPendingSnapRef.current = null;
     magnetCrosshairUpdatingRef.current = false;
-    const artifacts = overlayArtifactsRef.current;
-    if (artifacts.api) {
-      const chart = artifacts.api.controller.getChart();
-      const series = artifacts.api.controller.getSeries() as ISeriesApi<'Candlestick'>;
-      artifacts.primitives.forEach(primitive => {
-        try { series.detachPrimitive(primitive); } catch { /* chart already destroyed */ }
-      });
-      artifacts.lines.forEach(line => {
-        try { chart.removeSeries(line); } catch { /* chart already destroyed */ }
-      });
-    }
-    overlayArtifactsRef.current = { api: null, lines: [], primitives: [] };
+    releaseOverlayArtifacts(overlayArtifactsRef.current);
+    overlayArtifactsRef.current = emptyOverlayArtifacts();
     if (priceWheelFrameRef.current !== null) window.cancelAnimationFrame(priceWheelFrameRef.current);
     if (replayViewportFrameRef.current !== null) window.cancelAnimationFrame(replayViewportFrameRef.current);
     if (replayStartAnimationFrameRef.current !== null) window.cancelAnimationFrame(replayStartAnimationFrameRef.current);
@@ -4204,18 +4198,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     );
     applyFibRuntimeTimeframe(api.drawing?.engine, timeframe);
     applyPositionRuntimeInterval(api.drawing?.engine, timeframeMinutes(timeframe) * 60);
-    if (chartChanged) {
-      overlayArtifactsRef.current = { api, lines: [], primitives: [] };
-    } else {
-      overlayArtifactsRef.current.primitives.forEach(primitive => {
-        try { series.detachPrimitive(primitive); } catch { /* chart already refreshed */ }
-      });
-      overlayArtifactsRef.current.lines.forEach(line => {
-        try { chart.removeSeries(line); } catch { /* chart already refreshed */ }
-      });
-      overlayArtifactsRef.current.lines = [];
-      overlayArtifactsRef.current.primitives = [];
-    }
+    // Nové `api` neznamená nový graf: změna nastavení kreslení (LIVE se
+    // sdílenou vrstvou kreseb při přepnutí timeframu) vydá nový objekt nad
+    // stejnou sérií. Staré vrstvy se proto odpojují vždy — jinak by se FVG,
+    // levely i průběh pozic kreslily víckrát přes sebe.
+    overlayArtifactsRef.current = restartOverlayArtifacts(overlayArtifactsRef.current, api);
     const applyTradingViewCandleStyle = () => {
       chart.applyOptions({ layout: { fontFamily: chartStyle.fontFamily } });
       series.applyOptions({
@@ -4623,7 +4610,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const exitTime = nearestCandleTime(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
     const isLong = String(trade.direction).toLowerCase() === 'long';
     // Kotva grafu dne není obchod — žádné ENTRY/EXIT značky.
-    createSeriesMarkers(series, replayActive || trade.executionHistory || trade.accountId === DAY_ANCHOR_ACCOUNT_ID ? [] : [
+    overlayArtifactsRef.current.markers.push(createSeriesMarkers(series, replayActive || trade.executionHistory || trade.accountId === DAY_ANCHOR_ACCOUNT_ID ? [] : [
       {
         time: entryTime,
         position: isLong ? 'belowBar' as const : 'aboveBar' as const,
@@ -4638,7 +4625,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         shape: isLong ? 'arrowDown' as const : 'arrowUp' as const,
         text: 'EXIT',
       },
-    ].sort((a, b) => Number(a.time) - Number(b.time)));
+    ].sort((a, b) => Number(a.time) - Number(b.time))));
 
     const engine = api.drawing?.engine;
     if (engine) {

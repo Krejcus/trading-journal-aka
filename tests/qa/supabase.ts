@@ -5,7 +5,11 @@ const closed = (time: number) => {
   return day === 6 || day === 5 && hour >= 21 || day === 0 && hour < 22 || hour === 21;
 };
 const quarter = (value: number) => Math.round(value * 4) / 4;
-const price = (minute: number) => quarter(100 + Math.sin(minute / 8) * 3 + Math.sin(minute / 57) * 2);
+// Každých 45 minut skok o 5 bodů během jedné minuty (střídavě nahoru a dolů):
+// samotná sinusovka nikdy nenechá mezeru mezi knoty, takže by QA graf neměl
+// žádné FVG a nebylo by na čem ověřit jejich vykreslení.
+const impulse = (minute: number) => (Math.abs(Math.floor(minute / 45)) % 2 === 1 ? 5 : 0);
+const price = (minute: number) => quarter(100 + Math.sin(minute / 8) * 3 + Math.sin(minute / 57) * 2 + impulse(minute));
 const minuteCandle = (time: number) => {
   const index = Math.floor((time * 1000 - QA_START_MS) / 60_000);
   const open = price(index), close = price(index + 1);
