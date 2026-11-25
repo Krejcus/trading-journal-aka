@@ -39,6 +39,7 @@ import {
   LivePhoneOrderLines, LivePhoneWorkingBadges, livePhoneDraftAfterAddBracket, livePhoneDraftAfterDrag, livePhoneDraftAfterRemove, livePhoneDraftLines,
   livePhoneMarketDraftFollow, livePhoneWorkingView, useLivePhoneLineState,
 } from './LivePhoneOrderLines';
+import { exitTouchCrosshair } from '../../services/chartTouchCrosshair';
 import { hideExactCrosshairOverlays } from '../../services/chartCrosshairPrecision';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
 import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
@@ -755,7 +756,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
           {active && <LivePhoneCrosshairPlus api={api} onPlus={price => {
             plusOpenedAt.current = Date.now();
             // Kříž končí otevřením listu: jeho štítky (cena, datum a čas) by jinak zůstaly viset nad listem.
-            try { api?.controller.getChart().clearCrosshairPosition(); } catch { /* graf se právě přestavuje */ }
+            try { if (api) exitTouchCrosshair(api.controller.getChart()); } catch { /* graf se právě přestavuje */ }
             hideExactCrosshairOverlays();
             setPlus(price);
           }} />}

@@ -143,7 +143,8 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
     expect(chart).toMatch(/live\.paneLayer\(\{ \.\.\.liveInfo, api: paneApi\(index\), candles: list, intervalSeconds: timeframeMinutes\(paneTf\) \* 60, paneIndex: index, active: !split \|\| isActive \}\)/);
     const phone = readFileSync('components/day/LivePhoneChart.tsx', 'utf8');
     expect(phone).toMatch(/paneLayer: \(\{ api, replay, active, lastPrice \}\) => \(api && !replay \? <>/);
-    expect(phone).toMatch(/\{active && <LivePhoneCrosshairPlus api=\{api\} onPlus=\{price => \{ plusOpenedAt\.current = Date\.now\(\); setPlus\(price\); \}\} \/>\}/);
+    // Plusko jen v aktivním okně; otevření listu zapíše čas (proti „ghost tapu“), ukončí kříž a nastaví cenu.
+    expect(phone).toMatch(/\{active && <LivePhoneCrosshairPlus api=\{api\} onPlus=\{price => \{\s+plusOpenedAt\.current = Date\.now\(\);[\s\S]{0,400}?exitTouchCrosshair\([\s\S]{0,200}?setPlus\(price\);\s+\}\} \/>\}/);
     // Cenové čáry pozice (náhrada štítků ve dvou oknech) už nejsou potřeba — štítky by byly dvakrát.
     expect(phone).not.toMatch(/PositionPriceLines|createLivePriceLinesFeed/);
   });
@@ -171,7 +172,7 @@ describe('oponentura 2. 11. — vrstvy, okna, ×, plusko, karty', () => {
 
 describe('oponentura 2. 11., 2. kolo', () => {
   it('plusko leží nad štítky čar (klepnutí na + nikdy netrefí × u pozice)', () => {
-    expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/zIndex: 130, pointerEvents: 'auto', width: 16, height: 16/);
+    expect(readFileSync('components/day/LivePhoneAlerts.tsx', 'utf8')).toMatch(/zIndex: 130, pointerEvents: 'auto', width: PLUS_WIDTH, height: PLUS_HEIGHT/);
     expect(readFileSync('components/BacktestOrderLinesOverlay.tsx', 'utf8')).toMatch(/z-\[115\]/);
   });
   it('lokální karty (upozornění) nejsou sticky; position box bere čerstvou kotaci', () => {

@@ -1,3 +1,4 @@
+import { readCrosshairPrice } from '../../services/chartTouchCrosshair';
 import React, { useEffect, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
@@ -232,10 +233,12 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
     <button
       type="button"
       aria-label="Akce na ceně crosshairu"
+      data-crosshair-keep
       className="dj-btn"
       onPointerDown={event => event.stopPropagation()}
       onClick={() => {
-        const raw = api.controller.getSeries().coordinateToPrice(point.y);
+        // Přesná cena kříže (po přichycení magnetem); z pixelu jen jako záloha.
+        const raw = readCrosshairPrice(api.controller.getChart().chartElement()) ?? api.controller.getSeries().coordinateToPrice(point.y);
         if (raw != null && Number.isFinite(raw)) onPlus(Math.round(raw / TICK) * TICK);
       }}
       // Hranatější pilulka těsně u cenové osy (Filip 25. 11.). Sklo Aurora s vlastní výplní —

@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: telefonní graf — kříž, který nezůstává viset, magnet na kříži, nové plus (NENASAZENO, stejná větev)
+
+- Kříž: Lightweight Charts po dlouhém podržení drží „režim sledování“ až do klepnutí PŘÍMO do plochy grafu a nemá API na ukončení. Klepnutí jinam (lišta, tlačítko, list) kříž nechalo. Nově `services/chartTouchCrosshair.ts`: `exitTouchCrosshair` pošle ploše grafu umělé klepnutí bez pohybu (obyčejná `Event` s poli `touches`/`changedTouches` — knihovna nic jiného nečte) + `clearCrosshairPosition`. Volá se při dotyku mimo graf (kromě prvků s `data-crosshair-keep` = plus), při odchodu z appky a při otevření listu z plusu. Jen `phoneLayout`, jen ne-myš.
+- `touchcancel`: knihovna ho neřeší (jen zruší časovač dlouhého podržení) a přerušený dotyk si dál vede jako aktivní → další `touchstart` zahodí. `installTouchCancelRepair` jí ho dořekne jako `touchend`. Je to preventivní oprava podle čtení kódu knihovny; že přesně tohle byl Filipův případ, není doložené.
+- Magnet: na telefonu chytá i samotný kříž (bez kreslicího nástroje) — podmínka v `handleCrosshairMove` rozšířena o `phoneLayout`. Přesná cena kříže jde do `dataset.atCrosshairPrice` na prvku grafu a plus ji čte (z pixelu by se po přichycení nemusela trefit na tick). PC beze změny (magnet jen při kreslení).
+- Plus u kříže: hranatější skleněná pilulka 30×24 těsně u osy, barvy `--dj-plus-*` pro tmavý i světlý motiv. Štítky kříže (cena, datum a čas) se při otevření listu schovají (`hideExactCrosshairOverlays`).
+- QA: telefonní stránka má přepínač Světlý/Tmavý. Dotyky jdou v náhledu simulovat stejnou umělou událostí na horním plátně plochy grafu (`table tr:first-child td:nth-child(2) canvas`, poslední); dlouhé podržení = `touchstart`, 400 ms, `touchend`.
+- Ověřeno jen v náhledu prohlížeče se simulovanými dotyky; skutečný iPhone (WKWebView) neověřen.
+
 ### 2026-11-25 — Claude: zdvojené FVG a pozice po přepnutí timeframu — oprava (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
 
 - Příznak (Filip, PC i telefon): po přepnutí 1m → jiný → 1m jsou FVG sytější a pozice v grafu dvakrát, „přichycené“.
