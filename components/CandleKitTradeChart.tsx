@@ -122,6 +122,7 @@ import {
   createDrawingMagnetResolver,
   getDrawingMagnetSettings,
   installDrawingMagnet,
+  createPriceLevelMagnet,
   setDrawingMagnetSettings,
   subscribeDrawingMagnetSettings,
   type DrawingMagnetSources,
@@ -4727,7 +4728,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         },
       );
       drawingMagnetResolverRef.current = resolveMagnetPoint;
-      drawingMagnetCleanupRef.current = installDrawingMagnet(engine, resolveMagnetPoint);
+      const priceLevelMagnet = createPriceLevelMagnet(
+        () => drawingMagnetSourcesRef.current,
+        {
+          priceToY: price => series.priceToCoordinate(price),
+          visibleTimeRange: () => {
+            const range = chart.timeScale().getVisibleRange();
+            return range ? { from: Number(range.from), to: Number(range.to) } : null;
+          },
+        },
+      );
+      drawingMagnetCleanupRef.current = installDrawingMagnet(
+        engine,
+        resolveMagnetPoint,
+        // Jen telefon: prst drží úchyt u levého okraje boxu, ne u svíčky, na kterou míří.
+        price => (phoneLayoutRef.current ? priceLevelMagnet(price) : null),
+      );
       // Průběh Long/Short boxu jako v TradingView: po zasažení entry čárkovaná
       // čára k aktuální ceně a box se vyplňuje — v přehrávání i na běžném
       // grafu (bez přehrávání jsou „viditelné“ všechny svíčky).

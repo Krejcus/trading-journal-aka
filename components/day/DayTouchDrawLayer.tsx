@@ -99,6 +99,8 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
   const longPressRef = useRef(onDrawingLongPress);
   longPressRef.current = onDrawingLongPress;
   const [crosshair, setCrosshair] = useState<{ x: number; y: number; price: string | null } | null>(null);
+  /** Vodorovná vodicí čára při tahu úchytu ceny position boxu (vstup, SL, TP). */
+  const [guide, setGuide] = useState<{ y: number; right: number; axis: number; price: string } | null>(null);
 
   useEffect(() => {
     if (!enabled || !chartApi) return;
@@ -107,7 +109,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     const { engine } = controller;
     let element: HTMLElement;
     let chart: ReturnType<ChartViewApi['controller']['getChart']>;
-    let series: { coordinateToPrice: (y: number) => number | null } | null = null;
+    let series: { coordinateToPrice: (y: number) => number | null; priceToCoordinate: (price: number) => number | null } | null = null;
     try {
       chart = chartApi.controller.getChart();
       element = chart.chartElement();
@@ -230,6 +232,25 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     let pathDrag: { id: string; group: string; index: number; kind: string; anchorIndex: number; before: DrawingPoint[] } | null = null;
     /** Kresba pod prstem a poslední klepnutí na kresbu (dvojklep = nastavení). */
     let dragHitId: string | null = null;
+    /** Tažený úchyt ceny position boxu: kresba a index bodu, jehož cenu vodicí čára ukazuje. */
+    let guideAnchor: { id: string; pointIndex: number } | null = null;
+    const showGuide = () => {
+      if (!guideAnchor) { setGuide(null); return; }
+      const price = engine.getById(guideAnchor.id)?.points[guideAnchor.pointIndex]?.price;
+      const y = price == null ? null : series?.priceToCoordinate(price) ?? null;
+      const box = containerRef.current?.getBoundingClientRect();
+      if (price == null || y == null || !box) { setGuide(null); return; }
+      const rect = element.getBoundingClientRect();
+      let axis = 0;
+      try { axis = chart.priceScale('right').width(); } catch { /* graf se právě přestavuje */ }
+      setGuide({ y: y + rect.top - box.top, right: box.right - rect.right + axis, axis, price: price.toFixed(2) });
+    };
+    /** Konec tahu: čára pryč a s ní i kříž, který při tahu ukazuje magnet (jinak by zůstal viset). */
+    const endGuide = () => {
+      guideAnchor = null;
+      setGuide(null);
+      try { chart.clearCrosshairPosition(); } catch { /* graf už zanikl */ }
+    };
     let lastDrawingTap: { id: string; at: number } | null = null;
     /** Podržení: časovač a příznak, že dotyk už patří menu (konec není klepnutí). */
     let longTimer = 0;
@@ -253,6 +274,13 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       if (captured && hit && group && drawing) {
         pathDrag = { id: hit.id, group, index: segmentIndex(hit.id), kind: hit.kind, anchorIndex: hit.anchorIndex ?? 0, before: drawing.points.map(item => ({ ...item })) };
       }
+      guideAnchor = null;
+      const dragged = captured && hit?.kind === 'anchor' ? engine.getById(hit.id) : undefined;
+      // Úchyty ceny: 1 = TP, 2 = SL, 3 = vstup (bod 0). Úchyt 0 mění jen šířku boxu.
+      if (dragged && (dragged.tool === 'LongPosition' || dragged.tool === 'ShortPosition') && hit?.anchorIndex) {
+        guideAnchor = { id: dragged.id, pointIndex: hit.anchorIndex === 3 ? 0 : hit.anchorIndex };
+        showGuide();
+      }
       if (captured) block(event);
       if (captured && dragHitId && longPressRef.current) {
         const id = dragHitId;
@@ -264,6 +292,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
           controller.onUp();
           controller.onLeave?.();
           dragging = false; pathDrag = null; lastDrawingTap = null;
+          endGuide();
           longPressed = true;
         }, LONG_PRESS_MS);
       }
@@ -314,7 +343,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     const onTouchStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) {
         // Druhý prst: pinch patří grafu, rozdělaný tah ukončíme bez změny.
-        if (touching && dragging) controller.onUp();
+        if (touching && dragging) { controller.onUp(); endGuide(); }
         touching = false; captured = false; dragging = false;
         return;
       }
@@ -351,6 +380,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       if (dragging) {
         controller.onMove(fakeEvent(point.x, point.y));
         syncPathDrag();
+        showGuide();
       } else if (cursor && touchLast) {
         cursor = clamp({ x: cursor.x + point.x - touchLast.x, y: cursor.y + point.y - touchLast.y });
         cursorMovedSincePoint = true;
@@ -385,6 +415,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
         // Myš by hover zrušila odjetím; prst neodjíždí, úchyty by zůstaly svítit.
         controller.onLeave?.();
         dragging = false; captured = false; pathDrag = null;
+        endGuide();
         if (!moved && dragHitId) {
           const now = Date.now();
           if (lastDrawingTap && lastDrawingTap.id === dragHitId && now - lastDrawingTap.at < DOUBLE_TAP_MS * 1.3) {
@@ -410,7 +441,7 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
     const onTouchCancel = () => {
       window.clearTimeout(longTimer); longPressed = false; pendingSelect = null;
       if (!touching) return;
-      if (dragging) controller.onUp();
+      if (dragging) { controller.onUp(); endGuide(); }
       touching = false; captured = false; dragging = false;
     };
 
@@ -429,9 +460,18 @@ export default function DayTouchDrawLayer({ chartApi, containerRef, enabled, pat
       if (engine.getDraft()) engine.cancelDraft();
       if (pathActive && engine.getActiveTool() === 'Arrow') engine.stopTool();
       setCrosshair(null);
+      setGuide(null);
     };
   }, [chartApi, containerRef, enabled, onPathEnd, pathActive, pathStyle]);
 
+  if (guide) {
+    return (
+      <div aria-hidden="true" data-drag-guide style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 21 }}>
+        <div style={{ position: 'absolute', top: guide.y, left: 0, right: guide.right, height: 0, borderTop: '1px dashed rgba(129,140,248,0.95)' }} />
+        <span className="dj-mono" style={{ position: 'absolute', right: guide.right - guide.axis, top: guide.y, transform: 'translateY(-50%)', width: Math.max(60, guide.axis), boxSizing: 'border-box', padding: '3px 4px', borderRadius: 5, fontSize: 12, fontWeight: 700, textAlign: 'center', color: '#0b0f19', background: '#c7d2fe', whiteSpace: 'nowrap' }}>{guide.price}</span>
+      </div>
+    );
+  }
   if (!crosshair) return null;
   return (
     <div aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 21 }}>

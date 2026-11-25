@@ -27,6 +27,54 @@ interface DrawingMagnetProjector {
   onSnap?: (point: DrawingPoint) => void;
 }
 
+/** Přichytí cenu k úrovni svíčky; `null` = tenhle způsob teď neplatí (použije se běžný magnet). */
+export type PriceLevelMagnet = (price: number) => number | null;
+
+interface PriceLevelProjector {
+  priceToY: (price: number) => number | null;
+  /** Časový rozsah, který je v grafu právě vidět. */
+  visibleTimeRange: () => { from: number; to: number } | null;
+}
+
+const WEAK_MAGNET_RADIUS_PX = 14;
+
+/**
+ * Magnet „na úroveň“: cena se chytá k nejbližšímu open/high/low/close ze VŠECH
+ * viditelných svíček, jen podle výšky. Běžný magnet hledá jen u svíčky pod
+ * ukazatelem — při tahu úchytu SL/TP position boxu prstem je ale ukazatel
+ * u levého okraje boxu, takže by šlo chytit jen tři svíčky u vstupu. Slabý
+ * magnet chytá do 14 px, silný vždy.
+ */
+export const createPriceLevelMagnet = (
+  sources: DrawingMagnetSources | (() => DrawingMagnetSources),
+  projector: PriceLevelProjector,
+) => (price: number): number => {
+  const currentSources = typeof sources === 'function' ? sources() : sources;
+  const settings = getDrawingMagnetSettings();
+  const { candles } = currentSources;
+  if (settings.mode === 'off' || candles.length === 0) return price;
+  const range = projector.visibleTimeRange();
+  if (!range) return price;
+  let best: number | null = null;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (let index = nearestIndex(candles, range.from); index < candles.length; index += 1) {
+    const candle = candles[index];
+    if (candle.time > range.to) break;
+    if (candle.time < range.from) continue;
+    for (const level of [candle.open, candle.high, candle.low, candle.close]) {
+      const gap = Math.abs(level - price);
+      if (gap < bestGap) { best = level; bestGap = gap; }
+    }
+  }
+  if (best === null) return price;
+  if (settings.mode === 'weak') {
+    const from = projector.priceToY(price);
+    const to = projector.priceToY(best);
+    if (from === null || to === null || Math.abs(to - from) > WEAK_MAGNET_RADIUS_PX) return price;
+  }
+  return best;
+};
+
 interface DrawingEngineLike {
   beginDraft: (tool: string, point: DrawingPoint) => void;
   updateDraftEnd: (point: DrawingPoint) => void;
@@ -154,6 +202,8 @@ export const createDrawingMagnetResolver = (
 export const installDrawingMagnet = (
   engine: DrawingEngineLike,
   resolver: (point: DrawingPoint) => DrawingPoint,
+  /** Telefon: ceny úchytů position boxu se chytají na úroveň přes celý viditelný graf. */
+  priceLevel?: PriceLevelMagnet,
 ) => {
   const original = {
     beginDraft: engine.beginDraft,
@@ -206,6 +256,8 @@ export const installDrawingMagnet = (
       // Position target/stop anchors store the right edge time even though their
       // visible handle is on the left. Snap against the candle under the pointer,
       // then keep the stored time so TP/SL adjustment never changes box width.
+      const level = isPosition && index <= 2 ? priceLevel?.(point.price) ?? null : null;
+      if (level !== null) return { ...point, price: level };
       if (isPosition && (index === 1 || index === 2) && points[0]) {
         const snapped = resolver({ time: pointerPoint?.time ?? points[0].time, price: point.price });
         return { ...point, price: snapped.price };

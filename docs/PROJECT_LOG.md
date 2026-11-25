@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: telefon — magnet a vodicí čára při úpravě position boxu (NENASAZENO, stejná větev)
+
+- Zjištění: magnet při tahu úchytu SL/TP hledal jen u svíčky pod ukazatelem ±1. Na PC si myš k cílové svíčce dojede, prst na telefonu ale drží úchyt u levého okraje boxu → chytit šly jen tři svíčky u vstupu, což vypadá jako „magnet nefunguje“.
+- Nově `createPriceLevelMagnet` (`services/chartDrawingMagnet.ts`): cena úchytu se chytá na nejbližší OHLC ze všech VIDITELNÝCH svíček, jen podle výšky (slabý do 14 px, silný vždy). `installDrawingMagnet` má třetí parametr; graf ho dává jen při `phoneLayout`, jinak vrací `null` a platí původní chování. Týká se úchytů TP, SL a vstupu (cena); šířka boxu a tah celým boxem beze změny.
+- `DayTouchDrawLayer`: při tahu úchytu ceny position boxu vodorovná čárkovaná čára přes graf se štítkem ceny na ose (`data-drag-guide`), i s vypnutým magnetem. Po tahu se maže kříž — běžný magnet ho při tahu zobrazuje přes `setCrosshairPosition` a po zvednutí prstu zůstával viset (další příčina „kříž zůstává, když nemá“).
+- Ověřeno simulovanými dotyky v náhledu: TP 25008,50 → 25012,25 (úroveň svíčky mimo okolí vstupu), čára během tahu, po tahu bez čáry i kříže. iPhone neověřen.
+
 ### 2026-11-25 — Claude: telefonní graf — kříž, který nezůstává viset, magnet na kříži, nové plus (NENASAZENO, stejná větev)
 
 - Kříž: Lightweight Charts po dlouhém podržení drží „režim sledování“ až do klepnutí PŘÍMO do plochy grafu a nemá API na ukončení. Klepnutí jinam (lišta, tlačítko, list) kříž nechalo. Nově `services/chartTouchCrosshair.ts`: `exitTouchCrosshair` pošle ploše grafu umělé klepnutí bez pohybu (obyčejná `Event` s poli `touches`/`changedTouches` — knihovna nic jiného nečte) + `clearCrosshairPosition`. Volá se při dotyku mimo graf (kromě prvků s `data-crosshair-keep` = plus), při odchodu z appky a při otevření listu z plusu. Jen `phoneLayout`, jen ne-myš.

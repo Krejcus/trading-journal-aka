@@ -289,3 +289,72 @@ describe('drawing magnet', () => {
     restore();
   });
 });
+
+describe('price level magnet (telefon: úchyty position boxu)', () => {
+  const visible = [
+    { time: 60, open: 100, high: 105, low: 95, close: 102, volume: 1 },
+    { time: 120, open: 102, high: 108, low: 101, close: 107, volume: 1 },
+    { time: 180, open: 107, high: 130, low: 106, close: 129, volume: 1 },
+    { time: 240, open: 129, high: 160, low: 128, close: 159, volume: 1 },
+  ];
+  const levelProjector = (range: { from: number; to: number } | null) => ({
+    priceToY: (price: number) => -price,
+    visibleTimeRange: () => range,
+  });
+
+  it('silný magnet chytí nejbližší úroveň z kterékoli viditelné svíčky, ne jen u vstupu', async () => {
+    const { createPriceLevelMagnet } = await import('../services/chartDrawingMagnet');
+    setDrawingMagnetSettings({ mode: 'strong', snapToIndicators: false });
+    const magnet = createPriceLevelMagnet({ candles: visible }, levelProjector({ from: 60, to: 180 }));
+    // 131 je nejblíž high třetí svíčky (130) — ta leží daleko od vstupu boxu.
+    expect(magnet(131)).toBe(130);
+    // Čtvrtá svíčka (159, 160) je mimo viditelný rozsah.
+    expect(magnet(158)).toBe(130);
+  });
+
+  it('slabý magnet chytá jen do 14 px; vypnutý nechá cenu být', async () => {
+    const { createPriceLevelMagnet } = await import('../services/chartDrawingMagnet');
+    const magnet = createPriceLevelMagnet({ candles: visible }, levelProjector({ from: 60, to: 120 }));
+    setDrawingMagnetSettings({ mode: 'weak', snapToIndicators: false });
+    expect(magnet(120)).toBe(108);
+    expect(magnet(125)).toBe(125);
+    setDrawingMagnetSettings({ mode: 'off' });
+    expect(magnet(129.4)).toBe(129.4);
+  });
+
+  it('tah úchytu TP position boxu bere úroveň přes celý graf a nemění šířku boxu', async () => {
+    const { createPriceLevelMagnet } = await import('../services/chartDrawingMagnet');
+    setDrawingMagnetSettings({ mode: 'strong', snapToIndicators: false });
+    const setPoints = vi.fn();
+    const previous = [{ time: 60, price: 102 }, { time: 300, price: 110 }, { time: 300, price: 96 }];
+    const engine = {
+      beginDraft: vi.fn(), updateDraftEnd: vi.fn(), appendDraftPoint: vi.fn(), commit: vi.fn(),
+      getDraft: vi.fn(() => null),
+      getById: vi.fn(() => ({ tool: 'LongPosition', points: previous })),
+      setPoints,
+    };
+    const level = createPriceLevelMagnet({ candles: visible }, levelProjector({ from: 60, to: 240 }));
+    const restore = installDrawingMagnet(engine, createDrawingMagnetResolver({ candles: visible }, projector), price => level(price));
+    // Prst je u levého okraje boxu (čas 60); cena 131 → high svíčky v čase 180.
+    engine.setPoints('box', [previous[0], { time: 300, price: 131 }, previous[2]], { time: 60, price: 131 });
+    expect(setPoints).toHaveBeenCalledWith('box', [previous[0], { time: 300, price: 130 }, previous[2]]);
+    restore();
+  });
+
+  it('na PC (magnet na úroveň vrací null) zůstává chování po svíčce pod ukazatelem', () => {
+    setDrawingMagnetSettings({ mode: 'strong', snapToIndicators: false });
+    const setPoints = vi.fn();
+    const previous = [{ time: 60, price: 102 }, { time: 300, price: 110 }, { time: 300, price: 96 }];
+    const engine = {
+      beginDraft: vi.fn(), updateDraftEnd: vi.fn(), appendDraftPoint: vi.fn(), commit: vi.fn(),
+      getDraft: vi.fn(() => null),
+      getById: vi.fn(() => ({ tool: 'LongPosition', points: previous })),
+      setPoints,
+    };
+    const restore = installDrawingMagnet(engine, createDrawingMagnetResolver({ candles: visible }, projector), () => null);
+    engine.setPoints('box', [previous[0], { time: 300, price: 127 }, previous[2]], { time: 60, price: 127 });
+    // U ukazatele (čas 60) jsou jen první dvě svíčky → nejbližší je 108.
+    expect(setPoints).toHaveBeenCalledWith('box', [previous[0], { time: 300, price: 108 }, previous[2]]);
+    restore();
+  });
+});
