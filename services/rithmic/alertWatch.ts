@@ -42,6 +42,11 @@ export interface AlertWatchDeps {
   apiBase: string;
   post: (url: string, headers: Record<string, string>, body: string) => Promise<AlertWatchPostResult>;
   sign: (input: { userId: string; key: string; body: string; ts: number }) => string;
+  /**
+   * Křížení právě nastalo a jde na server: hned dát vědět připojeným appkám (jen zobrazení karty — „jednou“,
+   * odstup i strop dál rozhoduje server). Volá se jen s klíčem, tedy jen když se křížení opravdu hlásí.
+   */
+  onFired?: (fired: { alertId: string; version: number; triggerId: string; user: string }) => void;
   load: () => AlertWatchPersisted | null;
   save: (state: AlertWatchPersisted) => void;
   onStatus: (status: AlertWatchStatus) => void;
@@ -213,6 +218,7 @@ export function createRithmicAlertWatch(deps: AlertWatchDeps) {
         for (const trigger of triggers) {
           if (queue.length >= MAX_QUEUE) { core.settle(trigger.triggerId, 'retry'); continue; }
           queue.push(trigger);
+          if (userId && key) { try { deps.onFired?.({ alertId: trigger.alertId, version: trigger.version, triggerId: trigger.triggerId, user: alertUserTag(userId) }); } catch { /* oznámení appce nesmí nic shodit */ } }
         }
         void flush(0).catch(() => undefined);
       } catch (reason) {

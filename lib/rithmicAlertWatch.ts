@@ -21,6 +21,17 @@ export const alertUserTag = (userId: string | null): string => (userId ? shortTa
 export const alertListDigest = (alerts: readonly { id: string; version: number }[]): string =>
   shortTag([...alerts].map((alert) => `${alert.id}:${alert.version}`).sort().join('|'));
 
+export interface RithmicAlertFired { alertId: string; version: number; triggerId: string; user: string }
+const FIRED_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Zpráva služby `alert-fired` (křížení právě nastalo). Cokoli jiného = null. */
+export function parseRithmicAlertFired(raw: unknown): RithmicAlertFired | null {
+  const row = raw as { alertId?: unknown; version?: unknown; triggerId?: unknown; user?: unknown } | null;
+  if (!row || typeof row.alertId !== 'string' || !row.alertId || row.alertId.length > 80) return null;
+  if (typeof row.triggerId !== 'string' || !FIRED_UUID.test(row.triggerId) || typeof row.user !== 'string' || !row.user) return null;
+  if (!Number.isSafeInteger(row.version) || (row.version as number) < 1) return null;
+  return { alertId: row.alertId, version: row.version as number, triggerId: row.triggerId.toLowerCase(), user: row.user };
+}
+
 export function parseRithmicAlertWatchStatus(raw: unknown): RithmicAlertWatchStatus | null {
   const row = raw as Partial<RithmicAlertWatchStatus> | null;
   if (!row || typeof row !== 'object' || typeof row.count !== 'number' || !Number.isFinite(row.count) || typeof row.keyed !== 'boolean' || typeof row.feed !== 'boolean') return null;

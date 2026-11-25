@@ -81,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     const results: { triggerId: string; status: string }[] = [];
     const eventIds: string[] = [];
+    const startedAt = Date.now();
     for (const trigger of triggers) {
       const { data, error } = await db.rpc('trigger_price_alert', {
         p_user: auth.userId, p_alert: trigger.alertId, p_version: trigger.version, p_trigger: trigger.triggerId,
@@ -91,6 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       results.push({ triggerId: trigger.triggerId, status: row?.status ?? 'error' });
       if (row?.event_id && (row.status === 'triggered' || row.status === 'duplicate') && !row.suppressed) eventIds.push(row.event_id);
     }
+    const rpcDoneAt = Date.now();
     // Doručení do iPhonu hned (krátký rozpočet). Chyba doručení nikdy neshodí odpověď: událost už je zapsaná.
     try {
       // Bez výběru událostí: dožene i řádky, které se dřív nepodařilo doručit (mají vlastní vypršení).
@@ -98,6 +100,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (error) {
       console.warn('[price-alerts] immediate delivery failed', error instanceof Error ? error.message : String(error));
     }
+    if (eventIds.length) console.log(`[price-alerts] spuštění ${eventIds.length}: zápis ${rpcDoneAt - startedAt} ms, doručení ${Date.now() - rpcDoneAt} ms`);
     return res.status(200).json({ results, serverNow: now });
   } catch (error) {
     console.error('[price-alerts] watch failed', error instanceof Error ? error.message : String(error));

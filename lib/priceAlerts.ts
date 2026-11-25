@@ -212,6 +212,12 @@ export interface PriceAlertStore {
   setDefaults(defaults: PriceAlertDefaults): void;
   /** Znovu zapne spuštěné upozornění beze změny (jen server). */
   rearm?(id: string): boolean;
+  /**
+   * Křížení ohlášené místní službou dřív, než dorazí ze serveru (jen server). Ukáže kartu hned; událost ze serveru
+   * se stejným `triggerId` ji pak jen nahradí (podruhé nezazní). False = neznámé, neaktivní, v jiné verzi nebo
+   * právě upravované upozornění (služba mohla křížit starou úroveň) — pak kartu ukáže až událost ze serveru.
+   */
+  fired?(input: { alertId: string; version: number; triggerId: string; at: number }): boolean;
 }
 
 /** Řádek ze serveru / cache → upozornění pro UI (stejné čištění jako v zařízení). */

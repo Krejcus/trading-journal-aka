@@ -365,6 +365,8 @@ async function main(): Promise<void> {
       renameSync(`${alertFile}.tmp`, alertFile);
     },
     onStatus: (status) => broadcast({ type: 'alerts', ...status }),
+    // Křížení rovnou připojeným appkám (karta a zvuk bez čekání na server). Jen zobrazení.
+    onFired: (fired) => broadcast({ type: 'alert-fired', ...fired }),
     log: (line) => console.log(`[upozornění] ${line}`),
   });
   /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou; obnovuje se s rostoucím odstupem. */
@@ -457,7 +459,7 @@ async function main(): Promise<void> {
           if (tick.exchangeAt != null && exchangeLag.length < 20_000) exchangeLag.push(tick.receivedAt - tick.exchangeAt);
           if (tick.gatewayAt != null && gatewayLag.length < 20_000) gatewayLag.push(tick.receivedAt - tick.gatewayAt);
           // Upozornění na cenu: každý obchod (nikdy nevyhodí, na síť nečeká).
-          alertWatch?.onTrade(tick.price, tick.receivedAt, CONTRACT);
+          if (tick.tradePrice !== null) alertWatch?.onTrade(tick.tradePrice, tick.receivedAt, CONTRACT);
         }
         if (!candles.onTick(tick)) return;
         // Dokončená svíčka musí odejít celá: když tick otevřel novou minutu, pošle se ještě poslední stav té předchozí.

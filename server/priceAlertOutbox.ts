@@ -98,6 +98,7 @@ export async function drainPriceAlertOutbox(options: {
         if (device.error) throw new Error(device.error.message);
         if (!device.data) result = { status: 'expired', error: 'subscription-removed-or-reassigned' };
         else if (row.channel === 'apns') {
+          const apnsStartedAt = Date.now();
           result = await sendApns({ id: device.data.id, deviceToken: device.data.device_token,
             environment: device.data.environment, bundleId: device.data.bundle_id }, {
             ...content, route: 'live', threadId: 'alphatrade-price-alerts', interruptionLevel: 'time-sensitive',
@@ -107,6 +108,8 @@ export async function drainPriceAlertOutbox(options: {
             // Neukládat u Applu: nevytlačí rizikovou notifikaci kopírky a nepřijde pozdě (INV-WATCH-01).
             expirationSeconds: 0,
           });
+          // Měření zpoždění (25. 11.): kolik z cesty do iPhonu stojí server Applu (sandbox bývá o řád pomalejší).
+          console.log(`[price-alerts] apns ${device.data.environment} ${result.status} ${Date.now() - apnsStartedAt} ms (fronta ${apnsStartedAt - claimAt} ms)`);
         } else {
           // Webový push se už neposílá: řádek uzavřít, ať se neopakuje.
           result = { status: 'expired', error: 'web-push-removed' };
