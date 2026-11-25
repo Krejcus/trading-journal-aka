@@ -62,6 +62,13 @@ export const ALERT_WATCH_MAX_ALERTS = 50;
 /** Upozornění jsou na úrovně NQ (MNQ má stejnou cenu). */
 const WATCHED_CONTRACT = /^(MNQ|NQ)[FGHJKMNQUVXZ]\d{1,4}$/;
 const RETRY_DELAYS_MS = [5_000, 20_000];
+/**
+ * Předehřátí serveru (25. 11. 2026): když je cena blízko některé úrovně, služba nejvýš jednou za 25 s pošle
+ * serveru podepsané „zahřej se“ — funkce pak běží, spojení k Applu i ze služby na server jsou navázaná a samotné
+ * spuštění nečeká na jejich ustavení. Nic nespouští ani nezapisuje; selhání se nehlásí a neopakuje.
+ */
+export const ALERT_WARM_DISTANCE = 0.001; // 0,1 % ceny (≈ 25 bodů NQ)
+export const ALERT_WARM_EVERY_MS = 25_000;
 const MAX_QUEUE = 40;
 
 export function createRithmicAlertWatch(deps: AlertWatchDeps) {
@@ -79,6 +86,22 @@ export function createRithmicAlertWatch(deps: AlertWatchDeps) {
   /** Čeká se na opakování po chybě sítě: nová křížení se jen řadí, neposílají se mimo pořadí pokusů. */
   let waiting = false;
   let lastStatus = '';
+  let lastWarmAt = 0;
+  const warmIfNear = (price: number): void => {
+    if (!userId || !key || sending || waiting || queue.length) return;
+    const at = now();
+    if (at - lastWarmAt < ALERT_WARM_EVERY_MS) return;
+    const reach = Math.abs(price) * ALERT_WARM_DISTANCE;
+    if (!alerts.some((alert) => Math.abs(alert.price - price) <= reach)) return;
+    lastWarmAt = at;
+    const body = JSON.stringify({ action: 'warm' });
+    try {
+      void deps.post(`${deps.apiBase}/api/price-alerts/watch`, {
+        'Content-Type': 'application/json',
+        'x-alphatrade-alert-auth': deps.sign({ userId, key, body, ts: at }),
+      }, JSON.stringify({ payload: body })).catch(() => undefined);
+    } catch { /* předehřátí je jen úspora času */ }
+  };
 
   const status = (): AlertWatchStatus => ({ count: alerts.length, keyed: key !== null, feed, error, digest: alertListDigest(alerts), user: key !== null ? alertUserTag(userId) : '' });
   const publish = (): void => {
@@ -214,7 +237,7 @@ export function createRithmicAlertWatch(deps: AlertWatchDeps) {
         lastPrice = price;
         if (!alerts.length) return;
         const triggers = core.onBatch({ contract, prev, min: price, max: price, last: price, at });
-        if (!triggers.length) return;
+        if (!triggers.length) { warmIfNear(price); return; }
         for (const trigger of triggers) {
           if (queue.length >= MAX_QUEUE) { core.settle(trigger.triggerId, 'retry'); continue; }
           queue.push(trigger);

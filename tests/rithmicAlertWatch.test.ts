@@ -228,6 +228,65 @@ describe('hlídání upozornění: část v appce', () => {
   });
 });
 
+describe('předehřátí serveru, když je cena blízko úrovně', () => {
+  it('server: „warm“ je podepsané, jen zahřeje spojení k Applu a nic nečte ani nezapisuje', () => {
+    const api = readFileSync('api/price-alerts/watch.ts', 'utf8');
+    const verify = api.indexOf('verifyPriceAlertWatchRequest(req.headers');
+    const warm = api.indexOf("if (payload.action === 'warm') return res.status(200)");
+    const db = api.indexOf("requiredEnv('SUPABASE_SERVICE_ROLE_KEY')");
+    expect(verify).toBeGreaterThan(0);
+    expect(warm).toBeGreaterThan(verify);
+    expect(db).toBeGreaterThan(warm);
+    // „warm“ se k Applu nepřipojuje; spojení se navazuje až u spuštění a na konci téhož požadavku se zavře.
+    expect(api.slice(verify, warm)).not.toContain('prewarmApns');
+    expect(api.slice(warm)).toContain('const apns = prewarmApns();');
+    expect(api.slice(warm)).toContain('} finally { apns.release(); }');
+    expect(readFileSync('scripts/rithmic/devTradeServer.ts', 'utf8')).toContain("reason?.reusedSocket === true && reason.message !== 'timeout'");
+    expect(readFileSync('server/priceAlertOutbox.ts', 'utf8')).toContain('keepSession: true,');
+  });
+
+  const warms = (t: ReturnType<typeof setup>) => t.posts.filter((post) => (JSON.parse(post.payload) as { action: string }).action === 'warm');
+
+  it('blízko úrovně pošle podepsané „warm“ nejvýš jednou za 25 s; daleko nic', async () => {
+    const t = setup();
+    t.watch.setKey({ userId: USER, key: KEY });
+    t.watch.setAlerts({ userId: USER, alerts: [alert({ price: 25_000 })] });
+    t.trade(24_900); t.trade(24_950);
+    expect(warms(t)).toHaveLength(0);
+    t.trade(24_980); t.trade(24_985); t.trade(24_990);
+    await t.settle();
+    expect(warms(t)).toHaveLength(1);
+    expect(verifyPriceAlertWatchRequest(warms(t)[0].headers['x-alphatrade-alert-auth'], warms(t)[0].payload, t.now(), SECRET)).toEqual({ userId: USER });
+    t.trade(24_991, 26_000);
+    await t.settle();
+    expect(warms(t)).toHaveLength(2);
+    // Předehřátí nic nespouští: žádné ohlášení křížení, žádná karta.
+    expect(t.posts.length).toBe(2);
+    expect(t.fired).toEqual([]);
+  });
+
+  it('bez klíče se nepředehřívá a selhání předehřátí nic nerozbije (křížení se ohlásí dál)', async () => {
+    const quiet = setup();
+    quiet.watch.setAlerts({ userId: USER, alerts: [alert({ price: 25_000 })] });
+    quiet.trade(24_990); quiet.trade(24_991);
+    await quiet.settle();
+    expect(quiet.posts).toEqual([]);
+
+    let fail = true;
+    const t = setup({ reply: (body) => (fail ? new Error('síť') : { status: 200, json: { results: (body.triggers ?? []).map((item) => ({ triggerId: item.triggerId, status: 'triggered' })) } }) });
+    t.watch.setKey({ userId: USER, key: KEY });
+    t.watch.setAlerts({ userId: USER, alerts: [alert({ price: 25_000 })] });
+    t.trade(24_990); t.trade(24_991);
+    await t.settle();
+    expect(t.watch.status().error).toBeNull();
+    fail = false;
+    t.trade(25_000.25);
+    await t.settle();
+    expect(t.fired).toHaveLength(1);
+    expect(t.logs.some((line) => line.includes('ohlášeno'))).toBe(true);
+  });
+});
+
 describe('křížení rovnou připojeným appkám (bez čekání na server)', () => {
   it('ohlásí se hned při křížení, se stejným triggerId jako jde serveru, a jen jednou', async () => {
     const t = setup();

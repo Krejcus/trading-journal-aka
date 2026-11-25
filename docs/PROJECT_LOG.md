@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: zrychlení cesty alertu do iPhonu — předem navázané spojení k Applu, předehřátí ze služby (NENASAZENO)
+
+- Oprava předchozího zápisu: arn1 POMOHLO. Měření z logu funkce (7 spuštění 16:08–16:20): obchod → server 230–440 ms, RPC 35–200 ms, čtení před odesláním 110–280 ms, volání APNs 350–500 ms → obchod → Apple přijal ≈ 0,9–1,1 s (před arn1 ~2–2,5 s). Vzorek 15:32 (2,5 s) byl studený start po nasazení; sandbox APNs není pomalý. Poučení: nesoudit z jednoho vzorku.
+- Okamžitá karta (09d28b73) NASAZENA web + iPhone, služba restartována 16:18 z c20f23ef. Naostro nepotvrzeno Filipem.
+- Nově (lokálně): `prewarmApns()` — spojení k Applu se začne navazovat hned po ověření podpisu spuštění, běží souběžně s RPC a čtením, na konci TÉHOŽ požadavku se zavře (`release`, počítadlo držitelů). Mezi požadavky se nic nedrží (uspaná funkce = mrtvé spojení = čekání na timeout). Jen pro `keepSession` (upozornění na cenu); cron a ostatní odesílání beze změny.
+- Služba: `warmIfNear` — cena do 0,1 % od hlídané úrovně → nejvýš jednou za 25 s podepsané `warm` (probudí funkci, drží spojení služba → server; k Applu se nepřipojuje, DB nečte). `post` hlídače přes `node:https` s keep-alive; chyba (ne timeout) na znovupoužitém spojení = jedno okamžité opakování na novém.
+- Critic: OK S VÝHRADAMI k první verzi (držení spojení mezi požadavky: mrtvé spojení stojí celý timeout; `warm` vracel dřív, než se spojení navázalo; selhání jedné žádosti nechalo sourozence viset; timeout se opakoval). Vyřešeno změnou návrhu (spojení jen v rámci požadavku), `request.on('close')`, bez opakování po timeoutu; druhé kolo kritiky neproběhlo. Nové testy chování `tests/apnsHeldSession.test.ts` (falešné HTTP/2). 4088 testů, tsc čisté, služba typově zkontrolována zvlášť.
+- Cena: `warm` až ~144 volání funkce za hodinu, když cena stojí u úrovně (krátká, bez DB) — sledovat proti rozpočtu Vercelu.
+
 ### 2026-11-25 — Claude: alerty rovnou ze služby do otevřené appky (NENASAZENO); arn1 nasazeno, cesta do iPhonu se nezrychlila
 
 - arn1 NASAZENO (47992465, hlavička `fra1::arn1`). První spuštění po nasazení (15:32): obchod → zápis 334 ms, zápis → odeslání do APNs 2,4–2,7 s — tedy BEZ zlepšení. Dotazy do DB to nebyly. Podezření: registrované zařízení má `environment = development` (build z Xcode) → server posílá přes `api.sandbox.push.apple.com`, který bývá o řád pomalejší než produkční. Neprokázáno — přidáno měření do logu funkce (`[price-alerts] apns <prostředí> <stav> <ms>`, `zápis/doručení ms`).

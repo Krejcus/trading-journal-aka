@@ -1,5 +1,5 @@
 import { createPrivateKey, sign } from 'node:crypto';
-import { connect } from 'node:http2';
+import { connect, type ClientHttp2Session } from 'node:http2';
 
 export type ApnsEnvironment = 'development' | 'production';
 
@@ -36,6 +36,8 @@ export interface ApnsNotification {
    * notifikaci kopírky (APNs drží jen poslední) a dorazila by pozdě.
    */
   expirationSeconds?: number;
+  /** Poslat po drženém spojení k Applu a nechat ho otevřené (upozornění na cenu). */
+  keepSession?: boolean;
 }
 
 export interface ApnsLiveActivityContentState {
@@ -237,7 +239,66 @@ const cleanCollapseId = (value: string | undefined): string | undefined => {
   return cleaned || undefined;
 };
 
-async function sendApnsRequest(options: {
+const APNS_HOSTS: Record<ApnsEnvironment, string> = {
+  development: 'https://api.sandbox.push.apple.com',
+  production: 'https://api.push.apple.com',
+};
+/**
+ * Předem navázaná spojení k Applu (25. 11. 2026): navázání z Evropy stojí ~0,4 s, odeslání po hotovém spojení
+ * jeden oběh. Spojení se otevře na začátku požadavku (`prewarmApns`), běží souběžně se zápisem spuštění a na konci
+ * TÉHOŽ požadavku se zavře (`release`). Mezi požadavky se nic nedrží: uspaná funkce by se probudila s mrtvým
+ * spojením a odeslání by čekalo na timeout. Používá je jen volání s `keepSession` (upozornění na cenu).
+ */
+const apnsSessions = new Map<string, ClientHttp2Session>();
+let apnsHolders = 0;
+function heldApnsSession(host: string): ClientHttp2Session | null {
+  const cached = apnsSessions.get(host);
+  return cached && !cached.closed && !cached.destroyed ? cached : null;
+}
+function openApnsSession(host: string): void {
+  if (heldApnsSession(host)) return;
+  const client = connect(host);
+  apnsSessions.set(host, client);
+  const drop = () => { if (apnsSessions.get(host) === client) apnsSessions.delete(host); };
+  client.once('close', drop);
+  client.once('goaway', drop);
+  // Posluchač chyby musí existovat pořád: chyba nečinného spojení jinak shodí proces.
+  client.on('error', drop);
+}
+const dropApnsSession = (host: string, client: ClientHttp2Session) => {
+  if (apnsSessions.get(host) === client) apnsSessions.delete(host);
+  try { client.destroy(); } catch { /* už zavřené */ }
+};
+
+/**
+ * Začne navazovat spojení k Applu a vrátí `release`, které se MUSÍ zavolat na konci požadavku (finally).
+ * Souběžné požadavky na téže instanci spojení sdílejí; zavře se, až ho pustí poslední. Nikdy nevyhodí.
+ */
+export function prewarmApns(): { release: () => void } {
+  let released = false;
+  let opened = false;
+  try {
+    if (readConfig()) {
+      for (const host of Object.values(APNS_HOSTS)) openApnsSession(host);
+      apnsHolders += 1;
+      opened = true;
+    }
+  } catch { /* předehřátí je jen úspora času */ }
+  return {
+    release: () => {
+      if (released || !opened) return;
+      released = true;
+      apnsHolders = Math.max(0, apnsHolders - 1);
+      if (apnsHolders > 0) return;
+      for (const [host, client] of [...apnsSessions]) {
+        apnsSessions.delete(host);
+        try { client.close(); } catch { /* už zavřené */ }
+      }
+    },
+  };
+}
+
+interface ApnsRequestOptions {
   environment: ApnsEnvironment;
   deviceToken: string;
   topic: string;
@@ -247,13 +308,27 @@ async function sendApnsRequest(options: {
   collapseId?: string;
   payload: Record<string, unknown>;
   timeoutMs?: number;
-}): Promise<ApnsResult> {
+  /** Použít předem navázané spojení tohoto požadavku, pokud existuje (viz `prewarmApns`). */
+  keepSession?: boolean;
+}
+
+async function sendApnsRequest(options: ApnsRequestOptions): Promise<ApnsResult> {
+  if (!options.keepSession) return sendApnsOnce(options, null);
+  const host = APNS_HOSTS[options.environment === 'development' ? 'development' : 'production'];
+  const held = heldApnsSession(host);
+  if (!held) return sendApnsOnce(options, null);
+  const first = await sendApnsOnce(options, held);
+  // Předem navázané spojení selhalo dřív, než Apple odpověděl: jednou zkusit na vlastním čerstvém. Po vypršení
+  // času se neopakuje (Apple mohl žádost přijmout a druhý pokus by se nevešel do rozpočtu požadavku).
+  if (first.status === 'failed' && !first.statusCode && first.error !== 'apns-timeout') return sendApnsOnce(options, null);
+  return first;
+}
+
+async function sendApnsOnce(options: ApnsRequestOptions, heldClient: ClientHttp2Session | null): Promise<ApnsResult> {
   const config = readConfig();
   if (!config) return { status: 'failed', error: 'missing-apns-config' };
 
-  const host = options.environment === 'development'
-    ? 'https://api.sandbox.push.apple.com'
-    : 'https://api.push.apple.com';
+  const host = APNS_HOSTS[options.environment === 'development' ? 'development' : 'production'];
   let authToken: string;
   try {
     authToken = providerToken(config);
@@ -262,21 +337,30 @@ async function sendApnsRequest(options: {
   }
 
   return new Promise<ApnsResult>((resolve) => {
-    const client = connect(host);
+    const client = heldClient ?? connect(host);
     let settled = false;
+    const onClientError = (error: unknown) => {
+      // Chyba celého spojení: sdílené zahodit, ať ho nedostane další odeslání.
+      if (heldClient) dropApnsSession(host, client);
+      finish({ status: 'failed', error: String(error).slice(0, 300) });
+    };
     const finish = (result: ApnsResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      client.close();
+      // Vlastní spojení se zavře (posluchač chyby na něm zůstává jako dřív); sdílené zavírá `release`.
+      if (!heldClient) client.close();
+      else client.off('error', onClientError);
       resolve(result);
     };
     const timeout = setTimeout(() => {
-      client.destroy();
+      if (!heldClient) client.destroy();
+      // Nejdřív výsledek (zničení spojení pošle streamu `close`, které by ho přebilo), pak sdílené spojení zahodit.
       finish({ status: 'failed', error: 'apns-timeout' });
+      if (heldClient) dropApnsSession(host, client);
     }, Math.min(7_000, Math.max(100, options.timeoutMs ?? 7_000)));
 
-    client.once('error', error => finish({ status: 'failed', error: String(error).slice(0, 300) }));
+    client.on('error', onClientError);
     const collapseId = cleanCollapseId(options.collapseId);
     const request = client.request({
       ':method': 'POST',
@@ -299,6 +383,8 @@ async function sendApnsRequest(options: {
     });
     request.on('data', chunk => { responseBody += String(chunk); });
     request.on('error', error => finish({ status: 'failed', statusCode, error: String(error).slice(0, 300) }));
+    // Zničené spojení pošle streamu jen `close` (žádné `error` ani `end`): bez toho by odeslání viselo do timeoutu.
+    request.on('close', () => finish({ status: 'failed', statusCode, error: 'apns-stream-closed' }));
     request.on('end', () => {
       if (statusCode === 200) return finish({ status: 'sent', statusCode, apnsId });
       let reason = responseBody.slice(0, 300) || `APNs HTTP ${statusCode}`;
@@ -334,6 +420,7 @@ export async function sendApnsNotification(
     collapseId: notification.collapseId,
     payload: buildApnsPayload(notification),
     timeoutMs: notification.timeoutMs,
+    keepSession: notification.keepSession === true,
   });
 }
 
