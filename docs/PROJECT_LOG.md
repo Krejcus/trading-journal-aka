@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: zpoždění alertů změřeno; funkce spuštění do arn1 (NENASAZENO)
+
+- Měření z `price_alert_events`/`price_alert_outbox` (5 spuštění 14:53–14:55, ostrý trh, služba Rithmic `cteni`): obchod na burze → zápis události v DB **340–600 ms**; zápis → odeslání do APNs **1,3–1,9 s**. Karta v otevřené appce jde přes Realtime hned po zápisu (~0,5 s + Realtime), oznámení v iPhonu ~2–2,5 s + doručení Applem (neměřeno).
+- Příčina: `api/price-alerts/watch.ts` běžel v `iad1` (hlavička `fra1::iad1`), databáze je ve Stockholmu → Mac→Washington a pak ~6 dotazů za sebou přes Atlantik (RPC, výběr fronty, převzetí řádku, událost, upozornění, zařízení), teprve potom APNs.
+- Oprava: `vercel.json` `functions` → `api/price-alerts/watch.ts` v `arn1` (vedle DB, ~30 ms z Prahy); v `drainPriceAlertOutbox` se událost a zařízení čtou souběžně. Test hlídá region. 4053 testů, tsc čisté.
+- Vedlejší nález: ke každému spuštění vznikají 2 APNs řádky (dvě registrovaná zařízení — pravděpodobně starý token po čisté reinstalaci) a 2 webové řádky (staré webové odběry, uzavírají se jako expired).
+
 ### 2026-11-25 — Claude: upozornění na cenu hlídá služba Rithmic; oprava svíček po výpadku cen (NENASAZENO)
 
 - Lokální commity ve větvi `claude/remove-tradovate-20261123` nad main: f7cf3266 (svíčky) + commit upozornění. Nic není pushnuto; služba nad skutečným účtem běží dál ve staré verzi z `~/alphatrade-worktrees/rithmic` (6a2ad307) — restart dělá jen Filip a ten checkout je před tím potřeba aktualizovat.

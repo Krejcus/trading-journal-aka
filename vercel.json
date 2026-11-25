@@ -1,6 +1,13 @@
 {
   "installCommand": "npm ci",
   "ignoreCommand": "sh scripts/vercel-ignore-build.sh",
+  "functions": {
+    "api/price-alerts/watch.ts": {
+      "regions": [
+        "arn1"
+      ]
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/send-alerts",

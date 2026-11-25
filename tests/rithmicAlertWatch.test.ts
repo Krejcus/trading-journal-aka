@@ -228,6 +228,10 @@ describe('hlídání upozornění: část v appce', () => {
 
 describe('hlídání upozornění je oddělené od příkazů (INV-UI-01)', () => {
   const source = (path: string) => readFileSync(path, 'utf8');
+  it('funkce spuštění běží vedle databáze (arn1): jinak každý dotaz letí přes Atlantik (25. 11. ~1,5 s do iPhonu)', () => {
+    const vercel = JSON.parse(source('vercel.json')) as { functions?: Record<string, { regions?: string[] }> };
+    expect(vercel.functions?.['api/price-alerts/watch.ts']?.regions).toEqual(['arn1']);
+  });
   it('hlídač neimportuje nic z obchodní části služby a zprávy o upozorněních nejsou sledovaný příkaz', () => {
     const watch = source('services/rithmic/alertWatch.ts');
     expect(watch).not.toMatch(/from '\.\/(localExec|rithmicBroker|rithmicClient|rithmicProtection)/);

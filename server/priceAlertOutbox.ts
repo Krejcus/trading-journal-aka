@@ -78,8 +78,15 @@ export async function drainPriceAlertOutbox(options: {
       if (claim.error || !claim.data) { totals.skipped++; return; }
       let result: ApnsResult;
       try {
-        const event = await options.db.from('price_alert_events').select('id,alert_id,symbol,level,condition')
-          .eq('id', row.event_id).eq('user_id', row.user_id).maybeSingle<EventRow>();
+        // Vlastnictví zařízení až v okamžiku odeslání: odhlášení nesmí poslat cizí upozornění.
+        const table = row.channel === 'apns' ? 'native_push_subscriptions' : 'push_subscriptions';
+        // Událost a zařízení na sobě nezávisí: čtou se souběžně (jedna cesta do databáze místo dvou).
+        const [event, device] = await Promise.all([
+          options.db.from('price_alert_events').select('id,alert_id,symbol,level,condition')
+            .eq('id', row.event_id).eq('user_id', row.user_id).maybeSingle<EventRow>(),
+          options.db.from(table).select('*').eq('id', row.subscription_id)
+            .eq('user_id', row.user_id).is('expired_at', null).maybeSingle(),
+        ]);
         if (event.error) throw new Error(event.error.message);
         if (!event.data) throw new Error('price-alert-event-missing');
         const alert = await options.db.from('price_alerts').select('note,channels')
@@ -88,10 +95,6 @@ export async function drainPriceAlertOutbox(options: {
         const content = priceAlertNotificationText({ symbol: event.data.symbol, condition: event.data.condition,
           level: Number(event.data.level), note: alert.data?.note });
         const collapseId = priceAlertCollapseId(event.data.alert_id);
-        // Vlastnictví zařízení až v okamžiku odeslání: odhlášení nesmí poslat cizí upozornění.
-        const table = row.channel === 'apns' ? 'native_push_subscriptions' : 'push_subscriptions';
-        const device = await options.db.from(table).select('*').eq('id', row.subscription_id)
-          .eq('user_id', row.user_id).is('expired_at', null).maybeSingle();
         if (device.error) throw new Error(device.error.message);
         if (!device.data) result = { status: 'expired', error: 'subscription-removed-or-reassigned' };
         else if (row.channel === 'apns') {
