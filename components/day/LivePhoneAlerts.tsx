@@ -212,7 +212,10 @@ export function LivePhoneAlertLines({ api, alerts, selectedId, flashIds, mouse =
   );
 }
 
-/** Malé průsvitné plusko u cenové osy, když je vidět crosshair. */
+const PLUS_WIDTH = 30;
+const PLUS_HEIGHT = 24;
+
+/** Plusko u cenové osy, když je vidět crosshair. */
 export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | null; onPlus: (price: number) => void }) {
   const [point, setPoint] = useState<{ y: number; x: number } | null>(null);
   useEffect(() => {
@@ -235,10 +238,12 @@ export function LivePhoneCrosshairPlus({ api, onPlus }: { api: ChartViewApi | nu
         const raw = api.controller.getSeries().coordinateToPrice(point.y);
         if (raw != null && Number.isFinite(raw)) onPlus(Math.round(raw / TICK) * TICK);
       }}
-      style={{ position: 'absolute', left: paneWidth - 22, top: point.y, transform: 'translateY(-50%)', zIndex: 130, pointerEvents: 'auto', width: 16, height: 16, borderRadius: 5, padding: 0, display: 'grid', placeItems: 'center', fontSize: 12, lineHeight: 1, color: 'rgba(232,236,246,.9)', background: 'rgba(255,255,255,.07)', border: '1px solid rgba(190,200,255,.28)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
+      // Hranatější pilulka těsně u cenové osy (Filip 25. 11.). Sklo Aurora s vlastní výplní —
+      // prohlížeč bez backdrop-filter ji musí ukázat stejně čitelně, rozmazání je jen navíc.
+      style={{ position: 'absolute', left: paneWidth - PLUS_WIDTH - 1, top: point.y, transform: 'translateY(-50%)', zIndex: 130, pointerEvents: 'auto', width: PLUS_WIDTH, height: PLUS_HEIGHT, borderRadius: 7, padding: 0, display: 'grid', placeItems: 'center', color: '#dfe5ff', background: 'linear-gradient(180deg, rgba(72,86,150,.92), rgba(40,48,92,.92))', border: '1px solid rgba(168,182,255,.6)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.22), 0 2px 8px rgba(0,0,0,.35)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', cursor: 'pointer' }}
     >
-      +
-      <span aria-hidden style={{ position: 'absolute', inset: -12 }} />
+      <svg aria-hidden width="13" height="13" viewBox="0 0 13 13"><path d="M6.5 1.5v10M1.5 6.5h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+      <span aria-hidden style={{ position: 'absolute', inset: -10 }} />
     </button>
   );
 }
