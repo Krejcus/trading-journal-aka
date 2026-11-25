@@ -54,7 +54,9 @@ export function priceAlertEventFromRow(row: Record<string, unknown>): PriceAlert
   const condition = row.condition === 'up' || row.condition === 'down' ? row.condition : 'cross';
   const level = Number(row.level);
   if (typeof row.id !== 'string' || typeof row.alert_id !== 'string' || !Number.isFinite(level)) return null;
-  return { id: row.id, alertId: row.alert_id, at: ms(row.triggered_at), level, condition, suppressed: row.suppressed_reason != null };
+  // Klíč události = `trigger_id` (zná ho i služba, která křížení ohlásila): událost ze služby a ze serveru je táž.
+  const id = typeof row.trigger_id === 'string' && row.trigger_id ? row.trigger_id.toLowerCase() : row.id;
+  return { id, alertId: row.alert_id, at: ms(row.triggered_at), level, condition, suppressed: row.suppressed_reason != null };
 }
 
 export function priceAlertToRow(userId: string, alert: PriceAlert, deletedAt: number | null, now: number): Record<string, unknown> {
@@ -261,8 +263,11 @@ export function createServerPriceAlertStore(deps: {
         })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'price_alert_events', filter }, payload => {
           const event = payload.new ? priceAlertEventFromRow(payload.new as Record<string, unknown>) : null;
-          if (!event || events.some(item => item.id === event.id)) return;
-          events = [...events, event].slice(-EVENTS_MAX);
+          if (!event) return;
+          // Stejné křížení už ukázala místní služba: převzít pravdu serveru (čas, potlačení), karta znovu nezazní.
+          events = events.some(item => item.id === event.id)
+            ? events.map(item => (item.id === event.id ? event : item))
+            : [...events, event].slice(-EVENTS_MAX);
           rebuild();
         })
         .subscribe();
@@ -313,6 +318,18 @@ export function createServerPriceAlertStore(deps: {
       defaultsDirty = true;
       rebuild();
       void flush();
+    },
+    fired: ({ alertId, version, triggerId, at }) => {
+      // Čekající úprava (posun čáry, smazání): služba mohla křížit ještě starou úroveň — kartu nechat na serveru.
+      if (queue.has(alertId)) return false;
+      const alert = server.get(alertId);
+      // Jen upozornění, které tahle appka zná jako aktivní a ve STEJNÉ verzi, jakou křížila služba.
+      if (!alert || (alert.status != null && alert.status !== 'active') || alert.version !== version) return false;
+      const id = triggerId.toLowerCase();
+      if (events.some(item => item.id === id)) return false;
+      events = [...events, { id, alertId, at, level: alert.price, condition: alert.condition, suppressed: false }].slice(-EVENTS_MAX);
+      rebuild();
+      return true;
     },
     refresh: pull,
     dispose() {

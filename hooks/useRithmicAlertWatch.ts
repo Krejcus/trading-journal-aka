@@ -1,7 +1,7 @@
 // Předává službě Rithmic klíč hlídače a seznam aktivních upozornění a vrací text „kdo hlídá“ (24. 11. 2026).
 // JEN OZNÁMENÍ: nic odsud nesouvisí s příkazy (INV-UI-01). Nepřihlášený uživatel (místní úložiště) se nehlídá.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { alertListDigest, alertUserTag, rithmicAlertWatchLabel, rithmicAlertWatchProblem, rithmicWatchedAlerts, type RithmicAlertWatchStatus } from '../lib/rithmicAlertWatch';
+import { alertListDigest, alertUserTag, rithmicAlertWatchLabel, rithmicAlertWatchProblem, rithmicWatchedAlerts, type RithmicAlertFired, type RithmicAlertWatchStatus } from '../lib/rithmicAlertWatch';
 import { usePriceAlertStore } from '../services/priceAlertStoreHook';
 import { supabase } from '../services/supabase';
 import { apiUrl } from '../utils/runtimeConfig';
@@ -11,6 +11,7 @@ interface Link {
   helloFresh: boolean;
   alertWatch: RithmicAlertWatchStatus | null;
   sendAlertCommand: (command: { op: 'alerts-key' | 'alerts-set' } & Record<string, unknown>) => Promise<boolean>;
+  onAlertFired: (listener: (fired: RithmicAlertFired) => void) => () => void;
 }
 
 async function fetchGrant(): Promise<{ userId: string; key: string } | null> {
@@ -70,6 +71,16 @@ export function useRithmicAlertWatch(trading: Link, enabled: boolean): { watchin
     }, 400);
     return () => window.clearTimeout(timer);
   }, [ready, keyed, fingerprint, userId, trading.alertWatch?.digest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Křížení rovnou ze služby (bez čekání na server): jen na skutečném trhu a jen pro tohoto uživatele.
+  const firedGate = useRef({ enabled, userTag });
+  firedGate.current = { enabled, userTag };
+  const onAlertFired = trading.onAlertFired;
+  useEffect(() => onAlertFired((fired) => {
+    const gate = firedGate.current;
+    if (!gate.enabled || !gate.userTag || fired.user !== gate.userTag) return;
+    store.fired?.({ alertId: fired.alertId, version: fired.version, triggerId: fired.triggerId, at: Date.now() });
+  }), [onAlertFired, store]);
 
   if (!enabled) return { watching: null, problem: 'Na zkušebním systému se upozornění nehlídají (trh je smyšlený).' };
   if (userId === null) return { watching: null, problem: 'Upozornění hlídá služba jen přihlášenému uživateli.' };

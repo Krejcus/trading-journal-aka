@@ -3,7 +3,7 @@
 // Stav v prohlížeči slouží JEN k zobrazení — každý příkaz ověřuje místní proces (LocalExec).
 // Žádné opakování: příkaz bez odpovědi končí „unknown" a nikdy se neposílá znovu.
 import { mergeSeedCandles, patchSeedCandles } from '../lib/rithmicCandleSeed';
-import { parseRithmicAlertWatchStatus, type RithmicAlertWatchStatus } from '../lib/rithmicAlertWatch';
+import { parseRithmicAlertFired, parseRithmicAlertWatchStatus, type RithmicAlertFired, type RithmicAlertWatchStatus } from '../lib/rithmicAlertWatch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LiveTradingCopyEvent, LiveTradingMarketData } from '../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
@@ -384,6 +384,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             }
           } else if (message.type === 'alerts') {
             setAlertWatch(parseRithmicAlertWatchStatus(message));
+          } else if (message.type === 'alert-fired') {
+            // Křížení ze služby: rovnou posluchačům (ne přes stav — dvě křížení v jednom okamžiku by se slila).
+            const fired = parseRithmicAlertFired(message);
+            if (fired) for (const listener of [...alertFiredListeners.current]) { try { listener(fired); } catch { /* karta nesmí shodit spojení */ } }
           } else if (message.type === 'limits') {
             setLimits(message.limits as Limits | null);
           } else if (message.type === 'beat') {
@@ -484,6 +488,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (command.op === 'ack') return sent;
     setInFlight((count) => count + 1);
     return sent.finally(() => setInFlight((count) => Math.max(0, count - 1)));
+  }, []);
+  const alertFiredListeners = useRef(new Set<(fired: RithmicAlertFired) => void>());
+  /** Odběr křížení ohlášených službou (jen zobrazení). Vrací odhlášení. */
+  const onAlertFired = useCallback((listener: (fired: RithmicAlertFired) => void): (() => void) => {
+    alertFiredListeners.current.add(listener);
+    return () => { alertFiredListeners.current.delete(listener); };
   }, []);
   /** Zpráva službě o upozorněních na cenu (klíč, seznam). Není to příkaz: nejde do deníku ani mezi nejisté příkazy. */
   const sendAlertCommand = useCallback(async (command: { op: 'alerts-key' | 'alerts-set' } & Record<string, unknown>): Promise<boolean> => {
@@ -825,7 +835,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const marksKey = marks ? `${marks.open}:${marks.fills.map((fill) => `${fill.id}@${fill.price}`).join('|')}` : 'none';
   const liveFills = useMemo(() => liveChartFills(marks && marks.fills.length ? { fills: marks.fills, open: marks.open, symbol } : null), [marksKey, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
-    alertWatch, sendAlertCommand,
+    alertWatch, sendAlertCommand, onAlertFired,
     liveFills,
     legsRemovable,
     reducible, reduceOne,

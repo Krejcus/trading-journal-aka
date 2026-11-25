@@ -422,6 +422,8 @@ async function main(): Promise<void> {
       renameSync(`${alertFile}.tmp`, alertFile);
     },
     onStatus: (status) => broadcast({ type: 'alerts', ...status }),
+    // Křížení rovnou připojeným appkám (karta a zvuk bez čekání na server). Jen zobrazení.
+    onFired: (fired) => broadcast({ type: 'alert-fired', ...fired }),
     log: (line) => console.log(`[upozornění] ${line}`),
   });
   /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou; obnovuje se s rostoucím odstupem. */

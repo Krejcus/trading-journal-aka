@@ -288,6 +288,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: alerty rovnou ze služby do otevřené appky (NENASAZENO); arn1 nasazeno, cesta do iPhonu se nezrychlila
+
+- arn1 NASAZENO (47992465, hlavička `fra1::arn1`). První spuštění po nasazení (15:32): obchod → zápis 334 ms, zápis → odeslání do APNs 2,4–2,7 s — tedy BEZ zlepšení. Dotazy do DB to nebyly. Podezření: registrované zařízení má `environment = development` (build z Xcode) → server posílá přes `api.sandbox.push.apple.com`, který bývá o řád pomalejší než produkční. Neprokázáno — přidáno měření do logu funkce (`[price-alerts] apns <prostředí> <stav> <ms>`, `zápis/doručení ms`).
+- Přímé spuštění: služba při křížení rozešle připojeným appkám `{type:'alert-fired', alertId, version, triggerId, user}` (`alertWatch.onFired` → `broadcast`); appka (`useRithmicLocalTrading.onAlertFired` → `useRithmicAlertWatch` → `store.fired`) vloží místní událost s `id = triggerId`. `priceAlertEventFromRow` bere jako klíč události `trigger_id`, takže událost ze serveru místní jen nahradí a karta nezazní dvakrát. Jen zobrazení (INV-UI-01); „jednou“, odstup a strop dál rozhoduje server.
+- Brány `fired()`: stejný uživatel (otisk), skutečný trh, upozornění aktivní, stejná verze, žádná čekající úprava. Jinak kartu ukáže až server.
+- Critic: OK S VÝHRADAMI; N1 (karta se špatnou úrovní po posunu čáry — zpráva nenesla verzi) opraveno před commitem. Vědomě zůstává: karta za křížení, které server vzápětí odmítne (zastaralý stav, výpadek serveru); místní událost zmizí dalším čtením. Jednorázově po nasazení může událost mladší 30 s zaznít znovu (změna klíče v cache).
+- Dorovnáno do main: `tick.tradePrice` (dosud jen ve větvi služby); obnoven `tests/priceAlertServerStore.test.ts` z archivu. 4077 testů, tsc čisté, služba typově zkontrolována zvlášť.
+
+### 2026-11-25 — Claude: zpoždění alertů změřeno; funkce spuštění do arn1 (NENASAZENO)
+
+- Měření z `price_alert_events`/`price_alert_outbox` (5 spuštění 14:53–14:55, ostrý trh, služba Rithmic `cteni`): obchod na burze → zápis události v DB **340–600 ms**; zápis → odeslání do APNs **1,3–1,9 s**. Karta v otevřené appce jde přes Realtime hned po zápisu (~0,5 s + Realtime), oznámení v iPhonu ~2–2,5 s + doručení Applem (neměřeno).
+- Příčina: `api/price-alerts/watch.ts` běžel v `iad1` (hlavička `fra1::iad1`), databáze je ve Stockholmu → Mac→Washington a pak ~6 dotazů za sebou přes Atlantik (RPC, výběr fronty, převzetí řádku, událost, upozornění, zařízení), teprve potom APNs.
+- Oprava: `vercel.json` `functions` → `api/price-alerts/watch.ts` v `arn1` (vedle DB, ~30 ms z Prahy); v `drainPriceAlertOutbox` se událost a zařízení čtou souběžně. Test hlídá region. 4053 testů, tsc čisté.
+- Vedlejší nález: ke každému spuštění vznikají 2 APNs řádky (dvě registrovaná zařízení — pravděpodobně starý token po čisté reinstalaci) a 2 webové řádky (staré webové odběry, uzavírají se jako expired).
 ### 2026-11-25 — Claude: alerty a oprava svíček NASAZENY (web + iPhone 537c0d47); větev služby spojena s main
 
 - Web: push main 537c0d47, Vercel READY, `/api/price-alerts/watch` bez tokenu vrací 401. iPhone: build z 537c0d47 nainstalován přes stávající appku (bez odinstalace, přihlášení i spárování zůstává).

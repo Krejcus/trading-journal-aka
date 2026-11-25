@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRithmicAlertWatch, type AlertWatchPersisted, type AlertWatchStatus } from '../services/rithmic/alertWatch';
-import { alertListDigest, alertUserTag, parseRithmicAlertWatchStatus, rithmicAlertWatchLabel, rithmicAlertWatchProblem, rithmicWatchedAlerts } from '../lib/rithmicAlertWatch';
+import { alertListDigest, alertUserTag, parseRithmicAlertFired, parseRithmicAlertWatchStatus, rithmicAlertWatchLabel, rithmicAlertWatchProblem, rithmicWatchedAlerts } from '../lib/rithmicAlertWatch';
 import { priceAlertWatchGrant, signPriceAlertWatchRequest, verifyPriceAlertWatchRequest } from '../server/priceAlertWatchKey';
 import { readFileSync } from 'node:fs';
 
@@ -18,6 +18,7 @@ function setup(options: { saved?: AlertWatchPersisted | null; reply?: (body: { t
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const statuses: AlertWatchStatus[] = [];
   const logs: string[] = [];
+  const fired: Array<{ alertId: string; version: number; triggerId: string; user: string }> = [];
   let saved: AlertWatchPersisted | null = options.saved ?? null;
   const reply = options.reply ?? ((body) => ({ status: 200, json: { results: body.triggers.map((t) => ({ triggerId: t.triggerId, status: 'triggered' })) } }));
   const watch = createRithmicAlertWatch({
@@ -35,13 +36,14 @@ function setup(options: { saved?: AlertWatchPersisted | null; reply?: (body: { t
     load: () => saved,
     save: (state) => { saved = JSON.parse(JSON.stringify(state)) as AlertWatchPersisted; },
     onStatus: (status) => { statuses.push(status); },
+    onFired: (item) => { fired.push(item); },
     log: (line) => { logs.push(line); },
     // Sdružený zápis na disk (250 ms) proběhne v testu hned; časovače opakování se sbírají.
     setTimer: (fn, ms) => { if (ms === 250) fn(); else timers.push({ fn, ms }); return 0; },
   });
   const trade = (price: number, afterMs = 100) => { clock += afterMs; watch.onTrade(price, clock, 'MNQZ6'); };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-  return { watch, posts, timers, statuses, logs, trade, settle, saved: () => saved, now: () => clock };
+  return { watch, posts, timers, statuses, logs, fired, trade, settle, saved: () => saved, now: () => clock };
 }
 
 describe('hlídání upozornění ve službě Rithmic', () => {
@@ -226,6 +228,47 @@ describe('hlídání upozornění: část v appce', () => {
   });
 });
 
+describe('křížení rovnou připojeným appkám (bez čekání na server)', () => {
+  it('ohlásí se hned při křížení, se stejným triggerId jako jde serveru, a jen jednou', async () => {
+    const t = setup();
+    t.watch.setKey({ userId: USER, key: KEY });
+    t.watch.setAlerts({ userId: USER, alerts: [alert()] });
+    t.trade(99); t.trade(100.25);
+    // Ještě před odpovědí serveru.
+    expect(t.fired).toHaveLength(1);
+    expect(t.fired[0]).toMatchObject({ alertId: 'pa-a1', version: 1, user: alertUserTag(USER) });
+    await t.settle();
+    expect((JSON.parse(t.posts[0].payload) as { triggers: Array<{ triggerId: string }> }).triggers[0].triggerId).toBe(t.fired[0].triggerId);
+    t.trade(99); t.trade(100.5);
+    await t.settle();
+    expect(t.fired).toHaveLength(1);
+  });
+
+  it('bez klíče se appkám nic neohlásí (křížení se ani neposílá serveru)', async () => {
+    const t = setup();
+    t.watch.setAlerts({ userId: USER, alerts: [alert()] });
+    t.trade(99); t.trade(100.25);
+    await t.settle();
+    expect(t.fired).toEqual([]);
+    expect(t.posts).toEqual([]);
+  });
+
+  it('zpráva služby se čte přísně', () => {
+    const ok = { type: 'alert-fired', alertId: 'pa-a1', version: 3, triggerId: '00000000-0000-4000-8000-0000000000AA', user: 'abc123' };
+    expect(parseRithmicAlertFired(ok)).toEqual({ alertId: 'pa-a1', version: 3, triggerId: '00000000-0000-4000-8000-0000000000aa', user: 'abc123' });
+    for (const bad of [null, {}, { ...ok, triggerId: 'x' }, { ...ok, alertId: '' }, { ...ok, user: '' }, { ...ok, alertId: 5 }, { ...ok, version: 0 }, { ...ok, version: '3' }]) expect(parseRithmicAlertFired(bad)).toBeNull();
+  });
+
+  it('služba zprávu rozesílá a appka ji bere jen pro svého uživatele na skutečném trhu', () => {
+    const source = (path: string) => readFileSync(path, 'utf8');
+    expect(source('scripts/rithmic/devTradeServer.ts')).toContain("onFired: (fired) => broadcast({ type: 'alert-fired', ...fired }),");
+    const hook = source('hooks/useRithmicAlertWatch.ts');
+    expect(hook).toContain('if (!gate.enabled || !gate.userTag || fired.user !== gate.userTag) return;');
+    // Přímé křížení jen ukáže kartu: nic neposílá službě ani serveru.
+    expect(hook).toContain('store.fired?.({ alertId: fired.alertId, version: fired.version, triggerId: fired.triggerId, at: Date.now() });');
+  });
+});
+
 describe('hlídání upozornění je oddělené od příkazů (INV-UI-01)', () => {
   const source = (path: string) => readFileSync(path, 'utf8');
   it('služba předává hlídači cenu obchodu z tiku (pole tradePrice — `scripts/` typová kontrola nehlídá)', () => {
@@ -233,6 +276,10 @@ describe('hlídání upozornění je oddělené od příkazů (INV-UI-01)', () =
     expect(server).toContain('if (tick.tradePrice !== null) alertWatch?.onTrade(tick.tradePrice, tick.receivedAt, CONTRACT);');
     expect(source('services/rithmic/rithmicClient.ts')).toMatch(/interface RithmicTick \{[^}]*tradePrice: number \| null;[^}]*receivedAt: number;/s);
     expect(server).not.toMatch(/tick\.price\b/);
+  });
+  it('funkce spuštění běží vedle databáze (arn1): jinak každý dotaz letí přes Atlantik (25. 11. ~1,5 s do iPhonu)', () => {
+    const vercel = JSON.parse(source('vercel.json')) as { functions?: Record<string, { regions?: string[] }> };
+    expect(vercel.functions?.['api/price-alerts/watch.ts']?.regions).toEqual(['arn1']);
   });
   it('hlídač neimportuje nic z obchodní části služby a zprávy o upozorněních nejsou sledovaný příkaz', () => {
     const watch = source('services/rithmic/alertWatch.ts');
