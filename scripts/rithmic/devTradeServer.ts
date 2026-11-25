@@ -8,7 +8,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { commandStatus } from '../../services/rithmic/rithmicCommandStatus';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -25,6 +25,8 @@ import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
 import { barRepairWindow, mergeRepairedBars, mergeRepairWindows, repairedBarsFrom, type BarRepairWindow } from '../../services/rithmic/barRepair';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
+import { createRithmicAlertWatch, type AlertWatchPersisted } from '../../services/rithmic/alertWatch';
+import { signPriceAlertWatchRequest } from '../../server/priceAlertWatchKey';
 import { LocalExec, type LocalExecCommand } from '../../services/rithmic/localExec';
 import type { ProtectionState, ProtectionStore } from '../../services/rithmic/rithmicProtection';
 import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
@@ -344,6 +346,27 @@ async function main(): Promise<void> {
     const text = JSON.stringify(message);
     for (const socket of clients) if (socket.readyState === WebSocket.OPEN) socket.send(text);
   };
+  // ── Upozornění na cenu (jen oznámení; nic odsud nesahá na příkazy — INV-UI-01) ──────────────────────────────
+  // Zkušební systém má smyšlený trh: tam se nehlídá, aby do telefonu nechodila oznámení z cen, které neexistují.
+  const alertFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'price-alerts.json');
+  const ALERT_APP_URL = (process.env.ALPHATRADE_APP_URL ?? 'https://alphatrade-mentor-15.vercel.app').replace(/\/+$/, '');
+  const alertWatch = IS_TEST_SYSTEM ? null : createRithmicAlertWatch({
+    uuid: randomUUID,
+    apiBase: ALERT_APP_URL,
+    sign: signPriceAlertWatchRequest,
+    post: async (url, headers, body) => {
+      const response = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(8_000) });
+      return { status: response.status, json: await response.json().catch(() => null) };
+    },
+    load: () => { try { return JSON.parse(readFileSync(alertFile, 'utf8')) as AlertWatchPersisted; } catch { return null; } },
+    save: (state) => {
+      mkdirSync(dirname(alertFile), { recursive: true });
+      writeFileSync(`${alertFile}.tmp`, JSON.stringify(state), { mode: 0o600 });
+      renameSync(`${alertFile}.tmp`, alertFile);
+    },
+    onStatus: (status) => broadcast({ type: 'alerts', ...status }),
+    log: (line) => console.log(`[upozornění] ${line}`),
+  });
   /** Spojení pro ceny žije? Když spadne, stránka má cenu označit za starou; obnovuje se s rostoucím odstupem. */
   let feedOpen = false;
   let historyOk = false;
@@ -433,6 +456,8 @@ async function main(): Promise<void> {
         if (!tick.isSnapshot && tick.kind === 'trade') {
           if (tick.exchangeAt != null && exchangeLag.length < 20_000) exchangeLag.push(tick.receivedAt - tick.exchangeAt);
           if (tick.gatewayAt != null && gatewayLag.length < 20_000) gatewayLag.push(tick.receivedAt - tick.gatewayAt);
+          // Upozornění na cenu: každý obchod (nikdy nevyhodí, na síť nečeká).
+          alertWatch?.onTrade(tick.price, tick.receivedAt, CONTRACT);
         }
         if (!candles.onTick(tick)) return;
         // Dokončená svíčka musí odejít celá: když tick otevřel novou minutu, pošle se ještě poslední stav té předchozí.
@@ -448,6 +473,7 @@ async function main(): Promise<void> {
         if (plant === 'ticker') {
           feedOpen = false;
           if (feedGapFrom === null) feedGapFrom = Date.now();
+          alertWatch?.feedLost();
           candles.reset(CONTRACT);
           tickDirty = false;
           lastBar = null;
@@ -675,12 +701,15 @@ async function main(): Promise<void> {
     }
     /** Nejvýš 20 příkazů za 10 s na spojení. */
     let recent: number[] = [];
+    /** Zprávy o upozorněních mají vlastní strop (12 za 10 s) — rozpočet příkazů neberou. */
+    let recentAlertOps: number[] = [];
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
     const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
+    if (alertWatch) send(socket, { type: 'alerts', ...alertWatch.status() });
     void (async () => {
       const history = await recentHistory();
       if (!history.length || socket.readyState !== WebSocket.OPEN) return;
@@ -704,6 +733,22 @@ async function main(): Promise<void> {
             return;
           }
           if (!message.command || typeof message.command !== 'object') throw new Error('zpráva bez příkazu');
+          // Upozornění na cenu: klíč a seznam od přihlášené appky. Jen oznámení → smí každé spárované zařízení
+          // (i jen pro čtení), k brokerovi nic nejde a režim „jen pro čtení“ tomu nebrání. Vyřizuje se PŘED
+          // rozpočtem obchodních příkazů (vlastní malý strop), aby úpravy upozornění nikdy nezdržely příkaz.
+          const alertOp = (message.command as unknown as { op?: unknown }).op;
+          if (alertOp === 'alerts-key' || alertOp === 'alerts-set') {
+            if (access.deviceId && !activeDevice(access.deviceId)) { socket.terminate(); return; }
+            const alertAt = Date.now();
+            recentAlertOps = recentAlertOps.filter((time) => alertAt - time < 10_000);
+            if (recentAlertOps.length >= 12) throw new Error('příliš mnoho změn upozornění za krátkou dobu');
+            recentAlertOps.push(alertAt);
+            if (!alertWatch) throw new Error('na zkušebním systému se upozornění nehlídají (trh je smyšlený)');
+            const outcome = alertOp === 'alerts-key' ? alertWatch.setKey(message.command) : alertWatch.setAlerts(message.command);
+            if (!outcome.ok) throw new Error(outcome.error ?? 'upozornění se nepodařilo uložit');
+            send(socket, { type: 'reply', id, ok: true, result: alertWatch.status() });
+            return;
+          }
           const at = Date.now();
           recent = recent.filter((time) => at - time < 10_000);
           // Brzda (zavření) se neomezuje nikdy.

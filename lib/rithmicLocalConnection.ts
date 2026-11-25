@@ -58,6 +58,13 @@ const OPEN = 1;
 // Longer than a command reply timeout. Resume from a full snapshot after a prolonged gap.
 const RESYNC_GAP_MS = 30_000;
 
+/**
+ * Zprávy službě, které NEJSOU obchodní příkaz: potvrzení incidentu, dohledání a upozornění na cenu (klíč a seznam).
+ * Neukládají se do deníku příkazů a jejich selhání nikdy není „nejistý příkaz“ — k brokerovi z nich nic nejde.
+ */
+const UNTRACKED_OPS = new Set(['ack', 'lookup', 'alerts-key', 'alerts-set']);
+const tracked = (op: string): boolean => !UNTRACKED_OPS.has(op);
+
 export class RithmicLocalConnection {
   private socket: RithmicLinkSocket | null = null;
   private stopped = true;
@@ -185,7 +192,7 @@ export class RithmicLocalConnection {
         return;
       }
       const id = this.newId();
-      if (command.op !== 'ack' && command.op !== 'lookup') {
+      if (tracked(command.op)) {
         try { this.options.handlers.beforeSend?.(id, command); } catch (error) {
           if (command.op === 'entry' || command.op === 'replace-entry') {
             resolve({ ok: false, sent: false, error: error instanceof Error ? error.message : 'Nelze uložit ID příkazu pro obnovu po výpadku.' });
@@ -195,7 +202,7 @@ export class RithmicLocalConnection {
       }
       const timer = setTimeout(() => {
         if (!this.replies.delete(id)) return;
-        if (command.op !== 'ack' && command.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'místní proces neodpověděl' });
+        if (tracked(command.op)) this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'místní proces neodpověděl' });
         resolve({ ok: false, sent: 'unknown', error: 'místní proces neodpověděl — ověř stav' });
       }, this.replyTimeoutMs);
       this.replies.set(id, { op: command.op, resolve: (reply) => { clearTimeout(timer); resolve(reply); } });
@@ -203,7 +210,7 @@ export class RithmicLocalConnection {
         // Odeslání vyhodilo: jestli něco odešlo, se neví → stejné zacházení jako výpadek.
         const pending = this.replies.get(id);
         this.replies.delete(id);
-        if (command.op !== 'ack' && command.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'odeslání místnímu procesu selhalo' });
+        if (tracked(command.op)) this.options.handlers.onUncertain({ id, at: this.now(), op: command.op, reason: 'odeslání místnímu procesu selhalo' });
         pending?.resolve({ ok: false, sent: 'unknown', error: 'odeslání místnímu procesu selhalo — ověř stav' });
       }
     });
@@ -214,7 +221,7 @@ export class RithmicLocalConnection {
     const pending = [...this.replies];
     this.replies.clear();
     for (const [id, item] of pending) {
-      if (item.op !== 'ack' && item.op !== 'lookup') this.options.handlers.onUncertain({ id, at: this.now(), op: item.op, reason: 'spojení s místním procesem spadlo' });
+      if (tracked(item.op)) this.options.handlers.onUncertain({ id, at: this.now(), op: item.op, reason: 'spojení s místním procesem spadlo' });
       item.resolve({ ok: false, sent: 'unknown', error: 'spojení s místním procesem spadlo — ověř stav' });
     }
   }
@@ -312,8 +319,8 @@ export class RithmicLocalConnection {
         this.replies.delete(id);
         const reply = message as unknown as RithmicLinkReply;
         // Nejistou odpověď služby zapisuje jedno místo — stejně jako timeout a výpadek.
-        if (pending.op !== 'ack' && pending.op !== 'lookup' && !reply.ok && reply.sent !== false) this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: reply.error ?? 'výsledek není znám' });
-        if (pending.op !== 'ack' && pending.op !== 'lookup' && (reply.ok || reply.sent === false)) {
+        if (tracked(pending.op) && !reply.ok && reply.sent !== false) this.options.handlers.onUncertain({ id, at: this.now(), op: pending.op, reason: reply.error ?? 'výsledek není znám' });
+        if (tracked(pending.op) && (reply.ok || reply.sent === false)) {
           const status = (reply.result as { status?: string } | null)?.status;
           if (pending.op !== 'flatten' || !reply.ok || status === 'already-flat' || status === 'submitted' || status === 'rejected') {
             try { this.options.handlers.onCertain?.(id); } catch {

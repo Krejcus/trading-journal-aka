@@ -9,6 +9,7 @@ import { getLiveChartAutomation, subscribeLiveChartAutomation } from '../service
 import type { LiveDeskPhoneChartSlots } from './LiveDesk';
 import { rithmicScreenInstrumentIssue } from './RithmicLiveChart';
 import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
+import { useRithmicAlertWatch } from '../hooks/useRithmicAlertWatch';
 import { useLiveTicketQuote } from '../hooks/useLiveTicketQuote';
 import { rithmicLocalAuth, rithmicLocalUrl, rithmicPairingOffered } from '../lib/rithmicLocalLink';
 import RithmicPairingPanel from './RithmicPairingPanel';
@@ -103,6 +104,8 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
   // Spárované zařízení (telefon) se službě prokazuje klíčem z Klíčenky; PC a simulace klíč zařízení nemají.
   const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, linkVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });
+  // Upozornění na cenu hlídá služba jen na skutečném trhu (zkušební systém i simulace mají smyšlené ceny).
+  const alertWatch = useRithmicAlertWatch(trading, !simulationUrl && trading.system != null && trading.system !== 'Rithmic Test');
   // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
   const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.silent ? null : trading.accountClosedPnl }),
     [trading.accountName, trading.system, trading.accountClosedPnl, trading.silent]);
@@ -333,6 +336,7 @@ const RithmicPhoneChart: React.FC<Props> = ({ open, isDark, onLeave, phoneChart,
         // Příkazy zadané jinde: jen čáry pro zobrazení, nikdy do mostu příkazů.
         workingOrders: trading.workingView,
         userId: userId ?? null,
+        alertWatch: alertWatch.watching,
         ...(limitLines ? { limitLines } : {}),
       })}
     </>

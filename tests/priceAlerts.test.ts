@@ -229,7 +229,8 @@ describe('upozornění na cenu na PC', () => {
     const fill = { id: 'fill', sticky: false };
     const extras = Array.from({ length: 5 }, (_, i) => ({ id: `x${i}`, sticky: false }));
     const screen = read('components/LiveTradingScreen.tsx');
-    expect(screen).toContain('const cards = soloAccountLabel ? extraToasts ?? [] : priceAlerts.cards;');
+    // Režim jednoho účtu: karty služby vždy; karty upozornění jen tam, kde je hlídá služba (skutečný trh).
+    expect(screen).toContain('const cards = soloAccountLabel ? [...(extraToasts ?? []), ...(alertsOff ? [] : priceAlerts.cards)] : priceAlerts.cards;');
     expect(screen).toMatch(/extra=\{toastExtras\} capExtra/);
     expect(read('components/day/LivePhoneChart.tsx')).toMatch(/extra=\{cards\} capExtra/);
     expect(read('components/BacktestWorkspace.tsx')).not.toMatch(/capExtra/);

@@ -564,7 +564,7 @@ function AlertListWindow({ alerts, watching, error, isDark, onEdit, onTest, onRe
       <WindowHeader title="Upozornění" meta={`${active} ${active === 1 ? 'aktivní' : 'aktivních'}`} isDark={isDark} onClose={onClose} />
       <div className={`flex shrink-0 items-center gap-2 border-b px-4 py-2 text-[11.5px] font-medium ${line(isDark)} ${watching ? (isDark ? 'text-emerald-300' : 'text-emerald-700') : (isDark ? 'text-amber-300' : 'text-amber-700')}`}>
         <i className={`h-1.5 w-1.5 shrink-0 rounded-full ${watching ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-        {watching ?? 'Teď nikdo nehlídá: Mac worker neběží nebo nemá cenu z IBKR. Křížení mezitím se nedoženou.'}
+        {watching ?? 'Teď nikdo nehlídá: služba Rithmic na Macu neběží, je ve starší verzi nebo jí nejdou ceny. Křížení mezitím se nedoženou.'}
       </div>
       {error && <div role="alert" className={`shrink-0 border-b px-4 py-2 text-[11.5px] ${line(isDark)} ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>{error}</div>}
       <div className="min-h-0 overflow-y-auto">

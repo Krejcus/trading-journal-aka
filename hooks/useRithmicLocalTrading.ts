@@ -3,6 +3,7 @@
 // Stav v prohlížeči slouží JEN k zobrazení — každý příkaz ověřuje místní proces (LocalExec).
 // Žádné opakování: příkaz bez odpovědi končí „unknown" a nikdy se neposílá znovu.
 import { mergeSeedCandles, patchSeedCandles } from '../lib/rithmicCandleSeed';
+import { parseRithmicAlertWatchStatus, type RithmicAlertWatchStatus } from '../lib/rithmicAlertWatch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LiveTradingCopyEvent, LiveTradingMarketData } from '../components/LiveTradingScreen';
 import type { LiveCandleFeed } from '../lib/liveCandleFeed';
@@ -189,6 +190,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const [limits, setLimits] = useState<Limits | null>(null);
   /** Realizovaný P&L účtu z PnL streamu Rithmicu — JEN zobrazení (lišta grafu), nikdy brána ani limit. */
   const [closedPnl, setClosedPnl] = useState<number | null | undefined>(undefined);
+  // Hlídání upozornění na cenu ve službě (jen oznámení). null = služba ho neumí (starší verze) nebo není spojení.
+  const [alertWatch, setAlertWatch] = useState<RithmicAlertWatchStatus | null>(null);
   const [feedLive, setFeedLive] = useState(false);
   /** Identita procesu (systém, režim, kontrakt) potvrzená v TÉTO relaci spojení. */
   const [helloFresh, setHelloFresh] = useState(false);
@@ -289,6 +292,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
         // Konec relace (výpadek i odchod ze záložky): nic ze staré relace se nesmí tvářit jako živé.
         // Příkazy smí odejít až po novém `hello` + `state` z nového spojení.
         onSessionReset: () => {
+          setAlertWatch(null);
           const ui = uiTick.current;
           if (ui.timer !== null) clearTimeout(ui.timer);
           uiTick.current = { price: null, bar: null, dirty: false, timer: null };
@@ -380,6 +384,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
               }).map(candle);
               if (repaired.length) setCandles((current) => patchSeedCandles(current, repaired, through));
             }
+          } else if (message.type === 'alerts') {
+            setAlertWatch(parseRithmicAlertWatchStatus(message));
           } else if (message.type === 'limits') {
             setLimits(message.limits as Limits | null);
           } else if (message.type === 'beat') {
@@ -480,6 +486,12 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (command.op === 'ack') return sent;
     setInFlight((count) => count + 1);
     return sent.finally(() => setInFlight((count) => Math.max(0, count - 1)));
+  }, []);
+  /** Zpráva službě o upozorněních na cenu (klíč, seznam). Není to příkaz: nejde do deníku ani mezi nejisté příkazy. */
+  const sendAlertCommand = useCallback(async (command: { op: 'alerts-key' | 'alerts-set' } & Record<string, unknown>): Promise<boolean> => {
+    const reply = await (connectionRef.current?.send(command) ?? Promise.resolve({ ok: false, sent: false } as Reply));
+    if (reply.ok) { const status = parseRithmicAlertWatchStatus(reply.result); if (status) setAlertWatch(status); }
+    return reply.ok === true;
   }, []);
   // Brzda až po 1 s čekání: běžný posun SL/TP trvá zlomek sekundy a brzda by jinak problikla při každém.
   const [commandSlow, setCommandSlow] = useState(false);
@@ -815,6 +827,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const marksKey = marks ? `${marks.open}:${marks.fills.map((fill) => `${fill.id}@${fill.price}`).join('|')}` : 'none';
   const liveFills = useMemo(() => liveChartFills(marks && marks.fills.length ? { fills: marks.fills, open: marks.open, symbol } : null), [marksKey, symbol]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
+    alertWatch, sendAlertCommand,
     liveFills,
     legsRemovable,
     reducible, reduceOne,

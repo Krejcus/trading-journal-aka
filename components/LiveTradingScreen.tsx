@@ -268,6 +268,8 @@ export interface LiveTradingSolo {
   available: boolean;
   /** Graf jede na SKUTEČNÉM trhu: starší historie appky se smí připojit (u simulovaného trhu by ceny neseděly). */
   historyFromApp?: boolean;
+  /** Upozornění na cenu v režimu jednoho účtu: jen na skutečném trhu, kde je hlídá služba (ne na zkušebním). */
+  alerts?: boolean;
   /** Služba umí vstup jen se SL nebo jen s TP. */
   singleLeg?: boolean;
   /** SL/TP jde odebrat křížkem (jen jedna samostatná ochrana). U noh vstupu a svázaného páru × není. */
@@ -830,17 +832,19 @@ const LiveTradingScreen: React.FC<Props> = ({
     }
   };
 
-  // Režim jednoho účtu ukazuje jiný (simulovaný) trh: alerty se tu nezakládají, nekreslí ani nehlásí.
-  const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch, muted: solo != null });
+  // Režim jednoho účtu na zkušebním (smyšleném) trhu: alerty se nezakládají, nekreslí ani nehlásí. Na skutečném
+  // trhu je hlídá služba Rithmic (`solo.alerts`). Jen oznámení — nic z toho nesouvisí s příkazy (INV-UI-01).
+  const alertsOff = solo != null && solo.alerts !== true;
+  const priceAlerts = useLivePcPriceAlerts({ conditionMarket: candleClose, watching: alertWatch, muted: alertsOff });
   // Výsledek příkazu jde do stejného sloupce karet jako obchody a upozornění. V režimu jednoho
   // účtu se potvrzení neukazuje zvlášť — co se stalo, řekne karta události (Příkaz zrušen, SL posunut…).
   const toastExtras = useMemo(() => {
     const notice = lineNotice && !(soloAccountLabel && lineNotice.tone === 'ok')
       ? manageNoticeToast({ tone: lineNotice.tone, at: lineNotice.at, text: soloAccountLabel ? liveSoloNoticeText(lineNotice.text) : lineNotice.text })
       : null;
-    const cards = soloAccountLabel ? extraToasts ?? [] : priceAlerts.cards;
+    const cards = soloAccountLabel ? [...(extraToasts ?? []), ...(alertsOff ? [] : priceAlerts.cards)] : priceAlerts.cards;
     return notice ? [...cards, notice] : cards;
-  }, [lineNotice, priceAlerts.cards, soloAccountLabel, extraToasts]);
+  }, [lineNotice, priceAlerts.cards, soloAccountLabel, extraToasts, alertsOff]);
   const registerBoxFollow = useLivePositionBoxFollow({
     position,
     target: String(targetKey),
@@ -852,10 +856,10 @@ const LiveTradingScreen: React.FC<Props> = ({
     ...basePriceAlertBridge,
     renderLines: (api: Parameters<typeof basePriceAlertBridge.renderLines>[0], dark: boolean) => <>
       <LiveBoxFollowPane api={api} register={registerBoxFollow} />
-      {solo ? null : basePriceAlertBridge.renderLines(api, dark)}
+      {alertsOff ? null : basePriceAlertBridge.renderLines(api, dark)}
     </>,
-    ...(solo ? { quickAdd: () => undefined, move: () => undefined, remove: () => undefined, openEdit: () => undefined } : {}),
-  }), [basePriceAlertBridge, registerBoxFollow, solo != null]); // eslint-disable-line react-hooks/exhaustive-deps
+    ...(alertsOff ? { quickAdd: () => undefined, move: () => undefined, remove: () => undefined, openEdit: () => undefined } : {}),
+  }), [basePriceAlertBridge, registerBoxFollow, alertsOff]); // eslint-disable-line react-hooks/exhaustive-deps
   const liveOrderEntry = useMemo<LiveOrderEntryBridge>(() => ({
     executionInstrument: ROOT,
     externalMarketData: marketData != null && solo?.historyFromApp !== true,
@@ -1253,7 +1257,7 @@ const LiveTradingScreen: React.FC<Props> = ({
               isDark={isDark}
               toolbarFixedEnd={mergedHeader ? <div className="flex items-center gap-1" data-live-merged-header>{compactTabs}{headerRight}</div> : undefined}
               toolbarEnd={<>
-                {!solo && <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />}
+                {!alertsOff && <LivePcAlertsButton alerts={priceAlerts} isDark={isDark} />}
                 <LiveFillAnnounceToggle isDark={isDark} />
                 <LiveAutomationButton isDark={isDark} />
                 <LiveHotkeysHelp isDark={isDark} enabled={hotkeysOn} onEnabledChange={changeHotkeys} open={hotkeysHelp} onOpenChange={setHotkeysHelp} solo={solo != null} />
@@ -1347,7 +1351,7 @@ const LiveTradingScreen: React.FC<Props> = ({
         </aside>
         </div>
       </div>
-      {!solo && <LivePcAlertDialogs alerts={priceAlerts} lastPrice={lastPrice} conditionMarket={candleClose} watching={alertWatch} isDark={isDark} />}
+      {!alertsOff && <LivePcAlertDialogs alerts={priceAlerts} lastPrice={lastPrice} conditionMarket={candleClose} watching={alertWatch} isDark={isDark} />}
     </div>
   );
   return createPortal(screen, document.body);

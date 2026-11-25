@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alerty — návrhy vzhledu</title>
+<style>
+:root{--bg:#0b1020;--bg2:#131832;--card:rgba(24,29,58,.86);--ink:#f1f5f9;--ink2:#a5b0c8;--ink3:#6b7694;--line:rgba(255,255,255,.09);--acc:#818cf8;--teal:#5eead4;--win:#34d399;--loss:#fb7185;--warn:#fbbf24;--grid:rgba(255,255,255,.05);--up:#e2e8f0;--dn:#3b5bdb}
+:root.light{--bg:#eef1f8;--bg2:#fff;--card:rgba(255,255,255,.92);--ink:#0f172a;--ink2:#475569;--ink3:#94a3b8;--line:#e2e8f0;--acc:#6366f1;--teal:#0d9488;--win:#059669;--loss:#e11d48;--warn:#d97706;--grid:rgba(15,23,42,.06);--up:#cbd5e1;--dn:#3b5bdb}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 Inter,system-ui,-apple-system,sans-serif;color:var(--ink);background:radial-gradient(1200px 600px at 15% -10%,color-mix(in srgb,var(--acc) 28%,var(--bg)) 0%,var(--bg) 50%);min-height:100vh}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 16px 80px}
+h1{font-size:26px;letter-spacing:-.02em;margin:0 0 4px;font-weight:850}
+h2{font-size:17px;margin:34px 0 10px;font-weight:850;letter-spacing:-.01em}
+p.lead{color:var(--ink2);margin:0 0 14px;max-width:760px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 30px 60px -40px rgba(0,0,0,.6)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;padding:3px;border-radius:10px;background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid var(--line);gap:2px}
+.seg button{border:0;background:transparent;color:var(--ink2);font:inherit;font-weight:750;font-size:13px;height:30px;padding:0 12px;border-radius:7px;cursor:pointer}
+.seg button.on{background:var(--acc);color:#fff}
+.btn{height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 6%,transparent);color:var(--ink);font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+.btn.pri{background:var(--acc);border-color:transparent;color:#fff}
+.mut{color:var(--ink3)} .num{font-variant-numeric:tabular-nums}
+.chartbox{position:relative;height:420px;overflow:hidden;border-radius:14px}
+svg{display:block;width:100%;height:100%}
+.axis{position:absolute;right:0;top:0;bottom:0;width:74px;border-left:1px solid var(--line);background:color-mix(in srgb,var(--bg2) 70%,transparent)}
+.axis span{position:absolute;right:8px;font-size:11px;color:var(--ink3);transform:translateY(-50%)}
+.pxtag{position:absolute;right:0;width:74px;height:20px;line-height:20px;text-align:center;font-size:11.5px;font-weight:800;color:#fff;background:#3b5bdb;transform:translateY(-50%);border-radius:3px 0 0 3px;z-index:3}
+/* alert — společné */
+.al{position:absolute;left:0;right:74px;height:0;z-index:4;cursor:ns-resize;touch-action:none}
+.al::before{content:"";position:absolute;left:0;right:0;top:-8px;height:16px}
+.al .ln{position:absolute;left:0;right:0;top:-1px;height:0;border-top:2px dashed var(--c)}
+.al .ax{position:absolute;right:-74px;width:74px;height:20px;top:-10px;line-height:20px;text-align:center;font-size:11.5px;font-weight:800;color:#0b1020;background:var(--c);border-radius:3px 0 0 3px}
+.al .tag{position:absolute;top:-11px;height:22px;display:flex;align-items:center;gap:6px;padding:0 9px;border-radius:99px;font-size:11.5px;font-weight:800;white-space:nowrap;background:color-mix(in srgb,var(--c) 18%,var(--bg2));border:1px solid color-mix(in srgb,var(--c) 60%,transparent);color:var(--ink)}
+.al .dist{font-weight:700;color:var(--ink2)}
+/* A štítek */
+.vA .tag{left:12px}
+/* B zvonek na čáře */
+.vB .ln{border-top-style:solid;border-top-width:1.5px;opacity:.9}
+.vB .tag{right:10px;padding:0 10px 0 4px}
+.vB .bell{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:var(--c);color:#0b1020;font-size:11px}
+/* C zóna */
+.vC .ln{border-top-style:solid;border-top-width:1px}
+.vC .zone{position:absolute;left:0;right:0;top:0;height:var(--zh,34px);background:linear-gradient(180deg,color-mix(in srgb,var(--c) 26%,transparent),color-mix(in srgb,var(--c) 5%,transparent));border-bottom:1px dashed color-mix(in srgb,var(--c) 70%,transparent)}
+.vC .tag{left:12px;top:6px}
+/* D minimal */
+.vD .ln{border-top-width:1px;opacity:0;transition:opacity .2s}
+.vD:hover .ln,.vD.drag .ln,.vD.fire .ln{opacity:1}
+.vD .tag{display:none}
+.vD .ax{background:transparent;color:var(--c);border:1.5px solid var(--c);border-right:0}
+.vD .ax::before{content:"◀ ";font-size:8px}
+.vD:hover .tag,.vD.drag .tag{display:flex;left:12px}
+/* spuštění */
+.al.fire .ln{animation:flash .5s ease-in-out 4}
+.al.fire .ax{animation:pop .5s cubic-bezier(.3,1.6,.5,1) 3}
+.sweep{position:absolute;left:0;right:74px;height:120px;pointer-events:none;opacity:0;background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--c) 30%,transparent),transparent);transform:translateY(-50%);z-index:2}
+.sweep.go{animation:sweep 1.1s ease-out}
+@keyframes flash{50%{opacity:.25;filter:drop-shadow(0 0 8px var(--c))}}
+@keyframes pop{40%{transform:scale(1.18)}}
+@keyframes sweep{0%{opacity:0;height:8px}25%{opacity:1}100%{opacity:0;height:260px}}
+.done .ln{border-top-color:var(--ink3)!important;opacity:.6} .done .ax{background:var(--ink3)} .done .tag{opacity:.6}
+/* oznámení */
+.toasts{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;gap:8px;z-index:8;width:min(320px,calc(100% - 100px))}
+.toast{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--card);border:1px solid var(--line);box-shadow:0 20px 40px -20px rgba(0,0,0,.7);animation:tin .45s cubic-bezier(.2,.9,.3,1.2)}
+.toast .bk{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:16px;background:color-mix(in srgb,var(--c) 22%,transparent);position:relative}
+.toast .bk::after{content:"";position:absolute;inset:-3px;border-radius:12px;border:2px solid var(--c);opacity:0;animation:ring 1.2s ease-out 3}
+.toast b{display:block;font-size:13px} .toast small{color:var(--ink2);font-size:11.5px}
+.toast .x{border:0;background:transparent;color:var(--ink3);font-size:15px;cursor:pointer}
+@keyframes tin{from{opacity:0;transform:translateY(14px) scale(.96)}}
+@keyframes ring{0%{opacity:.9;transform:scale(.9)}100%{opacity:0;transform:scale(1.5)}}
+.banner{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:9;display:flex;align-items:center;gap:12px;padding:9px 16px 9px 10px;border-radius:99px;background:#05070f;color:#fff;border:1px solid rgba(255,255,255,.14);box-shadow:0 20px 50px -18px rgba(0,0,0,.9);animation:isl .6s cubic-bezier(.2,1,.3,1.15);white-space:nowrap}
+.banner i{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-style:normal;background:var(--c);color:#05070f}
+.banner small{color:#9aa4bf}
+@keyframes isl{from{opacity:0;transform:translateX(-50%) scaleX(.3) translateY(-10px)}}
+.edge{position:absolute;inset:0;border-radius:14px;pointer-events:none;z-index:7;box-shadow:inset 0 0 0 2px var(--c),inset 0 0 60px color-mix(in srgb,var(--c) 35%,transparent);opacity:0}
+.edge.go{animation:edge 1.6s ease-out}
+@keyframes edge{15%{opacity:1}100%{opacity:0}}
+/* formulář a seznam */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:820px){.grid2{grid-template-columns:1fr}.chartbox{height:340px}}
+.form{padding:16px}
+.lbl{font-size:10.5px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px}
+.chips{display:flex;gap:5px;flex-wrap:wrap}
+.chips button{height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink2);font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.chips button.on{background:color-mix(in srgb,var(--acc) 18%,transparent);border-color:color-mix(in srgb,var(--acc) 55%,transparent);color:var(--ink)}
+.dots{display:flex;gap:8px}.dots i{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent}.dots i.on{border-color:var(--ink);box-shadow:0 0 0 2px var(--bg2) inset}
+input.t{width:100%;height:36px;border-radius:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 5%,transparent);color:var(--ink);padding:0 11px;font:inherit;font-weight:700;outline:none}
+.watch{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:10px;font-size:12.5px;margin-top:14px;background:color-mix(in srgb,var(--win) 12%,transparent);border:1px solid color-mix(in srgb,var(--win) 40%,transparent)}
+.watch.off{background:color-mix(in srgb,var(--warn) 13%,transparent);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.watch i{width:8px;height:8px;border-radius:50%;background:var(--win);box-shadow:0 0 0 4px color-mix(in srgb,var(--win) 25%,transparent)} .watch.off i{background:var(--warn);box-shadow:none}
+.li{display:grid;grid-template-columns:10px 1fr auto auto;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.li:first-child{border-top:0}.li i{width:10px;height:10px;border-radius:50%}
+.li b{font-size:13px}.li small{display:block;color:var(--ink2);font-size:11.5px}
+.pill{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--ink2)}
+.pill.g{color:var(--win);border-color:color-mix(in srgb,var(--win) 45%,transparent)} .pill.w{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.phone{width:300px;border-radius:34px;padding:10px;background:#05070f;border:1px solid rgba(255,255,255,.14);margin:0 auto}
+.phone .scr{border-radius:26px;overflow:hidden;background:linear-gradient(160deg,#27306b,#0f1430 60%);height:300px;padding:44px 10px 10px;position:relative}
+.notif{background:rgba(245,246,250,.92);color:#0f172a;border-radius:18px;padding:10px 12px;display:grid;grid-template-columns:34px 1fr;gap:10px;font-size:12.5px;margin-bottom:8px}
+.notif .ic{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#6366f1,#14b8a6);display:grid;place-items:center;color:#fff;font-weight:900}
+.notif b{display:block}.notif .t{float:right;color:#64748b;font-size:11px;font-weight:500}
+.notif .acts{grid-column:1/-1;display:flex;gap:6px;margin-top:2px}.notif .acts span{flex:1;text-align:center;padding:7px 0;border-radius:10px;background:rgba(15,23,42,.08);font-weight:700;font-size:12px}
+.note{font-size:12.5px;color:var(--ink2);padding:12px 14px}
+ul.pts{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:13px}ul.pts li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between">
+    <div><h1>Alerty — návrhy vzhledu</h1><p class="lead">Čtyři podoby čáry alertu v grafu a tři podoby oznámení. Čáru chytni a táhni; cena se hýbe sama a alert se spustí, když ji protne. Všechno jsou smyšlená data.</p></div>
+    <div class="row"><button class="btn" id="theme">Světlý / tmavý</button><button class="btn pri" id="fireNow">Spustit alert teď</button></div>
+  </div>
+
+  <div class="row" style="margin:6px 0 10px">
+    <span class="mut" style="font-weight:700;font-size:12px">ČÁRA</span>
+    <div class="seg" id="segV"><button data-v="A" class="on">A · Štítek</button><button data-v="B">B · Zvonek na čáře</button><button data-v="C">C · Zóna</button><button data-v="D">D · Jen značka na ose</button></div>
+    <span class="mut" style="font-weight:700;font-size:12px;margin-left:10px">OZNÁMENÍ</span>
+    <div class="seg" id="segN"><button data-n="1" class="on">1 · Karta</button><button data-n="2">2 · Ostrov nahoře</button><button data-n="3">3 · Záblesk grafu</button></div>
+  </div>
+
+  <div class="card chartbox" id="box">
+    <svg id="svg" preserveAspectRatio="none"></svg>
+    <div class="axis" id="axis"></div>
+    <div class="sweep" id="sweep"></div>
+    <div class="edge" id="edge"></div>
+    <div class="pxtag num" id="pxtag"></div>
+    <div class="al vA" id="al" style="--c:#fbbf24"><div class="zone"></div><div class="ln"></div><div class="tag"><span class="bell">🔔</span><span id="alName">PDH</span><span class="dist num" id="alDist"></span></div><div class="ax num" id="alAx"></div></div>
+    <div class="toasts" id="toasts"></div>
+  </div>
+  <div class="note card" style="margin-top:10px" id="desc"></div>
+
+  <h2>Založení a úprava alertu</h2>
+  <div class="grid2">
+    <div class="card form">
+      <div class="row" style="justify-content:space-between"><b style="font-size:15px">Alert na 26 905,00</b><span class="pill g">MNQZ6</span></div>
+      <div class="lbl">Kdy se spustí</div>
+      <div class="chips" data-one><button class="on">↕ Protnutí</button><button>↗ Jen zdola</button><button>↘ Jen shora</button><button>▭ Vstup do zóny</button></div>
+      <div class="lbl">Jak často</div>
+      <div class="chips" data-one><button class="on">Jednou</button><button>Pokaždé</button><button>1× za svíčku</button></div>
+      <div class="lbl">Co udělá</div>
+      <div class="chips"><button class="on">🔔 Zvuk</button><button class="on">🗣 Řekne název</button><button class="on">📱 Oznámení v iPhonu</button><button>📸 Uloží snímek grafu</button></div>
+      <div class="lbl">Název a barva</div>
+      <div class="row"><input class="t" style="flex:1" value="PDH — čekám reakci"><div class="dots"><i class="on" style="background:#fbbf24"></i><i style="background:#818cf8"></i><i style="background:#5eead4"></i><i style="background:#fb7185"></i></div></div>
+      <div class="lbl">Platnost</div>
+      <div class="chips" data-one><button class="on">Do konce dne</button><button>Do zrušení</button><button>2 hodiny</button></div>
+      <div class="watch" id="watch"><i></i><span><b>Hlídá služba Rithmic na Macu</b> · cena přímo z burzy, appka může být zavřená</span></div>
+      <div class="row" style="margin-top:14px;justify-content:space-between"><button class="btn" id="watchToggle">Ukázat stav „nikdo nehlídá“</button><button class="btn pri">Uložit alert</button></div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="li"><i style="background:#fbbf24"></i><span><b>PDH — čekám reakci</b><small class="num">26 905,00 · protnutí · jednou</small></span><span class="mut num" style="font-size:12px">+18,25 b</span><span class="pill g">hlídá</span></div>
+        <div class="li"><i style="background:#818cf8"></i><span><b>VWAP +1σ</b><small class="num">26 907,75 · jen shora · pokaždé</small></span><span class="mut num" style="font-size:12px">+21,00 b</span><span class="pill g">hlídá</span></div>
+        <div class="li"><i style="background:#5eead4"></i><span><b>Londýnské minimum</b><small class="num">26 842,50 · spuštěn 8:13:07 na 26 842,25</small></span><span class="mut" style="font-size:12px">před 4 min</span><span class="pill w">spuštěn · znovu?</span></div>
+        <div class="li"><i style="background:#6b7694"></i><span><b>Gap fill</b><small class="num">26 780,00 · vypršel včera 22:00</small></span><span></span><span class="pill">vypršel</span></div>
+      </div>
+      <div class="note">Rychlé založení beze změny: <b>pravý klik</b> v grafu (PC) nebo <b>＋ u nitkového kříže</b> (telefon) založí alert na ceně kurzoru s posledním nastavením. Dvojklik na čáru otevře tenhle formulář.</div>
+      <div class="phone" style="margin-top:12px"><div class="scr">
+        <div class="notif"><div class="ic">AT</div><div><span class="t">teď</span><b>🔔 PDH — čekám reakci</b>MNQ protnul 26 905,00 zdola · teď 26 905,75<div class="mut" style="font-size:11px;color:#64748b">hlídá služba Rithmic · 8:21:14</div></div><div class="acts"><span>Otevřít graf</span><span>Zapnout znovu</span></div></div>
+        <div class="notif" style="opacity:.75;transform:scale(.96)"><div class="ic">AT</div><div><span class="t">8:13</span><b>🔔 Londýnské minimum</b>MNQ protnul 26 842,50 shora</div></div>
+      </div></div>
+    </div>
+  </div>
+
+  <h2>Co se od starých alertů změní pod kapotou</h2>
+  <div class="card note"><ul class="pts">
+    <li><b>Hlídá služba Rithmic</b>, ne appka: cena jde přímo z burzy a alert se spustí, i když máš graf zavřený nebo telefon v kapse.</li>
+    <li><b>Každý tick</b>, ne jednou za pár sekund: krátké protnutí úrovně se neztratí.</li>
+    <li><b>Když služba neběží, řekne to</b>: u alertu svítí „nikdo nehlídá“ místo tichého nefungování.</li>
+    <li><b>Výpadek cen:</b> úroveň protnutá během výpadku se neohlásí (služba neví kdy ani jak); hlídat začne znovu od první ceny po obnově.</li>
+  </ul></div>
+</div>
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const box=$('#box'),svg=$('#svg'),al=$('#al');
+const P0=26860,P1=26960; let W=0,H=0;
+const y=p=>H*(1-(p-P0)/(P1-P0)), py=yy=>P0+(1-yy/H)*(P1-P0);
+const fmt=p=>p.toLocaleString('cs-CZ',{minimumFractionDigits:2,maximumFractionDigits:2});
+let seed=11;const rnd=()=>((seed=(seed*9301+49297)%233280)/233280);
+const bars=[];let last=26890;
+for(let i=0;i<64;i++){const o=last,c=Math.round((o+(rnd()-.47)*14)*4)/4,h=Math.max(o,c)+rnd()*5,l=Math.min(o,c)-rnd()*5;bars.push({o,h,l,c});last=Math.min(P1-12,Math.max(P0+12,c));}
+let price=last,level=26905,fired=false,variant='A',notif='1',dir=1;
+function draw(){
+  const r=box.getBoundingClientRect();W=r.width-74;H=r.height;if(W<=0||H<=0)return;
+  svg.setAttribute('viewBox',`0 0 ${r.width} ${H}`);
+  const cs=getComputedStyle(document.documentElement),grid=cs.getPropertyValue('--grid'),up=cs.getPropertyValue('--up'),dn=cs.getPropertyValue('--dn');
+  let h='';for(let p=P0+10;p<P1;p+=10)h+=`<line x1="0" x2="${W}" y1="${y(p)}" y2="${y(p)}" stroke="${grid}"/>`;
+  const bw=W/(bars.length+2);
+  bars.forEach((b,i)=>{const x=(i+1)*bw,col=b.c>=b.o?up:dn;h+=`<line x1="${x}" x2="${x}" y1="${y(b.h)}" y2="${y(b.l)}" stroke="${col}"/><rect x="${x-bw*.32}" width="${bw*.64}" y="${y(Math.max(b.o,b.c))}" height="${Math.max(1,Math.abs(y(b.o)-y(b.c)))}" fill="${col}"/>`;});
+  h+=`<line x1="0" x2="${W}" y1="${y(price)}" y2="${y(price)}" stroke="#3b5bdb" stroke-dasharray="2 4"/>`;
+  svg.innerHTML=h;
+  $('#axis').innerHTML=[...Array(9)].map((_,i)=>{const p=P0+10+i*10;return `<span style="top:${y(p)}px">${fmt(p)}</span>`}).join('');
+  $('#pxtag').style.top=y(price)+'px';$('#pxtag').textContent=fmt(price);
+  al.style.top=y(level)+'px';$('#alAx').textContent=fmt(level);
+  const d=level-price;$('#alDist').textContent=`${d>=0?'+':'−'}${Math.abs(d).toLocaleString('cs-CZ',{minimumFractionDigits:2})} b · ${Math.abs(Math.round(d*2))} USD/k`;
+  $('#sweep').style.top=y(level)+'px';
+}
+function tick(){
+  const b=bars[bars.length-1],prev=price;
+  const pull=fired?0:Math.sign(level-price)*.35;
+  price=Math.round((price+(Math.random()-.5)*3+pull*dir)*4)/4;price=Math.min(P1-6,Math.max(P0+6,price));
+  b.c=price;b.h=Math.max(b.h,price);b.l=Math.min(b.l,price);
+  if(!fired&&((prev<level&&price>=level)||(prev>level&&price<=level)))fire(prev<level?'zdola':'shora');
+  draw();
+}
+setInterval(tick,260);
+setInterval(()=>{bars.shift();bars.push({o:price,h:price,l:price,c:price});},9000);
+function fire(side){
+  fired=true;const c=getComputedStyle(al).getPropertyValue('--c');
+  al.classList.add('fire');setTimeout(()=>{al.classList.remove('fire');al.classList.add('done');},2200);
+  const sw=$('#sweep');sw.style.setProperty('--c',c);sw.classList.remove('go');void sw.offsetWidth;sw.classList.add('go');
+  const title=$('#alName').textContent,line=`MNQ protnul ${fmt(level)} ${side||'zdola'} · teď ${fmt(price)}`;
+  if(notif==='1'){const t=document.createElement('div');t.className='toast';t.style.setProperty('--c',c);t.innerHTML=`<div class="bk">🔔</div><div><b>${title}</b><small class="num">${line}</small></div><button class="x">×</button>`;t.querySelector('.x').onclick=()=>t.remove();$('#toasts').prepend(t);setTimeout(()=>t.remove(),7000);}
+  if(notif==='2'){const b=document.createElement('div');b.className='banner';b.style.setProperty('--c',c);b.innerHTML=`<i>🔔</i><span><b>${title}</b> <small class="num">${fmt(level)} · ${side||'zdola'}</small></span>`;box.appendChild(b);setTimeout(()=>b.remove(),4500);}
+  if(notif==='3'){const e=$('#edge');e.style.setProperty('--c',c);e.classList.remove('go');void e.offsetWidth;e.classList.add('go');}
+  try{const a=new (window.AudioContext||window.webkitAudioContext)();[880,1175].forEach((f,i)=>{const o=a.createOscillator(),g=a.createGain();o.frequency.value=f;o.connect(g);g.connect(a.destination);g.gain.setValueAtTime(.0001,a.currentTime+i*.16);g.gain.exponentialRampToValueAtTime(.12,a.currentTime+i*.16+.02);g.gain.exponentialRampToValueAtTime(.0001,a.currentTime+i*.16+.3);o.start(a.currentTime+i*.16);o.stop(a.currentTime+i*.16+.32);});}catch{}
+  setTimeout(()=>{fired=false;al.classList.remove('done');level=Math.round((price+(Math.random()>.5?1:-1)*(14+Math.random()*10))*4)/4;level=Math.min(P1-10,Math.max(P0+10,level));draw();},6500);
+}
+// tažení čáry
+let drag=false;
+al.addEventListener('pointerdown',e=>{drag=true;al.classList.add('drag');al.setPointerCapture(e.pointerId);});
+al.addEventListener('pointermove',e=>{if(!drag)return;const r=box.getBoundingClientRect();level=Math.round(py(e.clientY-r.top)*4)/4;level=Math.min(P1-4,Math.max(P0+4,level));fired=false;al.classList.remove('done');draw();});
+al.addEventListener('pointerup',()=>{drag=false;al.classList.remove('drag');});
+const DESC={
+ A:'<b>A · Štítek.</b> Přerušovaná čára, vlevo štítek s názvem a vzdáleností od ceny (v bodech i v USD na kontrakt), cena na ose v barvě alertu. Nejčitelnější, když máš na grafu víc alertů najednou.',
+ B:'<b>B · Zvonek na čáře.</b> Plná tenká čára a štítek u pravého okraje u ceny. Zvonek slouží jako úchyt pro tažení. Levá část grafu zůstává čistá pro svíčky a kreslení.',
+ C:'<b>C · Zóna.</b> Alert jako pásmo: spustí se při vstupu ceny do zóny, ne až na přesné ceně. Hodí se pro FVG nebo oblast likvidity, kde nečekáš tick na tick.',
+ D:'<b>D · Jen značka na ose.</b> V grafu není nic, jen obrys ceny na ose. Čára a štítek se ukážou po najetí myší a při spuštění. Nejméně rušivé, ale alert snadno přehlédneš.'};
+const NDESC={1:'Oznámení <b>1 · Karta</b> vlevo dole s pulzujícím zvonkem, zmizí sama.',2:'Oznámení <b>2 · Ostrov nahoře</b>: krátká černá pilulka uprostřed nahoře, nezakrývá svíčky.',3:'Oznámení <b>3 · Záblesk grafu</b>: okraj grafu se rozsvítí barvou alertu, bez textu — jen zvuk a hlas.'};
+const setDesc=()=>$('#desc').innerHTML=DESC[variant]+' '+NDESC[notif]+' Při spuštění čára zabliká, od úrovně se rozběhne vlna a čára zešedne.';
+$('#segV').onclick=e=>{const b=e.target.closest('button');if(!b)return;variant=b.dataset.v;$$('#segV button').forEach(x=>x.classList.toggle('on',x===b));al.className='al v'+variant;setDesc();};
+$('#segN').onclick=e=>{const b=e.target.closest('button');if(!b)return;notif=b.dataset.n;$$('#segN button').forEach(x=>x.classList.toggle('on',x===b));setDesc();};
+$('#fireNow').onclick=()=>{fired=false;al.classList.remove('done');fire('zdola');};
+$('#theme').onclick=()=>{document.documentElement.classList.toggle('light');draw();};
+$$('.chips').forEach(c=>c.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(c.hasAttribute('data-one'))[...c.children].forEach(x=>x.classList.toggle('on',x===b));else b.classList.toggle('on');});
+$$('.dots i').forEach(d=>d.onclick=()=>{$$('.dots i').forEach(x=>x.classList.toggle('on',x===d));al.style.setProperty('--c',d.style.background);});
+$('#watchToggle').onclick=()=>{const w=$('#watch'),off=w.classList.toggle('off');w.querySelector('span').innerHTML=off?'<b>Teď nikdo nehlídá</b> · služba Rithmic na Macu neběží, alert se nespustí':'<b>Hlídá služba Rithmic na Macu</b> · cena přímo z burzy, appka může být zavřená';$('#watchToggle').textContent=off?'Ukázat stav „hlídá“':'Ukázat stav „nikdo nehlídá“';};
+addEventListener('resize',draw);setDesc();draw();
+</script>
+</body>
+</html>

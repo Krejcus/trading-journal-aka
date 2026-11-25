@@ -288,6 +288,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-25 — Claude: upozornění na cenu hlídá služba Rithmic; oprava svíček po výpadku cen (NENASAZENO)
+
+- Lokální commity ve větvi `claude/remove-tradovate-20261123` nad main: f7cf3266 (svíčky) + commit upozornění. Nic není pushnuto; služba nad skutečným účtem běží dál ve staré verzi z `~/alphatrade-worktrees/rithmic` (6a2ad307) — restart dělá jen Filip a ten checkout je před tím potřeba aktualizovat.
+- **Svíčky po výpadku cen:** minuta, ve které se ceny obnovily, se skládala jen z ticků po obnově (24. 11. 8:12 mělo PC otevření 26 898,25 místo 26 903,25; telefon připojený později ji měl z historie správně). Služba teď po skončení té minuty přečte dotčené minuty z historie (jeden malý dotaz, čekající opravy se slučují, nejvýš 2 pokusy) a pošle zprávu `bars` s hranicí `through`; graf, telefon i deník přepíšou jen dokončené minuty (`services/rithmic/barRepair.ts`, `patchSeedCandles`). Critic: OK s výhradami, zapracováno.
+- **Upozornění na cenu:** po odstranění Tradovate workeru je nehlídal nikdo (PC je v Rithmic grafu ani nekreslilo, telefon je kreslil a nikdy nespustil). Nově: `services/rithmic/alertWatch.ts` ve službě vyhodnocuje každý obchod z burzy obnoveným čistým jádrem (`services/priceAlertWatchCore.ts`, `lib/priceAlertCross.ts` z archivu), křížení podepsané hlásí `api/price-alerts/watch.ts` → `trigger_price_alert` (o „jednou“, odstupu a stropu rozhoduje DB) → událost přes Realtime + APNs (`server/priceAlertOutbox.ts`, jen iPhone; webový push zmizel).
+  - Klíč hlídače: `grant` vydá přihlášenému uživateli klíč = HMAC(serverový klíč DB, štítek:userId); appka ho službě předá místním spojením (`alerts-key`) spolu se seznamem (`alerts-set`). Umí jen ohlásit křížení existujícího upozornění téhož uživatele. Odvolání všech = zvednout `GRANT_LABEL`. Žádná nová proměnná na Vercelu, žádná migrace.
+  - Zprávy o upozorněních nejsou příkaz: vyřizují se před rozpočtem obchodních příkazů (vlastní strop 12/10 s), v appce nejdou do deníku příkazů ani mezi nejisté (`UNTRACKED_OPS`). Stav `alerts` nese otisk seznamu a uživatele — „Hlídá služba Rithmic“ se ukáže jen při přesné shodě (INV-UI-03). Zkušební systém a jiný trh než NQ/MNQ se nehlídají. Po výpadku cen se bere jen nová výchozí cena (nic se nedohání).
+  - Critic: OPRAVIT PŘED COMMITEM → opraveno (rozpočet příkazů, shoda podle počtu, klíč jiného uživatele, CORS pro iPhone, zaseknuté čekání, ES kontrakt, záložní jméno SUPABASE_URL, dohnání fronty doručení).
+  - Neověřeno naostro: celý řetěz běží až s novou službou + nasazeným webem/API + novým buildem iPhonu. Známé meze: nedoručené oznámení dožene až další spuštění (cron není); posun hodin Macu > 60 s = zahozený klíč; telefon na zkušebním systému upozornění dál kreslí.
+- Náhled návrhů vzhledu upozornění: `mockups/alerts-preview.html` (4 podoby čáry, 3 oznámení, formulář, seznam) — jen návrh, UI se zatím neměnilo.
+- Zjištěno: obchodní spojení služby stojí od 22. 11. 7:58 (Rithmic od 21. 11. odmítal přihlášení k účtu, služba se zastavila kvůli rozpočtu přihlášení); ceny běží.
+
 ### 2026-11-24 — Claude: obrazovka Kopírka (Rithmic) — čáry, skupiny, průvodce, ukázka; úklid textů
 
 - Web b1b521c3 (+ f91693af) NASAZEN, iPhone přeinstalován ze stejného commitu.

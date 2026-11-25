@@ -113,10 +113,15 @@ describe('obrazovka v režimu jednoho účtu', () => {
     expect(screen).toMatch(/toolbarFixedEnd=\{mergedHeader \? <div className="flex items-center gap-1" data-live-merged-header>\{compactTabs\}\{headerRight\}<\/div> : undefined\}/);
   });
 
-  it('alerty jsou v režimu jednoho účtu vypnuté a výchozí zdroj dat se nečte', () => {
-    expect(screen).toMatch(/muted: solo != null/);
-    expect(screen).toMatch(/\{!solo && <LivePcAlertsButton/);
-    expect(screen).toMatch(/\{!solo && <LivePcAlertDialogs/);
+  it('alerty jsou v režimu jednoho účtu jen na skutečném trhu (hlídá je služba); na zkušebním vypnuté; výchozí zdroj dat se nečte', () => {
+    expect(screen).toMatch(/const alertsOff = solo != null && solo\.alerts !== true;/);
+    expect(screen).toMatch(/muted: alertsOff/);
+    expect(screen).toMatch(/\{!alertsOff && <LivePcAlertsButton/);
+    expect(screen).toMatch(/\{!alertsOff && <LivePcAlertDialogs/);
+    expect(screen).toMatch(/\{alertsOff \? null : basePriceAlertBridge\.renderLines\(api, dark\)\}/);
+    // Zkušební systém i simulace mají smyšlené ceny: tam se alerty nezapnou ani v grafu, ani ve službě.
+    expect(chart).toMatch(/const alertsReal = !simulationUrl && trading\.system != null && trading\.system !== 'Rithmic Test';/);
+    expect(chart).toMatch(/alerts: alertsReal/);
     expect(screen).toMatch(/disabled: marketData != null/);
     // Starší historie appky (skutečný MNQ) se k cizímu zdroji svíček nepřipojuje; kanál TV se neodebírá.
     expect(screen).toMatch(/externalMarketData: marketData != null && solo\?\.historyFromApp !== true,/);
@@ -181,8 +186,10 @@ describe('hook místního procesu', () => {
     expect(rithmicFlattenReply({ ok: true, result: { status: 'indeterminate', reason: 'nepřišla' } })).toEqual({ ok: false, sent: 'unknown', error: 'nepřišla' });
     expect(rithmicFlattenReply({ ok: true, result: {} })).toMatchObject({ ok: false, sent: 'unknown' });
     expect(hook.match(/const reply = rithmicFlattenReply\(raw\);/g)).toHaveLength(2);
-    // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu.
-    expect(conn).toMatch(/if \(pending\.op !== 'ack' && pending\.op !== 'lookup' && !reply\.ok && reply\.sent !== false\) this\.options\.handlers\.onUncertain\(/);
+    // Nejistou odpověď služby zapisuje příjem odpovědi pro každý příkaz kromě potvrzení incidentu, dohledání
+    // a zpráv o upozorněních na cenu (ty nejsou příkaz).
+    expect(conn).toMatch(/if \(tracked\(pending\.op\) && !reply\.ok && reply\.sent !== false\) this\.options\.handlers\.onUncertain\(/);
+    expect(conn).toMatch(/const UNTRACKED_OPS = new Set\(\['ack', 'lookup', 'alerts-key', 'alerts-set'\]\);/);
     expect(hook.match(/op: 'flatten'/g)).toHaveLength(2);
   });
 

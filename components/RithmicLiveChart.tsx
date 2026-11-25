@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import LiveTradingScreenSlot from './LiveTradingScreenSlot';
 import type { LiveTradingCopierState, LiveTradingTab } from './LiveTradingScreen';
 import { RITHMIC_SOLO_ACCOUNT, useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
+import { useRithmicAlertWatch } from '../hooks/useRithmicAlertWatch';
 import { rithmicLocalUrl } from '../lib/rithmicLocalLink';
 import { cmeSessionCloseWarning } from '../lib/cmeSessionClose';
 import type { TradeToast } from '../lib/liveTradeToasts';
@@ -41,6 +42,9 @@ const card = (id: string, tone: TradeToast['tone'], badge: string, title: string
 const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, navigationBlocked, copier, disarm, onDisarm, onCrash, simulationUrl, accountBar: accountBarProp = null }) => {
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl]);
   const trading = useRithmicLocalTrading({ url, enabled: open });
+  // Upozornění na cenu hlídá služba jen na skutečném trhu (zkušební systém i simulace mají smyšlené ceny).
+  const alertsReal = !simulationUrl && trading.system != null && trading.system !== 'Rithmic Test';
+  const alertWatch = useRithmicAlertWatch(trading, alertsReal);
   // Lišta účtu: ze zkušební stránky mock účty, jinak skutečný účet služby (jeden, bez skupin; jen zobrazení).
   const realAccountBar = useMemo(() => rithmicAccountBarData({ accountName: trading.accountName, system: trading.system, closedPnl: trading.silent ? null : trading.accountClosedPnl }),
     [trading.accountName, trading.system, trading.accountClosedPnl, trading.silent]);
@@ -138,8 +142,8 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || trading.commandInFlight || replaying || !trading.available
     || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
-  const solo = useMemo(() => ({ ...soloBase, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
-    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
+  const solo = useMemo(() => ({ ...soloBase, alerts: alertsReal, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
+    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, alertsReal, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });
@@ -178,7 +182,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
         entryScaleIn={trading.scaleIn}
         entryMaxContracts={trading.maxContracts} entryFrontContract={symbol} manageLeaderAccountId={RITHMIC_SOLO_ACCOUNT} workingOrders={trading.workingView} liveFills={trading.liveFills}
         entryBlockedReason={blocked ? `Nové vstupy stojí: ${blocked}` : trading.entryBlockedReason}
-        accountBar={accountBar} onReplayChange={setReplaying}
+        accountBar={accountBar} onReplayChange={setReplaying} alertWatch={alertWatch.watching}
       />
       {/* Nejistý příkaz: karta se vrací, dokud uživatel nepotvrdí, že stav u brokera ověřil. */}
       {uncertain && !crashed && createPortal(<button type="button" data-rithmic-verified disabled={!trading.helloFresh || link !== 'open'} onClick={dismissUncertain} title={uncertainList.map(item => `${item.label} · ${item.reason}`).join('; ')}

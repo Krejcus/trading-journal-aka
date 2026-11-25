@@ -377,7 +377,7 @@ export function LivePhoneAlertList({ alerts, watching, error, onEdit, onRemove, 
       </div>
       <div style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', background: watching ? 'rgba(34,197,94,.1)' : 'rgba(242,166,35,.12)', color: watching ? '#86efac' : '#fcd34d' }}>
         <i style={{ width: 7, height: 7, borderRadius: 4, flex: 'none', background: watching ? '#22c55e' : '#f2a623' }} />
-        {watching ?? 'Upozornění teď nikdo nehlídá — Mac worker neběží nebo nemá cenu z IBKR. Křížení mezitím se nedoženou.'}
+        {watching ?? 'Upozornění teď nikdo nehlídá — služba Rithmic na Macu neběží, je ve starší verzi nebo jí nejdou ceny. Křížení mezitím se nedoženou.'}
       </div>
       {error && <div role="alert" style={{ margin: '0 16px 10px', padding: '9px 11px', borderRadius: 11, fontSize: 12, background: 'rgba(239,70,85,.12)', color: '#fda4af' }}>{error}</div>}
       {alerts.length === 0 && <p style={{ margin: 0, padding: '6px 16px 0', fontSize: 13, color: 'var(--dj-muted)' }}>Žádné upozornění. Podrž prst na grafu a klepni na +.</p>}

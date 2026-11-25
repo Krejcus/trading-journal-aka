@@ -260,7 +260,7 @@ export default React.memo(LiveTradingScreenSlot, (left, right) => (
   && (left.entryBlockedReason ?? null) === (right.entryBlockedReason ?? null)
   && (left.manageLeaderAccountId ?? null) === (right.manageLeaderAccountId ?? null)
   && left.marketData === right.marketData
-  && (left.solo?.label ?? null) === (right.solo?.label ?? null) && (left.solo?.available ?? null) === (right.solo?.available ?? null) && Boolean(left.solo?.singleLeg) === Boolean(right.solo?.singleLeg) && Boolean(left.solo?.historyFromApp) === Boolean(right.solo?.historyFromApp)
+  && (left.solo?.label ?? null) === (right.solo?.label ?? null) && (left.solo?.available ?? null) === (right.solo?.available ?? null) && Boolean(left.solo?.singleLeg) === Boolean(right.solo?.singleLeg) && Boolean(left.solo?.historyFromApp) === Boolean(right.solo?.historyFromApp) && Boolean(left.solo?.alerts) === Boolean(right.solo?.alerts)
   && left.solo?.limitsLabel === right.solo?.limitsLabel && left.solo?.lastCloseLabel === right.solo?.lastCloseLabel
   && left.solo?.reduce?.run === right.solo?.reduce?.run && left.solo?.reduce?.busy === right.solo?.reduce?.busy && left.solo?.reduce?.quantity === right.solo?.reduce?.quantity
   && left.solo?.legsRemovable === right.solo?.legsRemovable
