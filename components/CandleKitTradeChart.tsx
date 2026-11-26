@@ -88,6 +88,13 @@ import {
   subscribeDrawingLayer,
   windowDrawings,
 } from '../services/chartDrawingLayer';
+import { CROSSHAIR_PRICE_DATASET, exitTouchCrosshair, installTouchCancelRepair, tapEndsTouchCrosshair } from '../services/chartTouchCrosshair';
+import {
+  emptyOverlayArtifacts,
+  releaseOverlayArtifacts,
+  restartOverlayArtifacts,
+  type OverlayArtifacts,
+} from '../services/chartOverlayArtifacts';
 import { normalizeDrawingForLayer, type StoredDrawingLike } from '../services/chartAnnotationMigration';
 import {
   calculateMarketStructure,
@@ -115,6 +122,7 @@ import {
   createDrawingMagnetResolver,
   getDrawingMagnetSettings,
   installDrawingMagnet,
+  createPriceLevelMagnet,
   setDrawingMagnetSettings,
   subscribeDrawingMagnetSettings,
   type DrawingMagnetSources,
@@ -2287,11 +2295,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const magnetPendingSnapRef = useRef<{ time: number; price: number } | null>(null);
   const magnetCrosshairUpdatingRef = useRef(false);
   const magnetFirstAnchorPreviewRef = useRef(false);
-  const overlayArtifactsRef = useRef<{
-    api: ChartViewApi | null;
-    lines: ISeriesApi<'Line'>[];
-    primitives: ISeriesPrimitive<Time>[];
-  }>({ api: null, lines: [], primitives: [] });
+  const touchCrosshairShownRef = useRef(false);
+  const overlayArtifactsRef = useRef<OverlayArtifacts<ChartViewApi, ISeriesApi<'Line'>, ISeriesPrimitive<Time>>>(
+    emptyOverlayArtifacts(),
+  );
   const ohlcValuesRef = useRef<HTMLSpanElement>(null);
   const ohlcChangeRef = useRef<HTMLSpanElement>(null);
   const legendFollowsCrosshairRef = useRef(false);
@@ -3063,18 +3070,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (magnetCrosshairFrameRef.current !== null) window.cancelAnimationFrame(magnetCrosshairFrameRef.current);
     magnetPendingSnapRef.current = null;
     magnetCrosshairUpdatingRef.current = false;
-    const artifacts = overlayArtifactsRef.current;
-    if (artifacts.api) {
-      const chart = artifacts.api.controller.getChart();
-      const series = artifacts.api.controller.getSeries() as ISeriesApi<'Candlestick'>;
-      artifacts.primitives.forEach(primitive => {
-        try { series.detachPrimitive(primitive); } catch { /* chart already destroyed */ }
-      });
-      artifacts.lines.forEach(line => {
-        try { chart.removeSeries(line); } catch { /* chart already destroyed */ }
-      });
-    }
-    overlayArtifactsRef.current = { api: null, lines: [], primitives: [] };
+    releaseOverlayArtifacts(overlayArtifactsRef.current);
+    overlayArtifactsRef.current = emptyOverlayArtifacts();
     if (priceWheelFrameRef.current !== null) window.cancelAnimationFrame(priceWheelFrameRef.current);
     if (replayViewportFrameRef.current !== null) window.cancelAnimationFrame(replayViewportFrameRef.current);
     if (replayStartAnimationFrameRef.current !== null) window.cancelAnimationFrame(replayStartAnimationFrameRef.current);
@@ -4204,18 +4201,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     );
     applyFibRuntimeTimeframe(api.drawing?.engine, timeframe);
     applyPositionRuntimeInterval(api.drawing?.engine, timeframeMinutes(timeframe) * 60);
-    if (chartChanged) {
-      overlayArtifactsRef.current = { api, lines: [], primitives: [] };
-    } else {
-      overlayArtifactsRef.current.primitives.forEach(primitive => {
-        try { series.detachPrimitive(primitive); } catch { /* chart already refreshed */ }
-      });
-      overlayArtifactsRef.current.lines.forEach(line => {
-        try { chart.removeSeries(line); } catch { /* chart already refreshed */ }
-      });
-      overlayArtifactsRef.current.lines = [];
-      overlayArtifactsRef.current.primitives = [];
-    }
+    // Nové `api` neznamená nový graf: změna nastavení kreslení (LIVE se
+    // sdílenou vrstvou kreseb při přepnutí timeframu) vydá nový objekt nad
+    // stejnou sérií. Staré vrstvy se proto odpojují vždy — jinak by se FVG,
+    // levely i průběh pozic kreslily víckrát přes sebe.
+    overlayArtifactsRef.current = restartOverlayArtifacts(overlayArtifactsRef.current, api);
     const applyTradingViewCandleStyle = () => {
       chart.applyOptions({ layout: { fontFamily: chartStyle.fontFamily } });
       series.applyOptions({
@@ -4270,6 +4260,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     unsubscribeCrosshairSafely(crosshairSubscriptionRef.current);
     exactCrosshairSyncCleanupRef.current?.();
     const hideExactCrosshair = () => {
+      touchCrosshairShownRef.current = false;
+      delete chart.chartElement().dataset[CROSSHAIR_PRICE_DATASET];
       if (exactCrosshairLineRef.current) exactCrosshairLineRef.current.style.opacity = '0';
       if (exactCrosshairHorizontalLineRef.current) exactCrosshairHorizontalLineRef.current.style.opacity = '0';
       if (exactCrosshairTimeLabelRef.current) exactCrosshairTimeLabelRef.current.style.opacity = '0';
@@ -4285,6 +4277,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         hideExactCrosshair();
         return;
       }
+      touchCrosshairShownRef.current = true;
+      // Přesná cena kříže pro „+“ u osy: z pixelu by se po přichycení magnetem nemusela trefit na tick.
+      if (price !== null) chart.chartElement().dataset[CROSSHAIR_PRICE_DATASET] = String(price);
+      else delete chart.chartElement().dataset[CROSSHAIR_PRICE_DATASET];
       const chartRect = chart.chartElement().getBoundingClientRect();
       const rootRect = chartRootRef.current?.getBoundingClientRect() ?? chartRect;
       const leftScaleWidth = Math.max(0, chart.priceScale('left').width());
@@ -4346,10 +4342,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         updateExactCrosshair(param.point ? exactX : null, param.point?.y ?? null, param.time === undefined ? undefined : Number(param.time), fallbackPrice);
       }
       const drawingEngine = api.drawing?.engine;
+      // Telefon: magnet chytá i samotný kříž (bez nástroje), aby „+“ u osy
+      // šlo přesně na high/low/open/close svíčky. Na PC jen při kreslení.
       if (
         !magnetCrosshairUpdatingRef.current
-        && drawingEngine?.getActiveTool()
-        && !drawingEngine.getDraft()
+        && (drawingEngine?.getActiveTool() || phoneLayoutRef.current)
+        && !drawingEngine?.getDraft()
         && param.time !== undefined
         && param.point
       ) {
@@ -4623,7 +4621,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const exitTime = nearestCandleTime(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
     const isLong = String(trade.direction).toLowerCase() === 'long';
     // Kotva grafu dne není obchod — žádné ENTRY/EXIT značky.
-    createSeriesMarkers(series, replayActive || trade.executionHistory || trade.accountId === DAY_ANCHOR_ACCOUNT_ID ? [] : [
+    overlayArtifactsRef.current.markers.push(createSeriesMarkers(series, replayActive || trade.executionHistory || trade.accountId === DAY_ANCHOR_ACCOUNT_ID ? [] : [
       {
         time: entryTime,
         position: isLong ? 'belowBar' as const : 'aboveBar' as const,
@@ -4638,7 +4636,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         shape: isLong ? 'arrowDown' as const : 'arrowUp' as const,
         text: 'EXIT',
       },
-    ].sort((a, b) => Number(a.time) - Number(b.time)));
+    ].sort((a, b) => Number(a.time) - Number(b.time))));
 
     const engine = api.drawing?.engine;
     if (engine) {
@@ -4730,7 +4728,24 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         },
       );
       drawingMagnetResolverRef.current = resolveMagnetPoint;
-      drawingMagnetCleanupRef.current = installDrawingMagnet(engine, resolveMagnetPoint);
+      const priceLevelMagnet = createPriceLevelMagnet(
+        () => drawingMagnetSourcesRef.current,
+        {
+          priceToY: price => series.priceToCoordinate(price),
+          visibleTimeRange: () => {
+            const range = chart.timeScale().getVisibleRange();
+            return range ? { from: Number(range.from), to: Number(range.to) } : null;
+          },
+        },
+      );
+      drawingMagnetCleanupRef.current = installDrawingMagnet(
+        engine,
+        resolveMagnetPoint,
+        // Jen telefon: prst drží úchyt u levého okraje boxu, ne u svíčky, na kterou míří.
+        price => (phoneLayoutRef.current ? priceLevelMagnet(price) : null),
+        // Přesun celé kresby: přichytává se z nepřichycené polohy, tvar kresby zůstává.
+        { drag: () => (api.drawing as unknown as { drag?: { id: string; kind: string } | null } | undefined)?.drag ?? null, level: priceLevelMagnet },
+      );
       // Průběh Long/Short boxu jako v TradingView: po zasažení entry čárkovaná
       // čára k aktuální ceně a box se vyplňuje — v přehrávání i na běžném
       // grafu (bez přehrávání jsou „viditelné“ všechny svíčky).
@@ -5348,6 +5363,30 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   useEffect(() => {
     reviewPointRef.current?.setCandles(visibleCandles, timeframeMinutes(timeframe) * 60);
   }, [visibleCandles, timeframe, chartApiEpoch, reviewMode]);
+  // Telefon: dotykový kříž nesmí zůstat viset. Knihovna ho po dlouhém podržení
+  // drží do klepnutí přímo do grafu — klepnutí jinam (lišta, tlačítko) ho proto
+  // ukončíme sami, stejně jako odchod z appky; přerušený dotyk se knihovně dořekne.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!phoneLayout || !api) return undefined;
+    let chart: IChartApi;
+    let element: HTMLElement;
+    try { chart = api.controller.getChart(); element = chart.chartElement(); } catch { return undefined; }
+    const removeRepair = installTouchCancelRepair(element);
+    const exit = () => { if (touchCrosshairShownRef.current) exitTouchCrosshair(chart); };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'mouse') return;
+      if (tapEndsTouchCrosshair(event.target, element)) exit();
+    };
+    const onVisibility = () => { if (document.visibilityState !== 'visible') exit(); };
+    document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      removeRepair();
+      document.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [chartApiEpoch, phoneLayout]);
   const startReviewFocus = useCallback((target: { entryMs: number; exitMs: number; id?: string }) => {
     const api = apiRef.current;
     const range = centeredTradeRangeRef.current(target);

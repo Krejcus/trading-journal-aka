@@ -39,6 +39,8 @@ import {
   LivePhoneOrderLines, LivePhoneWorkingBadges, livePhoneDraftAfterAddBracket, livePhoneDraftAfterDrag, livePhoneDraftAfterRemove, livePhoneDraftLines,
   livePhoneMarketDraftFollow, livePhoneWorkingView, useLivePhoneLineState,
 } from './LivePhoneOrderLines';
+import { exitTouchCrosshair } from '../../services/chartTouchCrosshair';
+import { hideExactCrosshairOverlays } from '../../services/chartCrosshairPrecision';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
 import { alertTitle, movedAlert, newPriceAlert, priceAlertEventTitle, type PriceAlert } from '../../lib/priceAlerts';
 import { PRICE_ALERT_REARM_EVENT, useFreshPriceAlertEvents, usePriceAlertStore } from '../../services/priceAlertStoreHook';
@@ -791,7 +793,13 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             onRemove={removeAlert}
           />
           {/* Plusko u kříže jen v aktivním okně (ve dvou oknech by se ukázalo dvakrát). */}
-          {active && <LivePhoneCrosshairPlus api={api} onPlus={price => { plusOpenedAt.current = Date.now(); setPlus(price); }} />}
+          {active && <LivePhoneCrosshairPlus api={api} onPlus={price => {
+            plusOpenedAt.current = Date.now();
+            // Kříž končí otevřením listu: jeho štítky (cena, datum a čas) by jinak zůstaly viset nad listem.
+            try { if (api) exitTouchCrosshair(api.controller.getChart()); } catch { /* graf se právě přestavuje */ }
+            hideExactCrosshairOverlays();
+            setPlus(price);
+          }} />}
         </> : null),
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>

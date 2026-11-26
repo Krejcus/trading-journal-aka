@@ -397,6 +397,49 @@ Zadání Filipa: (1) klepnutí na Koupit/Prodat v liště má odejít hned a Pro
 - Před pushem: celá sada (4099 testů; `backupNightlyGate` jednou vypršel na čas v plné sadě, samostatně prošel), `tsc` bez chyb vč. služby (dočasný `tsconfig.service-check.json`), `npm run build` OK. Critic k merge větve: OK s výhradami (viz zápis o spojení větve s main).
 - Služba se nerestartovala (běží z `bdb8aeac`, rozdíl proti main je jen dokumentace). iPhone zůstává na buildu z `09d28b73` — změny telefonu z této větve v něm nejsou, dokud se nepřestaví.
 - Alerty: Filip potvrdil, že okamžitá karta cinká hned a rychlost (~0,5 s do přijetí Applem) stačí; přímé odesílání APNs z Macu se nestaví.
+### 2026-11-26 — Claude: krátké štítky příkazů v telefonním LIVE grafu (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
+
+- **Zadání (Filip):** štítky čar jsou zbytečně dlouhé. Cenu vstupu zvýraznit v cenové ose, „čeká na vyplnění“ pryč, u SL/TP pryč body i ikonka ✎ (posouvá se tahem). Čipy `+ SL` / `+ TP` zůstávají.
+- **Změna:** `BacktestOrderLinesOverlay` má nový přepínač `compact` (zapnutý jen v `LivePhoneOrderLines`; PC a backtest beze změny). V krátkém režimu štítek neukazuje cenu, body ani poznámky „návrh“ / „čeká na vyplnění“ („mění se“ zůstává) a cenovku v ose dostává i vstup. Návrh odliší čárkovaný obrys štítku a dutá čárkovaná cenovka (`isDraftLabel`). Čekající vstup má na telefonu barvu strany (modrá/červená) místo šedé, aby byla cenovka vidět; neověřené čáry zůstávají šedé.
+- **✎ na SL/TP** už se na čáru nepřidává; list správy SL/TP dál otevírá tlačítko „Správa SL a TP“ v liště pozice. Jen zobrazení (INV-UI): žádná cesta příkazu se nezměnila.
+- **Ověření:** místní simulace telefonu (`rithmic-phone-simulation`): čekající limit `BUY 1 LIMIT ×` + modrá cenovka, pozice `LONG 1 +$ BE ×` + cenovka, SL/TP `SL 1 −$18.00 ×`. Celá sada testů a `tsc --noEmit` prošly. Čára návrhu vstupu na telefonu v simulaci nevyvolána (jen přes kód), skutečný iPhone neověřen.
+
+### 2026-11-26 — Claude: magnet při přesunu celé kresby (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
+- **Příčina:** magnet chytal jen při tahu za úchyt. Při přesunu celé kresby (tělo position boxu, čára, obdélník) se nepřichytávalo vůbec — schválně, aby se kresba nezdeformovala. Vodorovná čára tažená mimo svůj bod navíc se silným magnetem uvízla: CandleKit posouvá kresbu po krocích (aktuální body + posun), takže přichycený bod se v dalším kroku přichytil zpět.
+- **Oprava (`services/chartDrawingMagnet.ts`, 4. parametr `installDrawingMagnet`):** při tahu za tělo (pozná se z `controller.drag`) se pamatuje nepřichycená poloha a přichycení se počítá z ní; všechny body se posunou stejně, tvar zůstává. Position box a vodorovná čára se chytají cenou na úroveň přes viditelné svíčky, kresby s více body přichytí bod, který je ke své svíčce nejblíž. Platí pro telefon i PC (stejný řadič).
+- **Ověřeno:** telefonní QA simulace syntetickými dotyky (silný magnet): čára, obdélník, position box a vodorovná čára se chytají a tvar drží; 4 nové testy, celá sada 4118 prošla, tsc čistý. **Neověřeno:** PC myší v prohlížeči, skutečný iPhone (build v telefonu je starší, ef3c1d3c).
+- **iPhone:** build z `50f28ccb` nainstalován přes stávající appku a spuštěn na LIVE (26. 11.); Filipem zatím neověřeno. Web dál nenasazen.
+- Zkoušené „zaostření“ na vybranou kresbu (ztmavení okolí) Filip zamítl — commit fc76b0f5 vrácen (0ffd2a52), nestavět.
+
+### 2026-11-25 — Claude: iPhone build z větve `claude/chart-tf-duplicates-20261125` (ef3c1d3c) nainstalován; web NENASAZEN
+
+- Na Filipovo „dej do telefonu“: `ios:sync` + `xcodebuild` z worktree `~/alphatrade-worktrees/chart-tf-dup` (vlastní `node_modules`, `.env.local` symlinkem), instalace přes stávající appku bez odinstalace (přihlášení a spárování zůstává), spuštěno na `alphatrade-native://live`. Větev obsahuje celý `origin/main` (4c18fd86) + opravy grafu z dnešních zápisů níže.
+- Web (push na main) čeká na Filipovo „nasaď“ — telefon je teď napřed před webem. Volné místo na disku po buildu 6,4 GB.
+
+### 2026-11-25 — Claude: telefon — magnet a vodicí čára při úpravě position boxu (NENASAZENO, stejná větev)
+
+- Zjištění: magnet při tahu úchytu SL/TP hledal jen u svíčky pod ukazatelem ±1. Na PC si myš k cílové svíčce dojede, prst na telefonu ale drží úchyt u levého okraje boxu → chytit šly jen tři svíčky u vstupu, což vypadá jako „magnet nefunguje“.
+- Nově `createPriceLevelMagnet` (`services/chartDrawingMagnet.ts`): cena úchytu se chytá na nejbližší OHLC ze všech VIDITELNÝCH svíček, jen podle výšky (slabý do 14 px, silný vždy). `installDrawingMagnet` má třetí parametr; graf ho dává jen při `phoneLayout`, jinak vrací `null` a platí původní chování. Týká se úchytů TP, SL a vstupu (cena); šířka boxu a tah celým boxem beze změny.
+- `DayTouchDrawLayer`: při tahu úchytu ceny position boxu vodorovná čárkovaná čára přes graf se štítkem ceny na ose (`data-drag-guide`), i s vypnutým magnetem. Po tahu se maže kříž — běžný magnet ho při tahu zobrazuje přes `setCrosshairPosition` a po zvednutí prstu zůstával viset (další příčina „kříž zůstává, když nemá“).
+- Ověřeno simulovanými dotyky v náhledu: TP 25008,50 → 25012,25 (úroveň svíčky mimo okolí vstupu), čára během tahu, po tahu bez čáry i kříže. iPhone neověřen.
+
+### 2026-11-25 — Claude: telefonní graf — kříž, který nezůstává viset, magnet na kříži, nové plus (NENASAZENO, stejná větev)
+
+- Kříž: Lightweight Charts po dlouhém podržení drží „režim sledování“ až do klepnutí PŘÍMO do plochy grafu a nemá API na ukončení. Klepnutí jinam (lišta, tlačítko, list) kříž nechalo. Nově `services/chartTouchCrosshair.ts`: `exitTouchCrosshair` pošle ploše grafu umělé klepnutí bez pohybu (obyčejná `Event` s poli `touches`/`changedTouches` — knihovna nic jiného nečte) + `clearCrosshairPosition`. Volá se při dotyku mimo graf (kromě prvků s `data-crosshair-keep` = plus), při odchodu z appky a při otevření listu z plusu. Jen `phoneLayout`, jen ne-myš.
+- `touchcancel`: knihovna ho neřeší (jen zruší časovač dlouhého podržení) a přerušený dotyk si dál vede jako aktivní → další `touchstart` zahodí. `installTouchCancelRepair` jí ho dořekne jako `touchend`. Je to preventivní oprava podle čtení kódu knihovny; že přesně tohle byl Filipův případ, není doložené.
+- Magnet: na telefonu chytá i samotný kříž (bez kreslicího nástroje) — podmínka v `handleCrosshairMove` rozšířena o `phoneLayout`. Přesná cena kříže jde do `dataset.atCrosshairPrice` na prvku grafu a plus ji čte (z pixelu by se po přichycení nemusela trefit na tick). PC beze změny (magnet jen při kreslení).
+- Plus u kříže: hranatější skleněná pilulka 30×24 těsně u osy, barvy `--dj-plus-*` pro tmavý i světlý motiv. Štítky kříže (cena, datum a čas) se při otevření listu schovají (`hideExactCrosshairOverlays`).
+- QA: telefonní stránka má přepínač Světlý/Tmavý. Dotyky jdou v náhledu simulovat stejnou umělou událostí na horním plátně plochy grafu (`table tr:first-child td:nth-child(2) canvas`, poslední); dlouhé podržení = `touchstart`, 400 ms, `touchend`.
+- Ověřeno jen v náhledu prohlížeče se simulovanými dotyky; skutečný iPhone (WKWebView) neověřen.
+
+### 2026-11-25 — Claude: zdvojené FVG a pozice po přepnutí timeframu — oprava (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
+
+- Příznak (Filip, PC i telefon): po přepnutí 1m → jiný → 1m jsou FVG sytější a pozice v grafu dvakrát, „přichycené“.
+- Příčina: `CandleKitTradeChart.handleReadyLatest` bral nový objekt `api` jako nový graf a evidenci vrstev jen vynuloval. ChartView ale vydá nové `api` i nad STEJNÝM grafem, kdykoli se změní objekt nastavení kreslení — tj. při sdílené vrstvě kreseb pokaždé, když se změní okno dnů (`layer:od:do`) nebo se vrstva zapne: v LIVE na PC při přepnutí timeframu (jeden graf přes všechny intervaly), na telefonu a v deníku když se dočte starší historie / přejde půlnoc / vrstva naběhne po startu. Staré vrstvy (FVG, levely, popisky struktury, průběh pozic, značky) zůstaly na sérii a kreslily se znovu; stará vrstva průběhu pozic navíc držela starý kreslicí engine.
+- Oprava: `services/chartOverlayArtifacts.ts` — před každou přestavbou se vše z evidence odpojí od grafu, ke kterému to bylo připojeno (zaniklý graf = chyba se spolkne). Značky vstup/výstup (`createSeriesMarkers`) se nově evidují taky; dřív přibývaly při každé přestavbě i bez změny api. Test `tests/chartOverlayArtifacts.test.ts`.
+- Ověřeno v náhledu (simulace Rithmic, `?vrstva=1`): PC 4× přepnutí 1m↔5m — dřív 10 → 16 → 22 → 28 vrstev na sérii a neprůhledné FVG, teď 10 → 13; telefon 6 změn vrstvy — dřív 11 → 31, teď stále 11. Backtest s jedním grafem chybu neměl (nový graf na každý timeframe, kresby tam jsou per timeframe).
+- Zbývá (neviditelné): `IndicatorController` v CandleKitu při odpojení zahodí svůj prázdný plugin značek bez `detach()` → +1 prázdná vrstva na každou výměnu kreslicího ovladače. Chce úpravu patche knihovny.
+- QA: `tests/qa/start.mjs` bere `QA_PORT` a `QA_CACHE_DIR` (víc worktree vedle sebe); syntetické svíčky backtestu mají každých 45 min skok 5 b → vznikají FVG; `rithmic-simulation.html` a `rithmic-phone-simulation.html` s `?vrstva=1` zapnou sdílenou vrstvu kreseb se smyšleným uživatelem (tabulky zůstávají zavřené). Počítání vrstev: obalit `attachPrimitive`/`detachPrimitive` na prototypu série; na telefonní stránce se api hledá přes React fiber (není tam `__atPanels`).
 
 ### 2026-11-25 — Claude: zrychlení cesty alertu do iPhonu — předem navázané spojení k Applu, předehřátí ze služby (NENASAZENO)
 

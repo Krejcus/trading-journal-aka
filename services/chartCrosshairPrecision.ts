@@ -90,3 +90,15 @@ export function crosshairCssLineStyle(style: ChartLineStyleName): 'solid' | 'dot
   if (style === 'dotted' || style === 'sparse-dotted') return 'dotted';
   return 'dashed';
 }
+
+/**
+ * Schová vlastní čáry a štítky kříže (cena u osy, datum a čas dole) ve všech
+ * grafech pod `root`. Štítky jsou DOM prvky nad plátnem grafu, takže by jinak
+ * zůstaly viset i nad listem, který se přes graf otevře (telefonní „+“).
+ * Další pohyb myši nebo dotyk je zase ukáže.
+ */
+export const hideExactCrosshairOverlays = (root: ParentNode = document): void => {
+  root.querySelectorAll<HTMLElement>(
+    '[data-exact-crosshair-line],[data-exact-crosshair-horizontal-line],[data-exact-crosshair-time-label],[data-exact-crosshair-price-label]',
+  ).forEach(element => { element.style.opacity = '0'; });
+};

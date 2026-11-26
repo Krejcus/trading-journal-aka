@@ -165,16 +165,16 @@ describe('U5: pracující příkazy jen jako zobrazení', () => {
 });
 
 describe('U10: ✎ na čáře jen otevře list správy', () => {
-  it('✎ u táhnutelné SL/TP: klepnutí volá jen onManage s nohou, nic se neodešle', async () => {
+  it('✎ na čáře SL/TP už není (Filip 26. 11. 2026: posouvá se tahem); akce „manage“ dál jen otevře list', async () => {
     const manage = vi.fn(async () => ack());
     const onManage = vi.fn();
     const { props } = render({ manage, extra: { onManage } });
     const stop = byId(props!, 'live-position:stopLoss');
     const target = byId(props!, 'live-position:takeProfit');
-    expect(stop.actions.map((action: { id: string }) => action.id)).toEqual(['manage']);
-    expect(target.actions.map((action: { id: string }) => action.id)).toEqual(['manage']);
-    // Vstup má dál jen BE (dvoukrokově), ✎ ne.
+    expect(stop.actions ?? []).toEqual([]);
+    expect(target.actions ?? []).toEqual([]);
     expect(byId(props!, 'live-position:entry').actions.map((action: { id: string }) => action.id)).toEqual(['break-even']);
+    expect(props!.compact).toBe(true);
     props!.onAction(stop, 'manage');
     props!.onAction(target, 'manage');
     await Promise.resolve();
