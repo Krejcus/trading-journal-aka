@@ -288,7 +288,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-26 — Claude: jednotné SL/TP při přikoupení (jen appka) — NENASAZENO
+### 2026-11-26 — Claude: druhá noha ke vstupu + jednotné SL/TP NASAZENY (web 2eef8c39, iPhone aa4ab658)
+
+- Filip: „Nasaď“. Řetěz: sada 4175 zelená → tsc 0 → build → push `0e7538d6..2eef8c39` na main. Checkout služby
+  `~/alphatrade-worktrees/rithmic` na `2eef8c39`; služba běží ze starého kódu do restartu Filipem
+  (`VICE_VSTUPU=ano scripts/rithmic/lucid.sh obnovit`) — bez něj „+ TP“ k SL ze vstupu dál odmítá.
+- iPhone: build ze společné větve `claude/phone-combined-20261126` (`aa4ab658` = main 2eef8c39 + větev ladění grafu
+  dc17a6bc s krátkými štítky; ta větev není v main). Další iPhone buildy stavět z této větve po sloučení main,
+  dokud ladění grafu nepůjde do main.
+- NEOVĚŘENO: telefon, Rithmic Test, skutečný účet (zrušení jediné nohy vstupu při otevřené pozici).
+
+### 2026-11-26 — Claude: jednotné SL/TP při přikoupení (jen appka) (nasazeno, viz výše)
 
 - Filip: „když přidávám/odebírám, ať je jednotný SL/TP a jen se navyšuje“ (ve volném režimu měl každý další vstup
   vlastní SL/TP z šablony a v grafu přibývaly čáry).
@@ -301,7 +311,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno: celá sada zelená, tsc 0; simulace PC: Market se SL+TP, druhý Market → „LONG 2“, jedna čára „SL 2“ a „TP 2“.
   Telefon a skutečný účet NEOVĚŘENO.
 
-### 2026-11-26 — Claude: druhá noha k ochraně ZE VSTUPU (vstup jen se SL → „+ TP“, a obráceně) — NENASAZENO
+### 2026-11-26 — Claude: druhá noha k ochraně ZE VSTUPU (vstup jen se SL → „+ TP“, a obráceně) (nasazeno, viz výše)
 
 - Filip na skutečném účtu vstoupil jen se SL (bracket STOP_ONLY, 1 ks) a čip „+ TP“ odmítal („pozice už má pracující
   příkazy“). Nebyla to regrese: druhá noha šla jen k samostatné ochraně `uiprot-`.
