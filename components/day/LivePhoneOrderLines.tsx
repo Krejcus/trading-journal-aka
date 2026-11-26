@@ -234,14 +234,16 @@ export function LivePhoneOrderLines({
   }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
-    ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
-      ? { ...line, actions: [...(line.actions ?? []), { ...LIVE_PHONE_MANAGE_ACTION }] } : line)) : positionLines),
+    // Filip 26. 11. 2026: ✎ na SL/TP pryč (posouvá se tahem). Čekající vstup v barvě strany, ať je jeho
+    // cenovka v ose vidět; neověřené čáry zůstávají šedé (šedá = stav neznámý).
+    ...positionLines.map(line => (line.kind === 'entry' && line.ownerType === 'order' && guardSummary && guardSummary.unverified !== true
+      ? { ...line, color: guardSummary.side === 'long' ? '#2563eb' : '#e11d48' } : line)),
     ...(attachLegs && attachSide && attachQuantity != null ? liveAttachChartLines(attachLegs, { side: attachSide, quantity: attachQuantity }, attachReference ?? null, { tickSize: TICK, pointValue: POINT_VALUE } as TicketInstrument) : []),
     // Pracující příkazy: jen zobrazení — vynucené bez tahu, × a tlačítek, ať je pustí jen tato vrstva.
     ...(extraLines ?? []).map(line => ({ ...line, draggable: false, cancellable: false, actions: undefined, addableBrackets: undefined })),
     // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic).
     ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
-  ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, onManage, positionLines, guardSummary?.kind]);
+  ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, positionLines, guardSummary]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'entry' | 'stopLoss' | 'takeProfit', seenGroupLimitStateHash?: string) => {
     if (!manage) return;
@@ -289,6 +291,7 @@ export function LivePhoneOrderLines({
       api={api}
       lines={lines}
       isDark={isDark}
+      compact
       selectToDrag
       // Filip 18. 11. 2026: SL/TP táhnout hned, bez předchozího výběru; po puštění čára drží novou cenu do
       // potvrzení brokerem (jinak by na okamžik problikla stará poloha).

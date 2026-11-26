@@ -11,6 +11,11 @@ interface Props {
   showPriceLabels?: boolean;
   /** Štítky SL/TP: body od vstupu + P&L, nebo jen P&L. */
   labelMode?: ChartOrderLineLabels;
+  /**
+   * Krátké štítky (telefon LIVE, Filip 26. 11. 2026): cena vstupu jde do cenové osy, ze štítku mizí cena,
+   * body i poznámky „návrh“ / „čeká na vyplnění“. Návrh odliší čárkovaný obrys a dutá cenovka. Jen zobrazení.
+   */
+  compact?: boolean;
   isDark?: boolean;
   /** `startLine` = čára v okamžiku chycení (živé příkazy posílají „co jsem viděl“ ze začátku tahu). */
   onChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number, startLine?: BacktestChartOrderLine) => void;
@@ -55,6 +60,10 @@ const sameCoordinates = (left: Record<string, number>, right: Record<string, num
   return leftKeys.length === Object.keys(right).length && leftKeys.every(key => left[key] === right[key]);
 };
 
+/** Poznámky, které krátký štítek neukazuje (stav říká obrys štítku a cenovka v ose). */
+const COMPACT_HIDDEN_NOTES = new Set(['návrh', 'čeká na vyplnění']);
+export const isDraftLabel = (label: string) => orderLineLabelParts(label).note === 'návrh';
+
 /**
  * Tenký štítek Aurora: mléčné sklo s vlastní výplní (Chrome nemusí kreslit
  * backdrop blur), obrys a typ v barvě čáry, čísla neutrální, P&L barevně.
@@ -66,16 +75,20 @@ const OrderLineBadge: React.FC<{
   isDark: boolean;
   labelMode: ChartOrderLineLabels;
   selected?: boolean;
+  compact?: boolean;
   children?: React.ReactNode;
-}> = ({ label, kind, color, isDark, labelMode, selected = false, children }) => {
+}> = ({ label, kind, color, isDark, labelMode, selected = false, compact = false, children }) => {
   const parts = orderLineLabelParts(label);
+  const draft = compact && isDraftLabel(label);
+  const note = compact && parts.note && COMPACT_HIDDEN_NOTES.has(parts.note) ? undefined : parts.note;
   const muted = isDark ? '#8391a7' : '#64748b';
-  const showPoints = kind === 'entry' || labelMode === 'points-pnl';
+  const showPoints = !compact && (kind === 'entry' || labelMode === 'points-pnl');
   return (
     <div
       className="flex h-[19px] items-center gap-[7px] whitespace-nowrap rounded-[4px] border pl-[7px] pr-[2px] text-[10.5px] font-medium backdrop-blur-md backdrop-saturate-150"
       style={{
-        borderColor: selected ? color : `${color}61`,
+        borderColor: selected || draft ? color : `${color}61`,
+        borderStyle: draft ? 'dashed' : undefined,
         backgroundColor: isDark ? 'rgba(13, 18, 26, 0.86)' : 'rgba(255, 255, 255, 0.9)',
         boxShadow: `${selected ? `0 0 0 2px ${color}40, ` : ''}0 4px 12px -8px ${color}bf, inset 0 1px 0 rgba(255, 255, 255, ${isDark ? 0.06 : 0.5})`,
         color: isDark ? '#e2e8f0' : '#0f172a',
@@ -83,10 +96,10 @@ const OrderLineBadge: React.FC<{
       data-order-line-badge
     >
       <span className="font-semibold tracking-[0.02em]" style={{ color }}>{parts.key}</span>
-      {parts.price && <span className="font-mono" style={{ color: muted }}>{parts.price}</span>}
+      {!compact && parts.price && <span className="font-mono" style={{ color: muted }}>{parts.price}</span>}
       {showPoints && parts.points && <span className="font-mono" style={{ color: muted }}>{parts.points}</span>}
       {parts.pnl && <span className="font-mono font-semibold" style={{ color }}>{parts.pnl}</span>}
-      {parts.note && <span style={{ color: muted }}>{parts.note}</span>}
+      {note && <span style={{ color: muted }}>{note}</span>}
       {children ?? <span className="w-[3px]" />}
     </div>
   );
@@ -223,7 +236,7 @@ export function liveLineClick(state: LiveLineClickState, line: Pick<BacktestChar
   return { fire: step.send, next: { ...state, last: step.next } };
 }
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, dragOnFirstTouch = false, holdMoveMs = 0, marketPrice, subscribeMarket }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, labelMode = 'points-pnl', compact = false, isDark = false, onChange, onCancel, onAction, onClickSwallowed, onAddBracket, selectToDrag = false, dragOnFirstTouch = false, holdMoveMs = 0, marketPrice, subscribeMarket }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Klepnutí mimo vybraný štítek výběr zruší (jen telefonní režim).
   useEffect(() => {
@@ -561,7 +574,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                   { transformOrigin: 'left top', transform: 'translate(0, 0) scale(1, 1)', opacity: 1 },
                 ], { duration: 260, easing: 'cubic-bezier(.2,.9,.25,1.15)' });
               }}>
-                <OrderLineBadge label={label} kind={bracketDragPreview.kind} color={color} isDark={isDark} labelMode={labelMode} />
+                <OrderLineBadge label={label} kind={bracketDragPreview.kind} color={color} isDark={isDark} labelMode={labelMode} compact={compact} />
               </div>
             </div>
             {showPriceLabels && (
@@ -579,7 +592,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
           <div className="pointer-events-none absolute left-0 h-0" style={{ right: priceScaleWidth, top: landingTop }} data-order-leg-landing>
             <div className="absolute inset-x-0 top-0 border-t border-dashed" style={{ borderColor: landing.color }} />
             <div className="absolute right-1 top-0 -translate-y-1/2">
-              <OrderLineBadge label={landing.label} kind={landing.kind} color={landing.color} isDark={isDark} labelMode={labelMode} />
+              <OrderLineBadge label={landing.label} kind={landing.kind} color={landing.color} isDark={isDark} labelMode={labelMode} compact={compact} />
             </div>
           </div>
         );
@@ -621,7 +634,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 // Skrytá stránka animaci nedohraje: čip nesmí zůstat schovaný.
                 window.setTimeout(done, 450);
               }}>
-                <OrderLineBadge label={flight.label} kind={flight.kind} color={flight.color} isDark={isDark} labelMode={labelMode} />
+                <OrderLineBadge label={flight.label} kind={flight.kind} color={flight.color} isDark={isDark} labelMode={labelMode} compact={compact} />
               </div>
             </div>
           </div>
@@ -709,6 +722,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 color={line.color}
                 isDark={isDark}
                 labelMode={labelMode}
+                compact={compact}
                 selected={selectToDrag && selectedId === line.id}
               >
                 {line.actions?.map(action => (
@@ -752,11 +766,13 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabel
                 )}
               </OrderLineBadge>
             </div>
-            {showPriceLabels && line.kind !== 'entry' && (
+            {showPriceLabels && (line.kind !== 'entry' || compact) && (
               <div
-                className="absolute top-0 flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white"
-                style={{ left: '100%', width: priceScaleWidth, backgroundColor: line.color }}
-                data-backtest-order-price-label
+                className="absolute top-0 box-border flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white"
+                style={compact && isDraftLabel(line.label)
+                  ? { left: '100%', width: priceScaleWidth, border: `1px dashed ${line.color}`, color: line.color, backgroundColor: isDark ? 'rgb(13, 18, 26)' : '#ffffff' }
+                  : { left: '100%', width: priceScaleWidth, backgroundColor: line.color }}
+                data-backtest-order-price-label={compact && isDraftLabel(line.label) ? 'draft' : ''}
               >
                 {shownPrice.toFixed(2)}
               </div>

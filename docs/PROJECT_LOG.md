@@ -288,6 +288,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: krátké štítky příkazů v telefonním LIVE grafu (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
+
+- **Zadání (Filip):** štítky čar jsou zbytečně dlouhé. Cenu vstupu zvýraznit v cenové ose, „čeká na vyplnění“ pryč, u SL/TP pryč body i ikonka ✎ (posouvá se tahem). Čipy `+ SL` / `+ TP` zůstávají.
+- **Změna:** `BacktestOrderLinesOverlay` má nový přepínač `compact` (zapnutý jen v `LivePhoneOrderLines`; PC a backtest beze změny). V krátkém režimu štítek neukazuje cenu, body ani poznámky „návrh“ / „čeká na vyplnění“ („mění se“ zůstává) a cenovku v ose dostává i vstup. Návrh odliší čárkovaný obrys štítku a dutá čárkovaná cenovka (`isDraftLabel`). Čekající vstup má na telefonu barvu strany (modrá/červená) místo šedé, aby byla cenovka vidět; neověřené čáry zůstávají šedé.
+- **✎ na SL/TP** už se na čáru nepřidává; list správy SL/TP dál otevírá tlačítko „Správa SL a TP“ v liště pozice. Jen zobrazení (INV-UI): žádná cesta příkazu se nezměnila.
+- **Ověření:** místní simulace telefonu (`rithmic-phone-simulation`): čekající limit `BUY 1 LIMIT ×` + modrá cenovka, pozice `LONG 1 +$ BE ×` + cenovka, SL/TP `SL 1 −$18.00 ×`. Celá sada testů a `tsc --noEmit` prošly. Čára návrhu vstupu na telefonu v simulaci nevyvolána (jen přes kód), skutečný iPhone neověřen.
+
 ### 2026-11-26 — Claude: magnet při přesunu celé kresby (NENASAZENO, větev `claude/chart-tf-duplicates-20261125`)
 - **Příčina:** magnet chytal jen při tahu za úchyt. Při přesunu celé kresby (tělo position boxu, čára, obdélník) se nepřichytávalo vůbec — schválně, aby se kresba nezdeformovala. Vodorovná čára tažená mimo svůj bod navíc se silným magnetem uvízla: CandleKit posouvá kresbu po krocích (aktuální body + posun), takže přichycený bod se v dalším kroku přichytil zpět.
 - **Oprava (`services/chartDrawingMagnet.ts`, 4. parametr `installDrawingMagnet`):** při tahu za tělo (pozná se z `controller.drag`) se pamatuje nepřichycená poloha a přichycení se počítá z ní; všechny body se posunou stejně, tvar zůstává. Position box a vodorovná čára se chytají cenou na úroveň přes viditelné svíčky, kresby s více body přichytí bod, který je ke své svíčce nejblíž. Platí pro telefon i PC (stejný řadič).

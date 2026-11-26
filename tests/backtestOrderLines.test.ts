@@ -19,7 +19,10 @@ describe('backtest chart order lines', () => {
     // Tenký štítek Aurora: 19 px, sklo s vlastní výplní, SL/TP jako čárkované „+ SL“ / „+ TP“.
     expect(source).toContain('flex h-[19px] items-center gap-[7px]');
     expect(source).toContain("{kind === 'stopLoss' ? '+ SL' : '+ TP'}");
-    expect(source).toContain("const showPoints = kind === 'entry' || labelMode === 'points-pnl'");
+    expect(source).toContain("const showPoints = !compact && (kind === 'entry' || labelMode === 'points-pnl')");
+    // Krátké štítky (telefon LIVE, 26. 11. 2026): cena vstupu v ose, „návrh“ / „čeká na vyplnění“ jen jako styl.
+    expect(source).toContain("showPriceLabels && (line.kind !== 'entry' || compact)");
+    expect(source).toContain("new Set(['návrh', 'čeká na vyplnění'])");
     // Tažení commitne do enginu až při puštění (jinak se celý workspace
     // překresloval na každý pixel); během tahu žije cena jen v overlay.
     expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice, dragging.startLine)');
