@@ -288,6 +288,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: kresby mezi zařízeními do vteřiny (NENASAZENO, migrace neaplikovaná)
+
+- **Proč:** kresba z telefonu dorazila na PC za 1,5 s až ~60 s — odeslání
+  čekalo 1,5 s a druhé zařízení se serveru ptalo jen jednou za minutu (a při
+  návratu do appky). Filip chtěl rychlejší propis.
+- **Co:** `services/chartDrawingLayer.ts` má odběr Supabase Realtime na
+  `chart_drawings` (stejný vzor jako cenové alerty) a odeslání zkrácené na
+  0,3 s po poslední úpravě. Oznámení je jen rychlejší doručení téhož řádku:
+  slévá se jako čtení (novější neodeslaná místní úprava zůstane). Neúplné
+  oznámení nebo obnovené spojení → běžné čtení. Minutové čtení zůstává jako
+  pojistka.
+- **Zamítnuto:** broadcast přímo mezi zařízeními (ukázal by i rozkreslenou
+  kresbu) — složitější, malý přínos; častější dotazování — víc dotazů a pořád
+  pomalejší.
+- **Chybí:** migrace `20261126180000_chart_drawings_realtime.sql` (přidání
+  tabulky do publikace `supabase_realtime`) NENÍ na produkci — bez ní se nic
+  nezrychlí kromě odeslání. Aplikovat jen s Filipovým souhlasem, přes
+  `db query --linked` + `migration repair` (ne `db push`). Na dvou skutečných
+  zařízeních neměřeno. Větev `claude/chart-tf-duplicates-20261125` (obsahuje
+  i sloučený main 218ef638).
+
 ### 2026-11-26 — Claude: druhá noha ke vstupu + jednotné SL/TP NASAZENY (web 2eef8c39, iPhone aa4ab658)
 
 - Filip: „Nasaď“. Řetěz: sada 4175 zelená → tsc 0 → build → push `0e7538d6..2eef8c39` na main. Checkout služby

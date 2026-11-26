@@ -24,12 +24,17 @@ import { stableStringify } from '../lib/stableJson';
  *   (stejný čas celé dávky nesmí přeskočit řádky), po přihlášení, při návratu
  *   do appky a každou minutu. Starší úprava novější nepřepíše (trigger v DB,
  *   stejně tak tady při slévání).
+ * - Změnu z jiného zařízení navíc hned oznámí Supabase Realtime (stejně jako
+ *   cenové alerty); minutové čtení zůstává jako pojistka pro výpadek spojení.
+ *   Oznámení je jen rychlejší doručení téhož řádku — slévá se stejně jako čtení.
  * - Automatické vrstvy grafu (`auto-*`) se do vrstvy nikdy nedostanou.
  */
 
 export const CHART_DRAWINGS_MARKET = 'NQ';
 const TABLE = 'chart_drawings';
-const PUSH_DELAY_MS = 1_500;
+// Krátké: druhé zařízení má kresbu vidět do vteřiny. Časovač se s každou další
+// úpravou natahuje, takže tah myší server nezahltí.
+const PUSH_DELAY_MS = 300;
 const PUSH_BATCH = 100;
 const MAX_BACKOFF_MS = 60_000;
 const PULL_INTERVAL_MS = 60_000;
@@ -495,6 +500,62 @@ async function pull(): Promise<void> {
   if (run === generation) void push();
 }
 
+/**
+ * Okamžité oznámení změny ze serveru (Supabase Realtime). Řádek se slévá stejně
+ * jako při čtení: neodeslaná novější místní úprava zůstane. Když oznámení nenese
+ * celou kresbu (velký nezměněný sloupec), nebo se spojení znovu naváže, dočte
+ * se rozdíl běžným čtením. Bez Realtime (testy, výpadek) zůstává minutové čtení.
+ */
+type RealtimeChannelLike = { unsubscribe?: () => unknown };
+let realtime: RealtimeChannelLike | null = null;
+
+const applyRealtimeRow = (owner: string, raw: unknown): void => {
+  if (userId !== owner) return;
+  const serverRow = raw as ServerRow | null | undefined;
+  if (!serverRow || typeof serverRow.id !== 'string') return;
+  const parsed = fromServerRow(serverRow);
+  if (!parsed || !Number.isFinite(parsed.editedAt) || !Number.isFinite(parsed.startTime) || !Number.isFinite(parsed.endTime)) {
+    void pull();
+    return;
+  }
+  const merged = mergeServerRow(cache.rows[parsed.id], parsed);
+  if (sameRow(cache.rows[parsed.id], merged)) return;
+  cache.rows[parsed.id] = merged;
+  saveCache();
+  notify();
+};
+
+const stopRealtime = () => {
+  const channel = realtime;
+  realtime = null;
+  try { void channel?.unsubscribe?.(); } catch { /* zavřené spojení nevadí */ }
+};
+
+const startRealtime = (owner: string) => {
+  stopRealtime();
+  try {
+    const client = supabase as unknown as {
+      channel?: (name: string) => {
+        on: (type: string, filter: Record<string, unknown>, callback: (payload: { new?: unknown }) => void) => { subscribe: (callback?: (status: string) => void) => RealtimeChannelLike };
+      };
+    };
+    if (typeof client.channel !== 'function') return;
+    let subscribedOnce = false;
+    realtime = client.channel(`chart-drawings-${owner}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE, filter: `user_id=eq.${owner}` }, payload => {
+        applyRealtimeRow(owner, payload.new);
+      })
+      .subscribe(status => {
+        if (status !== 'SUBSCRIBED' || userId !== owner) return;
+        // První přihlášení k odběru kryje úvodní čtení; po obnově spojení dočíst, co uteklo.
+        if (subscribedOnce) void pull();
+        subscribedOnce = true;
+      });
+  } catch {
+    realtime = null;
+  }
+};
+
 /** Spustí vrstvu: po přihlášení načte cache a server, pak průběžně synchronizuje. */
 export function startChartDrawingLayer(): () => void {
   const begin = (owner: string) => {
@@ -510,11 +571,12 @@ export function startChartDrawingLayer(): () => void {
     // Odložené řádky zkusit znovu (mohly selhat jen kvůli vypršelému přihlášení).
     Object.values(cache.rows).forEach(row => { if (row.parked) cache.rows[row.id] = { ...row, parked: false }; });
     notify();
+    startRealtime(owner);
     void pull();
   };
   const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
     const owner = session?.user.id ?? null;
-    if (!owner) { flushCache(); generation += 1; userId = null; pulledOnce = false; cache = { rows: {}, pulledAt: null }; notify(); return; }
+    if (!owner) { flushCache(); stopRealtime(); generation += 1; userId = null; pulledOnce = false; cache = { rows: {}, pulledAt: null }; notify(); return; }
     if (owner !== userId) setTimeout(() => begin(owner), 0);
   });
   const timer = setInterval(() => { if (document.visibilityState === 'visible') void pull(); }, PULL_INTERVAL_MS);
@@ -527,6 +589,7 @@ export function startChartDrawingLayer(): () => void {
   window.addEventListener('pagehide', flushCache);
   return () => {
     subscription.unsubscribe();
+    stopRealtime();
     clearInterval(timer);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('focus', onVisibility);

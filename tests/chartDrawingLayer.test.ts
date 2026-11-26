@@ -10,6 +10,8 @@ const server = vi.hoisted(() => ({
   clock: 0,
   /** Všechny řádky jedné dávky mají stejný updated_at (now() transakce). */
   rejectIds: new Set<string>(),
+  /** Odběr Realtime: poslední kanál vrstvy. */
+  realtime: null as null | { name: string; filter: Record<string, unknown>; emit: (row: unknown) => void; status: (value: string) => void; closed: boolean },
 }));
 
 vi.mock('../services/supabase', () => {
@@ -70,6 +72,22 @@ vi.mock('../services/supabase', () => {
         },
       },
       from: () => query(),
+      channel: (name: string) => {
+        const state = { name, filter: {} as Record<string, unknown>, emit: (_row: unknown) => {}, status: (_value: string) => {}, closed: false };
+        const channel = {
+          on: (_type: string, filter: Record<string, unknown>, callback: (payload: { new?: unknown }) => void) => {
+            state.filter = filter;
+            state.emit = row => callback({ new: row });
+            return channel;
+          },
+          subscribe: (callback?: (status: string) => void) => {
+            state.status = value => callback?.(value);
+            server.realtime = state;
+            return { unsubscribe: () => { state.closed = true; } };
+          },
+        };
+        return channel;
+      },
     },
   };
 });
@@ -171,6 +189,7 @@ describe('vrstva kreseb — synchronizace se serverem', () => {
     server.upserts = [];
     server.clock = 0;
     server.rejectIds.clear();
+    server.realtime = null;
     vi.stubGlobal('window', { localStorage: memoryStorage(), addEventListener: () => {}, removeEventListener: () => {} });
     vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} });
   });
@@ -206,6 +225,76 @@ describe('vrstva kreseb — synchronizace se serverem', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(server.rows.get('dw_a')?.deleted_at).not.toBeNull();
     expect(layer.windowDrawings('2026-10-15', '2026-10-15')).toEqual([]);
+  });
+
+  const serverRow = (id: string, editedAt: string, extra: Record<string, unknown> = {}) => ({
+    user_id: USER, id, market: 'NQ', day: '2026-10-15',
+    start_time: new Date(T * 1_000).toISOString(), end_time: new Date((T + 600) * 1_000).toISOString(),
+    carry_forward: false, drawing: line(id), edited_at: editedAt, deleted_at: null, updated_at: editedAt, ...extra,
+  });
+
+  it('kresba odchází na server do půl vteřiny po úpravě', async () => {
+    const layer = await start();
+    const kv = layer.drawingLayerKV('2026-10-15', '2026-10-15');
+    kv.get();
+    kv.set('x', JSON.stringify([line('dw_fast')]));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(server.rows.has('dw_fast')).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(server.rows.has('dw_fast')).toBe(true);
+  });
+
+  it('oznámení ze serveru ukáže kresbu z jiného zařízení hned, bez čekání na minutové čtení', async () => {
+    const layer = await start();
+    expect(server.realtime).toMatchObject({ name: `chart-drawings-${USER}`, filter: { table: 'chart_drawings', filter: `user_id=eq.${USER}` } });
+    const heard = vi.fn();
+    layer.subscribeDrawingLayer(heard);
+    server.realtime!.emit(serverRow('dw_phone', '2026-10-17T08:00:30.000Z'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(heard).toHaveBeenCalled();
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15').map(drawing => drawing.id)).toEqual(['dw_phone']);
+    // Smazání jinde = měkké smazání v oznámení.
+    server.realtime!.emit(serverRow('dw_phone', '2026-10-17T08:00:40.000Z', { deleted_at: '2026-10-17T08:00:40.000Z' }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15')).toEqual([]);
+    // Oznámení samo nic neposílá zpět na server.
+    expect(server.upserts).toEqual([]);
+  });
+
+  it('oznámení nepřepíše novější neodeslanou místní úpravu a starší verzi nevrátí', async () => {
+    vi.setSystemTime(new Date('2026-10-17T08:10:00Z'));
+    const layer = await start();
+    const kv = layer.drawingLayerKV('2026-10-15', '2026-10-15');
+    kv.get();
+    kv.set('x', JSON.stringify([line('dw_mine', T, 29_700)]));
+    // Ještě před odesláním přijde starší verze téže kresby z jiného zařízení.
+    server.realtime!.emit(serverRow('dw_mine', '2026-10-17T08:09:00.000Z'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15')[0].points[0].price).toBe(29_700);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((server.rows.get('dw_mine')?.drawing as { points: { price: number }[] }).points[0].price).toBe(29_700);
+  });
+
+  it('neúplné oznámení a obnovené spojení dočtou rozdíl ze serveru', async () => {
+    const layer = await start();
+    server.realtime!.status('SUBSCRIBED');
+    server.rows.set('dw_big', serverRow('dw_big', '2026-10-17T08:00:50.000Z'));
+    // Oznámení bez kresby (velký nezměněný sloupec) → běžné čtení.
+    server.realtime!.emit({ id: 'dw_big', user_id: USER, edited_at: '2026-10-17T08:00:50.000Z' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15').map(drawing => drawing.id)).toEqual(['dw_big']);
+    // Znovu navázané spojení: co mezitím uteklo, se dočte.
+    server.rows.set('dw_gap', serverRow('dw_gap', '2026-10-17T08:00:55.000Z'));
+    server.realtime!.status('SUBSCRIBED');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(layer.windowDrawings('2026-10-15', '2026-10-15').map(drawing => drawing.id).sort()).toEqual(['dw_big', 'dw_gap']);
+  });
+
+  it('odhlášení odběr oznámení zavře', async () => {
+    await start();
+    const channel = server.realtime!;
+    server.authCallback?.('SIGNED_OUT', null);
+    expect(channel.closed).toBe(true);
   });
 
   it('opakovaný export bez změny ručních kreseb nic nezapisuje', async () => {
