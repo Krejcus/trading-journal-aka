@@ -288,7 +288,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-26 — Claude: spojnice vstupu a výstupu v LIVE grafu (NENASAZENO)
+### 2026-11-26 — Claude: šipky všech obchodů a spojnice NASAZENY (web + iPhone a827c169)
+- Push na main a827c169 na Filipovo „Nasaď“ (testy 4109, tsc 0, build OK). iPhone build z téhož commitu, instalace
+  přes stávající appku (bez odinstalace). Checkout služby `~/alphatrade-worktrees/rithmic` posunut na a827c169;
+  běžící služba jede dál ze starého kódu, dokud ji Filip nerestartuje (`lucid.sh obnovit`) — do té doby
+  posílá jen šipky posledního obchodu.
+- Při prvním běhu řetězu spadl `tests/rithmicProtection.test.ts` („stará nula nezavře vstup…“), samostatně 3× prošel
+  a druhý celý běh byl zelený — test stojí na skutečných časovačích (250 ms), pod zátěží je nestabilní.
+- Neověřeno: telefon a skutečný účet.
+
+### 2026-11-26 — Claude: spojnice vstupu a výstupu v LIVE grafu (nasazeno, viz výše)
 - Zavřený obchod má mezi šipkami čárkovanou spojnici (průměrný vstup → průměrný výstup, zelená/červená podle
   výsledku), stejně jako backtest. Najetí myší nebo klepnutí na ni ukáže „Vstup → Výstup · body · USD“
   (hrubý odhad z plnění × hodnota bodu kontraktu, bez poplatků). Otevřený obchod spojnici nemá.
@@ -297,7 +306,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Jen zobrazení, služba beze změny. Testy `tests/journalTradeLine.test.ts`; ověřeno v simulaci na PC grafu.
   Neověřeno: telefon, skutečný účet, vypnutí v dialogu nastavení (jen typy a zapojení).
 
-### 2026-11-25 — Claude: šipky všech obchodů v LIVE grafu, ne jen posledního (NENASAZENO)
+### 2026-11-25 — Claude: šipky všech obchodů v LIVE grafu, ne jen posledního (nasazeno 26. 11., a827c169)
 
 - Hlášení Filipa: šipky vstupu/výstupu jsou vidět jen u posledního obchodu, další obchod je přepíše. Příčina: služba (`services/rithmic/localExec.ts`) při novém obchodu z nuly šipky kontraktu schválně smazala.
 - Nově služba zavřený obchod odloží mezi dřívější (`pastMarks`, nejvýš 40 na kontrakt, 20 hodin, jen paměť — restart služby je smaže). `state().marks` = nejdřív poslední/otevřený obchod, pak dřívější zavřené; starší appka bere první záznam a kreslí jako dřív.
