@@ -1108,6 +1108,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     intervalSeconds: timeframeMinutes(config.timeframe) * 60,
     enabled: Boolean(liveFills && liveFills.open !== undefined && liveFills.fills.length > 0) && context.replay.phase === 'off',
     isDark: context.isDark,
+    tradeLine: context.tradingSettings.tradeLines,
+    symbol: config.root,
   });
 
   const isActive = context.activePanelId === instance.id;

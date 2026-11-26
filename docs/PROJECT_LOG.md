@@ -288,6 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: spojnice vstupu a výstupu v LIVE grafu (NENASAZENO)
+- Zavřený obchod má mezi šipkami čárkovanou spojnici (průměrný vstup → průměrný výstup, zelená/červená podle
+  výsledku), stejně jako backtest. Najetí myší nebo klepnutí na ni ukáže „Vstup → Výstup · body · USD“
+  (hrubý odhad z plnění × hodnota bodu kontraktu, bez poplatků). Otevřený obchod spojnici nemá.
+- Kreslí ji primitiva deníku za novou volbou `tradeLine` (deník ji nezapíná). PC se řídí stávajícím nastavením
+  grafu „Zobrazit spojnici vstupu a výstupu“; telefon nastavení grafu nemá, spojnice je tam vždy.
+- Jen zobrazení, služba beze změny. Testy `tests/journalTradeLine.test.ts`; ověřeno v simulaci na PC grafu.
+  Neověřeno: telefon, skutečný účet, vypnutí v dialogu nastavení (jen typy a zapojení).
+
 ### 2026-11-25 — Claude: šipky všech obchodů v LIVE grafu, ne jen posledního (NENASAZENO)
 
 - Hlášení Filipa: šipky vstupu/výstupu jsou vidět jen u posledního obchodu, další obchod je přepíše. Příčina: služba (`services/rithmic/localExec.ts`) při novém obchodu z nuly šipky kontraktu schválně smazala.

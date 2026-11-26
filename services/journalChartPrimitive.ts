@@ -31,6 +31,11 @@ export interface JournalChartOptions {
    * u obchodu úplně bez SL/TP.
    */
   resultBox?: boolean;
+  /**
+   * Spojnice průměrného vstupu a výstupu uzavřeného obchodu (LIVE graf, jako v
+   * backtestu). Po najetí / klepnutí ukáže vstup → výstup, body a hrubý výsledek.
+   */
+  tradeLine?: boolean;
   /** Štítek u výsledku, co při vstupu chybělo („bez SL“, „SL po 2:40“…). */
   protectionNote?: boolean;
   isDark?: boolean;
@@ -110,6 +115,14 @@ const ARROW = { gap: 3, stem: 13, head: 4, headDepth: 4.5, width: 1.6, hoverScal
 // Zásah: ±10 px nad/pod čárou a 4 px přes konce úseku (rohy schodů) — na
 // tenkou čáru se jinak musí trefit přesně.
 const LEVEL = { width: 1, hoverWidth: 2.2, hitY: 10, hitX: 4 } as const;
+/** Spojnice obchodu: zásah do 8 px od úsečky (prst i myš). */
+const TRADE_LINE_HIT = 8;
+const segmentDistance = (point: { x: number; y: number }, line: { x1: number; y1: number; x2: number; y2: number }) => {
+  const dx = line.x2 - line.x1; const dy = line.y2 - line.y1;
+  const length = dx * dx + dy * dy;
+  const t = length === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - line.x1) * dx + (point.y - line.y1) * dy) / length));
+  return Math.hypot(point.x - (line.x1 + t * dx), point.y - (line.y1 + t * dy));
+};
 const signed = (value: number, digits = 2) => `${value >= 0 ? '+' : '−'}${Math.abs(value).toLocaleString('cs-CZ', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 const priceText = (value: number) => value.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -151,6 +164,28 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
     return { from, to, entry, exit, win: points >= 0, label: `${signed(points)} b. · ${signed(usd)} $`, spans: projection.spans(from, to) };
   })();
   const note = options.protectionNote && resultBox ? entryProtectionNote(history) : null;
+  // Spojnice vstup → výstup: jen uzavřený obchod s oběma stranami (otevřený nemá kam vést).
+  const tradeLine = (() => {
+    if (!options.tradeLine || !closed) return null;
+    const entries = history.fills.filter(fill => fill.role === 'entry' && fill.allocatedQuantity > 0);
+    const exits = history.fills.filter(fill => fill.role === 'exit' && fill.allocatedQuantity > 0);
+    if (!entries.length || !exits.length) return null;
+    const total = (rows: typeof entries) => rows.reduce((sum, fill) => sum + fill.allocatedQuantity, 0);
+    const average = (rows: typeof entries) => rows.reduce((sum, fill) => sum + fill.price * fill.allocatedQuantity, 0) / total(rows);
+    const entry = average(entries); const exit = average(exits);
+    const firstSide = entries[0].side;
+    const direction = firstSide ? (firstSide === 'Buy' ? 1 : -1) : long ? 1 : -1;
+    const points = (exit - entry) * direction;
+    // Výsledek jen za zavřené množství; přesný hrubý od brokera, je-li znám.
+    const quantity = Math.min(total(entries), total(exits));
+    const usd = history.grossPnl != null ? history.grossPnl : points * (options.pointValue ?? 2) * quantity;
+    const tone = points > 0 ? JOURNAL_TP_COLOR : points < 0 ? JOURNAL_SL_COLOR : JOURNAL_BUY_COLOR;
+    return { from: entries[0].at, to: Math.max(...exits.map(fill => fill.at)), entry, exit, tone,
+      label: `Vstup ${priceText(entry)} → Výstup ${priceText(exit)} · ${signed(points)} b. · ${signed(usd)} $` };
+  })();
+  // Poslední vykreslená poloha spojnice (zásah kurzorem / klepnutím).
+  let tradeLineHit: { x1: number; y1: number; x2: number; y2: number } | null = null;
+  let tradeHover: { x: number; y: number } | null = null;
   const arrows = groups.map((group, index) => {
     const buy = history.fills.some(fill => fill.side != null) ? group.side === 'Buy' : (group.role === 'entry') === long;
     const role = group.role === 'entry' ? (index === groups.findIndex(item => item.role === 'entry') ? 'Vstup' : 'Přikoupeno')
@@ -257,6 +292,10 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         : hit.from,
     } : null;
     if (hoveredLine && arrowHit < 0) nextSet = new Set<number>();
+    // Spojnice obchodu: jen když kurzor není na šipce, svíčce s plněním ani čáře SL/TP.
+    const onTrade = point && tradeLineHit && !hoveredLine && nextSet.size === 0
+      && segmentDistance(point, tradeLineHit) <= TRADE_LINE_HIT ? { x: point.x, y: point.y } : null;
+    if (onTrade || tradeHover) { tradeHover = onTrade; requestUpdate?.(); }
     const sameSet = nextSet.size === hovered.size && [...nextSet].every(index => hovered.has(index));
     if (sameSet && (hoveredLine?.kind ?? null) === previousKind) {
       // Kurzor se posouvá po téže čáře — štítek jde s ním.
@@ -365,6 +404,22 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
               context.fillText(resultBox.label, resultLeft + 7, labelTop + pillH / 2 + 0.5);
             }
           }
+        }
+      }
+      tradeLineHit = null;
+      if (tradeLine) {
+        const fromPoint = projection.point(tradeLine.from); const toPoint = projection.point(tradeLine.to);
+        const x1 = fromPoint == null ? null : coordinate(Math.floor(fromPoint)); const x2 = toPoint == null ? null : coordinate(Math.floor(toPoint));
+        const y1 = series.priceToCoordinate(tradeLine.entry); const y2 = series.priceToCoordinate(tradeLine.exit);
+        if (x1 != null && x2 != null && y1 != null && y2 != null) {
+          tradeLineHit = { x1, y1, x2, y2 };
+          context.globalAlpha = (tradeHover ? 1 : 0.75) * baseAlpha; context.strokeStyle = tradeLine.tone;
+          context.lineWidth = tradeHover ? 1.6 : 1; context.setLineDash([3, 4]);
+          context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2); context.stroke();
+          context.setLineDash([]);
+          context.fillStyle = tradeLine.tone;
+          for (const [px, py] of [[x1, y1], [x2, y2]] as const) { context.beginPath(); context.arc(px, py, 2, 0, Math.PI * 2); context.fill(); }
+          context.globalAlpha = baseAlpha;
         }
       }
       context.lineCap = 'round'; context.lineJoin = 'round';
@@ -481,6 +536,23 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         context.fillStyle = '#ffffff'; context.textAlign = 'left'; context.textBaseline = 'middle';
         context.fillText(text, left + 7, top + pillH / 2 + 0.5);
         context.globalAlpha = 1;
+      }
+      // Štítek spojnice obchodu pod kurzorem: vstup → výstup, body a výsledek.
+      if (tradeLine && tradeHover && tradeLineHit) {
+        context.globalAlpha = 1;
+        context.font = '600 10.5px Inter, sans-serif';
+        const width = context.measureText?.(tradeLine.label)?.width ?? tradeLine.label.length * 5.5;
+        const pillW = width + 14; const pillH = 19;
+        const paneW = mediaSize?.width ?? Infinity;
+        const left = Math.max(4, Math.min(tradeHover.x - pillW / 2, paneW - pillW - 4));
+        const above = tradeHover.y - 10 - pillH;
+        const top = above < 4 ? tradeHover.y + 10 : above;
+        context.fillStyle = tradeLine.tone;
+        context.beginPath();
+        if (context.roundRect) context.roundRect(left, top, pillW, pillH, 4); else context.rect(left, top, pillW, pillH);
+        context.fill();
+        context.fillStyle = '#ffffff'; context.textAlign = 'left'; context.textBaseline = 'middle';
+        context.fillText(tradeLine.label, left + 7, top + pillH / 2 + 0.5);
       }
       context.restore();
     });

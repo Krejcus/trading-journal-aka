@@ -3,6 +3,7 @@ import type { ISeriesApi } from 'lightweight-charts';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { MarketCandle } from '../../services/marketData';
 import { createJournalChartPrimitive, type JournalChartPrimitive } from '../../services/journalChartPrimitive';
+import { pointValueUsd } from '../../services/futuresContractSpecs';
 import { liveFillHistory, liveFillKey, type LiveFillMarker } from '../../lib/liveFillMarkers';
 
 const TAP_PX = 8;
@@ -14,9 +15,10 @@ const TAP_MS = 450;
  * cenu ve svíčce (čárka + tečka, spojnice, štítek s časem, cena na ose);
  * klepnutí jinam výběr zruší. Překreslí se jen s novým plněním nebo svíčkou.
  * `past` = dřívější zavřené obchody, každý jako vlastní vrstva (25. 11. 2026) —
- * dřív zůstaly v grafu jen šipky posledního obchodu.
+ * dřív zůstaly v grafu jen šipky posledního obchodu. Zavřený obchod má spojnici
+ * vstup → výstup; klepnutí na ni ukáže vstup, výstup a výsledek (26. 11. 2026).
  */
-export function useLiveFillArrows({ api, fills, past, open, candles, intervalSeconds, enabled, isDark }: {
+export function useLiveFillArrows({ api, fills, past, open, candles, intervalSeconds, enabled, isDark, tradeLine = true, symbol }: {
   api: ChartViewApi | null;
   fills: readonly LiveFillMarker[];
   past?: readonly (readonly LiveFillMarker[])[];
@@ -25,6 +27,10 @@ export function useLiveFillArrows({ api, fills, past, open, candles, intervalSec
   intervalSeconds: number;
   enabled: boolean;
   isDark: boolean;
+  /** Spojnice vstup → výstup u zavřených obchodů (nastavení grafu „spojnice vstupu a výstupu“). */
+  tradeLine?: boolean;
+  /** Kontrakt nebo kořen (MNQZ6 / MNQ) pro USD za bod; bez něj MNQ. */
+  symbol?: string | null;
 }) {
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
@@ -53,7 +59,8 @@ export function useLiveFillArrows({ api, fills, past, open, candles, intervalSec
         const firstEntry = history.fills.find(fill => fill.role === 'entry');
         const primitive = createJournalChartPrimitive(history, candlesRef.current, intervalSeconds, chart, series, undefined, {
           direction: firstEntry?.side === 'Sell' ? 'Short' : 'Long',
-          resultBox: false, hideResultLabel: true, isDark, pointValue: 2, instrument: 'MNQ',
+          resultBox: false, hideResultLabel: true, isDark, tradeLine,
+          pointValue: (symbol ? pointValueUsd(symbol) : null) ?? 2, instrument: 'MNQ',
         });
         series.attachPrimitive(primitive);
         primitives.push(primitive);
@@ -84,5 +91,5 @@ export function useLiveFillArrows({ api, fills, past, open, candles, intervalSec
       element.removeEventListener('pointerup', onUp);
       for (const primitive of primitives) { try { series.detachPrimitive(primitive); } catch { /* graf už je pryč */ } }
     };
-  }, [api, enabled, hasFills, fillKey, candleKey, open, intervalSeconds, isDark]);
+  }, [api, enabled, hasFills, fillKey, candleKey, open, intervalSeconds, isDark, tradeLine, symbol]);
 }

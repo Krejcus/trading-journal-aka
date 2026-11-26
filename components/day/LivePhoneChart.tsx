@@ -142,7 +142,7 @@ const CANCEL_PENDING_CHIP_SPACE = 38;
 interface PhoneOrder { key: number; draft: TicketDraft; mode: 'sheet' | 'chart'; template: boolean }
 
 /** Šipky plnění (hook uvnitř vrstvy grafu, kde je API panelu). */
-function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; past?: readonly (readonly LiveFillMarker[])[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean }) {
+function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; past?: readonly (readonly LiveFillMarker[])[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean; symbol?: string | null }) {
   useLiveFillArrows(props);
   return null;
 }
@@ -759,7 +759,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
         </> : null),
         // Bid/ask ze streamu přijde s napojením dat; zatím poslední cena svíčky.
         chartLayer: ({ lastPrice, api, candles, intervalSeconds, replay, exitReplay }) => <>
-          <LiveFillArrows api={api} fills={shownFills} past={shownPastFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && (shownFills.length > 0 || shownPastFills.length > 0)} isDark={isDark} />
+          <LiveFillArrows api={api} fills={shownFills} past={shownPastFills} open={slots.fillsOpen === true} candles={candles} intervalSeconds={intervalSeconds} enabled={!replay && slots.fillsOpen != null && (shownFills.length > 0 || shownPastFills.length > 0)} isDark={isDark} symbol={slots.fillsSymbol} />
           {!replay && <LivePhoneWorkingBadges badges={working.badges} top={(positionBarShown(replay) ? BELOW_POSITION_BAR : 8) + (cancelPendingChip ? CANCEL_PENDING_CHIP_SPACE : 0)} />}
           {/* C7: „Zrušit čekající“ jen s pohledem desku a mimo přehrávání; sdílený zámek čar. */}
           {!replay && cancelPendingChip && trade?.cancelPending && trade.cancelPendingEntries && <LivePhoneCancelPendingChip
