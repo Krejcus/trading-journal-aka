@@ -288,7 +288,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-26 — Claude: SL pro nekrytou část pozice, lišta proti pozici se SL/TP, testy před skutečným účtem (NENASAZENO)
+### 2026-11-26 — Claude: rychlý Market, víc vstupů a SL zbytku NASAZENY (web + iPhone 134e2e62)
+
+- Filip: „nasaď a povol, ať můžu otestovat na live účtu“. Řetěz: celá sada 4154 zelená → tsc 0 → build → push
+  `a827c169..134e2e62` na main. iPhone build z `134e2e62` nainstalován přes stávající appku. Checkout služby
+  `~/alphatrade-worktrees/rithmic` posunut na `134e2e62`.
+- Služba běží ze starého kódu, dokud ji Filip nerestartuje. Víc čekajících vstupů na skutečném účtu jen s
+  `VICE_VSTUPU=ano scripts/rithmic/lucid.sh obnovit` (rychlý Market z lišty a odebrání z pozice jdou i bez toho).
+- Proti Rithmic Test ani skutečnému účtu NEOVĚŘENO; první zkoušky s 1 kontraktem. Omezení v1 viz dva zápisy níže.
+
+### 2026-11-26 — Claude: SL pro nekrytou část pozice, lišta proti pozici se SL/TP, testy před skutečným účtem (nasazeno, viz výše)
 Navazuje na zápis níže (commit e2e52d13); Filip: „zatím pokračuj“ (nenasazovat).
 - **SL nekrytého zbytku** (`services/rithmic/localExec.ts`, `case 'protect'`, jen `manageMulti()`): k pozici složené
   z části s ochranou a části bez ní jde přidat JEDEN samostatný Stop (`uiprot-`) jen na kusy, které nekryje žádný
@@ -311,7 +320,7 @@ Navazuje na zápis níže (commit e2e52d13); Filip: „zatím pokračuj“ (nena
   zavřel; pozice ze tří částí kreslí „SL 1/3“ a další části zvlášť. **Neověřeno rukou:** čip „+ SL“ zbytku v grafu
   (vedle existující čáry SL), tažení dalších čar; Rithmic Test ani skutečný účet.
 
-### 2026-11-26 — Claude: rychlý Market z lišty s odebráním z pozice + víc čekajících vstupů (NENASAZENO)
+### 2026-11-26 — Claude: rychlý Market z lišty s odebráním z pozice + víc čekajících vstupů (nasazeno, viz výše)
 Zadání Filipa: (1) klepnutí na Koupit/Prodat v liště má odejít hned a Prodat v longu má z pozice odebrat;
 (2) víc Limitů najednou, bez podmínek na SL/TP („aby fungovalo vše“).
 - **Proč lišta čekala** (tři brzdy): zámek telefonu do odpovědi, deník appky (`beforeSend` odmítl druhý vstup, dokud
