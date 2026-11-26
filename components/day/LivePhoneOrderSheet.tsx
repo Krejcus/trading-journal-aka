@@ -205,7 +205,7 @@ export default function LivePhoneOrderSheet({
   const [boot] = useState(() => {
     const library = readLiveBracketTemplates(userId).library;
     const template = applyDefaultTemplate ? defaultLiveBracketTemplate(library) : null;
-    const start = livePhoneSheetStartDraft(initial, template, instrument, quote, trade?.scaleIn ?? null);
+    const start = livePhoneSheetStartDraft(initial, template, instrument, quote, trade?.scaleIn?.free ? null : trade?.scaleIn ?? null);
     return { library, draft: start.draft, templateId: start.applied && template ? template.id : null };
   });
   const [draft, setDraft] = useState<TicketDraft>(boot.draft);
@@ -264,7 +264,7 @@ export default function LivePhoneOrderSheet({
   const previewKey = livePhoneSheetPreviewKey(resetKey, payload);
   const previewBlocked = livePhoneSheetPreviewBlocked({ blockedReason: trade?.blockedReason ?? null, problems, payload, liveQuote, now });
   const shownPreview = snapshot && previewKey !== '' && snapshot.key === previewKey ? snapshot : null;
-  const scaleLocked = trade?.scaleIn != null && trade.scaleIn.side === draft.side;
+  const scaleLocked = trade?.scaleIn != null && trade.scaleIn.free !== true && trade.scaleIn.side === draft.side;
 
   const update = (next: TicketDraft) => setDraft(next);
   const setSide = (side: 'buy' | 'sell') => {
@@ -332,7 +332,7 @@ export default function LivePhoneOrderSheet({
   const note = (tone: 'ok' | 'bad' | 'warn', textValue: string | null) => setTemplateNote(textValue ? { tone, text: textValue } : null);
   const applyTemplate = (template: LiveBracketTemplate) => {
     playNativeHapticIfAvailable('selection');
-    const result = applyLiveBracketTemplate(draft, template, instrument, quote, { scaleIn: trade?.scaleIn ?? null, ...(trade ? { maxContracts: trade.maxContracts } : {}) });
+    const result = applyLiveBracketTemplate(draft, template, instrument, quote, { scaleIn: trade?.scaleIn?.free ? null : trade?.scaleIn ?? null, ...(trade ? { maxContracts: trade.maxContracts } : {}) });
     if (result.skipped === 'scale-in') { note('warn', 'Přikoupení: platí SL a TP pozice — šablona se nepoužije.'); return; }
     if (result.skipped) { note('bad', result.notes[0] ?? 'Šablonu teď nejde použít.'); return; }
     update(result.draft);

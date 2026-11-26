@@ -898,7 +898,9 @@ const LiveOrderTicket: React.FC<Props> = ({
     ? (entryDraft: LiveEntryPreviewDraft, operationId: string) => runWithCommandLock(lockRef, () => onPlaceEntry(entryDraft, operationId))
     : undefined;
   // Přikoupení: návrh na stranu otevřené pozice drží SL/TP pozice (čáry návrhu se k nim vrátí).
-  const scaleIn = entryScaleIn && draft && draft.side === entryScaleIn.side ? entryScaleIn : null;
+  // Volný režim (jeden účet přes Rithmic): panel SL/TP pozice nevnucuje a další vstup neblokuje — rozhoduje služba.
+  const scaleIn = entryScaleIn && entryScaleIn.free !== true && draft && draft.side === entryScaleIn.side ? entryScaleIn : null;
+  const freeAdd = entryScaleIn?.free === true && draft != null && draft.side === entryScaleIn.side ? entryScaleIn : null;
   useEffect(() => {
     // Buď pozice SL i TP má (přikoupení je převezme), nebo nemá nic (přikoupení jde bez nich). Jedna noha = neřeší se tady.
     if (!scaleIn || !draft || (scaleIn.stopLoss == null) !== (scaleIn.targetPrice == null)) return;
@@ -981,7 +983,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     bareSupported: entryBareSupported,
     maxContracts: entryMaxContracts,
     quote: bareQuote,
-    positionOpen: barePosition.open,
+    positionOpen: entryScaleIn?.free === true ? false : barePosition.open,
     bareAddOffered: scaleIn != null && scaleIn.stopLoss == null && scaleIn.targetPrice == null && scaleIn.canAdd,
     now,
   });
@@ -1013,7 +1015,7 @@ const LiveOrderTicket: React.FC<Props> = ({
     : scaleIn && scaleIn.pendingAdd ? 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.'
     : scaleIn && (draft.stopLoss !== scaleIn.stopLoss || draft.takeProfit !== scaleIn.targetPrice) ? (scaleIn.stopLoss == null && scaleIn.targetPrice == null ? 'Pozice nemá SL/TP — přikoupit jde jen bez nich; ochranu pak přidej na celou pozici.' : 'Přikoupení musí mít SL a TP pozice — nic se neodešle, dokud nesedí.')
     : scaleIn && draft.type !== 'market' && m && m.quantity > 1 ? 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.'
-    : quantityLimits && draft && m && (scaleIn?.quantity ?? 0) + m.quantity > quantityLimits[draft.side] ? `Pozice by přesáhla limit ${quantityLimits[draft.side]} kontraktů pro ${draft.side === 'buy' ? 'long' : 'short'}.`
+    : quantityLimits && draft && m && ((scaleIn ?? freeAdd)?.quantity ?? 0) + m.quantity > quantityLimits[draft.side] ? `Pozice by přesáhla limit ${quantityLimits[draft.side]} kontraktů pro ${draft.side === 'buy' ? 'long' : 'short'}.`
     : !quantityLimits && scaleIn && m && scaleIn.quantity + m.quantity > entryMaxContracts ? `Pozice by měla ${scaleIn.quantity + m.quantity} kontraktů — strop účtu je ${entryMaxContracts}.`
     : scaleIn && !scaleIn.canAdd ? scaleIn.reason ?? 'Přikoupení teď nejde.'
     : m && m.quantity > entryMaxContracts ? `Ruční vstup je omezený na ${entryMaxContracts} ${entryMaxContracts === 1 ? 'kontrakt' : entryMaxContracts < 5 ? 'kontrakty' : 'kontraktů'} (strop skupiny).`

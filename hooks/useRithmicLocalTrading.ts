@@ -17,6 +17,7 @@ import type { BareLeaderTrade } from '../lib/manualBareClose';
 import type { LiveBareLegIntent } from '../lib/liveBareLeg';
 import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
+import { liveExtraOrdersKey, type LiveExtraOrders } from '../lib/liveExtraOrderLines';
 import { RithmicPendingJournal, type PendingRithmicCommand } from '../lib/rithmicPendingJournal';
 import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
 import { liveChartFills, type LiveChartWorkingOrders } from './useLiveChartData';
@@ -92,7 +93,7 @@ const hideOwnExit = (order: { orderId: string; tag?: string; orderType?: string 
   ownExitSeen.set(order.orderId, seen);
   return !blocked && now - seen < OWN_EXIT_HIDE_MS;
 };
-const isOwnExit = (order: { tag?: string; orderType?: string }): boolean => order.orderType === 'Market' && order.tag?.startsWith('ui-red-') === true;
+const isOwnExit = (order: { tag?: string; orderType?: string }): boolean => order.orderType === 'Market' && (order.tag?.startsWith('ui-red-') === true || order.tag?.startsWith('ui-cut-') === true);
 const COMMAND_LABEL: Record<LocalExecCommand['op'], string> = { 'move-legs': 'Posun SL/TP', protect: 'Přidání SL/TP', 'protect-pair': 'Přidání SL a TP', 'replace-entry': 'Změna čekajícího vstupu', entry: 'Vstup', move: 'Posun SL/TP', cancel: 'Zrušení příkazu', flatten: 'Zavření pozice', reduce: 'Částečné zavření', ack: 'Potvrzení incidentu' };
 
 /**
@@ -248,6 +249,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (!url || !enabled) { setLink(url ? 'closed' : 'off'); return undefined; }
     // Jádro spojení (obnova, lhůty, nejisté příkazy, zahazování starého socketu) žije v `RithmicLocalConnection`.
     let journal: RithmicPendingJournal | null = null;
+    /** Holé Markety, které právě čekají na odpověď služby (ne nejisté) — jen v paměti této relace. */
+    const quickInFlight = new Set<string>();
     let sessionScope = '';
     let recoveryGeneration = 0;
     let identity: Hello | null = null;
@@ -271,15 +274,22 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       handlers: {
         beforeSend: (id, command) => {
           if (!journal) throw new Error('Účet není potvrzený nebo místní úložiště není dostupné.');
-          if ((command.op === 'entry' || command.op === 'replace-entry') && journal.list().length > 0) throw new Error('Ověř předchozí příkaz u brokera.');
+          // Rychlá řada holých Marketů z lišty (26. 11. 2026): další smí odejít, i když předchozí ještě ČEKÁ na odpověď
+          // služby. Jakýkoli příkaz s nejistým výsledkem (nebo jiný druh příkazu na cestě) další vstup dál zastaví.
+          const quick = command.op === 'entry' && command.orderType === 'Market' && command.stopPrice === undefined && command.targetPrice === undefined;
+          const waitingRows = journal.list();
+          if ((command.op === 'entry' || command.op === 'replace-entry') && waitingRows.length > 0
+            && !(quick && waitingRows.every(row => quickInFlight.has(row.id)))) throw new Error('Ověř předchozí příkaz u brokera.');
+          if (quick) quickInFlight.add(id);
           journal.put({ id, op: command.op, at: Date.now(),
             ...(typeof command.clientId === 'string' ? { clientId: command.clientId } : {}),
             ...(command.op === 'cancel' && typeof command.orderId === 'string' ? { orderId: command.orderId } : {}) });
         },
-        onCertain: id => journal?.remove(id),
+        onCertain: id => { quickInFlight.delete(id); journal?.remove(id); },
         onLink: (next) => { if (next === 'open') setAuthFailed(null); setLink(next); },
         onAuthFailed: setAuthFailed,
         onUncertain: item => {
+          quickInFlight.delete(item.id);
           addUncertain({ ...item, label: COMMAND_LABEL[item.op as LocalExecCommand['op']] ?? item.op });
           if (!connection.isOpen() || !identity) return;
           try {
@@ -470,7 +480,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const entryReadyRef = useRef(false);
   entryReadyRef.current = entryReady && !!limits && !!hello?.account && !hello.closeOnly && !uncertain.some(item => !item.confirmed);
   const maxContracts = limits ? Math.min(limits.order, Math.max(limits.buy, limits.sell)) : 0;
-  const IN_POSITION = 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP).';
+  const IN_POSITION = state?.multiEntry === true ? 'Vstup proti otevřené pozici nejde — pozici zavři (nebo z pozice bez SL/TP odeber lištou).'
+    : 'V pozici jde jen přikoupit Marketem do pozice se SL i TP (stejné SL/TP).';
   const NOT_READY = 'Spojení s Rithmicem není připravené — nic se neodeslalo.';
   const inPosition = Boolean(state?.positions.some((item) => item.symbol === hello?.symbol));
   const entryBlockedReason = uncertain.some(item => !item.confirmed) ? 'Nejdřív ověř výsledek předchozího příkazu.' : readOnly ? 'Účet je připojený jen pro čtení — příkazy jsou vypnuté.' : hello?.closeOnly ? 'Účet je v režimu jen pro zavírání.' : !maxContracts ? 'Limit RMS není dostupný nebo je nulový.' : entryReady ? (inPosition && !scaleInRef.current?.canAdd ? scaleInRef.current?.reason ?? IN_POSITION : null)
@@ -523,6 +534,30 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const legView = rithmicLegView(orders, net?.netQuantity ?? 0);
   const stopOrder = legView.stop;
   const targetOrder = legView.target;
+  // Další vlastní příkazy vedle hlavní skupiny čar (víc čekajících vstupů, 26. 11. 2026): každý další čekající vstup
+  // a každá noha pozice s jinou cenou, než ukazuje hlavní čára. Jen zobrazení; akce míří na id příkazu a ověří je služba.
+  const extraNow: LiveExtraOrders = {
+    entries: orders.filter((order) => order.role === 'entry' && order.status === 'working' && order.price !== undefined && order.orderId !== entryOrder?.orderId)
+      .map((order) => ({
+        orderId: order.orderId, side: order.side, quantity: order.quantity - order.filledQuantity, price: order.price!, entryType: order.entryType ?? 'Limit',
+        ...(order.plannedStop !== undefined ? { plannedStop: order.plannedStop } : {}), ...(order.plannedTarget !== undefined ? { plannedTarget: order.plannedTarget } : {}),
+        add: order.tag?.startsWith('ui-add-') === true,
+      })),
+    legs: net && state?.multiEntry === true ? [...legView.stops.filter((order) => order.price !== stopOrder?.price), ...legView.targets.filter((order) => order.price !== targetOrder?.price)]
+      .map((order) => ({ orderId: order.orderId, role: order.role as 'stop' | 'target', price: order.price!, quantity: order.quantity - order.filledQuantity })) : [],
+  };
+  // Kolik kusů pozice kryje hlavní čára SL / TP (nohy na její ceně) — štítek nesmí vypadat jako ochrana celé pozice.
+  const coverOf = (list: LocalExecOrderView[], at: number | undefined) => list.filter((order) => order.price === at).reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+  const stopCover = net && stopOrder ? coverOf(legView.stops, stopOrder.price) : 0;
+  const targetCover = net && targetOrder ? coverOf(legView.targets, targetOrder.price) : 0;
+  // Kolik kusů pozice kryje JAKÝKOLI pracující SL / TP (pro výstrahu „pozice není celá chráněná").
+  const openQty = (list: LocalExecOrderView[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+  const stopTotal = net ? openQty(legView.stops) : 0;
+  const targetTotal = net ? openQty(legView.targets) : 0;
+  const legCoverageTotal = useMemo(() => ({ stopLoss: stopTotal, takeProfit: targetTotal }), [stopTotal, targetTotal]);
+  const legCoverage = useMemo(() => (net ? { stopLoss: stopCover, takeProfit: targetCover } : null), [net != null, stopCover, targetCover]); // eslint-disable-line react-hooks/exhaustive-deps
+  const extraKey = liveExtraOrdersKey(extraNow);
+  const extraOrders = useMemo(() => extraNow, [extraKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Podklad pro čipy „+ SL / + TP" a práci s nohami otevřené pozice. Jen zobrazení; příkaz ověří služba.
   // Jen zobrazení: během zavírání pozice služba nejdřív ruší SL/TP a pak zavírá — nabídka „+ SL / + TP" by na chvíli
@@ -542,7 +577,16 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   // Čekající vstupy (i přikoupení) jako klíč: jejich příchod nebo zmizení musí pohled přikoupení přepočítat.
   const waitingEntriesKey = orders.filter((order) => order.role === 'entry' && order.status === 'working').map((order) => `${order.orderId}@${order.price}`).join('|');
   const maxParts = state?.maxParts ?? 2;
-  const scaleIn = useMemo<LiveTicketScaleIn | null>(() => {
+  const freeScaleIn = useMemo<LiveTicketScaleIn | null>(() => {
+    if (!net) return null;
+    // Volný režim (26. 11. 2026): do pozice smí další vstup s jakýmikoli SL/TP a čekat jich smí víc — panel nic
+    // nevnucuje, `stopLoss`/`targetPrice` jsou jen informace (hlavní čáry pozice) a jestli vstup projde, řekne služba.
+    const quantity = Math.abs(net.netQuantity);
+    const reason = quantity >= (net.netQuantity > 0 ? limits?.buy ?? 0 : limits?.sell ?? 0) ? 'Pozice dosáhla limitu.' : null;
+    return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder?.price ?? null, targetPrice: targetOrder?.price ?? null, canAdd: reason === null, reason, pendingAdd: null, free: true };
+  }, [limits, net?.netQuantity, stopOrder?.price, targetOrder?.price]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Bez víc vstupů (služba je nemá zapnuté) platí dosavadní přísné přikoupení.
+  const strictScaleIn = useMemo<LiveTicketScaleIn | null>(() => {
     if (!net) return null;
     const quantity = Math.abs(net.netQuantity);
     const own = (list: LocalExecOrderView[]) => list.length > 0 && list.every((order) => !order.tag?.startsWith('uiprot-'));
@@ -565,6 +609,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     return { side: net.netQuantity > 0 ? 'buy' : 'sell', quantity, stopLoss: stopOrder.price ?? null, targetPrice: targetOrder.price ?? null, canAdd: reason === null, reason,
       pendingAdd: waitingAdd ? { price: waitingAdd.price ?? null, quantity: waitingAdd.quantity, orderType: 'Limit' } : null };
   }, [state?.bareAdd, maxParts, orders.some((order) => order.status === 'working'), waitingEntriesKey, limits, net?.netQuantity, legView.note, legView.stops.length, legView.targets.length, stopOrder?.price, targetOrder?.price, stopOrder?.tag, targetOrder?.tag]); // eslint-disable-line react-hooks/exhaustive-deps
+  const multiEntry = state?.multiEntry === true;
+  const scaleIn = multiEntry ? freeScaleIn : strictScaleIn;
   scaleInRef.current = scaleIn;
 
   const position = useMemo<LiveChartPosition | null>(() => {
@@ -628,11 +674,22 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (stateRef.current?.positions.some((item) => item.symbol === symbolRef.current)) {
       // Přikoupení: jen Market na stranu pozice a jen když ho režim přikoupení nabízí; všechno znovu ověří služba.
       const add = scaleInRef.current;
-      const sameSide = add && (draft.side === 'Buy') === (add.side === 'buy');
-      if (!add?.canAdd || !sameSide || (draft.orderType !== 'Market' && draft.orderType !== 'Limit')) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: add && !add.canAdd ? add.reason ?? IN_POSITION : IN_POSITION }] };
+      const held = stateRef.current?.positions.find((item) => item.symbol === symbolRef.current)?.netQuantity ?? 0;
+      const sameSide = held !== 0 && (draft.side === 'Buy') === (held > 0);
+      // Odebrání z pozice bez SL/TP holým Marketem proti ní (lišta): strop přikoupení se ho netýká.
+      const reducing = draft.reduceOnly === true && add != null && !sameSide && add.stopLoss == null && add.targetPrice == null
+        && draft.orderType === 'Market' && draft.stopLoss === undefined && draft.takeProfit === undefined;
+      const multi = stateRef.current?.multiEntry === true;
+      // Víc vstupů zapnuté ve službě: na stranu pozice smí jakýkoli vstup (Market, Limit, Stop; s jakýmikoli SL/TP).
+      // Jinak dosavadní přikoupení: jen Market/Limit a jen když ho režim přikoupení nabízí. Vše znovu ověří služba.
+      if (!reducing && (!sameSide || (!multi && (!add?.canAdd || (draft.orderType !== 'Market' && draft.orderType !== 'Limit'))))) {
+        return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: !multi && add && !add.canAdd ? add.reason ?? IN_POSITION : IN_POSITION }] };
+      }
+    } else if (draft.reduceOnly === true) {
+      return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: 'Pozice už není otevřená — nic se neodeslalo.' }] };
     }
     // Čekající přikoupení (Limit do otevřené pozice) nese označení vazby na pozici — služba ho po zavření pozice zruší.
-    const pendingAdd = draft.orderType === 'Limit' && stateRef.current?.positions.some((item) => item.symbol === symbolRef.current) === true;
+    const pendingAdd = (draft.orderType === 'Limit' || (draft.orderType === 'Stop' && stateRef.current?.multiEntry === true)) && stateRef.current?.positions.some((item) => item.symbol === symbolRef.current) === true;
     const clientId = `${pendingAdd ? 'add-' : ''}${operationId.replace(/[^A-Za-z0-9_-]/g, '').slice(pendingAdd ? -24 : -28) || newId()}`;
     const tag = `ui-${clientId}`;
     const sym = symbolRef.current;
@@ -643,6 +700,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       op: 'entry', clientId, expectedPosition, symbol: draft.symbol, side: draft.side, quantity: draft.quantity, orderType: draft.orderType,
       ...(draft.orderType === 'Limit' ? { limitPrice: draft.price } : draft.orderType === 'Stop' ? { triggerPrice: draft.price } : { referencePrice: draft.referencePrice ?? priceRef.current ?? undefined }),
       ...(draft.stopLoss !== undefined ? { stopPrice: draft.stopLoss } : {}), ...(draft.takeProfit !== undefined ? { targetPrice: draft.takeProfit } : {}),
+      ...(draft.reduceOnly === true ? { reduceOnly: true } : {}),
     });
     if (reply.ok) return { ...base, status: 'acknowledged', blockers: [], entryBrokerOrderId: String((reply.result as { orderId?: string } | undefined)?.orderId ?? '') };
     if (reply.sent === false) return { ...base, status: 'blocked', blockers: [{ code: 'local-exec', text: reply.error ?? 'Neodesláno.' }] };
@@ -682,10 +740,14 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       if (!leg) return blocked(`Pozice nemá ${role === 'stop' ? 'SL' : 'TP'} — přidej ho čipem u čáry pozice, nebo pozici zavři.`);
       if (leg.price !== expectPrice) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
       if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
-      if (legs.length > 1) {
-        // Dvě ochrany: posouvají se obě najednou (a tím se srovnají na jednu cenu).
-        measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => rithmicLegView(s.orders.filter((order) => order.symbol === sym), 1)[role === 'stop' ? 'stops' : 'targets'].every((order) => order.price === newPrice));
-        return finish(await send({ op: 'move-legs', symbol: sym, role, price: newPrice, expect: legs.map((order) => ({ orderId: order.orderId, price: order.price! })) }));
+      // Hlavní čára = nohy na TÉTO ceně. Části s jinou cenou mají vlastní čáry a tímto tahem se nehýbou (dřív se
+      // všechny nohy role srovnaly na jednu cenu — u nezávislých částí by to tiše změnilo ochranu ostatních).
+      // Dělí se jen v režimu víc vstupů (části jsou nezávislé). Jinak dosavadní chování: tah i BE hýbou celou pozicí
+      // a nohy rozjeté skluzem přikoupení srovnají na jednu cenu.
+      const same = current?.multiEntry === true ? legs.filter((order) => order.price === leg.price) : legs;
+      if (same.length > 1) {
+        measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.filter((order) => same.some((item) => item.orderId === order.orderId)).every((order) => order.price === newPrice));
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: newPrice, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < legs.length ? { subset: true } : {}) }));
       }
       measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === newPrice));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: newPrice }));
@@ -717,6 +779,46 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       return finish(reply);
     }
     return blocked('Tuhle akci místní služba zatím neumí.');
+  }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Akce na DALŠÍM příkazu (viz `extraOrders`): cíl je id příkazu u brokera, cena je jen kontrola „co jsem viděl“.
+   * Čekající vstup: zrušit, posunout (výměna za nový na nové ceně), posunout jeho plánovaný SL/TP. Noha pozice: posun.
+   */
+  const onManageOrder = useCallback(async (target: { type: 'order' | 'leg'; orderId: string }, action: 'move' | 'cancel', kind: 'entry' | 'stopLoss' | 'takeProfit', expectPrice: number, newPrice?: number): Promise<LeaderOrderManageResult> => {
+    const base = { type: 'leader-order-managed' as const, operationId: `manage:${newId()}`, action: (action === 'cancel' ? 'cancel-entry' : kind === 'entry' ? 'move-limit' : kind === 'stopLoss' ? 'move-stop' : 'move-target') as LeaderOrderManageAction, checkedAt: Date.now() };
+    const blocked = (text: string): LeaderOrderManageResult => ({ ...base, status: 'blocked', blockers: [{ code: 'local-exec', text }] });
+    if (!availableRef.current) return blocked(NOT_READY);
+    if (silentRef.current) return blocked('Místní proces neodpovídá — nic se neodeslalo. Zavřít pozici jde.');
+    const sym = symbolRef.current;
+    const order = stateRef.current?.orders.find((item) => item.orderId === target.orderId && item.symbol === sym && item.status === 'working');
+    if (!order) return blocked('Tento příkaz už u Rithmicu nepracuje.');
+    const finish = (reply: Reply): LeaderOrderManageResult => (reply.ok
+      ? { ...base, status: 'acknowledged', blockers: [] }
+      : reply.sent === false ? blocked(reply.error ?? 'Neodesláno.') : { ...base, status: 'unknown', blockers: [], reason: reply.error ?? 'Výsledek není znám — ověř stav.' });
+    const changed = 'Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.';
+    if (target.type === 'leg') {
+      if (action !== 'move' || kind === 'entry' || order.role !== (kind === 'stopLoss' ? 'stop' : 'target')) return blocked('Tuhle akci u nohy pozice služba neumí.');
+      if (order.price !== expectPrice) return blocked(changed);
+      if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
+      measure(kind === 'stopLoss' ? 'Posun SL části → čára' : 'Posun TP části → čára', (s) => s.orders.some((item) => item.orderId === order.orderId && item.price === newPrice));
+      return finish(await send({ op: 'move', orderId: order.orderId, price: newPrice }));
+    }
+    if (order.role !== 'entry') return blocked(changed);
+    if (action === 'cancel') {
+      if (order.price !== expectPrice) return blocked(changed);
+      measure('Zrušení vstupu → čára pryč', (s) => !s.orders.some((item) => item.orderId === order.orderId && item.status === 'working'));
+      return finish(await send({ op: 'cancel', orderId: order.orderId }));
+    }
+    if (typeof newPrice !== 'number') return blocked('Chybí nová cena.');
+    if (kind === 'entry') {
+      if (order.price !== expectPrice) return blocked(changed);
+      return finish(await send({ op: 'replace-entry', clientId: newId(), orderId: order.orderId, price: newPrice }));
+    }
+    const planned = kind === 'stopLoss' ? order.plannedStop : order.plannedTarget;
+    if (planned === undefined) return blocked(`Čekající vstup ${kind === 'stopLoss' ? 'SL' : 'TP'} nemá.`);
+    if (planned !== expectPrice) return blocked(changed);
+    return finish(await send({ op: 'replace-entry', clientId: newId(), orderId: order.orderId, ...(kind === 'stopLoss' ? { stopPrice: newPrice } : { targetPrice: newPrice }) }));
   }, [send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
@@ -754,8 +856,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (!leg) return blocked(`Pozice ${name} nemá.`);
     if (intent.kind === 'move') {
       if (leg.price !== intent.current) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
-      if (legs.length > 1) {
-        return finish(await send({ op: 'move-legs', symbol: sym, role, price: intent.price, expect: legs.map((order) => ({ orderId: order.orderId, price: order.price! })) }));
+      // Jen nohy na ceně hlavní čáry; části s jinou cenou mají vlastní čáry (viz `onManageEntry`).
+      const same = stateRef.current?.multiEntry === true ? legs.filter((order) => order.price === leg.price) : legs;
+      if (same.length > 1) {
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: intent.price, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < legs.length ? { subset: true } : {}) }));
       }
       measure(`Posun ${name} → čára`, (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === intent.price));
       return finish(await send({ op: 'move', orderId: leg.orderId, price: intent.price }));
@@ -849,5 +953,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
     workingView, onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack, scaleIn, legsNote: legView.note,
+    extraOrders, onManageOrder, legCoverage, legCoverageTotal,
   };
 }

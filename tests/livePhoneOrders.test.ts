@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { livePhoneBareMarket, livePhonePosition, livePhoneSheetEntry } from '../lib/livePhoneOrders';
+import { livePhoneBareMarket, livePhonePillScaleIn, livePhonePosition, livePhoneSheetEntry } from '../lib/livePhoneOrders';
 import { validateLeaderEntryPreview, buildLeaderEntryPreviewCommand } from '../lib/leaderEntryPreview';
 import type { TicketDraft } from '../lib/liveOrderTicket';
 
@@ -67,5 +67,24 @@ describe('telefon: podmínky správy z čar = PC', async () => {
   it('průměr pro BE jen ze stavu pollu (expozice z kanálu předbíhá = null)', () => {
     expect(livePhoneManageFields(base).entryAvg).toBe(100);
     expect(livePhoneManageFields({ ...base, chartShowsPoll: false }).entryAvg).toBeNull();
+  });
+});
+
+describe('lišta v pozici bez SL/TP: klepnutí proti pozici z ní odebere (26. 11. 2026)', () => {
+  const quote = { bid: 24_999.75, ask: 25_000, at: 1_000, symbol: 'MNQZ6' };
+  const bare = (quantity: number, canAdd = true) => ({ side: 'buy' as const, quantity, stopLoss: null, targetPrice: null, canAdd, reason: canAdd ? null : 'Pozice dosáhla limitu.', pendingAdd: null });
+  it('opačná strana = odebrání, nejvýš celá zobrazená pozice, i když přikoupit už nejde', () => {
+    expect(livePhonePillScaleIn('sell', 1, quote, bare(3), 3)).toMatchObject({ side: 'Sell', quantity: 1, orderType: 'Market', reduceOnly: true });
+    expect(livePhonePillScaleIn('sell', 5, quote, bare(3, false), 3)).toMatchObject({ side: 'Sell', quantity: 3, reduceOnly: true });
+    const draft = livePhonePillScaleIn('sell', 1, quote, bare(1), 3) as Record<string, unknown>;
+    expect(draft.stopLoss).toBeUndefined();
+    expect(draft.takeProfit).toBeUndefined();
+  });
+  it('stejná strana zůstává přikoupením bez příznaku; pozice se SL/TP se takto nezmenšuje', () => {
+    const add = livePhonePillScaleIn('buy', 1, quote, bare(1), 3) as Record<string, unknown>;
+    expect(add).toMatchObject({ side: 'Buy', quantity: 1 });
+    expect(add.reduceOnly).toBeUndefined();
+    const guarded = { side: 'buy' as const, quantity: 1, stopLoss: 24_990, targetPrice: 25_020, canAdd: true, reason: null, pendingAdd: null };
+    expect(livePhonePillScaleIn('sell', 1, quote, guarded, 3)).toHaveProperty('error');
   });
 });

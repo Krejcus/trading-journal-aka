@@ -137,13 +137,15 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   // Sama se vrátí, když běžná cesta nemusí fungovat: nejistý příkaz, neznámý stav / visící vstup bez pozice,
   // služba mlčí nebo nejsou čerstvá data, stop nových vstupů.
   // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
-  const unprotected = hasPosition && (trading.position?.summary?.kind !== 'position' || trading.position.summary.stop == null);
+  // Nechráněná = bez SL, nebo SL kryje jen část pozice (části smí mít různou ochranu nebo žádnou).
+  const unprotected = hasPosition && (trading.position?.summary?.kind !== 'position' || trading.position.summary.stop == null
+    || (trading.legCoverage != null && trading.legCoverageTotal.stopLoss < trading.position.summary.quantity));
   // Také když × a Shift+X zrovna nejdou: rozběhnutý příkaz (čekají na výsledek), přehrávání grafu, Rithmic odpojený.
   const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || trading.commandInFlight || replaying || !trading.available
     || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
-  const solo = useMemo(() => ({ ...soloBase, alerts: alertsReal, ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
-    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, alertsReal, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy]);
+  const solo = useMemo(() => ({ ...soloBase, alerts: alertsReal, extraOrders: trading.extraOrders, legCoverage: trading.legCoverage, ...(trading.readOnly ? {} : { manageOrder: trading.onManageOrder }), ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
+    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, alertsReal, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy, trading.extraOrders, trading.onManageOrder, trading.readOnly, trading.legCoverage]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });

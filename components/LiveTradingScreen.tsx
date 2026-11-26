@@ -89,6 +89,8 @@ import {
 } from '../lib/liveTradeTarget';
 import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 import { createLivePriceLinesFeed } from '../lib/livePriceLinesFeed';
+import { liveExtraLineTarget, liveExtraOrderLines, type LiveExtraOrders } from '../lib/liveExtraOrderLines';
+import { runLiveExtraManage, type LiveManageOrderCallback } from '../lib/liveExtraManage';
 import { LIVE_ATTACH_SEND_ACTION, LIVE_PENDING_ADD_LINE_ID, LIVE_POSITION_OWNER, liveBreakEven, liveGroupLineSnapshotChanged, liveLineMoveBlockReason, livePositionChartLines } from '../lib/liveChartOrderLines';
 import { liveDisplayOpenPnl, liveShownOpenPnl, withIbkrTightenMark } from '../lib/liveChartPosition';
 import type { LiveChartPosition } from '../lib/liveChartPosition';
@@ -278,6 +280,12 @@ export interface LiveTradingSolo {
   emergencyClose?: { run: () => void; busy: boolean };
   /** Částečné zavření: zavře jednu z více částí pozice (každá má vlastní SL/TP). Nabízí se, jen když to služba umí. */
   reduce?: { run: () => void; busy: boolean; quantity: number };
+  /** Další vlastní příkazy vedle hlavní skupiny čar (další čekající vstupy, nohy částí pozice s jinou cenou). */
+  extraOrders?: LiveExtraOrders;
+  /** Kolik kusů pozice kryje hlavní čára SL / TP (jen do štítku). */
+  legCoverage?: { stopLoss: number; takeProfit: number } | null;
+  /** Akce na dalším příkazu podle jeho id u brokera (tažení, ×); ověří ji místní služba. */
+  manageOrder?: LiveManageOrderCallback;
 }
 
 /** Text pojistky U3-PC u tlačítka Objednávka během přehrávání v grafu. */
@@ -514,6 +522,13 @@ const LiveTradingScreen: React.FC<Props> = ({
     landed: { entry: summary?.entry, stopLoss: summary?.stop, takeProfit: summary?.target },
   });
   const pendingMove = manageRunner.pendingMove;
+  // Další příkazy (víc čekajících vstupů): čára, jejíž změna právě běží, a odeslání přes sdílený zámek čar.
+  const [extraPending, setExtraPending] = useState<string | null>(null);
+  const manageOrderRef = useRef(solo?.manageOrder);
+  manageOrderRef.current = solo?.manageOrder;
+  const runExtra = useCallback((input: Parameters<typeof runLiveExtraManage>[1]) => runLiveExtraManage({
+    manage: manageOrderRef.current, busyRef: liveBusyRef, report: notice => setLineNotice(notice), setPending: setExtraPending,
+  }, input), [liveBusyRef]);
   const runLiveManage = manageRunner.run;
   // C8: × holé pozice (čára, Shift+X, panel) TÝMŽ zámkem jako správa; odejde jen nabídka, kterou
   // uživatel viděl (id cíle je v id čáry), a jen když ji worker teď nabízí.
@@ -746,6 +761,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     groupLimitStateHash: manageGroupLimitStateHash,
     moveBareEntry: manageMoveBareEntrySupported === true,
     stopEntryMove: solo != null,
+    legQuantity: solo?.legCoverage ?? null,
     attachChips,
     bareLegs: legTrade != null,
     ...(solo ? { legRemovable: solo.legsRemovable === true } : {}),
@@ -757,9 +773,10 @@ const LiveTradingScreen: React.FC<Props> = ({
     pointValue: INSTRUMENT.pointValue,
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-    pendingAdd: entryScaleIn?.pendingAdd ?? entryBarePartial,
+    // Další čekající vstupy kreslí vlastní vrstva (každý svou čáru s × a tažením) — jedna čára „přikoupení“ by je zdvojila.
+    pendingAdd: solo?.extraOrders ? null : entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, solo?.available, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [solo?.extraOrders != null, solo?.legCoverage, manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, solo?.available, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;
@@ -794,8 +811,13 @@ const LiveTradingScreen: React.FC<Props> = ({
   const hotkeyHandlerRef = useRef<(event: KeyboardEvent, fromChartEscape: boolean) => void>(() => undefined);
 
   const picked = group ? targetAccount(group, target) : null;
+  const extraOrderLines = useMemo(() => liveExtraOrderLines(solo?.extraOrders, {
+    pointValue: INSTRUMENT.pointValue, manageable: solo?.manageOrder != null && solo.available && !chartReplay,
+    position: summary?.kind === 'position' && summary.entry != null ? { entry: summary.entry, long: summary.side === 'long' } : null,
+    ...(extraPending ? { pending: new Set([extraPending]) } : {}),
+  }), [solo?.extraOrders, solo?.manageOrder != null, solo?.available, chartReplay, summary?.kind, summary?.entry, summary?.side, extraPending]); // eslint-disable-line react-hooks/exhaustive-deps
   const orderLines = useMemo(
-    () => [...liveLines, ...(draft && quote && ticketOpen
+    () => [...liveLines, ...extraOrderLines, ...(draft && quote && ticketOpen
       // Návrh Market jde s trhem: čáry nesou cenu trhu, ze které vznikly, a vrstva je posouvá s živou cenou (jen zobrazení).
       ? liveDraftChartLines(draft, INSTRUMENT, quote, picked?.short)
         // Přikoupení převezme SL a TP pozice: jeho návrhové čáry by ležely přesně na skutečných a zakrývaly jejich štítky.
@@ -803,7 +825,7 @@ const LiveTradingScreen: React.FC<Props> = ({
           && (line.kind === 'stopLoss' ? entryScaleIn.stopLoss : entryScaleIn.targetPrice) === line.price))
         .map(line => (draft.type === 'market' && tick != null ? { ...line, marketBase: quote.bid } : line))
       : []), ...attachLines],
-    [attachLines, draft, liveLines, picked?.short, quote, ticketOpen, tick != null, entryScaleIn?.side, entryScaleIn?.stopLoss, entryScaleIn?.targetPrice],
+    [attachLines, draft, liveLines, extraOrderLines, picked?.short, quote, ticketOpen, tick != null, entryScaleIn?.side, entryScaleIn?.stopLoss, entryScaleIn?.targetPrice],
   );
 
   // Pravé tlačítko = okamžitý holý Limit/Stop (Filip 7. 11.): sólo DEMO (capability), bez pozice, čekajícího vstupu a návrhu.
@@ -909,6 +931,15 @@ const LiveTradingScreen: React.FC<Props> = ({
     onOrderLineChange: (line, kind, price, startLine) => {
       // Čáry jen pro zobrazení (pracující příkazy, U5) nikdy nic nemění ani neposílají.
       if (isLiveDisplayOnlyLine(line)) return;
+      // Další příkaz (další čekající vstup nebo noha části pozice): cíl je id příkazu z čáry.
+      if (liveExtraLineTarget(line)) {
+        if (chartReplay) { replayNotice(); return; }
+        const snapped = snapToTick(price, INSTRUMENT.tickSize);
+        if (startLine && startLine.price !== line.price) { setLineNotice({ at: Date.now(), tone: 'bad', text: 'Příkaz se během tažení změnil — nic se neodeslalo.' }); return; }
+        if (snapped === line.price) return;
+        void runExtra({ line, action: 'move', expect: line.price, next: snapped });
+        return;
+      }
       if (line.ownerId === LIVE_POSITION_OWNER) {
         if (chartReplay) { replayNotice(); return; }
         if (!summary) return;
@@ -949,6 +980,12 @@ const LiveTradingScreen: React.FC<Props> = ({
     onOrderLineCancel: line => {
       if (isLiveDisplayOnlyLine(line)) return;
       if (line.ownerId === LIVE_POSITION_OWNER && chartReplay) { replayNotice(); return; }
+      // × dalšího čekajícího vstupu: zruší jen tento příkaz (podle id).
+      if (liveExtraLineTarget(line)) {
+        if (chartReplay) { replayNotice(); return; }
+        if (line.kind === 'entry') void runExtra({ line, action: 'cancel', expect: line.price });
+        return;
+      }
       // Čekající přikoupení: zrušit jen jeho vstup (desk pošle `cancel-entry` jeho lístku s jeho qty).
       if (line.id === LIVE_PENDING_ADD_LINE_ID) {
         const pendingAddPrice = entryScaleIn?.pendingAdd?.price ?? entryBarePartial?.price;
@@ -1006,7 +1043,7 @@ const LiveTradingScreen: React.FC<Props> = ({
       if (!quote || line.ownerId !== LIVE_DRAFT_ID) return;
       setDraft(previous => (previous ? withBracket(previous, kind === 'stopLoss' ? 'sl' : 'tp', INSTRUMENT, quote, price) : previous));
     },
-  }), [liveFeed, manageMoveBareEntrySupported, marketData != null, solo?.historyFromApp, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
+  }), [runExtra, liveFeed, manageMoveBareEntrySupported, marketData != null, solo?.historyFromApp, instantBareReady, entryBarePartial, priceAlertBridge, attachOperationId, chartReplay, closeBare, draft, entryMaxContracts, guardSummaryAt, manageEntryAvgPrice, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, managePendingLegsSupported, newDraft, orderLines, quote, replayNotice, runLiveManage, shownFills, shownWorking, summary, ticketPrefs, updateDraft, entryScaleIn?.pendingAdd, entryScaleIn?.stopLoss]);
 
   /**
    * Klávesa → záměr → funkce obrazovky (U1). Rozhoduje `resolveLiveHotkey`; BE, zavřít

@@ -11,6 +11,8 @@ import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../../lib
 import { LIVE_ATTACH_OWNER, LIVE_DRAFT_ID, liveAttachChartLines, liveDraftChartLines, snapToTick, type LiveAttachLegs, withBracket, withEntryPrice, type TicketDraft, type TicketInstrument, type TicketQuote } from '../../lib/liveOrderTicket';
 import type { LiveTicketScaleIn } from '../../lib/liveScaleIn';
 import { LIVE_MANAGE_BUSY_TEXT } from '../../hooks/useLiveManageRunner';
+import { liveExtraLineTarget, liveExtraOrderLines, type LiveExtraOrders } from '../../lib/liveExtraOrderLines';
+import { runLiveExtraManage, type LiveManageOrderCallback } from '../../lib/liveExtraManage';
 import { runLiveBareLeg, type LiveBareLegIntent } from '../../lib/liveBareLeg';
 import { liveBareLineEntryId } from '../../lib/liveBareCloseUi';
 import { isLiveDisplayOnlyLine, type LiveWorkingOrderBadge, type LiveWorkingOrdersView } from '../../lib/liveWorkingOrderLines';
@@ -46,7 +48,7 @@ export const LIVE_PHONE_MANAGE_ACTION = { id: 'manage', label: '✎', title: 'Sp
  * v grafu netáhnou (worker jiné nepustí, PC je má v panelu zamčené) — kreslí je čáry pozice.
  */
 export function livePhoneDraftScaleLocked(draft: Pick<TicketDraft, 'side'>, scaleIn: LiveTicketScaleIn | null | undefined): boolean {
-  return scaleIn != null && draft.side === scaleIn.side && scaleIn.stopLoss != null && scaleIn.targetPrice != null;
+  return scaleIn != null && scaleIn.free !== true && draft.side === scaleIn.side && scaleIn.stopLoss != null && scaleIn.targetPrice != null;
 }
 
 /**
@@ -135,8 +137,12 @@ export function livePhoneWorkingView(
  */
 export function LivePhoneOrderLines({
   api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, groupLimitMove = false, groupLimitStateHash = null, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, closeWithoutStop = false, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
-  extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage,
+  extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage, extraOrders, manageOrder, legCoverage = null,
 }: {
+  /** Další vlastní příkazy (další čekající vstupy, nohy částí pozice s jinou cenou) — vlastní čáry s tahem a ×. */
+  extraOrders?: LiveExtraOrders;
+  manageOrder?: LiveManageOrderCallback | null;
+  legCoverage?: { stopLoss: number; takeProfit: number } | null;
   api: ChartViewApi;
   state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
@@ -230,18 +236,30 @@ export function LivePhoneOrderLines({
     pointValue: POINT_VALUE,
     displayOpenPnl,
     ...(pendingMove ? { pending: { [pendingMove.kind]: pendingMove.price } } : {}),
-    pendingAdd,
-  }) : []), [attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
+    // Další čekající vstupy kreslí vlastní vrstva — jedna čára „přikoupení“ by je zdvojila.
+    pendingAdd: extraOrders ? null : pendingAdd,
+    legQuantity: legCoverage,
+  }) : []), [extraOrders != null, legCoverage, attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
+  const [extraPending, setExtraPending] = useState<string | null>(null);
+  const extraOrderLines = useMemo(() => liveExtraOrderLines(extraOrders, {
+    pointValue: POINT_VALUE, manageable: manageOrder != null,
+    position: guardSummary?.kind === 'position' && guardSummary.entry != null ? { entry: guardSummary.entry, long: guardSummary.side === 'long' } : null,
+    ...(extraPending ? { pending: new Set([extraPending]) } : {}),
+  }), [extraOrders, manageOrder != null, guardSummary?.kind, guardSummary?.entry, guardSummary?.side, extraPending]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runExtra = (input: Parameters<typeof runLiveExtraManage>[1]) => runLiveExtraManage({
+    manage: manageOrder, busyRef, report: notice => onNotice(notice.text, notice.tone === 'ok'), setPending: setExtraPending,
+  }, input);
   const lines = useMemo(() => [
     // ✎ jen u táhnutelné SL/TP (správa jde a nic se právě neodesílá); jen otevře list.
     ...(onManage ? positionLines.map(line => (line.ownerId === LIVE_POSITION_OWNER && line.kind !== 'entry' && line.draggable && guardSummary?.kind === 'position'
       ? { ...line, actions: [...(line.actions ?? []), { ...LIVE_PHONE_MANAGE_ACTION }] } : line)) : positionLines),
+    ...extraOrderLines,
     ...(attachLegs && attachSide && attachQuantity != null ? liveAttachChartLines(attachLegs, { side: attachSide, quantity: attachQuantity }, attachReference ?? null, { tickSize: TICK, pointValue: POINT_VALUE } as TicketInstrument) : []),
     // Pracující příkazy: jen zobrazení — vynucené bez tahu, × a tlačítek, ať je pustí jen tato vrstva.
     ...(extraLines ?? []).map(line => ({ ...line, draggable: false, cancellable: false, actions: undefined, addableBrackets: undefined })),
     // Návrh nahoře (poslední v DOM). × návrhu jedním klepnutím: jen zahodí návrh (u brokera nic).
     ...(draftLines ?? []).map(line => ({ ...line, confirmCancel: false })),
-  ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, onManage, positionLines, guardSummary?.kind]);
+  ], [attachLegs, attachReference, attachSide, attachQuantity, draftLines, extraLines, extraOrderLines, onManage, positionLines, guardSummary?.kind]);
 
   const run = useCallback(async (action: LeaderOrderManageAction, expect: number | null | undefined, newPrice?: number, move?: 'entry' | 'stopLoss' | 'takeProfit', seenGroupLimitStateHash?: string) => {
     if (!manage) return;
@@ -301,6 +319,13 @@ export function LivePhoneOrderLines({
         // Návrh: tah jen změní návrh v rodiči — k brokerovi nic (odeslání jen tlačítkem).
         if (line.ownerId === LIVE_DRAFT_ID) { onDraftChange?.(kind, snapToTick(price, TICK)); return; }
         if (line.ownerId === LIVE_ATTACH_OWNER) { if (kind !== 'entry') attach?.onLeg(kind, snapToTick(price, TICK)); return; }
+        // Další příkaz (další čekající vstup nebo noha části pozice): cíl je id příkazu z čáry.
+        if (liveExtraLineTarget(line)) {
+          const next = snapToTick(price, TICK);
+          if (startLine && startLine.price !== line.price) { onNotice('Příkaz se během tažení změnil — nic se neodeslalo.'); return; }
+          if (next !== line.price) void runExtra({ line, action: 'move', expect: line.price, next });
+          return;
+        }
         if (line.ownerId !== LIVE_POSITION_OWNER || !summary) return;
         const snapped = snapToTick(price, TICK);
         const current = kind === 'entry' ? summary.entry : kind === 'stopLoss' ? summary.stop : summary.target;
@@ -315,6 +340,8 @@ export function LivePhoneOrderLines({
         if (isLiveDisplayOnlyLine(line)) return;
         if (line.ownerId === LIVE_DRAFT_ID) { onDraftRemove?.(line.kind); return; }
         if (line.ownerId === LIVE_ATTACH_OWNER) { if (line.kind !== 'entry') attach?.onLeg(line.kind, null); return; }
+        // × dalšího čekajícího vstupu: zruší jen tento příkaz (podle id).
+        if (liveExtraLineTarget(line)) { if (line.kind === 'entry') void runExtra({ line, action: 'cancel', expect: line.price }); return; }
         // × holé pozice: jen nabídka se stejným cílem, jako je v id čáry.
         const bareLineEntry = liveBareLineEntryId(line.id);
         if (bareLineEntry != null) { if (bareClose?.entryOperationId === bareLineEntry) onBareClose?.(bareClose.key); return; }

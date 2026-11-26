@@ -1374,8 +1374,9 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
       && !inflightHere();
     const settleMs = config.exitSettleMs ?? 1_500;
     /** Pracující tržní příkaz BEZ značky = zavírací příkaz (jen ten Rithmic vytváří neoznačený) se ještě nevyplnil.
-     *  Stejně se počítá výstup dělení vstupu (`ui-red-`): dokud pracuje, druhé zavření by pozici mohlo obrátit. */
-    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market' && (!o.tag || o.tag.startsWith('ui-red-')));
+     *  Stejně se počítá výstup dělení vstupu (`ui-red-`) a odebrání z holé pozice (`ui-cut-`, 26. 11. 2026): dokud
+     *  pracuje, druhé zavření by pozici mohlo obrátit. */
+    const exitOrderWorking = (): boolean => book.list(accountId).some((o) => o.symbol === symbol && !TERMINAL.has(o.status) && o.orderType === 'Market' && (!o.tag || o.tag.startsWith('ui-red-') || o.tag.startsWith('ui-cut-')));
     /** Návrat bez jediného zápisu: záznam operace se zahodí, ať stejná značka smí zavřít později. */
     const abandon = async (result: BrokerLiquidateResult): Promise<BrokerLiquidateResult> => {
       protection.dropFlatten(request.tag);

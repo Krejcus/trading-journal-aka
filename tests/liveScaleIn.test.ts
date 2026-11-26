@@ -91,7 +91,10 @@ describe('telefon: Koupit / Prodat z lišty v pozici', () => {
     expect(sent).toMatchObject({ side: 'Buy', quantity: 1, orderType: 'Market' });
     expect(sent).not.toHaveProperty('stopLoss');
     expect(sent).not.toHaveProperty('takeProfit');
-    expect(livePhonePillScaleIn('sell', 1, quote, bare, 5)).toEqual({ error: expect.stringContaining('jen přikoupit') });
+    // Opačná strana v pozici bez SL/TP (26. 11. 2026): odebrání z pozice, nejvýš celá; nikdy vstup proti ní.
+    expect(livePhonePillScaleIn('sell', 1, quote, bare, 5)).toMatchObject({ side: 'Sell', quantity: 1, orderType: 'Market', reduceOnly: true });
+    expect(livePhonePillScaleIn('sell', 9, quote, bare, 5)).toMatchObject({ quantity: 2, reduceOnly: true });
+    expect(livePhonePillScaleIn('sell', 1, quote, { ...bare, stopLoss: 24_990, targetPrice: 25_020 }, 5)).toEqual({ error: expect.stringContaining('jen přikoupit') });
     expect(livePhonePillScaleIn('buy', 4, quote, bare, 5)).toEqual({ error: expect.stringContaining('strop účtu') });
     expect(livePhonePillScaleIn('buy', 1, quote, { ...bare, canAdd: false, reason: 'Pozice dosáhla limitu.' }, 5)).toEqual({ error: 'Pozice dosáhla limitu.' });
   });

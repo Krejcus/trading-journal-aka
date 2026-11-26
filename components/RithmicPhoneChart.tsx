@@ -253,7 +253,9 @@ const PhoneChartView: React.FC<Props & { session: ReturnType<typeof usePhoneSess
   // S výběrem účtu v hlavičce (21. 11., Filip): v klidu se brzda neukazuje — pozice se zavírá × u pozice v grafu.
   // Sama se vrátí, když běžná cesta nemusí fungovat (nejistý příkaz, neznámý stav, služba mlčí, stop vstupů).
   // Pozice bez známé ceny SL: × v grafu ji nezavře („cena SL/TP není známá — nic se neodeslalo“), brzda tedy zůstává.
-  const unprotected = hasPosition && (shownPosition?.summary?.kind !== 'position' || shownPosition.summary.stop == null);
+  // Nechráněná = bez SL, nebo SL kryje jen část pozice (části smí mít různou ochranu nebo žádnou).
+  const unprotected = hasPosition && (shownPosition?.summary?.kind !== 'position' || shownPosition.summary.stop == null
+    || (trading.legCoverage != null && trading.legCoverageTotal.stopLoss < shownPosition.summary.quantity));
   // Také když × zrovna nejde: rozběhnutý příkaz (čeká na výsledek), Rithmic odpojený. Přehrávání má telefon pokryté lištou s Flattenem.
   const brakeNeeded = trading.uncertain.length > 0 || (exposureShown && !hasPosition) || unprotected || trading.commandInFlight || !trading.available
     || Boolean(blocked) || trading.silent || !trading.helloFresh;
@@ -265,7 +267,8 @@ const PhoneChartView: React.FC<Props & { session: ReturnType<typeof usePhoneSess
     readOnly: trading.readOnly, blocked, entryBlockedReason: trading.entryBlockedReason, maxContracts: trading.maxContracts, symbol,
     averagePrice: trading.averagePrice, scaleIn: trading.scaleIn, position: trading.position, bareLegTrade: trading.bareLegTrade, soloAccountId: RITHMIC_SOLO_ACCOUNT,
     onPlaceEntry: trading.onPlaceEntry, onManageEntry: trading.onManageEntry, onBareLeg: trading.onBareLeg, closeNow: runClose,
-  }), [trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
+    extraOrders: trading.extraOrders, onManageOrder: trading.onManageOrder, legCoverage: trading.legCoverage,
+  }), [trading.extraOrders, trading.onManageOrder, trading.legCoverage, trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
 
   // P&L pozice a čáry DLL / MLL (jen zobrazení): z průměru, kusů a živé ceny služby.
   const summary = shownPosition?.summary?.kind === 'position' ? shownPosition.summary : null;

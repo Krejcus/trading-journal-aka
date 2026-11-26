@@ -41,6 +41,11 @@ export interface LivePositionLineControls {
    */
   pendingLegs?: boolean;
   moveLimit?: boolean;
+  /**
+   * Kolik kusů pozice kryje čára SL / TP (části pozice smí mít různou ochranu nebo žádnou). Chybí = celá pozice.
+   * Jen do štítku: „SL 1/3" místo „SL 3", aby čára nevypadala jako ochrana celé pozice.
+   */
+  legQuantity?: { stopLoss?: number; takeProfit?: number } | null;
   /** Distinct group capability: aggregate chart quantity may exceed the leader quantity. */
   groupLimitMove?: boolean;
   groupLimitStateHash?: string | null;
@@ -198,8 +203,10 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
   const canMove = legsLive || (controls.manageable && (position || controls.pendingLegs === true));
   const scope = summary.scopeLabel ? ` ${summary.scopeLabel}` : '';
   const levelLabel = (kind: 'stopLoss' | 'takeProfit', at: number, note?: string, from: number = entry) => {
-    const pnl = (at - from) * dir * summary.quantity * controls.pointValue;
-    return `${kind === 'stopLoss' ? 'SL' : 'TP'} ${summary.quantity}  ${signedUsd(pnl)} · ${Math.abs(at - from).toFixed(2)} b${note ? ` · ${note}` : ''}`;
+    const covered = position ? controls.legQuantity?.[kind] : undefined;
+    const quantity = covered != null && covered > 0 && covered < summary.quantity ? covered : summary.quantity;
+    const pnl = (at - from) * dir * quantity * controls.pointValue;
+    return `${kind === 'stopLoss' ? 'SL' : 'TP'} ${quantity === summary.quantity ? quantity : `${quantity}/${summary.quantity}`}  ${signedUsd(pnl)} · ${Math.abs(at - from).toFixed(2)} b${note ? ` · ${note}` : ''}`;
   };
   // Holá pozice bez SL nemá co posouvat na BE.
   const be = controls.manageable || (legsLive && summary.stop != null) ? liveBreakEven(summary, controls.entryAvg ?? (legsLive ? entry : null)) : null;

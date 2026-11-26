@@ -172,7 +172,7 @@ describe('hook místního procesu', () => {
     expect(chart).toMatch(/const brakeNeeded = uncertainList\.length > 0 \|\| \(trading\.mayHaveExposure && !hasPosition\) \|\| unprotected \|\| trading\.commandInFlight \|\| replaying \|\| !trading\.available\s+\|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
     expect(chart).toMatch(/accountBar=\{accountBar\} onReplayChange=\{setReplaying\}/);
     // Pozice bez známé ceny SL: × ji nezavře, brzda musí zůstat.
-    expect(chart).toMatch(/const unprotected = hasPosition && \(trading\.position\?\.summary\?\.kind !== 'position' \|\| trading\.position\.summary\.stop == null\);/);
+    expect(chart).toMatch(/const unprotected = hasPosition && \(trading\.position\?\.summary\?\.kind !== 'position' \|\| trading\.position\.summary\.stop == null\s+\|\| \(trading\.legCoverage != null && trading\.legCoverageTotal\.stopLoss < trading\.position\.summary\.quantity\)\);/);
     expect(chart).toMatch(/const offerBrake = \(trading\.mayHaveExposure \|\| uncertainList\.length > 0\) && \(!accountBar \|\| brakeNeeded\);/);
     // Nabízí se i při neznámém stavu a visícím vstupu; nejistý výsledek od služby se zapíše mezi nejisté.
     expect(hook).toMatch(/mayHaveExposure: state === null \|\| net != null \|\| orders\.some\(order => order\.status === 'working'\),/);
@@ -201,8 +201,19 @@ describe('hook místního procesu', () => {
     // V pozici další vstup ne (přikoupení služba neumí) a okamžité odeslání z menu grafu se v solo nenabízí.
     // V pozici jen přikoupení: Market na stranu pozice a jen když ho režim přikoupení nabízí (službu to váže znovu).
     // Přikoupení: Market, nebo Limit (čekající přikoupení se po zavření pozice samo zruší); o všem rozhoduje služba.
-    expect(hook).toMatch(/if \(!add\?\.canAdd \|\| !sameSide \|\| \(draft\.orderType !== 'Market' && draft\.orderType !== 'Limit'\)\) return \{ \.\.\.base, status: 'blocked'/);
-    expect(hook).toMatch(/const pendingAdd = draft\.orderType === 'Limit' && stateRef\.current\?\.positions\.some/);
+    // Volný režim (26. 11. 2026): na stranu pozice smí jakýkoli vstup; proti pozici jen odebrání z holé pozice.
+    // Bez zapnutých více vstupů ve službě (`state.multiEntry`) platí dosavadní přísné přikoupení.
+    expect(hook).toMatch(/if \(!reducing && \(!sameSide \|\| \(!multi && \(!add\?\.canAdd \|\| \(draft\.orderType !== 'Market' && draft\.orderType !== 'Limit'\)\)\)\)\) \{/);
+    expect(hook).toMatch(/const multi = stateRef\.current\?\.multiEntry === true;/);
+    expect(hook).toMatch(/const scaleIn = multiEntry \? freeScaleIn : strictScaleIn;/);
+    expect(hook).toMatch(/const sameSide = held !== 0 && \(draft\.side === 'Buy'\) === \(held > 0\);/);
+    // Odebrání z pozice (26. 11. 2026): jen holý Market proti pozici bez SL/TP, s výslovným úmyslem z lišty.
+    expect(hook).toMatch(/const reducing = draft\.reduceOnly === true && add != null && !sameSide && add\.stopLoss == null && add\.targetPrice == null\s+&& draft\.orderType === 'Market' && draft\.stopLoss === undefined && draft\.takeProfit === undefined;/);
+    expect(hook).toMatch(/\.\.\.\(draft\.reduceOnly === true \? \{ reduceOnly: true \} : \{\}\)/);
+    // Deník: další vstup smí odejít jen když všechno čekající jsou holé Markety na cestě (ne nejisté).
+    expect(hook).toMatch(/&& !\(quick && waitingRows\.every\(row => quickInFlight\.has\(row\.id\)\)\)\) throw new Error\('Ověř předchozí příkaz u brokera\.'\)/);
+    expect(hook).toMatch(/onUncertain: item => \{\s+quickInFlight\.delete\(item\.id\);/);
+    expect(hook).toMatch(/const pendingAdd = \(draft\.orderType === 'Limit' \|\| \(draft\.orderType === 'Stop' && stateRef\.current\?\.multiEntry === true\)\) && stateRef\.current\?\.positions\.some/);
     expect(screen).toMatch(/const instantBareReady = !solo && entryBarePendingSupported/);
     expect(liveSoloNoticeText(LIVE_COMMAND_BUSY_TEXT)).not.toMatch(/Flatten/);
     expect(chart).toMatch(/available: usable, singleLeg: true/);
@@ -219,7 +230,9 @@ describe('hook místního procesu', () => {
     expect(screen).toMatch(/stopEntryMove: solo != null \}\);/);
     expect(hook).toMatch(/if \(action === 'move-limit'\) \{/);
     expect(hook).toMatch(/return replaceEntry\(entry, \{ price: newPrice \}\);/);
-    expect(hook.match(/op: 'replace-entry'/g)).toHaveLength(1);
+    // Výměnu vstupu posílá hlavní cesta (jedna) a cesta dalších příkazů cílená podle id (vstup a jeho plánovaná noha).
+    expect(hook.match(/op: 'replace-entry'/g)).toHaveLength(3);
+    expect(hook.match(/op: 'replace-entry', clientId: newId\(\), orderId: order\.orderId/g)).toHaveLength(2);
     expect(chart).toMatch(/managePendingLegsSupported/);
   });
 
@@ -264,7 +277,13 @@ describe('hook místního procesu', () => {
     expect(short.target?.orderId).toBe('d');
     expect(rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 100)], 2).note).toBeNull();
     // obě cesty posunu (panel/klávesa i čára) jdou při více nohách přes move-legs s výčtem noh
-    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: legs\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\) \}\)/g)).toHaveLength(2);
+    // … a jen pro nohy na ceně hlavní čáry (části s jinou cenou mají vlastní čáry); při různých cenách s `subset`.
+    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: same\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\), \.\.\.\(same\.length < legs\.length \? \{ subset: true \} : \{\}\) \}\)/g)).toHaveLength(2);
+    // Jen v režimu víc vstupů (`state.multiEntry`); jinak dosavadní „všechny nohy role" — tah i BE hýbou celou pozicí.
+    expect(hook.match(/const same = (current|stateRef\.current)\?\.multiEntry === true \? legs\.filter\(\(order\) => order\.price === leg\.price\) : legs;/g)).toHaveLength(2);
+    // Spouštěč: víc vstupů na skutečném účtu jen na výslovné zapnutí; správa částí vždy, i v režimu jen pro zavírání.
+    expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| \(LIVE_TRADING && !CLOSE_ONLY && process\.argv\.includes\('--multi-entry'\)\) \? \{ multiEntry: true \} : \{\}\)/);
+    expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| LIVE_TRADING \? \{ multiManage: true \} : \{\}\)/);
     expect(chart).toMatch(/entryScaleIn=\{trading\.scaleIn\}/);
   });
 
@@ -344,7 +363,7 @@ describe('hook místního procesu', () => {
     // Visící výstup se skrývat nesmí: jen krátce a jen dokud služba není zablokovaná.
     expect(hook).toMatch(/return !blocked && now - seen < OWN_EXIT_HIDE_MS;/);
     // Jediná výjimka: vlastní výstupní Market částečného zavření (značka ui-red-), jen zobrazení.
-    expect(hook).toMatch(/const isOwnExit = \(order: \{ tag\?: string; orderType\?: string \}\): boolean => order\.orderType === 'Market' && order\.tag\?\.startsWith\('ui-red-'\) === true;/);
+    expect(hook).toMatch(/const isOwnExit = \(order: \{ tag\?: string; orderType\?: string \}\): boolean => order\.orderType === 'Market' && \(order\.tag\?\.startsWith\('ui-red-'\) === true \|\| order\.tag\?\.startsWith\('ui-cut-'\) === true\);/);
     expect(hook).toMatch(/const view = liveWorkingOrderView\(\{/);
     expect(chart).toMatch(/workingOrders=\{trading\.workingView\}/);
   });
@@ -473,7 +492,7 @@ describe('Rithmic graf na telefonu', () => {
     expect(wrapper).toMatch(/const offerBrake = \(link === 'open' \|\| grace\) && !viewOnly && \(exposureShown \|\| trading\.uncertain\.length > 0\) && \(!accountBar \|\| brakeNeeded \|\| grace\);/);
     // S výběrem účtu v hlavičce se v klidu schová; vrací se při nejistotě, neznámém stavu, mlčící službě, stopu vstupů (21. 11.).
     expect(wrapper).toMatch(/const brakeNeeded = trading\.uncertain\.length > 0 \|\| \(exposureShown && !hasPosition\) \|\| unprotected \|\| trading\.commandInFlight \|\| !trading\.available\s+\|\| Boolean\(blocked\) \|\| trading\.silent \|\| !trading\.helloFresh;/);
-    expect(wrapper).toMatch(/const unprotected = hasPosition && \(shownPosition\?\.summary\?\.kind !== 'position' \|\| shownPosition\.summary\.stop == null\);/);
+    expect(wrapper).toMatch(/const unprotected = hasPosition && \(shownPosition\?\.summary\?\.kind !== 'position' \|\| shownPosition\.summary\.stop == null\s+\|\| \(trading\.legCoverage != null && trading\.legCoverageTotal\.stopLoss < shownPosition\.summary\.quantity\)\);/);
     // Krátký výpadek (návrat do appky): poslední známý obraz se drží jen pár sekund, pak obrazovka hlásí pravdu.
     expect(wrapper).toMatch(/const RECONNECT_GRACE_MS = 4_000;/);
     expect(wrapper).toMatch(/window\.setTimeout\(\(\) => \{ hadState\.current = false; setGrace\(false\); \}, RECONNECT_GRACE_MS\);/);

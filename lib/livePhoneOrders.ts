@@ -21,6 +21,12 @@ export interface LivePhoneQuote { symbol: string | null; bid: number; ask: numbe
 
 /** Co telefonní graf dostane z LIVE desku (jen funkce a zobrazení, žádný stav kopírky k rozhodování). */
 export interface LivePhoneTradeBridge {
+  /** Další vlastní příkazy vedle hlavní skupiny čar (další čekající vstupy, nohy částí pozice s jinou cenou). */
+  extraOrders?: import('./liveExtraOrderLines').LiveExtraOrders;
+  /** Akce na dalším příkazu podle jeho id u brokera; ověří ji místní služba. */
+  manageOrder?: import('./liveExtraManage').LiveManageOrderCallback;
+  /** Kolik kusů pozice kryje hlavní čára SL / TP (jen do štítku). */
+  legCoverage?: { stopLoss: number; takeProfit: number } | null;
   /** Null = odeslat jde; jinak proč ne (čerstvost stavu, kopírka vypnutá, rozpracovaný vstup…). */
   blockedReason: string | null;
   marketSupported: boolean;
@@ -155,7 +161,7 @@ export function liveBareEntryRecord(entry: LiveBareEntryRecord | null | undefine
  * jiné nepustí) a strop platí na celou pozici. Jen příprava návrhu — rozhoduje worker.
  */
 export function livePhoneScaleInDraft(draft: TicketDraft, scaleIn: LiveTicketScaleIn | null | undefined): TicketDraft {
-  if (!scaleIn || draft.side !== scaleIn.side || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return draft;
+  if (!scaleIn || scaleIn.free || draft.side !== scaleIn.side || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return draft;
   return { ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice };
 }
 
@@ -163,6 +169,8 @@ export function livePhoneScaleInDraft(draft: TicketDraft, scaleIn: LiveTicketSca
 export function livePhoneScaleInBlocked(draft: TicketDraft, quantity: number, scaleIn: LiveTicketScaleIn | null | undefined, maxContracts: number): string | null {
   if (!scaleIn) return null;
   if (draft.side !== scaleIn.side) return 'V pozici jde jen přikoupit na její stranu — zavři ji ×.';
+  // Volný režim (Rithmic): SL/TP ani počet čekajících vstupů panel neřeší — rozhoduje služba; zbývá jen strop.
+  if (scaleIn.free) return scaleIn.quantity + quantity > maxContracts ? `Pozice by měla ${scaleIn.quantity + quantity} kontraktů — strop účtu je ${maxContracts}.` : null;
   if (scaleIn.pendingAdd) return 'Předchozí přikoupení ještě čeká — nejdřív ať se vyplní, nebo ho zruš.';
   // Upravené SL/TP se nikdy tiše nepřepíšou na SL/TP pozice (P1-B) — nic neodejde.
   const tick = (value: number | null) => (value == null ? null : snapToTick(value, 0.25));
@@ -263,8 +271,15 @@ export function livePhonePillScaleIn(
   if (!quote.symbol) return { error: 'Kontrakt není ověřený (cena není z IBKR) — nic se neodeslalo.' };
   if (!Number.isSafeInteger(quantity) || quantity < 1) return { error: 'Neplatný počet kontraktů.' };
   // Pozice jen s jednou nohou (jen SL, nebo jen TP): přikoupení by vytvořilo část bez stejné ochrany.
-  if (side === scaleIn.side && (scaleIn.stopLoss == null) !== (scaleIn.targetPrice == null)) {
+  if (!scaleIn.free && side === scaleIn.side && (scaleIn.stopLoss == null) !== (scaleIn.targetPrice == null)) {
     return { error: 'Pozice má jen SL nebo jen TP — nejdřív doplň druhou nohu, nic se neodeslalo.' };
+  }
+  // Pozice bez SL/TP a klepnutí na OPAČNOU stranu: jen z pozice odebere (nejvýš celou zobrazenou), neotočí ji.
+  // Stropy přikoupení se netýkají — pozice se zmenšuje; skutečnou kapacitu počítá služba.
+  if (side !== scaleIn.side && scaleIn.stopLoss == null && scaleIn.targetPrice == null) {
+    if (scaleIn.quantity < 1) return { error: 'Pozice není známá — nic se neodeslalo.' };
+    const reduce = livePhoneBareMarket(side, Math.min(quantity, scaleIn.quantity), quote);
+    return 'error' in reduce ? reduce : { ...reduce, reduceOnly: true };
   }
   const blocked = livePhoneScaleInBlocked({ side, type: 'market', stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice } as TicketDraft, quantity, scaleIn, maxContracts);
   if (blocked) return { error: blocked };
@@ -273,7 +288,7 @@ export function livePhonePillScaleIn(
   return {
     symbol: quote.symbol, side: side === 'buy' ? 'Buy' : 'Sell', quantity, orderType: 'Market',
     referencePrice: side === 'buy' ? quote.ask : quote.bid, quoteReceivedAt: Math.round(quote.at),
-    stopLoss: scaleIn.stopLoss!, takeProfit: scaleIn.targetPrice!,
+    ...(scaleIn.stopLoss != null ? { stopLoss: scaleIn.stopLoss } : {}), ...(scaleIn.targetPrice != null ? { takeProfit: scaleIn.targetPrice } : {}),
   };
 }
 

@@ -25,6 +25,10 @@ MODE="${1:-obchod}"
 COMMON=(--system "$SYSTEM" --user "$LUCID_USER" --contract MNQ --mobile --tailscale-login "$TAILSCALE_LOGIN")
 NO_STOP=(--allow-no-stop)
 [ "${SL:-}" = "povinny" ] && NO_STOP=()
+# VICE_VSTUPU=ano zapne víc čekajících vstupů a vstupy s libovolnými SL/TP (proti brokerovi zatím neověřeno);
+# bez toho platí jeden čekající vstup jako dřív. Jen pro obchodní režim (obchod / obnovit).
+MULTI=()
+[ "${VICE_VSTUPU:-}" = "ano" ] && MULTI=(--multi-entry)
 export RITHMIC_DEV_ORIGINS="http://localhost:5273"
 
 if [ ! -t 0 ] || [ ! -t 1 ]; then
@@ -36,10 +40,10 @@ case "$MODE" in
   obchod)
     npx tsx scripts/rithmic/grantLiveTrading.ts --system "$SYSTEM" --user "$LUCID_USER" --account "$LUCID_ACCOUNT" \
       --hours "${HODIN:-12}" --max-quantity "${KS:-3}" "${NO_STOP[@]}"
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading
+    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading "${MULTI[@]}"
     ;;
   obnovit)
-    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT"
+    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT" "${MULTI[@]}"
     ;;
   cteni)
     exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only

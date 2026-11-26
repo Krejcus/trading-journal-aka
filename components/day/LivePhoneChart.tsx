@@ -141,6 +141,9 @@ const CANCEL_PENDING_CHIP_SPACE = 38;
  */
 interface PhoneOrder { key: number; draft: TicketDraft; mode: 'sheet' | 'chart'; template: boolean }
 
+/** Nejkratší odstup dvou klepnutí na TUTÉŽ stranu lišty — kratší je dvojdotek, ne úmysl. */
+const QUICK_TAP_GAP_MS = 180;
+
 /** Šipky plnění (hook uvnitř vrstvy grafu, kde je API panelu). */
 function LiveFillArrows(props: { api: ChartViewApi | null; fills: readonly LiveFillMarker[]; past?: readonly (readonly LiveFillMarker[])[]; open: boolean; candles: readonly MarketCandle[]; intervalSeconds: number; enabled: boolean; isDark: boolean; symbol?: string | null }) {
   useLiveFillArrows(props);
@@ -261,20 +264,25 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
     if (ok && slots.copyEvents) return;
     sayCard(text, ok);
   };
-  const send = async (draft: LiveEntryPreviewDraft | { error: string }) => {
+  // `quick` = holý Market z lišty (26. 11. 2026): klepnutí odchází hned a souběžně — nezamyká a na odpověď
+  // předchozího klepnutí nečeká (pořadí, stropy a otočení hlídá služba). Jinou běžící akci (zavření, posun) respektuje.
+  const quickRuns = useRef(0);
+  const lastQuickTap = useRef<{ side: 'buy' | 'sell' | null; at: number }>({ side: null, at: 0 });
+  const send = async (draft: LiveEntryPreviewDraft | { error: string }, quick = false) => {
     if ('error' in draft) { say(draft.error); return; }
     if (!trade) return;
-    if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
+    if (busyRef.current && !(quick && quickRuns.current > 0)) { say(LIVE_COMMAND_BUSY_TEXT); return; }
+    if (quick) quickRuns.current += 1;
     busyRef.current = true;
-    setBusy(true);
+    if (!quick) setBusy(true);
     try {
       const result = await trade.place(draft, livePhoneOperationId());
       say(livePhonePlacedText(result), result.status === 'acknowledged');
     } catch (error) {
       say(`Neodesláno / neznámé: ${error instanceof Error ? error.message.slice(0, 140) : 'chyba'} — nic neopakuj, zkontroluj pozici.`);
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      if (quick) quickRuns.current -= 1;
+      if (!quick || quickRuns.current === 0) { busyRef.current = false; setBusy(false); }
     }
   };
   const sendBlocked = (market: boolean): string | null => (
@@ -292,7 +300,15 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       : pill.qty > trade!.maxContracts ? `Strop ručního vstupu je ${trade!.maxContracts} kontraktů.` : null);
     if (blocked) { say(blocked); return; }
     // V pozici jde lišta jako přikoupení se SL/TP pozice (holý Market by worker v pozici zastavil).
-    void send(scaleIn ? livePhonePillScaleIn(side, pill.qty, quote!, scaleIn, trade!.maxContracts) : livePhoneBareMarket(side, pill.qty, quote!));
+    const draft = scaleIn ? livePhonePillScaleIn(side, pill.qty, quote!, scaleIn, trade!.maxContracts) : livePhoneBareMarket(side, pill.qty, quote!);
+    const quick = !('error' in draft) && draft.stopLoss === undefined && draft.takeProfit === undefined;
+    // Nechtěný dvojdotek téže strany (dva dotyky do 180 ms) = jeden příkaz; úmyslné rychlé klepání projde.
+    if (quick) {
+      const now = Date.now();
+      if (lastQuickTap.current.side === side && now - lastQuickTap.current.at < QUICK_TAP_GAP_MS) return;
+      lastQuickTap.current = { side, at: now };
+    }
+    void send(draft, quick);
   };
   const [attachOpen, setAttachOpen] = useState(false);
   const attachSeenGroupHash = useRef<string | null>(null);
@@ -715,6 +731,9 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             guardAt={guardAt}
             displayOpenPnl={displayOpenPnl}
             manage={trade?.manage ?? null}
+            extraOrders={trade?.extraOrders}
+            manageOrder={trade?.manageOrder ?? null}
+            legCoverage={trade?.legCoverage ?? null}
             bareClose={trade?.closeBare && trade.bareClose?.enabled ? { entryOperationId: trade.bareClose.trade.entryOperationId, key: trade.bareClose.key } : null}
             onBareClose={barBareClose}
             attach={trade?.bareLeg && trade.bareLegTrade ? null : attachChipBridge}

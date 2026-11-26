@@ -206,6 +206,11 @@ export interface LiveEntryPreviewDraft {
   takeProfit?: number;
   /** Přikoupení do otevřené pozice (jen s capability `manual-entry-scale-in-v1`). */
   position?: LeaderEntryPositionIntent;
+  /**
+   * Holý Market PROTI zobrazené pozici bez SL/TP (lišta, 26. 11. 2026): jen z ní odebere, nikdy ji neotočí.
+   * Úmysl z toho, co uživatel viděl; kolik opravdu jde odebrat, počítá místní služba ze svého stavu.
+   */
+  reduceOnly?: boolean;
 }
 
 /** Holý Market (bez SL i TP)? */

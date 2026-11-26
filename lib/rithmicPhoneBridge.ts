@@ -12,6 +12,8 @@ import type { LiveTicketScaleIn } from './liveScaleIn';
 import type { BareLeaderTrade } from './manualBareClose';
 
 /** Výsledek brzdy služby (`closeNow` hooku). */
+import type { LiveExtraOrders } from './liveExtraOrderLines';
+import type { LiveManageOrderCallback } from './liveExtraManage';
 export interface RithmicCloseResult { status: 'sent' | 'blocked' | 'unknown'; text: string | null }
 
 /** Štítek režimu účtu v hlavičce telefonu. Pořadí: nejdřív omezení příkazů, pak skutečný účet, pak test. */
@@ -74,6 +76,9 @@ export interface RithmicPhoneBridgeInput {
   onManageEntry: (action: LeaderOrderManageAction, expectPrice: number, newPrice?: number) => Promise<LeaderOrderManageResult>;
   onBareLeg: (seen: BareLeaderTrade, intent: LiveBareLegIntent) => Promise<LeaderOrderManageResult>;
   closeNow: () => Promise<RithmicCloseResult>;
+  extraOrders?: LiveExtraOrders;
+  onManageOrder?: LiveManageOrderCallback;
+  legCoverage?: { stopLoss: number; takeProfit: number } | null;
 }
 
 /**
@@ -105,6 +110,9 @@ export function rithmicPhoneBridge(input: RithmicPhoneBridgeInput): LivePhoneTra
     entryAvg: input.averagePrice,
     scaleIn: input.scaleIn,
     leaderAccountId: input.soloAccountId,
+    ...(input.extraOrders ? { extraOrders: input.extraOrders } : {}),
+    ...(input.onManageOrder ? { manageOrder: input.onManageOrder } : {}),
+    ...(input.legCoverage ? { legCoverage: input.legCoverage } : {}),
     ...(input.bareLegTrade ? { bareLegTrade: input.bareLegTrade, bareLeg: input.onBareLeg } : {}),
   };
 }

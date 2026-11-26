@@ -49,7 +49,7 @@ export async function attachSimulation(http: Server, port: number) {
     broker, symbols: { [symbol]: { tickSize: 0.25 } }, systemName: 'Rithmic Test', allowedSystems: ['Rithmic Test'],
     maxQuantity: 2_147_483_647, quantityLimits: () => limits, serverPrice: () => price, serverQuote: () => ({ bid: price - 0.25, ask: price + 0.25 }),
     // RITHMIC_SIM_TEST_FEATURES=1 zapne i to, co skutečný spouštěč povoluje jen na Rithmic Test.
-    ...(process.env.RITHMIC_SIM_TEST_FEATURES === '1' ? { pendingAdd: true, entrySplit: true, multiPairSwap: true, maxProtectedParts: 20, bareAdd: true } : {}),
+    ...(process.env.RITHMIC_SIM_TEST_FEATURES === '1' ? { pendingAdd: true, entrySplit: true, multiPairSwap: true, maxProtectedParts: 20, bareAdd: true, multiEntry: true } : { multiManage: true }),
   });
   exec.attach();
   // Samočinné zápisy (zrušení čekajícího přikoupení po zavření pozice) — stejně jako skutečný spouštěč mimo režim jen pro čtení.

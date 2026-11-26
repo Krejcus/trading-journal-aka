@@ -288,6 +288,50 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: rychlý Market z lišty s odebráním z pozice + víc čekajících vstupů (NENASAZENO)
+Zadání Filipa: (1) klepnutí na Koupit/Prodat v liště má odejít hned a Prodat v longu má z pozice odebrat;
+(2) víc Limitů najednou, bez podmínek na SL/TP („aby fungovalo vše“).
+- **Proč lišta čekala** (tři brzdy): zámek telefonu do odpovědi, deník appky (`beforeSend` odmítl druhý vstup, dokud
+  první neměl odpověď) a služba (zobrazená pozice ≠ stav, kniha pozic za vyplněním).
+- **Rychlý Market** (`services/rithmic/localExec.ts` `quickMarketProblem`, jen `bareAdd` a jen když na kontraktu nejsou
+  jiné než vlastní tržní příkazy): počítá se podepsaně a ze dvou zdrojů pozice (vyplnění × kniha), příkaz musí vyjít
+  pro oba. `reduceOnly` = odebrání z pozice bez SL/TP (značka `ui-cut-`, adaptér ji bere jako výstup): nikdy přes nulu,
+  příkazy na cestě na opačné straně se do kapacity nepočítají. Otočení jedním příkazem ani dvojklepem nejde.
+  Zavřít vedle odebrání s neznámým výsledkem počká / odmítne s časem (jinak obrat). Telefon: souběžné odesílání,
+  dvojdotek téže strany do 180 ms = jeden příkaz.
+- **Víc vstupů** (`config.multiEntry`; spouštěč: Rithmic Test vždy, skutečný účet JEN na výslovné zapnutí
+  `VICE_VSTUPU=ano scripts/rithmic/lucid.sh` → `--multi-entry`, výchozí vypnuto — proti brokerovi neověřeno):
+  víc čekajících vlastních vstupů, Market/Limit/Stop s jakoukoli kombinací
+  SL/TP i do pozice. Pravidla: vše na JEDNÉ straně (vstupy na obě strany ne), nepotvrzený záměr vstupu s ochranou
+  zastaví každý další vstup, stropy se počítají znovu těsně před zápisem, vazba přikoupení (`ui-add-`, samo se zruší
+  po zavření pozice) se při výměně vstupu dědí, posun jedné nohy má kontroly a potvrzení stavem, hlídač ochran počítá
+  součet expozic vstupů, po zavření pozice s dál čekajícími vstupy z nuly vyjde výstraha.
+- **Graf** (PC i telefon): každý další čekající vstup a každá noha s jinou cenou má vlastní čáru (`lib/liveExtraOrderLines.ts`),
+  tažení a × míří na id příkazu (`lib/liveExtraManage.ts`), hlavní čára SL/TP ukazuje krytí („SL 1/3“). Lístek a list
+  ve „volném“ režimu (`scaleIn.free`) nevnucují SL/TP pozice.
+- **Známá omezení v1:** vstupy na obě strany (průraz) ne; pozice se samostatně přidaným SL/TP (`uiprot-`) další vstup
+  nepustí; ve smíšené pozici (část s ochranou + část bez) nejde nekryté části SL dodatečně přidat, částečně zavřít
+  ani odebrat lištou — jen Zavřít; lišta v pozici se SL/TP proti pozici neodebírá; posun čekajícího vstupu zůstává výměnou.
+- **Zbytková rizika (oponent):** po `ack` nebo po 12 s se zapomene odebrání s neznámým výsledkem (pozdní doručení by
+  pozici otočilo); brzda je při neznámém odebrání až 12 s odmítaná; „čerstvá vlastní aktivita“ platí pro celou službu,
+  ne pro zařízení; RMS propky může čekající vstupy počítat jinak.
+- **Ověření:** celá sada 4142, typy webu i služby 0; simulace (skutečný LocalExec, falešný broker) na PC i telefonu:
+  3× Koupit → long 3, 2× Prodat → long 1, dvojdotek = 1, z nuly short, Koupit v shortu zavře; tři Limity (bez nohou,
+  jen SL, SL+TP), vyplnění prvního, × jen prostředního. **Neověřeno:** Rithmic Test, skutečný účet, tažení dalších
+  čar rukou, Stop do pozice proti brokerovi. Simulace s funkcemi: `rithmic-sim-features` v `.claude/launch.json`.
+- **Správa částí zvlášť** (`config.multiManage`, zapnuto na testu i ve všech režimech skutečného účtu včetně
+  „zavirani“): posun jedné nohy, posun jen noh na ceně hlavní čáry, vlastní vstup bez ochrany jako známý příkaz.
+  Appka se řídí `state.multiEntry` / `state.multiManage` — bez nich platí dosavadní přísné přikoupení a „všechny nohy“.
+- Oponentura (copier-design-critic): návrh rychlého Marketu OPRAVIT → zapracováno; diff OK S VÝHRADAMI → zapracovány
+  nálezy 1–4 a 8; návrh více vstupů OPRAVIT → zapracovány nálezy 1, 3–6; konečný diff OPRAVIT PŘED COMMITEM →
+  opraveny nálezy 1–6 (oddělený přepínač správy, `reduce` vedle čekajícího vstupu, nejistý vstup blokuje další,
+  částečné krytí = nechráněná pozice, `legsOf` bez „Unsupported“, výstraha po resyncu); nezapracováno: 7–9.
+  Druhé kolo k opravám: OK S VÝHRADAMI → zapracováno: tah SL/BE dělí nohy podle ceny jen v režimu víc vstupů
+  (výchozí režim hýbe celou pozicí jako dřív), nejistý vstup nastaví blokaci `entry-uncertain` (jde potvrdit z appky),
+  resync uvolní rezervace příkazů, které snímek zná.
+  Chybí testy „před skutečným účtem“: restart s nepotvrzeným záměrem, tři vstupy v jednom tiku, `watchPendingAdds`
+  s N příkazy, brzda s vyplněním vstupu během rušení, výpadek s N čekajícími, dílčí vyplnění jednoho z N.
+
 ### 2026-11-26 — Claude: šipky všech obchodů a spojnice NASAZENY (web + iPhone a827c169)
 - Push na main a827c169 na Filipovo „Nasaď“ (testy 4109, tsc 0, build OK). iPhone build z téhož commitu, instalace
   přes stávající appku (bez odinstalace). Checkout služby `~/alphatrade-worktrees/rithmic` posunut na a827c169;

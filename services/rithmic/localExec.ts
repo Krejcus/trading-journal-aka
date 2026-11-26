@@ -62,6 +62,20 @@ export interface LocalExecConfig {
   splitWaitMs?: number;
   /** Jak dlouho po nejistém výstupu dělení brzda čeká, než ho kniha pozná (výchozí 12 s). */
   splitUnknownMs?: number;
+  /**
+   * Víc čekajících vlastních vstupů najednou a vstupy s libovolnou kombinací SL/TP (oba, jeden, žádný) i do otevřené
+   * pozice, včetně Stopu (Filip 26. 11. 2026). Všechny vstupy a pozice musí být na JEDNÉ straně. Výchozí VYPNUTO —
+   * zapíná spouštěč; proti skutečnému brokerovi zatím neověřeno (Stop do pozice, smíšené části).
+   */
+  multiEntry?: boolean;
+  /**
+   * SPRÁVA pozice složené z víc nezávislých částí (posun jedné nohy, posun jen vyjmenovaných noh, vlastní vstup bez
+   * ochrany jako známý příkaz). Odděleno od `multiEntry`, protože pozici postavenou s ním musí jít spravovat i tam,
+   * kde nové vstupy nejdou (režim jen pro zavírání, vypnuté víc vstupů). `multiEntry` ji zahrnuje.
+   */
+  multiManage?: boolean;
+  /** Nejdelší čekání brzdy, až kniha uvidí odebrání z pozice na cestě (výchozí 1,5 s). */
+  cutWaitMs?: number;
   /** Čekání po zrušení vícekusového příkazu, než se smí brát jako nevyplněný (výchozí 400 ms). */
   cancelSettleMs?: number;
   /** Poslední cena ze strany služby; reference od klienta se smí lišit nejvýš o `maxReferenceDriftTicks`. */
@@ -141,6 +155,10 @@ export interface LocalExecState {
   maxParts: number;
   /** Smí se přikoupit Marketem bez SL/TP do pozice bez ochrany? Jen pro nabídku v appce. */
   bareAdd: boolean;
+  /** Služba pustí víc čekajících vstupů a vstupy s libovolnými SL/TP (jen pro nabídku v appce). */
+  multiEntry?: boolean;
+  /** Služba umí spravovat části pozice zvlášť (posun jedné nohy). Jen pro nabídku v appce. */
+  multiManage?: boolean;
   /** Poslední zavřené obchody spočítané z vyplnění brokera — JEN zobrazení (karta zavření), nic neautorizuje. */
   closes: LocalExecClose[];
   /** Vyplnění posledního (nebo právě otevřeného) obchodu pro šipky vstupu a výstupu v grafu — JEN zobrazení. */
@@ -168,7 +186,7 @@ export interface LocalExecClose {
 
 export type LocalExecCommand =
   /** `triggerPrice` = spoušť Stop vstupu; `stopPrice` / `targetPrice` jsou ceny SL / TP. */
-  | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit' | 'Stop'; limitPrice?: number; triggerPrice?: number; stopPrice?: number; targetPrice?: number; referencePrice?: number; expectedPosition?: string }
+  | { op: 'entry'; clientId: string; symbol: string; side: OrderSide; quantity: number; orderType: 'Market' | 'Limit' | 'Stop'; limitPrice?: number; triggerPrice?: number; stopPrice?: number; targetPrice?: number; reduceOnly?: true; referencePrice?: number; expectedPosition?: string }
   /** Samostatná ochrana otevřené pozice: BUĎ SL, NEBO TP — nikdy obojí (dva nesvázané výstupy by po vyplnění jednoho nechaly druhý pracovat). */
   | { op: 'protect'; clientId: string; symbol: string; kind: 'stop' | 'target'; price: number }
   /**
@@ -206,11 +224,19 @@ export const PROTECT_TAG = 'uiprot-';
  * jinak by se později vyplnil a otevřel obchod, který nikdo nezamýšlel.
  */
 export const ADD_TAG = 'ui-add-';
+/**
+ * Odebrání z pozice BEZ SL/TP tržním příkazem proti ní (lišta, Filip 26. 11. 2026). Vlastní značka, aby ho služba
+ * i adaptér poznaly jako VÝSTUPNÍ příkaz i po restartu (rezervace žije jen v paměti): nepočítá se mezi vstupy
+ * a zavření celé pozice vedle něj nesmí odejít, dokud pracuje (obrat).
+ */
+export const CUT_TAG = 'ui-cut-';
+/** Jak dlouho po vyplnění vlastního holého Marketu smí kniha pozic zaostávat za vyplněními (rychlá řada). */
+const QUICK_FRESH_MS = 3_000;
 export const ADD_CLIENT_PREFIX = 'add-';
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 /** Značka vlastního VSTUPU. Výstup dělení vstupu (`ui-red-`) vstup není: nepočítá se do rezervy ani mezi čekající vstupy. */
-const isEntryTag = (order: { tag?: string; orderType?: string }): boolean => order.tag?.startsWith('ui-') === true && !(order.tag.startsWith('ui-red-') && order.orderType === 'Market');
+const isEntryTag = (order: { tag?: string; orderType?: string }): boolean => order.tag?.startsWith('ui-') === true && !(order.tag.startsWith('ui-red-') && order.orderType === 'Market') && !order.tag.startsWith(CUT_TAG);
 
 export class LocalExec {
   private readonly broker: RithmicBrokerPort;
@@ -224,7 +250,15 @@ export class LocalExec {
   private connected = false;
   private blocked: string | null = null;
   /** Množství vstupů, které odešly (nebo právě odcházejí) a kniha je ještě nezná: značka → kontrakt a kusy. */
-  private readonly reserved = new Map<string, { symbol: string; quantity: number; bareMarket?: boolean }>();
+  private readonly reserved = new Map<string, { symbol: string; quantity: number; bareMarket?: boolean; side?: OrderSide; cut?: boolean; at?: number; uncertain?: boolean }>();
+  /** Značky holých Marketů zadaných v tomto běhu služby a čas posledního jejich vyplnění (tolerance zpoždění knihy pozic). */
+  private readonly bareTags = new Set<string>();
+  private manageMulti(): boolean { return this.config.multiEntry === true || this.config.multiManage === true; }
+  /** Výměna čekajícího vstupu: vazba na pozici (značka přikoupení) se DĚDÍ z původního příkazu, nepočítá se znovu. */
+  private replaceLink: boolean | null = null;
+  /** Kontrakty, kde služba viděla otevřenou pozici (pro výstrahu „pozice zavřená, vstupy dál čekají"). */
+  private readonly hadPosition = new Set<string>();
+  private readonly lastBareFillAt = new Map<string, number>();
   /** Vyplnění vlastních vstupů, která zpráva o pozici ještě nepotvrdila (pořadí událostí). */
   private fillsAhead: Array<{ symbol: string; quantity: number; at: number }> = [];
   private seq = 0;
@@ -362,6 +396,7 @@ export class LocalExec {
       // (jinak by mezi vyplněním a pozicí „zmizelo" a další vstup by obešel strop).
       const grew = event.order.filledQuantity - (before?.filledQuantity ?? 0);
       if (grew > 0) this.lastFillAt.set(event.order.symbol, this.now());
+      if (grew > 0 && event.order.tag && this.bareTags.has(event.order.tag)) this.lastBareFillAt.set(event.order.symbol, this.now());
       if (grew > 0 && isEntryTag(event.order)) this.fillsAhead.push({ symbol: event.order.symbol, quantity: grew, at: this.now() });
       if (event.order.status === 'rejected' && before?.status !== 'rejected') {
         this.rejections.push({ orderId: event.order.brokerOrderId, ...(event.order.tag ? { tag: event.order.tag } : {}), reason: event.order.rejectReason ?? 'bez důvodu', at: this.now() });
@@ -373,6 +408,7 @@ export class LocalExec {
       // Nula může být opožděná zpráva z doby před vyplněním — ta nic neuvolní; zbytek vyprší časem.
       if (event.position.netQuantity !== 0) this.fillsAhead = this.fillsAhead.filter((fill) => fill.symbol !== event.position.symbol);
       this.lastPositionAt.set(event.position.symbol, this.now());
+      this.warnEntriesAfterClose(event.position.symbol, event.position.netQuantity);
       const waiting = this.pendingClose.get(event.position.symbol);
       if (waiting && event.position.netQuantity === 0) {
         this.pendingClose.delete(event.position.symbol);
@@ -433,6 +469,13 @@ export class LocalExec {
           // Průměrná cena ze snímku jen pro zobrazení čáry pozice (živá zpráva o pozici může na klidném trhu chybět).
           const average = position.netQuantity !== 0 ? this.broker.snapshotAveragePrice(position.accountId, position.symbol) : null;
           this.positions.set(position.symbol, { netQuantity: position.netQuantity, ...(average !== null ? { averagePrice: average } : {}) });
+        }
+        // Rezervace příkazu, který snímek zná, už není potřeba (počítá se z knihy) — jinak by visela do další zprávy.
+        for (const order of event.resync.orders) if (order.tag) this.reserved.delete(order.tag);
+        // Pozice zavřená během výpadku (SL) a vstupy z nuly dál čekají → stejná výstraha jako za chodu.
+        for (const position of event.resync.positions) if (position.netQuantity !== 0) this.hadPosition.add(position.symbol);
+        for (const symbol of [...this.hadPosition]) {
+          if (!event.resync.positions.some((position) => position.symbol === symbol && position.netQuantity !== 0)) this.warnEntriesAfterClose(symbol, 0);
         }
         // Šipky v grafu: v mezeře se obchod mohl zavřít — staré šipky by tvrdily, že je otevřený.
         // Zavřené obchody (celé, s výstupem) v grafu zůstávají jako dřívější.
@@ -695,7 +738,17 @@ export class LocalExec {
         const legs = this.legsOf(accountId, symbol, false);
         const net = this.positions.get(symbol)?.netQuantity ?? 0;
         const open = (list: BrokerOrder[]) => list.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
-        const over = legs ? [legs.stops, legs.targets].some((list) => list.length > 0 && open(list) > Math.abs(net)) : false;
+        // Části smí mít jen SL nebo jen TP: zvlášť součet SL a zvlášť součet TP by přesah neviděl (část jen se SL +
+        // část jen s TP = dvě nesvázané nohy). Počítá se proto součet expozic vstupů — za každý vstup větší ze
+        // zbývajícího SL a TP.
+        const exposure = this.broker.listBrackets(accountId).filter((bracket) => bracket.symbol === symbol && !bracket.closed).reduce((sum, bracket) => {
+          const rest = (role: 'stop' | 'target') => bracket.legs.filter((leg) => leg.role === role).reduce((part, leg) => {
+            const order = this.orders.get(leg.orderId);
+            return part + (order && !TERMINAL.has(order.status) ? order.quantity - order.filledQuantity : 0);
+          }, 0);
+          return sum + Math.max(rest('stop'), rest('target'));
+        }, 0);
+        const over = (legs ? [legs.stops, legs.targets].some((list) => list.length > 0 && open(list) > Math.abs(net)) : false) || exposure > Math.abs(net);
         if (!over) { this.protectiveMismatchSince.delete(key); this.protectiveReported.delete(key); continue; }
         if (this.protectiveReported.has(key)) continue;
         const since = this.protectiveMismatchSince.get(key) ?? this.now();
@@ -788,6 +841,8 @@ export class LocalExec {
       blocked: this.blocked,
       maxParts: this.maxParts(),
       bareAdd: this.config.bareAdd === true,
+      multiEntry: this.config.multiEntry === true,
+      multiManage: this.manageMulti(),
     };
   }
 
@@ -809,7 +864,11 @@ export class LocalExec {
     }
     // Každý pracující příkaz kontraktu musí být známý (vstup nebo noha vlastní ochrany).
     for (const order of this.orders.values()) {
-      if (strict && order.symbol === symbol && !TERMINAL.has(order.status) && !known.has(order.brokerOrderId)) return null;
+      if (!strict || order.symbol !== symbol || TERMINAL.has(order.status) || known.has(order.brokerOrderId)) continue;
+      // Víc vstupů (`multiEntry`): vlastní vstup BEZ ochrany (čekající Limit/Stop, tržní na cestě) je také známý příkaz.
+      // Typ „Unsupported" má v knize vstup s ochranou: bez záznamu ochrany (např. po restartu) ho služba NEZNÁ.
+      if (this.manageMulti() && isEntryTag(order) && order.orderType !== 'Unsupported') continue;
+      return null;
     }
     return { stops, targets, brackets };
   }
@@ -916,6 +975,122 @@ export class LocalExec {
     return true;
   }
 
+  /**
+   * Proč teď NEJDE holý Market rychlé řady (null = jde). Volá se jen když `onlyBareMarkets` platí, tedy všechny
+   * pracující příkazy kontraktu jsou vlastní tržní bez SL/TP. Počítá se PODEPSANĚ a ze dvou zdrojů pozice
+   * (potvrzená vyplnění × kniha pozic — kniha bývá po vyplnění chvíli pozadu): příkaz musí vyjít pro oba.
+   * - vstup / přikoupení: žádný zdroj nesmí ukazovat pozici na opačné straně; nejhorší možná pozice po vyplnění
+   *   všeho, co je na cestě na TÉŽE straně, nesmí přesáhnout strop ani limit RMS;
+   * - `reduceOnly` (odebrání): oba zdroje musí ukazovat pozici proti příkazu a po vyplnění všeho, co je na cestě
+   *   na straně příkazu, nesmí pozice přejít přes nulu. Příkazy na cestě na opačné straně se nepočítají (kdyby je
+   *   burza odmítla, odebrání by pozici otočilo). Jedním příkazem ani rychlým dvojklepem tedy pozici otočit nejde.
+   */
+  private quickMarketProblem(accountId: number, symbol: string, side: OrderSide, quantity: number, reduceOnly: boolean, expected: unknown): string | null {
+    const exec = this.broker.executionNet(accountId, symbol);
+    if (exec === null) return 'pozice není ověřená vyplněními — příkaz neodesílám';
+    const book = this.positions.get(symbol)?.netQuantity ?? 0;
+    const freshOwnFill = this.now() - (this.lastBareFillAt.get(symbol) ?? Number.NEGATIVE_INFINITY) < QUICK_FRESH_MS;
+    // Nesoulad zdrojů smí vysvětlit jen čerstvé vyplnění VLASTNÍHO holého Marketu; jinak platí dosavadní odmítnutí.
+    if (exec !== book && !freshOwnFill) return 'Pozice a potvrzená vyplnění se zatím neshodují — příkaz neodesílám.';
+    const onWay = (which: OrderSide): number => {
+      let sum = 0;
+      for (const order of this.orders.values()) {
+        if (order.symbol === symbol && !TERMINAL.has(order.status) && order.side === which) sum += order.quantity - order.filledQuantity;
+      }
+      for (const [reservedTag, item] of this.reserved) {
+        if (item.symbol === symbol && item.side === which && ![...this.orders.values()].some((order) => order.tag === reservedTag)) sum += item.quantity;
+      }
+      return sum;
+    };
+    const buys = onWay('Buy');
+    const sells = onWay('Sell');
+    // Zobrazená pozice se porovnává jako u každého vstupu — kromě vlastní čerstvé aktivity (příkaz na cestě nebo
+    // právě vyplněný), kdy appka svá vyplnění ještě vidět nemohla. Odebrání nese úmysl stranou a `reduceOnly`.
+    if (!reduceOnly && buys + sells === 0 && !freshOwnFill && !this.positionMatches(accountId, symbol, expected)) return 'Pozice se od zobrazení změnila — vstup neodešel.';
+    if (this.config.quantityLimits && (
+      [...this.positions].some(([other, position]) => other !== symbol && position.netQuantity !== 0)
+      || [...this.orders.values()].some((order) => order.symbol !== symbol && !TERMINAL.has(order.status))
+    )) return 'Na účtu je další kontrakt s pozicí nebo příkazem. Zbývající společný limit RMS není ověřený.';
+    const limits = this.config.quantityLimits ? this.config.quantityLimits() : undefined;
+    if (limits === null) return 'Limity účtu a produktu RMS nejsou ověřené.';
+    if (limits && quantity > limits.order) return `Příkaz přesahuje limit RMS ${limits.order} ks.`;
+    const low = Math.min(exec, book);
+    const high = Math.max(exec, book);
+    const highest = high + buys + (side === 'Buy' ? quantity : 0);
+    const lowest = low - sells - (side === 'Sell' ? quantity : 0);
+    // Vstup s ochranou, jehož nohy teď nepracují (ještě nedorazily, zrušené, nejisté), vypadá jako holá pozice —
+    // holý Market vedle něj by rozhodil jeho účtování. Platí pro celou rychlou řadu, nejen pro odebrání.
+    if (this.broker.unresolvedBracketTags(accountId, symbol).length > 0
+      || this.broker.listBrackets(accountId).some((bracket) => bracket.symbol === symbol && !bracket.closed && this.broker.bracketState(accountId, bracket.entryId).state !== 'done')) {
+      return reduceOnly ? 'pozice patří ke vstupu s ochranou — odebrat takto nejde, použij Zavřít' : 'na kontraktu je vstup s ochranou, který ještě není uzavřený — holý Market teď neodesílám';
+    }
+    if (reduceOnly) {
+      if (side === 'Sell' ? low <= 0 : high >= 0) return 'není z čeho odebrat — pozice na této straně není (nebo ještě není potvrzená)';
+      if (side === 'Sell' ? lowest < 0 : highest > 0) {
+        const room = side === 'Sell' ? low - sells : -high - buys;
+        return room > 0 ? `odebrat jde nejvýš ${room} ks — víc by pozici otočilo` : 'odebrání už je na cestě — další by pozici otočilo';
+      }
+      return null;
+    }
+    if (side === 'Buy' ? low < 0 : high > 0) return 'pozice je na opačné straně, než appka ukazovala — vstup neodešel';
+    // Vlastní příkaz na OPAČNÉ straně je teprve na cestě: vstup proti němu by s ním jen vyměnil poplatky, a kdyby ho
+    // burza odmítla, zůstala by pozice, kterou nikdo nezamýšlel. Počkat na jeho výsledek.
+    if (side === 'Buy' ? sells > 0 : buys > 0) return 'na cestě je vlastní příkaz na opačné straně — počkej na jeho výsledek';
+    const exposure = side === 'Buy' ? highest : -lowest;
+    if (limits && exposure > (side === 'Buy' ? limits.buy : limits.sell)) return `Pozice by přesáhla limit RMS ${side === 'Buy' ? limits.buy : limits.sell} ks.`;
+    const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
+    if (exposure > maxPosition) return `pozice by přesáhla strop ${maxPosition} (potvrzeno ${Math.max(Math.abs(low), Math.abs(high))}, na cestě ${side === 'Buy' ? buys : sells})`;
+    return null;
+  }
+
+  /**
+   * Proč teď NEJDE další vstup do otevřené pozice v režimu `multiEntry` (null = jde). SL/TP vstupu se neporovnávají
+   * s pozicí — každá část je samostatná. Zůstávají jen podmínky, které chrání účtování: strana pozice, usazení pozice
+   * po čerstvém vyplnění, žádný nejistý nebo běžící posun noh, žádný příkaz, který služba nezná, žádná samostatná
+   * ochrana (kontroluje se dřív) a strop počtu vstupů s ochranou.
+   */
+  private freeAddProblem(accountId: number, symbol: string, side: OrderSide, hasLegs: boolean, ownTag: string | null): string | null {
+    const net = this.positions.get(symbol)?.netQuantity ?? 0;
+    if (net === 0) return 'pozice se mezitím zavřela — vstup neodesílám';
+    if ((side === 'Buy') !== (net > 0)) return 'vstup proti otevřené pozici nejde — pozici zavři';
+    if (hasLegs && [...this.reserved].some(([reservedTag, item]) => item.symbol === symbol && reservedTag !== ownTag)) return 'na cestě je jiný příkaz tohoto kontraktu — zkus to za okamžik';
+    this.fillsAhead = this.fillsAhead.filter((fill) => this.now() - fill.at < 5_000);
+    const filledAt = this.lastFillAt.get(symbol);
+    if (this.fillsAhead.some((fill) => fill.symbol === symbol)
+      || (filledAt !== undefined && ((this.lastPositionAt.get(symbol) ?? 0) < filledAt || this.now() - filledAt < (this.config.positionSettleMs ?? 1_000)))) {
+      return 'pozice se právě mění (čerstvé vyplnění) — zkus to za okamžik';
+    }
+    if (this.broker.unresolvedBracketTags(accountId, symbol).some((pendingTag) => pendingTag !== ownTag)) return 'jiný vstup s ochranou ještě není potvrzený — zkus to za okamžik';
+    if (this.legsUncertain.has(symbol)) return 'poslední posun SL/TP skončil nejistě — nejdřív ověř ceny u brokera a potvrď incident';
+    if (this.legsMoving.has(symbol)) return 'posun SL/TP právě běží — zkus to, až doběhne';
+    const legs = this.legsOf(accountId, symbol);
+    if (!legs) return 'na kontraktu pracuje příkaz, který služba nezná — další vstup nejde';
+    if (this.broker.executionNet(accountId, symbol) !== net) return 'pozice zatím nesouhlasí s vyplněními — zkus to za okamžik';
+    if (!hasLegs) return null;
+    const open = legs.brackets.filter((bracket) => bracket.entryId !== this.replaceDryRun && this.broker.bracketState(accountId, bracket.entryId).state !== 'done');
+    const maxParts = this.maxParts();
+    return open.length >= maxParts ? `pozice a čekající vstupy už mají ${open.length} ochran — další vstup s ochranou služba nepustí (strop ${maxParts})` : null;
+  }
+
+  /**
+   * Pozice se zavřela a vlastní vstupy zadané Z NULY (bez vazby na pozici) dál čekají: vyplní se jako NOVÝ obchod
+   * (se svými SL/TP, nebo bez nich). Nic se neruší — jen výstraha, ať to obsluha ví. Přikoupení (`ui-add-`) ruší
+   * `watchPendingAdds`.
+   */
+  private warnEntriesAfterClose(symbol: string, netQuantity: number): void {
+    if (netQuantity !== 0) { this.hadPosition.add(symbol); return; }
+    if (!this.hadPosition.delete(symbol)) return;
+    const accountId = this.broker.accountIds()[0];
+    if (accountId === undefined) return;
+    const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && isEntryTag(order)
+      && !order.tag?.startsWith(ADD_TAG) && order.orderType !== 'Market' && !this.isLeg(accountId, order.brokerOrderId));
+    if (waiting.length === 0) return;
+    const bare = waiting.filter((order) => !this.broker.listBrackets(accountId).some((bracket) => bracket.entryId === order.brokerOrderId)).length;
+    this.incidents.push({ kind: 'entries-working-after-close', at: this.now(),
+      message: `pozice na ${symbol} je zavřená a dál čeká ${waiting.length} ${waiting.length === 1 ? 'vstup' : waiting.length < 5 ? 'vstupy' : 'vstupů'}${bare ? ` (${bare} bez SL/TP)` : ''} — vyplní se jako nový obchod; zruš je, pokud je nechceš` });
+    if (this.incidents.length > 30) this.incidents.shift();
+  }
+
   /** Strop částí pozice s vlastní ochranou (viz `maxProtectedParts`). */
   private maxParts(): number {
     const value = this.config.maxProtectedParts;
@@ -973,7 +1148,10 @@ export class LocalExec {
           // Nejistý zápis (ochrany i vstupu), který se v knize neobjevil, nesmí blokovat další ochranu navždy:
           // obsluha potvrzením říká, že stav u brokera zkontrolovala. Rezervace vstupu by jinak do restartu služby
           // bránila zadat ochranu holé pozici („na cestě je jiný příkaz").
-          for (const [reservedTag] of this.reserved) {
+          // Výjimka: čerstvé odebrání z pozice s neznámým výsledkem (do lhůty požadavku se ještě může objevit) —
+          // jeho zapomenutí by pustilo druhé odebrání nebo Zavřít a pozdní doručení by pozici otočilo.
+          for (const [reservedTag, item] of this.reserved) {
+            if (item.cut === true && this.now() - (item.at ?? 0) < (this.config.splitUnknownMs ?? 12_000)) continue;
             if (![...this.orders.values()].some((order) => order.tag === reservedTag)) this.reserved.delete(reservedTag);
           }
           this.legsUncertain.clear();
@@ -985,7 +1163,8 @@ export class LocalExec {
           this.changed();
           return { ok: true, result: { acknowledged: true } };
         case 'entry': {
-          if (this.blocked) refuse(`nové vstupy jsou zastavené, dokud nepotvrdíš incident (${this.blocked})`);
+          if (this.blocked) refuse(command.reduceOnly === true ? `odebrat teď nejde, dokud nepotvrdíš incident (${this.blocked}) — pozici jde zavřít (Zavřít)`
+            : `nové vstupy jsou zastavené, dokud nepotvrdíš incident (${this.blocked})`);
           const symbol = typeof command.symbol === 'string' ? command.symbol : '';
           const spec = this.config.symbols[symbol];
           if (!spec) return refuse(`kontrakt ${symbol || '?'} není povolený`);
@@ -1006,10 +1185,14 @@ export class LocalExec {
           const clientId = typeof command.clientId === 'string' ? command.clientId : '';
           if (!CLIENT_ID.test(clientId)) refuse('clientId musí mít 1–30 znaků [A-Za-z0-9_-]');
           if (clientId.startsWith('red-')) refuse('clientId red-… je vyhrazený pro částečné zavření');
-          const tag = `ui-${clientId}`;
+          if (clientId.startsWith('cut-')) refuse('clientId cut-… je vyhrazený pro odebrání z pozice');
+          if (command.reduceOnly !== undefined && command.reduceOnly !== true) refuse('reduceOnly smí být jen true (nebo chybět)');
+          // Odebrání z pozice (ne vstup): tržní příkaz PROTI pozici bez SL/TP, který ji jen zmenší — viz `quickMarketProblem`.
+          const reduceOnly = command.reduceOnly === true;
+          const tag = reduceOnly ? `${CUT_TAG}${clientId}` : `ui-${clientId}`;
           // Idempotence i přes restart služby: značku nesmí nést žádný dnešní příkaz (kniha po
           // výchozím stavu zná i dokončené).
-          if (this.seenClientIds.has(clientId) || [...this.orders.values()].some((order) => order.tag === tag)) refuse('příkaz s tímto clientId už byl přijat');
+          if (this.seenClientIds.has(clientId) || [...this.orders.values()].some((order) => order.tag === `ui-${clientId}` || order.tag === `${CUT_TAG}${clientId}`)) refuse('příkaz s tímto clientId už byl přijat');
           for (const field of ['limitPrice', 'triggerPrice', 'stopPrice', 'targetPrice', 'referencePrice'] as const) {
             const value = command[field];
             if (value === undefined) continue;
@@ -1080,60 +1263,115 @@ export class LocalExec {
               && !order.tag?.startsWith('ui-') && !this.isLeg(accountId, order.brokerOrderId));
             return other ? 'na kontraktu pracuje příkaz zadaný jinde — nový vstup neodesílám' : null;
           };
-          const problem = accountProblem();
-          if (problem) return refuse(problem);
-          const open = Math.abs(net);
-          const waiting = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && isEntryTag(order) && !this.isLeg(accountId, order.brokerOrderId)
-            // Zkouška nanečisto před výměnou vstupu: nahrazovaný vstup se nepočítá (do skutečného zápisu bude zrušený).
-            && order.brokerOrderId !== this.replaceDryRun)
-            .reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
-          // + vstupy na cestě, které kniha ještě nezná (souběžná volání nesmí strop obejít).
-          const onTheWay = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && ![...this.orders.values()].some((order) => order.tag === reservedTag))
-            .reduce((sum, [, item]) => sum + item.quantity, 0);
-          const rmsProblem = () => {
-            if (!this.config.quantityLimits) return null;
-            const limits = this.config.quantityLimits();
-            if (!limits) return 'Limity účtu a produktu RMS nejsou ověřené.';
-            if (quantity > limits.order) return `Příkaz přesahuje limit RMS ${limits.order} ks.`;
-            const cap = side === 'Buy' ? limits.buy : limits.sell;
-            return open + waiting + onTheWay + quantity > cap ? `Pozice by přesáhla limit RMS ${cap} ks.` : null;
-          };
-          const sizeProblem = rmsProblem();
-          if (sizeProblem) return refuse(sizeProblem);
-          const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
-          if (open + waiting + onTheWay + quantity > maxPosition) refuse(`pozice by přesáhla strop ${maxPosition} (otevřeno ${open}, čeká ${waiting + onTheWay})`);
-          // Přikoupení do otevřené pozice: jen za přísných podmínek (viz `scaleInProblem`); ověří se teď
-          // a znovu těsně před zápisem (adaptér mezitím čeká na uložení záměru).
-          // Jeden vlastní vstup najednou: při čekajícím nebo právě odesílaném vstupu další nejde (jinak by se
-          // čekající vstup později vyplnil do cizí pozice, nebo po jejím zavření otevřel nezamýšlený obchod).
-          // Výjimka — rychlé vstupy Marketem BEZ SL/TP za sebou (lišta, Filip 18. 11. 2026): když na kontraktu není
-          // nic jiného než takové tržní příkazy (žádná ochrana, žádný čekající vstup), další smí odejít hned, i když
-          // předchozí ještě není vyplněný nebo se pozice teprve hlásí. Tržní příkaz nečeká a nemá ochranu, kterou by
-          // šlo rozhodit; stropy (pozice, RMS) výše počítají i příkazy na cestě.
+          // Rychlá řada holých Marketů (lišta): na kontraktu není nic jiného než takové tržní příkazy. Počítá se
+          // podepsaně a ze dvou zdrojů pozice (`quickMarketProblem`); běžné kontroly níže se jí netýkají.
           const bareRun = this.config.bareAdd === true && orderType === 'Market' && stopPrice === undefined && targetPrice === undefined
             && this.onlyBareMarkets(symbol);
-          if (waiting + onTheWay > 0 && !bareRun) return refuse('čeká jiný vstup — další jde až po jeho vyplnění nebo zrušení');
+          if (reduceOnly && !bareRun) {
+            return refuse(orderType !== 'Market' || stopPrice !== undefined || targetPrice !== undefined ? 'odebrat z pozice jde jen Marketem bez SL/TP'
+              : 'odebrat Marketem jde jen z pozice bez SL/TP a bez jiných příkazů — použij částečné zavření nebo Zavřít');
+          }
+          if (bareRun) {
+            const quickProblem = this.quickMarketProblem(accountId, symbol, side, quantity, reduceOnly, command.expectedPosition);
+            if (quickProblem) return refuse(quickProblem);
+          }
+          const problem = bareRun ? null : accountProblem();
+          if (problem) return refuse(problem);
+          const multi = this.config.multiEntry === true;
+          // Součty se počítají pokaždé znovu (i těsně před zápisem v `guard`): otevřená pozice, vlastní čekající vstupy
+          // a vstupy na cestě, které kniha ještě nezná. `ownTag` = tento příkaz (v `guard` už má rezervaci a záměr).
+          const counts = (ownTag: string | null = null) => {
+            const entries = [...this.orders.values()].filter((order) => order.symbol === symbol && !TERMINAL.has(order.status) && isEntryTag(order) && !this.isLeg(accountId, order.brokerOrderId)
+              // Zkouška nanečisto před výměnou vstupu: nahrazovaný vstup se nepočítá (do skutečného zápisu bude zrušený).
+              && order.brokerOrderId !== this.replaceDryRun && order.tag !== ownTag);
+            // + vstupy na cestě, které kniha ještě nezná (souběžná volání nesmí strop obejít).
+            const way = [...this.reserved].filter(([reservedTag, item]) => item.symbol === symbol && reservedTag !== ownTag && ![...this.orders.values()].some((order) => order.tag === reservedTag));
+            return {
+              open: Math.abs(this.positions.get(symbol)?.netQuantity ?? 0),
+              waiting: entries.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0),
+              onTheWay: way.reduce((sum, [, item]) => sum + item.quantity, 0),
+              entries, way,
+            };
+          };
+          const { open, waiting, onTheWay } = counts();
+          const maxPosition = this.config.maxPosition ?? this.config.maxQuantity;
+          const rmsProblem = (ownTag: string | null = null) => {
+            const now = counts(ownTag);
+            if (this.config.quantityLimits) {
+              const limits = this.config.quantityLimits();
+              if (!limits) return 'Limity účtu a produktu RMS nejsou ověřené.';
+              if (quantity > limits.order) return `Příkaz přesahuje limit RMS ${limits.order} ks.`;
+              const cap = side === 'Buy' ? limits.buy : limits.sell;
+              if (now.open + now.waiting + now.onTheWay + quantity > cap) return `Pozice by přesáhla limit RMS ${cap} ks.`;
+            }
+            return now.open + now.waiting + now.onTheWay + quantity > maxPosition ? `pozice by přesáhla strop ${maxPosition} (otevřeno ${now.open}, čeká ${now.waiting + now.onTheWay})` : null;
+          };
+          const sizeProblem = bareRun ? null : rmsProblem();
+          if (sizeProblem) return refuse(sizeProblem);
+          // Víc vstupů najednou (`multiEntry`): všechny vlastní vstupy i pozice na JEDNÉ straně (vstup proti čekajícímu
+          // by po jeho vyplnění pozici zavřel a nohy by zůstaly bez pozice), strop počtu, a žádný vstup s ochranou,
+          // o kterém broker ještě nedal vědět (ani po restartu služby — rezervace žije jen v paměti).
+          const crowdProblem = (ownTag: string | null = null): string | null => {
+            const now = counts(ownTag);
+            if (now.entries.some((order) => order.side !== side) || now.way.some(([, item]) => item.side !== undefined && item.side !== side)) {
+              return 'čeká vlastní vstup na opačné straně — nejdřív ho zruš (vstupy na obě strany najednou služba nepouští)';
+            }
+            if (now.way.some(([, item]) => item.uncertain === true)) return 'předchozí vstup má neznámý výsledek — ověř u brokera, co čeká, a potvrď incident';
+            if (now.way.some(([, item]) => item.side === undefined)) return 'na cestě je jiný příkaz tohoto kontraktu — zkus to za okamžik';
+            const held = this.positions.get(symbol)?.netQuantity ?? 0;
+            if (held !== 0 && (side === 'Buy') !== (held > 0)) return 'vstup proti otevřené pozici nejde — pozici zavři';
+            if (this.broker.unresolvedBracketTags(accountId, symbol).some((pendingTag) => pendingTag !== ownTag)) return 'jiný vstup s ochranou ještě není potvrzený — zkus to za okamžik';
+            const limit = this.maxParts();
+            return now.entries.length + now.way.length >= limit ? `čeká už ${now.entries.length + now.way.length} vstupů — víc jich služba najednou nepustí (strop ${limit})` : null;
+          };
+          // Jeden vlastní vstup najednou (bez `multiEntry`): při čekajícím nebo právě odesílaném vstupu další nejde.
+          // Výjimka — rychlé vstupy Marketem BEZ SL/TP za sebou (lišta, Filip 18. 11. 2026), viz `quickMarketProblem`.
+          if (!bareRun) {
+            if (multi) { const crowd = crowdProblem(); if (crowd) return refuse(crowd); }
+            else if (waiting + onTheWay > 0) return refuse('čeká jiný vstup — další jde až po jeho vyplnění nebo zrušení');
+          }
           // Přikoupení = jakákoli existující nebo právě vznikající expozice (i vyplnění, které pozice ještě nehlásí).
           const adding = net !== 0;
-          if (adding) {
-            if (orderType === 'Stop') return refuse('přikoupení jde Marketem nebo Limitem');
-            const problem = this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, null, orderType, bareRun);
+          const hasLegs = stopPrice !== undefined || targetPrice !== undefined;
+          const addProblem = (ownTag: string | null): string | null => (multi
+            ? this.freeAddProblem(accountId, symbol, side, hasLegs, ownTag)
+            : this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, ownTag, orderType, bareRun));
+          if (adding && !bareRun) {
+            if (orderType === 'Stop' && !multi) return refuse('přikoupení jde Marketem nebo Limitem');
+            const problem = addProblem(null);
             if (problem) return refuse(problem);
           }
           // Čekající přikoupení musí nést značku vazby na pozici (a nic jiného ji nést nesmí) — podle ní se po zavření
-          // pozice samo ruší.
-          const pendingAdd = adding && orderType === 'Limit';
+          // pozice samo ruší. Při výměně vstupu se vazba dědí z původního příkazu (`replaceLink`), nepočítá se znovu:
+          // jinak by žebříkový vstup zadaný z nuly nešel po otevření pozice posunout, nebo by tiše změnil chování.
+          const pendingAdd = this.replaceLink ?? (adding && (orderType === 'Limit' || (multi && orderType === 'Stop')));
           if (pendingAdd && this.config.pendingAdd !== true) return refuse('přikoupení Limitem je zatím jen na testovacím účtu — v pozici přikup Marketem');
           if (clientId.startsWith(ADD_CLIENT_PREFIX) !== pendingAdd) {
-            return refuse(pendingAdd ? 'čekající přikoupení musí být označené jako přikoupení (clientId add-…)' : 'označení přikoupení (add-…) patří jen Limitu do otevřené pozice');
+            return refuse(pendingAdd ? 'čekající přikoupení musí být označené jako přikoupení (clientId add-…)' : 'označení přikoupení (add-…) patří jen čekajícímu vstupu do otevřené pozice');
           }
           // Jen ověření (výměna čekajícího vstupu): všechny kontroly prošly, nic se neodesílá.
           if (this.replaceDryRun !== null) return { ok: true, result: { dryRun: true } };
           this.seenClientIds.add(clientId);
           // Rezervace PŘED prvním čekáním; drží i při neznámém výsledku, padá jen když zápis prokazatelně neodešel.
-          this.reserved.set(tag, { symbol, quantity, bareMarket: orderType === 'Market' && stopPrice === undefined && targetPrice === undefined });
+          const bareMarket = orderType === 'Market' && stopPrice === undefined && targetPrice === undefined;
+          if (bareMarket) this.bareTags.add(tag);
+          this.reserved.set(tag, { symbol, quantity, bareMarket, side, at: this.now(), ...(reduceOnly ? { cut: true } : {}) });
           const release = <T>(promise: Promise<T>): Promise<T> => promise.catch((error: unknown) => {
             if (error instanceof BrokerRequestNotSentError) this.reserved.delete(tag);
+            // Výsledek není znám: rezervace drží a v režimu víc vstupů zastaví další vstup, dokud ji kniha neuvidí
+            // nebo obsluha stav nepotvrdí (dřív to hlídalo pravidlo jednoho čekajícího vstupu).
+            else {
+              const held = this.reserved.get(tag);
+              if (held) held.uncertain = true;
+              // V režimu víc vstupů musí jít nejistotu potvrdit z appky (tlačítko se kreslí jen při blokaci).
+              if (held && multi) {
+                const message = `vstup ${clientId} má neznámý výsledek — ověř u brokera, co čeká, a potvrď`;
+                this.incidents.push({ kind: 'entry-uncertain', message, at: this.now() });
+                if (this.incidents.length > 30) this.incidents.shift();
+                this.blocked = `entry-uncertain: ${message}`.slice(0, 240);
+                this.changed();
+              }
+            }
             throw error;
           });
           const request = { tag, accountId, symbol, side, quantity, orderType, ...(orderType === 'Limit' ? { limitPrice } : {}), ...(orderType === 'Stop' ? { stopPrice: command.triggerPrice as number } : {}) };
@@ -1159,8 +1397,10 @@ export class LocalExec {
             // Ochrana platná do zrušení by byla horší: když propka pozici před koncem seance zavře sama, SL/TP by
             // zůstaly pracovat bez pozice a v další seanci by mohly otevřít nový obchod (oponentura 17. 11.).
             ...request, ...(stopTicks !== undefined ? { stopTicks } : {}), ...(targetTicks !== undefined ? { targetTicks } : {}),
-            guard: () => consentNow() ?? rmsProblem() ?? accountProblem() ?? marketProblem()
-              ?? (adding ? this.scaleInProblem(accountId, symbol, side, stopPrice, targetPrice, tag, orderType, bareRun) : null),
+            // Těsně před zápisem všechno znovu a z čerstvého stavu (mezi rozhodnutím a zápisem se čekalo na uložení záměru).
+            guard: () => consentNow() ?? rmsProblem(tag) ?? accountProblem() ?? marketProblem()
+              ?? (multi ? crowdProblem(tag) : null)
+              ?? ((this.positions.get(symbol)?.netQuantity ?? 0) !== 0 ? addProblem(tag) : null),
           }));
           return { ok: true, result: { orderId: ack.entryBrokerOrderId, stopTicks, targetTicks } };
         }
@@ -1200,9 +1440,11 @@ export class LocalExec {
           const brake = this.flattenCount.get(order.symbol) ?? 0;
           // 1) Zkouška nanečisto: nový vstup musí projít VŠEMI kontrolami dřív, než se starý zruší. Běží celá
           //    synchronně (bez čekání), takže příznak neuvidí žádný jiný příkaz.
+          const link = order.tag.startsWith(ADD_TAG);
           this.replaceDryRun = orderId;
+          this.replaceLink = link;
           let dry: Promise<LocalExecResult>;
-          try { dry = this.execute(next as unknown as LocalExecCommand); } finally { this.replaceDryRun = null; }
+          try { dry = this.execute(next as unknown as LocalExecCommand); } finally { this.replaceDryRun = null; this.replaceLink = null; }
           const check = await dry;
           if (!check.ok) return check;
           // 2) Zrušit starý vstup a počkat na potvrzení stavem. Pozice neexistuje, takže se nic neodkrývá.
@@ -1226,7 +1468,11 @@ export class LocalExec {
           // Mezitím někdo stiskl brzdu (Zavřít pozici): po zavření se nový vstup NEZADÁVÁ — vrátil by obchod do trhu.
           if ((this.flattenCount.get(order.symbol) ?? 0) !== brake) return { ok: false, sent: false, error: 'mezitím proběhlo Zavřít pozici — původní vstup je zrušený a nový jsem nezadal' };
           // 3) Nový vstup běžnou cestou (všechny kontroly znovu, proti čerstvé ceně). Když neprojde, žádný vstup nečeká.
-          const placed = await this.execute(next as unknown as LocalExecCommand);
+          // (Kontroly vstupu včetně vazby běží synchronně při zavolání — příznak stačí držet do návratu příslibu.)
+          this.replaceLink = link;
+          let placing: Promise<LocalExecResult>;
+          try { placing = this.execute(next as unknown as LocalExecCommand); } finally { this.replaceLink = null; }
+          const placed = await placing;
           if (placed.ok) return { ok: true, result: { ...(placed.result as Record<string, unknown>), replaced: orderId } };
           const failed = placed as { ok: false; sent: false | 'unknown'; error?: string };
           // Nový vstup prokazatelně neodešel → stav je jistý (starý zrušen, nic nečeká): žádná „neznámá" karta, jen hláška.
@@ -1512,7 +1758,46 @@ export class LocalExec {
             if (this.legsUncertain.has(order.symbol) || this.legsMoving.has(order.symbol)) return refuse('posun SL/TP na tomto kontraktu právě běží nebo skončil nejistě — ověř ceny u brokera a potvrď incident');
             const siblings = this.legsOf(accountId, order.symbol);
             if (!siblings) return refuse('na kontraktu pracuje příkaz, který služba nezná — posun neodesílám');
-            if ((leg.role === 'stop' ? siblings.stops : siblings.targets).length > 1) return refuse('pozice má víc ochran — posun jde jen pro všechny najednou');
+            if ((leg.role === 'stop' ? siblings.stops : siblings.targets).length > 1) {
+              if (!this.manageMulti()) return refuse('pozice má víc ochran — posun jde jen pro všechny najednou');
+              // Části pozice jsou nezávislé a smí mít různé ceny: posun JEDNÉ nohy se stejnými kontrolami jako společný
+              // posun (strana trhu, vzdálenost, potvrzená noha), pod zámkem posunu a s potvrzením stavem.
+              const server = this.config.serverPrice?.(order.symbol) ?? null;
+              if (server === null) return refuse('služba nemá čerstvou cenu — ochranu neposouvám');
+              const held = this.positions.get(order.symbol)?.netQuantity ?? 0;
+              if (held === 0) return refuse('není otevřená pozice');
+              const below = price < server;
+              if (leg.role === 'stop' ? (held > 0) !== below : (held > 0) === below) return refuse('nová cena ochrany je na špatné straně trhu — spustila by se hned');
+              const distance = Math.round(Math.abs(price - server) / spec.tickSize);
+              if (distance < 1) return refuse('ochrana je příliš blízko trhu');
+              if (distance > (this.config.maxProtectionTicks ?? 400)) return refuse(`ochrana je ${distance} ticků od trhu — víc než povolených ${this.config.maxProtectionTicks ?? 400}`);
+              if (order.status !== 'working') return refuse('noha ještě není potvrzená burzou — posun neodesílám');
+              if (order.filledQuantity > 0) return refuse('noha se už plní — cenu neměním');
+              if ((leg.role === 'stop' ? order.stopPrice : order.limitPrice) === price) return refuse('nic se nemění');
+              this.legsMoving.add(order.symbol);
+              try {
+                this.lastLegWriteAt.set(order.symbol, this.now());
+                await this.broker.modifyOrder(accountId, orderId, {
+                  quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
+                });
+                const deadline = this.now() + (this.config.moveConfirmMs ?? 1_500);
+                for (let round = 0; round < 400; round += 1) {
+                  const current = this.orders.get(orderId);
+                  if (current && (leg.role === 'stop' ? current.stopPrice : current.limitPrice) === price) return { ok: true, result: { orderId } };
+                  // Noha mezitím skončila (vyplnění, zrušení): cena už nic neznamená, stav ukáže kniha.
+                  if (current && TERMINAL.has(current.status)) return { ok: false, sent: 'unknown', error: 'noha během posunu skončila (vyplnila se nebo byla zrušena) — zkontroluj pozici' };
+                  if (this.now() >= deadline) break;
+                  await new Promise((resolve) => setTimeout(resolve, 20));
+                }
+                this.legsUncertain.add(order.symbol);
+                this.blocked = `move-leg-uncertain: posun nohy ${orderId} není potvrzený`.slice(0, 240);
+                this.changed();
+                return { ok: false, sent: 'unknown', error: 'posun nohy není potvrzený — ověř ceny SL/TP u brokera a potvrď incident' };
+              } catch (error) {
+                if (!(error instanceof BrokerRequestNotSentError)) { this.legsUncertain.add(order.symbol); this.blocked = `move-leg-uncertain: posun nohy ${orderId} skončil nejistě`.slice(0, 240); this.changed(); }
+                throw error;
+              } finally { this.legsMoving.delete(order.symbol); }
+            }
             this.lastLegWriteAt.set(order.symbol, this.now());
             await this.broker.modifyOrder(accountId, orderId, {
               quantity: order.quantity, orderType: leg.role === 'stop' ? 'Stop' : 'Limit', ...(leg.role === 'stop' ? { stopPrice: price } : { limitPrice: price }),
@@ -1605,9 +1890,14 @@ export class LocalExec {
           const priceOf = (order: BrokerOrder) => (role === 'stop' ? order.stopPrice : order.limitPrice);
           if (this.legsUncertain.has(symbol)) return refuse('poslední posun SL/TP skončil nejistě — ověř ceny u brokera a potvrď incident');
           if (this.legsMoving.has(symbol)) return refuse('jiný posun SL/TP právě běží');
+          // `subset` (jen s `multiEntry`): posouvají se JEN nohy vyjmenované v `expect` (části se stejnou cenou);
+          // ostatní části mají vlastní cenu a zůstávají. Bez něj platí „všechny nohy role".
+          const subsetIds = command.subset === true && this.manageMulti() && Array.isArray(command.expect)
+            ? new Set((command.expect as Array<{ orderId?: unknown }>).map((item) => String(item.orderId))) : null;
           const legsNow = () => {
             const all = this.legsOf(accountId, symbol);
-            return all ? (role === 'stop' ? all.stops : all.targets) : null;
+            const list = all ? (role === 'stop' ? all.stops : all.targets) : null;
+            return list && subsetIds ? list.filter((order) => subsetIds.has(order.brokerOrderId)) : list;
           };
           const list = legsNow();
           if (!list) return refuse('na kontraktu pracuje příkaz, který služba nezná — posun neodesílám');
@@ -1721,6 +2011,26 @@ export class LocalExec {
           if ((running && this.splitRunning.has(symbol))
             || (unsettled && ![...this.orders.values()].some((order) => order.tag === unsettled.exitTag) && this.now() - (unsettled.at ?? 0) < (this.config.splitUnknownMs ?? 12_000))) {
             return refuse('zavření 1 ks ještě nemá známý výsledek — Zavřít by teď mohlo pozici obrátit; zkus to za pár sekund');
+          }
+          // Odebrání z pozice (`ui-cut-`), které kniha ještě nezná: zavření celé pozice vedle něj by ji mohlo obrátit
+          // (zavře se celá a opožděné odebrání pak otevře opačnou). Krátce se počká, až ho kniha uvidí (pak ho hlídá
+          // adaptér jako pracující výstup); nejistý výsledek brzdu drží nejdéle po lhůtu požadavku, potom už odejde.
+          const cutLimit = this.config.splitUnknownMs ?? 12_000;
+          const cutUnknown = (): number | null => {
+            let left: number | null = null;
+            for (const [reservedTag, item] of this.reserved) {
+              if (item.symbol !== symbol || item.cut !== true || [...this.orders.values()].some((order) => order.tag === reservedTag)) continue;
+              const rest = cutLimit - (this.now() - (item.at ?? 0));
+              if (rest > 0) left = Math.max(left ?? 0, rest);
+            }
+            return left;
+          };
+          // Počet kol, ne hodiny: čekání brzdy nesmí prodloužit skok systémového času.
+          for (let round = Math.ceil((this.config.cutWaitMs ?? 1_500) / 25); round > 0 && cutUnknown() !== null; round -= 1) await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          const cutLeft = cutUnknown();
+          if (cutLeft !== null) {
+            this.flattenSentAt.delete(symbol);
+            return refuse(`odebrání z pozice ještě nemá známý výsledek — Zavřít by teď mohlo pozici obrátit; půjde nejpozději za ${Math.ceil(cutLeft / 1_000)} s (nebo po potvrzení příkazu)`);
           }
           let result;
           try { result = await this.broker.liquidatePosition({ tag: `uiflat-${clientId}`, accountId, symbol }); } catch (error) {
@@ -1921,7 +2231,8 @@ export class LocalExec {
                     return current?.status === 'working' && current.side === previous.side && current.quantity === part.quantity
                       && current.filledQuantity === 0 && current.stopPrice === previous.stopPrice && current.limitPrice === previous.limitPrice;
                   }))
-                && ![...this.orders.values()].some(order => order.symbol === symbol && !TERMINAL.has(order.status) && !remainingIds.has(order.brokerOrderId))) {
+                // (Vlastní čekající vstup vedle pozice k částečnému zavření nepatří — není to zbytek po zavírané části.)
+                && ![...this.orders.values()].some(order => order.symbol === symbol && !TERMINAL.has(order.status) && !remainingIds.has(order.brokerOrderId) && !isEntryTag(order))) {
                 return { ok: true, result: { orderId: chosen.target.brokerOrderId, quantity: chosen.quantity, price } };
               }
               if (this.now() >= deadline) {

@@ -655,6 +655,12 @@ async function main(): Promise<void> {
     // které by jinak otevřelo nový obchod. Nové vstupy tu odmítá souhlas (`problem` níže), takže nic dalšího nepovolí.
     ...(CLOSE_ONLY ? { pendingAdd: true } : {}),
     ...(IS_TEST_SYSTEM ? { bareAdd: true } : {}),
+    // Víc čekajících vstupů a vstupy s libovolnými SL/TP (Filip 26. 11. 2026): na testu vždy; na skutečném účtu jen
+    // v obchodním režimu a jen když je spouštěč výslovně zapne (`--multi-entry`) — proti brokerovi zatím neověřeno.
+    ...(IS_TEST_SYSTEM || (LIVE_TRADING && !CLOSE_ONLY && process.argv.includes('--multi-entry')) ? { multiEntry: true } : {}),
+    // Správa částí pozice zvlášť je zapnutá vždy, i v režimu jen pro zavírání: pozici postavenou s víc vstupy
+    // musí jít spravovat (posun SL/TP), i když nové vstupy nejdou.
+    ...(IS_TEST_SYSTEM || LIVE_TRADING ? { multiManage: true } : {}),
     // Skutečný účet: přikoupení bez SL/TP jen když souhlas vydaný na Macu SL NEVYŽADUJE (`--allow-no-stop`) — pak
     // už jde i první vstup bez SL, takže přikoupení bez SL/TP nic nového nepovoluje.
     ...(LIVE_TRADING && !CLOSE_ONLY && startConsent?.requireStop === false ? { bareAdd: true } : {}),

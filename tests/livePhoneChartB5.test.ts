@@ -255,7 +255,11 @@ describe('statika B5: odeslání jen tlačítkem, přehrávání nic, zobrazení
     // Dvě odesílací místa vstupu: lišta Koupit/Prodat a submitSheetDraft (stejný příkaz jako náhled).
     expect(phone.match(/void send\(/g)).toHaveLength(2);
     expect(phone).toMatch(/void send\(livePhoneSheetPayload\(draft, LIVE_PHONE_INSTRUMENT, quote, trade\?\.frontContract \?\? null\)\);/);
-    expect(phone).toMatch(/void send\(scaleIn \? livePhonePillScaleIn\(side, pill\.qty, quote!, scaleIn, trade!\.maxContracts\) : livePhoneBareMarket\(side, pill\.qty, quote!\)\);/);
+    expect(phone).toMatch(/const draft = scaleIn \? livePhonePillScaleIn\(side, pill\.qty, quote!, scaleIn, trade!\.maxContracts\) : livePhoneBareMarket\(side, pill\.qty, quote!\);/);
+    // Holý Market z lišty jde „rychle" (souběžně, bez čekání na předchozí klepnutí); cokoli se SL/TP běžnou cestou.
+    expect(phone).toMatch(/const quick = !\('error' in draft\) && draft\.stopLoss === undefined && draft\.takeProfit === undefined;/);
+    expect(phone).toMatch(/void send\(draft, quick\);/);
+    expect(phone).toMatch(/if \(busyRef\.current && !\(quick && quickRuns\.current > 0\)\) \{ say\(LIVE_COMMAND_BUSY_TEXT\); return; \}/);
   });
 
   it('přehrávání: odeslání listu/lišty i lišta Koupit/Prodat nejdřív kontrolují replay; lišta, návrh a vrstva čar schované', () => {

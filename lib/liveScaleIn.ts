@@ -58,6 +58,12 @@ export interface LiveTicketScaleIn {
   targetPrice: number | null;
   canAdd: boolean;
   reason: string | null;
+  /**
+   * Jeden účet přes Rithmic (26. 11. 2026): další vstup do pozice smí mít JAKÉKOLI SL/TP (oba, jeden, žádný) a smí
+   * jich čekat víc. Panel nic nevnucuje ani nezamyká — `stopLoss`/`targetPrice` jsou jen informace o pozici a
+   * rozhoduje místní služba.
+   */
+  free?: boolean;
   /** Čekající přikoupení (čára s × v grafu); null = žádné. */
   pendingAdd: { price: number | null; quantity: number; orderType: string } | null;
 }
