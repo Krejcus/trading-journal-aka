@@ -30,6 +30,14 @@ interface DrawingMagnetProjector {
 /** Přichytí cenu k úrovni svíčky; `null` = tenhle způsob teď neplatí (použije se běžný magnet). */
 export type PriceLevelMagnet = (price: number) => number | null;
 
+/** Přesun celé kresby za tělo (ne za úchyt). */
+export interface DrawingBodyMagnet {
+  /** Kresba, kterou řadič právě táhne; `null` = žádný tah. */
+  drag: () => { id: string; kind: string } | null | undefined;
+  /** Cena přichycená na úroveň svíček ve viditelném grafu (bez přichycení vrací stejnou cenu). */
+  level: (price: number) => number;
+}
+
 interface PriceLevelProjector {
   priceToY: (price: number) => number | null;
   /** Časový rozsah, který je v grafu právě vidět. */
@@ -204,7 +212,52 @@ export const installDrawingMagnet = (
   resolver: (point: DrawingPoint) => DrawingPoint,
   /** Telefon: ceny úchytů position boxu se chytají na úroveň přes celý viditelný graf. */
   priceLevel?: PriceLevelMagnet,
+  /** Přesun celé kresby: řadič řekne, kterou kresbu uživatel právě táhne za tělo. */
+  body?: DrawingBodyMagnet,
 ) => {
+  /**
+   * Řadič posouvá kresbu po krocích (aktuální body + posun od minulého pohybu).
+   * Kdyby se přichycené body vracely do dalšího kroku, kresba by na úrovni
+   * uvízla. Proto si pamatujeme nepřichycenou polohu (`raw`) a přichycení se
+   * počítá vždy z ní.
+   */
+  let bodyDrag: { id: string; raw: DrawingPoint[]; shown: DrawingPoint[] } | null = null;
+  const moveBody = (id: string, tool: string | undefined, previous: DrawingPoint[], points: DrawingPoint[]) => {
+    const dt = points[0].time - previous[0].time;
+    const dp = points[0].price - previous[0].price;
+    const continues = bodyDrag?.id === id && bodyDrag.shown.length === previous.length
+      && bodyDrag.shown.every((point, index) => samePoint(point, previous[index]));
+    const raw = continues && bodyDrag
+      ? bodyDrag.raw.map(point => ({ time: point.time + dt, price: point.price + dp }))
+      : points.map(point => ({ ...point }));
+    let shiftTime = 0;
+    let shiftPrice = 0;
+    const isPosition = tool === 'LongPosition' || tool === 'ShortPosition';
+    if (isPosition || raw.length === 1 || tool === 'HorizontalLine' || tool === 'HorizontalRay') {
+      // Jedna cena určuje kresbu (vstup boxu, vodorovná čára): chytá se na úroveň přes viditelný graf.
+      shiftPrice = body!.level(raw[0].price) - raw[0].price;
+    } else {
+      // Víc bodů: přichytí se ten, který má ke svíčce nejblíž; ostatní se posunou stejně (tvar zůstane).
+      let best: { time: number; price: number } | null = null;
+      let bestIndex = -1;
+      raw.forEach((point, index) => {
+        const snapped = resolver(point);
+        if (samePoint(snapped, point)) return;
+        const shift = { time: snapped.time - point.time, price: snapped.price - point.price };
+        if (!best || Math.abs(shift.price) < Math.abs(best.price)) { best = shift; bestIndex = index; }
+      });
+      if (best) {
+        // Kříž magnetu ukazuje poslední volaný bod — ať je to ten, který se opravdu chytil.
+        resolver(raw[bestIndex]);
+        shiftTime = (best as { time: number }).time;
+        shiftPrice = (best as { price: number }).price;
+      }
+    }
+    original.setPoints.call(engine, id, raw.map(point => ({ time: point.time + shiftTime, price: point.price + shiftPrice })));
+    const shown = engine.getById(id)?.points ?? [];
+    bodyDrag = { id, raw, shown: shown.map(point => ({ ...point })) };
+  };
+
   const original = {
     beginDraft: engine.beginDraft,
     updateDraftEnd: engine.updateDraftEnd,
@@ -238,6 +291,12 @@ export const installDrawingMagnet = (
     }
     const drawing = engine.getById(id);
     const previous = drawing?.points ?? [];
+    const dragged = body?.drag();
+    if (dragged && dragged.id === id && dragged.kind !== 'anchor' && !pointerPoint && previous.length > 0 && previous.length === points.length) {
+      moveBody(id, drawing?.tool, previous, points);
+      return;
+    }
+    bodyDrag = null;
     const changed = points.map((point, index) => !previous[index] || !samePoint(point, previous[index]));
     const changedCount = changed.filter(Boolean).length;
     // A body drag moves every anchor together. Snapping each anchor separately

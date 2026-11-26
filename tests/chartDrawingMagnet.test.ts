@@ -358,3 +358,61 @@ describe('price level magnet (telefon: úchyty position boxu)', () => {
     restore();
   });
 });
+
+describe('magnet při přesunu celé kresby', () => {
+  /** Motor jako CandleKit: tah za tělo posílá aktuální body + posun od minulého pohybu. */
+  const bodyEngine = (id: string, tool: string, start: { time: number; price: number }[]) => {
+    const drawings = new Map([[id, { tool, points: start }]]);
+    const engine = {
+      beginDraft: vi.fn(), updateDraftEnd: vi.fn(), appendDraftPoint: vi.fn(), commit: vi.fn(),
+      getDraft: () => null,
+      getById: (key: string) => drawings.get(key),
+      setPoints: (key: string, points: { time: number; price: number }[]) => { drawings.set(key, { tool: drawings.get(key)?.tool ?? tool, points }); },
+    };
+    const step = (key: string, dt: number, dp: number) => engine.setPoints(key, drawings.get(key)!.points.map(point => ({ time: point.time + dt, price: point.price + dp })));
+    return { engine, drawings, step };
+  };
+  /** Úrovně po deseti: 100, 110, 120… */
+  const level = (price: number) => Math.round(price / 10) * 10;
+
+  it('vodorovná čára po malých krocích neuvízne a chytá se na další úroveň', () => {
+    const { engine, drawings, step } = bodyEngine('line', 'HorizontalLine', [{ time: 60, price: 100 }]);
+    const restore = installDrawingMagnet(engine, point => point, undefined, { drag: () => ({ id: 'line', kind: 'body' }), level });
+    const seen: number[] = [];
+    for (let index = 0; index < 8; index += 1) { step('line', 0, 1); seen.push(drawings.get('line')!.points[0].price); }
+    // Prvních pět kroků (101–105 → zaokrouhlení) zůstává u 100/110, pak drží 110; nikdy mezi úrovněmi.
+    expect(seen.every(price => price % 10 === 0)).toBe(true);
+    expect(seen.at(-1)).toBe(110);
+    restore();
+  });
+
+  it('position box se chytá vstupem a tvar (vzdálenost SL a TP) zůstává', () => {
+    const { engine, drawings, step } = bodyEngine('box', 'LongPosition', [{ time: 60, price: 103 }, { time: 300, price: 118 }, { time: 300, price: 96 }]);
+    const restore = installDrawingMagnet(engine, point => point, undefined, { drag: () => ({ id: 'box', kind: 'body' }), level });
+    step('box', 0, 4);
+    expect(drawings.get('box')!.points).toEqual([{ time: 60, price: 110 }, { time: 300, price: 125 }, { time: 300, price: 103 }]);
+    restore();
+  });
+
+  it('kresba s více body přichytí nejbližší bod a ostatní posune stejně', () => {
+    setDrawingMagnetSettings({ mode: 'weak', snapToIndicators: false });
+    const { engine, drawings, step } = bodyEngine('trend', 'TrendLine', [{ time: 60, price: 90 }, { time: 120, price: 104 }]);
+    const resolve = createDrawingMagnetResolver({ candles }, projector);
+    const restore = installDrawingMagnet(engine, resolve, undefined, { drag: () => ({ id: 'trend', kind: 'body' }), level });
+    step('trend', 0, 3.4);
+    // Druhý bod (107,4) je do 14 px od close 107 → posun −0,4 pro oba body.
+    expect(drawings.get('trend')!.points[1].price).toBeCloseTo(107);
+    expect(drawings.get('trend')!.points[0].price).toBeCloseTo(93);
+    restore();
+  });
+
+  it('jiná kresba než tažená (sousední úsek cesty) se při posunu nepřichytává', () => {
+    setDrawingMagnetSettings({ mode: 'strong', snapToIndicators: false });
+    const { engine, drawings } = bodyEngine('other', 'TrendLine', [{ time: 60, price: 90 }, { time: 120, price: 104 }]);
+    const resolve = createDrawingMagnetResolver({ candles }, projector);
+    const restore = installDrawingMagnet(engine, resolve, undefined, { drag: () => ({ id: 'dragged', kind: 'body' }), level });
+    engine.setPoints('other', [{ time: 60, price: 93.3 }, { time: 120, price: 107.3 }]);
+    expect(drawings.get('other')!.points).toEqual([{ time: 60, price: 93.3 }, { time: 120, price: 107.3 }]);
+    restore();
+  });
+});

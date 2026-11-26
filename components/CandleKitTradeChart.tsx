@@ -4743,6 +4743,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         resolveMagnetPoint,
         // Jen telefon: prst drží úchyt u levého okraje boxu, ne u svíčky, na kterou míří.
         price => (phoneLayoutRef.current ? priceLevelMagnet(price) : null),
+        // Přesun celé kresby: přichytává se z nepřichycené polohy, tvar kresby zůstává.
+        { drag: () => (api.drawing as unknown as { drag?: { id: string; kind: string } | null } | undefined)?.drag ?? null, level: priceLevelMagnet },
       );
       // Průběh Long/Short boxu jako v TradingView: po zasažení entry čárkovaná
       // čára k aktuální ceně a box se vyplňuje — v přehrávání i na běžném
