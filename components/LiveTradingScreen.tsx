@@ -284,6 +284,8 @@ export interface LiveTradingSolo {
   extraOrders?: LiveExtraOrders;
   /** Kolik kusů pozice kryje hlavní čára SL / TP (jen do štítku). */
   legCoverage?: { stopLoss: number; takeProfit: number } | null;
+  /** SL kryje jen část pozice: čip „+ SL" pro nekrytý zbytek. */
+  restStop?: boolean;
   /** Akce na dalším příkazu podle jeho id u brokera (tažení, ×); ověří ji místní služba. */
   manageOrder?: LiveManageOrderCallback;
 }
@@ -762,6 +764,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     moveBareEntry: manageMoveBareEntrySupported === true,
     stopEntryMove: solo != null,
     legQuantity: solo?.legCoverage ?? null,
+    restStop: solo?.restStop === true,
     attachChips,
     bareLegs: legTrade != null,
     ...(solo ? { legRemovable: solo.legsRemovable === true } : {}),
@@ -776,7 +779,7 @@ const LiveTradingScreen: React.FC<Props> = ({
     // Další čekající vstupy kreslí vlastní vrstva (každý svou čáru s × a tažením) — jedna čára „přikoupení“ by je zdvojila.
     pendingAdd: solo?.extraOrders ? null : entryScaleIn?.pendingAdd ?? entryBarePartial,
     bareClose: bareOffer?.enabled ? { entryOperationId: bareOffer.trade.entryOperationId } : null,
-  }) : []), [solo?.extraOrders != null, solo?.legCoverage, manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, solo?.available, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
+  }) : []), [solo?.extraOrders != null, solo?.legCoverage, solo?.restStop, manageMoveBareEntrySupported, entryBarePartial, attachChips, copier.available, copier.status, solo?.available, displayOpenPnl, manageCloseSupported, managePendingLegsSupported, manageMoveLimitSupported, manageGroupLimitMoveSupported, manageGroupLimitStateHash, manageEntryAvgPrice, onManageEntry, pendingMove, guardSummary, entryScaleIn?.pendingAdd, bareOffer]);
   // U4/U5: kontrakt grafu — IBKR zdroj nese měsíc, jinak pozice, jinak front podle brokera.
   // Jiný kontrakt (týden rollu) nebo neznámý = šipky ani pracující příkazy se nekreslí.
   const chartContract = previewSymbolFromChartSource(quoteInfo.source) ?? position?.symbol ?? entryFrontContract ?? null;

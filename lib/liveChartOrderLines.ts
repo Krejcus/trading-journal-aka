@@ -46,6 +46,8 @@ export interface LivePositionLineControls {
    * Jen do štítku: „SL 1/3" místo „SL 3", aby čára nevypadala jako ochrana celé pozice.
    */
   legQuantity?: { stopLoss?: number; takeProfit?: number } | null;
+  /** SL kryje jen část pozice a služba umí přidat SL nekrytému zbytku: čip „+ SL" zůstává i vedle čáry SL. */
+  restStop?: boolean;
   /** Distinct group capability: aggregate chart quantity may exceed the leader quantity. */
   groupLimitMove?: boolean;
   groupLimitStateHash?: string | null;
@@ -240,8 +242,8 @@ function positionLines(summary: LiveChartPositionSummary, controls: LivePosition
         title: be.blocked ?? `SL na BE leadera ${be.price?.toFixed(2)} (bez poplatků)`,
       }],
     } : {}),
-    ...(legsLive && (summary.stop == null || summary.target == null) ? {
-      addableBrackets: [...(summary.stop == null ? ['stopLoss' as const] : []), ...(summary.target == null ? ['takeProfit' as const] : [])],
+    ...(legsLive && (summary.stop == null || summary.target == null || controls.restStop === true) ? {
+      addableBrackets: [...(summary.stop == null || controls.restStop === true ? ['stopLoss' as const] : []), ...(summary.target == null && controls.restStop !== true ? ['takeProfit' as const] : [])],
     } : {}),
     ...(position && !legsLive && controls.attachChips ? {
       ...(controls.attachChips.missing.length > 0 ? { addableBrackets: [...controls.attachChips.missing] } : {}),

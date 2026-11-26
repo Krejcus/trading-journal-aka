@@ -26,7 +26,7 @@ import { liveTicketLegsProblem, LIVE_ATTACH_SENT_HOLD_MS, LIVE_BARE_QUOTE_MAX_AG
 import type { LiveAttachLegs } from '../../lib/liveOrderTicket';
 import { snapToTick } from '../../lib/liveOrderTicket';
 import {
-  livePhoneBareMarket, livePhonePillScaleIn, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
+  livePhoneBareMarket, livePhoneOppositeTapPlan, livePhonePillScaleIn, livePhoneCancelPendingChipShown, livePhoneOperationId, livePhonePlacedText, livePhoneScaleInBlocked, livePhoneScaleInDraft,
   type LivePhoneQuote, type LivePhoneTradeBridge,
 } from '../../lib/livePhoneOrders';
 import type { LiveEntryPreviewDraft } from '../../lib/leaderEntryPreview';
@@ -300,6 +300,22 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
       : pill.qty > trade!.maxContracts ? `Strop ručního vstupu je ${trade!.maxContracts} kontraktů.` : null);
     if (blocked) { say(blocked); return; }
     // V pozici jde lišta jako přikoupení se SL/TP pozice (holý Market by worker v pozici zastavil).
+    // Proti pozici se SL/TP: ne holý Market (ochrana by zůstala na větší množství), ale bezpečné cesty služby —
+    // celá pozice = Zavřít, část = částečné zavření. Jedna akce naráz, pod sdíleným zámkem čar.
+    if (scaleIn && side !== scaleIn.side && (scaleIn.stopLoss != null || scaleIn.targetPrice != null)) {
+      const plan = livePhoneOppositeTapPlan(pill.qty, scaleIn, trade!.reduce);
+      if (plan.action === 'none') { say(plan.text); return; }
+      if (busyRef.current) { say(LIVE_COMMAND_BUSY_TEXT); return; }
+      busyRef.current = true;
+      setBusy(true);
+      const done = () => { busyRef.current = false; setBusy(false); };
+      if (plan.action === 'close') { say(`Zavírám CELOU pozici (${scaleIn.quantity} ks) a ruším čekající příkazy.`); void trade!.flatten().then(say, () => say('Výsledek zavření není znám — zkontroluj pozici, nic neopakuj.')).finally(done); return; }
+      void trade!.reduce!.run().then(
+        result => say(result.status === 'sent' ? 'Část pozice se zavírá — výsledek ukáže graf.' : result.status === 'blocked' ? `Neodesláno: ${result.text ?? 'služba to nepustila'}` : `Výsledek není znám: ${result.text ?? ''} — zkontroluj pozici, nic neopakuj.`, result.status === 'sent'),
+        () => say('Výsledek není znám — zkontroluj pozici, nic neopakuj.'),
+      ).finally(done);
+      return;
+    }
     const draft = scaleIn ? livePhonePillScaleIn(side, pill.qty, quote!, scaleIn, trade!.maxContracts) : livePhoneBareMarket(side, pill.qty, quote!);
     const quick = !('error' in draft) && draft.stopLoss === undefined && draft.takeProfit === undefined;
     // Nechtěný dvojdotek téže strany (dva dotyky do 180 ms) = jeden příkaz; úmyslné rychlé klepání projde.
@@ -734,6 +750,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             extraOrders={trade?.extraOrders}
             manageOrder={trade?.manageOrder ?? null}
             legCoverage={trade?.legCoverage ?? null}
+            restStop={trade?.restStop === true}
             bareClose={trade?.closeBare && trade.bareClose?.enabled ? { entryOperationId: trade.bareClose.trade.entryOperationId, key: trade.bareClose.key } : null}
             onBareClose={barBareClose}
             attach={trade?.bareLeg && trade.bareLegTrade ? null : attachChipBridge}

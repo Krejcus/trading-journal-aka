@@ -123,7 +123,7 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
     // Krátká karta (stav se mění s každým posunem; trvalá by ukazovala staré ceny).
     // Jen pro čtení: příkazy z jiné platformy graf neumí věrně ukázat (role jen odhaduje) → říct to nahlas.
     ...(trading.workingOrders > 0 ? [{ ...card(`rithmic-foreign:${trading.workingOrders}`, 'amber', 'Info', `Na účtu pracuje ${trading.workingOrders} ${trading.workingOrders === 1 ? 'příkaz zadaný' : 'příkazů zadaných'} jinde`, 'Graf je ukazuje tlumenou čarou jen pro zobrazení — z této appky je nejde posunout ani zrušit.'), sticky: false, ms: 10_000 }] : []),
-    ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Části pozice mají ochranu na různých cenách', `${trading.legsNote}. Čára ukazuje tu bližší trhu; posunem srovnáš všechny.`), sticky: false, ms: 9_000 }] : []),
+    ...(trading.legsNote ? [{ ...card(`rithmic-legs:${trading.legsNote}`, 'amber', 'SL/TP', 'Části pozice mají ochranu na různých cenách', `${trading.legsNote}. ${state?.multiEntry === true ? 'Každá část má vlastní čáru a posouvá se zvlášť.' : 'Čára ukazuje tu bližší trhu; posunem srovnáš všechny.'}`), sticky: false, ms: 9_000 }] : []),
     ...(blocked ? [trading.readOnly
       ? card(`rithmic-blocked:${blocked}`, 'amber', 'Info', 'Služba hlásí stav účtu', `${blocked} Účet je připojený jen pro čtení — nic se neposílá.`)
       : card(`rithmic-blocked:${blocked}`, 'red', 'Stop', 'Nové vstupy stojí', `${blocked} Zkontroluj účet a potvrď tlačítkem „Potvrdit incident“.`)] : []),
@@ -144,8 +144,8 @@ const RithmicLiveChart: React.FC<Props> = ({ open, isDark, tabs, onNavigate, nav
   const brakeNeeded = uncertainList.length > 0 || (trading.mayHaveExposure && !hasPosition) || unprotected || trading.commandInFlight || replaying || !trading.available
     || Boolean(blocked) || trading.silent || !trading.helloFresh;
   const offerBrake = (trading.mayHaveExposure || uncertainList.length > 0) && (!accountBar || brakeNeeded);
-  const solo = useMemo(() => ({ ...soloBase, alerts: alertsReal, extraOrders: trading.extraOrders, legCoverage: trading.legCoverage, ...(trading.readOnly ? {} : { manageOrder: trading.onManageOrder }), ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
-    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, alertsReal, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy, trading.extraOrders, trading.onManageOrder, trading.readOnly, trading.legCoverage]);
+  const solo = useMemo(() => ({ ...soloBase, alerts: alertsReal, extraOrders: trading.extraOrders, legCoverage: trading.legCoverage, restStop: trading.restStop, ...(trading.readOnly ? {} : { manageOrder: trading.onManageOrder }), ...(link === 'open' && offerBrake && !trading.readOnly ? { emergencyClose: { run: emergencyClose, busy: closeBusy } } : {}),
+    ...(usable && trading.reducible ? { reduce: { run: reducePart, busy: reduceBusy, quantity: trading.reducible.quantity } } : {}) }), [soloBase, alertsReal, link, offerBrake, emergencyClose, closeBusy, usable, trading.reducible, reducePart, reduceBusy, trading.extraOrders, trading.onManageOrder, trading.readOnly, trading.legCoverage, trading.restStop]);
 
   // Skutečný incident kopírky musí být vidět i v prázdném stavu (INV-UI-02 duchem).
   const strip = buildLiveStatusStrip({ status: copier.status, available: copier.available, pending: copier.pending, transport: copier.transport, journalHealth: copier.journalHealth });

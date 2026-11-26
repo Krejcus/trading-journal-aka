@@ -137,12 +137,13 @@ export function livePhoneWorkingView(
  */
 export function LivePhoneOrderLines({
   api, state, summary, guardAt, displayOpenPnl = null, manage, pendingLegs = false, moveLimit = false, groupLimitMove = false, groupLimitStateHash = null, moveBareEntry = false, attach = null, bareClose = null, bareLeg = null, onBareClose, canClose, closeWithoutStop = false, entryAvg, pendingAdd = null, closeExpect = null, isDark, onNotice,
-  extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage, extraOrders, manageOrder, legCoverage = null,
+  extraLines, draftLines, onDraftChange, onDraftRemove, onDraftAddBracket, onManage, extraOrders, manageOrder, legCoverage = null, restStop = false,
 }: {
   /** Další vlastní příkazy (další čekající vstupy, nohy částí pozice s jinou cenou) — vlastní čáry s tahem a ×. */
   extraOrders?: LiveExtraOrders;
   manageOrder?: LiveManageOrderCallback | null;
   legCoverage?: { stopLoss: number; takeProfit: number } | null;
+  restStop?: boolean;
   api: ChartViewApi;
   state: LivePhoneLineState;
   summary: LiveChartPositionSummary | null;
@@ -239,7 +240,8 @@ export function LivePhoneOrderLines({
     // Další čekající vstupy kreslí vlastní vrstva — jedna čára „přikoupení“ by je zdvojila.
     pendingAdd: extraOrders ? null : pendingAdd,
     legQuantity: legCoverage,
-  }) : []), [extraOrders != null, legCoverage, attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
+    restStop,
+  }) : []), [extraOrders != null, legCoverage, restStop, attachOn, attachLegs, bareEntryId, bareLegOn, canClose, displayOpenPnl, entryAvg, manage, pendingLegs, moveLimit, groupLimitMove, groupLimitStateHash, moveBareEntry, pendingMove, guardSummary, pendingAdd]);
   const [extraPending, setExtraPending] = useState<string | null>(null);
   const extraOrderLines = useMemo(() => liveExtraOrderLines(extraOrders, {
     pointValue: POINT_VALUE, manageable: manageOrder != null,

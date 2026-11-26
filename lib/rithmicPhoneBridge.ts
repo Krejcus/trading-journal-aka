@@ -79,6 +79,9 @@ export interface RithmicPhoneBridgeInput {
   extraOrders?: LiveExtraOrders;
   onManageOrder?: LiveManageOrderCallback;
   legCoverage?: { stopLoss: number; takeProfit: number } | null;
+  restStop?: boolean;
+  reducible?: { quantity: number } | null;
+  reduceOne?: () => Promise<{ status: 'sent' | 'blocked' | 'unknown'; text: string | null }>;
 }
 
 /**
@@ -113,6 +116,8 @@ export function rithmicPhoneBridge(input: RithmicPhoneBridgeInput): LivePhoneTra
     ...(input.extraOrders ? { extraOrders: input.extraOrders } : {}),
     ...(input.onManageOrder ? { manageOrder: input.onManageOrder } : {}),
     ...(input.legCoverage ? { legCoverage: input.legCoverage } : {}),
+    ...(input.restStop ? { restStop: true } : {}),
+    ...(input.reducible && input.reduceOne ? { reduce: { quantity: input.reducible.quantity, run: input.reduceOne } } : {}),
     ...(input.bareLegTrade ? { bareLegTrade: input.bareLegTrade, bareLeg: input.onBareLeg } : {}),
   };
 }

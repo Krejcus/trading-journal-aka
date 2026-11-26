@@ -268,7 +268,8 @@ const PhoneChartView: React.FC<Props & { session: ReturnType<typeof usePhoneSess
     averagePrice: trading.averagePrice, scaleIn: trading.scaleIn, position: trading.position, bareLegTrade: trading.bareLegTrade, soloAccountId: RITHMIC_SOLO_ACCOUNT,
     onPlaceEntry: trading.onPlaceEntry, onManageEntry: trading.onManageEntry, onBareLeg: trading.onBareLeg, closeNow: runClose,
     extraOrders: trading.extraOrders, onManageOrder: trading.onManageOrder, legCoverage: trading.legCoverage,
-  }), [trading.extraOrders, trading.onManageOrder, trading.legCoverage, trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
+    reducible: trading.reducible, reduceOne: trading.reduceOne, restStop: trading.restStop,
+  }), [trading.restStop, trading.reducible, trading.reduceOne, trading.extraOrders, trading.onManageOrder, trading.legCoverage, trading.readOnly, blocked, trading.entryBlockedReason, trading.maxContracts, symbol, trading.averagePrice, trading.scaleIn, trading.position, trading.bareLegTrade, trading.onPlaceEntry, trading.onManageEntry, trading.onBareLeg, runClose]);
 
   // P&L pozice a čáry DLL / MLL (jen zobrazení): z průměru, kusů a živé ceny služby.
   const summary = shownPosition?.summary?.kind === 'position' ? shownPosition.summary : null;

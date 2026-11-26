@@ -97,3 +97,13 @@ describe('odeslání akce na dalším příkazu', () => {
     expect(reports[0]).toMatch(/není znám/);
   });
 });
+
+describe('čip „+ SL" pro nekrytý zbytek pozice', () => {
+  const summary = { kind: 'position', side: 'long', quantity: 3, entry: 25_000, entryType: null, openPnl: null, mark: null, stop: 24_990, target: 25_020, protection: '', accounts: 1, scopeLabel: null, leader: null, rows: [] };
+  it('zůstává na čáře pozice i vedle existující čáry SL; TP zbytku se nenabízí', () => {
+    const controls = { manageable: true, entryAvg: 25_000, pointValue: 2, bareLegs: true, legQuantity: { stopLoss: 1, takeProfit: 1 } };
+    const entryLine = (extra: object) => livePositionChartLines(summary as never, { ...controls, ...extra } as never).find(line => line.kind === 'entry')!;
+    expect(entryLine({ restStop: true }).addableBrackets).toEqual(['stopLoss']);
+    expect(entryLine({ restStop: false }).addableBrackets).toBeUndefined();
+  });
+});

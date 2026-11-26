@@ -543,7 +543,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
         ...(order.plannedStop !== undefined ? { plannedStop: order.plannedStop } : {}), ...(order.plannedTarget !== undefined ? { plannedTarget: order.plannedTarget } : {}),
         add: order.tag?.startsWith('ui-add-') === true,
       })),
-    legs: net && state?.multiEntry === true ? [...legView.stops.filter((order) => order.price !== stopOrder?.price), ...legView.targets.filter((order) => order.price !== targetOrder?.price)]
+    // Samostatný SL zbytku se kreslí vždy, když pracuje a není hlavní čarou (i bez režimu víc vstupů a i na stejné
+    // ceně jako noha vstupu) — u brokera nesmí pracovat příkaz, který graf neukazuje.
+    legs: net ? [...legView.stops.filter((order) => order.orderId !== stopOrder?.orderId && (order.tag?.startsWith('uiprot-') || (state?.multiEntry === true && order.price !== stopOrder?.price))),
+      ...legView.targets.filter((order) => state?.multiEntry === true && order.price !== targetOrder?.price)]
       .map((order) => ({ orderId: order.orderId, role: order.role as 'stop' | 'target', price: order.price!, quantity: order.quantity - order.filledQuantity })) : [],
   };
   // Kolik kusů pozice kryje hlavní čára SL / TP (nohy na její ceně) — štítek nesmí vypadat jako ochrana celé pozice.
@@ -555,6 +558,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
   const stopTotal = net ? openQty(legView.stops) : 0;
   const targetTotal = net ? openQty(legView.targets) : 0;
   const legCoverageTotal = useMemo(() => ({ stopLoss: stopTotal, takeProfit: targetTotal }), [stopTotal, targetTotal]);
+  // Čip „+ SL" i u pozice, kterou SL kryje jen zčásti (služba ho zadá na nekrytý zbytek). Jen nabídka.
+  const restStop = Boolean(net && state?.multiManage === true && stopTotal > 0 && stopTotal < Math.abs(net.netQuantity)
+    && !orders.some((order) => order.status === 'working' && order.tag?.startsWith('uiprot-')));
   const legCoverage = useMemo(() => (net ? { stopLoss: stopCover, takeProfit: targetCover } : null), [net != null, stopCover, targetCover]); // eslint-disable-line react-hooks/exhaustive-deps
   const extraKey = liveExtraOrdersKey(extraNow);
   const extraOrders = useMemo(() => extraNow, [extraKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -744,13 +750,16 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       // všechny nohy role srovnaly na jednu cenu — u nezávislých částí by to tiše změnilo ochranu ostatních).
       // Dělí se jen v režimu víc vstupů (části jsou nezávislé). Jinak dosavadní chování: tah i BE hýbou celou pozicí
       // a nohy rozjeté skluzem přikoupení srovnají na jednu cenu.
-      const same = current?.multiEntry === true ? legs.filter((order) => order.price === leg.price) : legs;
+      // Samostatný SL zbytku (`uiprot-`) není noha vstupu: služba ho mezi nohy role nepočítá, posouvá se sám.
+      const entryLegs = legs.filter((order) => !order.tag?.startsWith('uiprot-'));
+      const same = leg.tag?.startsWith('uiprot-') ? [leg] : current?.multiEntry === true ? entryLegs.filter((order) => order.price === leg.price) : entryLegs;
       if (same.length > 1) {
         measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.filter((order) => same.some((item) => item.orderId === order.orderId)).every((order) => order.price === newPrice));
-        return finish(await send({ op: 'move-legs', symbol: sym, role, price: newPrice, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < legs.length ? { subset: true } : {}) }));
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: newPrice, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < entryLegs.length ? { subset: true } : {}) }));
       }
-      measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === newPrice));
-      return finish(await send({ op: 'move', orderId: leg.orderId, price: newPrice }));
+      const single = same[0] ?? leg;
+      measure(action === 'move-stop' ? 'Posun SL → čára' : 'Posun TP → čára', (s) => s.orders.some((order) => order.orderId === single.orderId && order.price === newPrice));
+      return finish(await send({ op: 'move', orderId: single.orderId, price: newPrice }));
     }
     if (action === 'move-limit') {
       // Posun čekajícího Limitu: služba posouvá jen vlastní Limit; SL/TP jsou u Rithmicu vzdálenosti od vstupu,
@@ -843,6 +852,14 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     const legs = role === 'stop' ? view.stops : view.targets;
     const leg = legs.length ? (role === 'stop' ? view.stop : view.target) : null;
     if (intent.kind === 'add') {
+      // SL pro nekrytý zbytek pozice složené z víc částí: služba ho zadá jen na kusy, které žádný vstup nekryje.
+      const heldNow = Math.abs(stateRef.current?.positions.find((item) => item.symbol === sym)?.netQuantity ?? 0);
+      const stopCovered = view.stops.reduce((sum, order) => sum + (order.quantity - order.filledQuantity), 0);
+      if (role === 'stop' && stateRef.current?.multiManage === true && list.some((order) => order.entryId !== undefined || order.role === 'entry')
+        && stopCovered < heldNow && !list.some((order) => order.status === 'working' && order.tag?.startsWith('uiprot-'))) {
+        measure('Přidání SL zbytku → čára', (s) => s.orders.some((order) => order.symbol === sym && order.status === 'working' && order.tag?.startsWith('uiprot-') === true));
+        return finish(await send({ op: 'protect', clientId: newId(), symbol: sym, kind: 'stop', price: intent.price }));
+      }
       if (leg) return blocked(`Pozice už ${name} má.`);
       // Druhá noha: jde jen k JEDNÉ samostatné ochraně opačného druhu — služba ji zruší a obě zadá znovu jako
       // svázaný pár (vyplnění jedné pak druhou zruší burza). Jestli to opravdu jde, rozhodne služba.
@@ -857,12 +874,14 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (intent.kind === 'move') {
       if (leg.price !== intent.current) return blocked('Stav se mezitím změnil — čára už neodpovídá příkazu u Rithmicu.');
       // Jen nohy na ceně hlavní čáry; části s jinou cenou mají vlastní čáry (viz `onManageEntry`).
-      const same = stateRef.current?.multiEntry === true ? legs.filter((order) => order.price === leg.price) : legs;
+      const entryLegs = legs.filter((order) => !order.tag?.startsWith('uiprot-'));
+      const same = leg.tag?.startsWith('uiprot-') ? [leg] : stateRef.current?.multiEntry === true ? entryLegs.filter((order) => order.price === leg.price) : entryLegs;
       if (same.length > 1) {
-        return finish(await send({ op: 'move-legs', symbol: sym, role, price: intent.price, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < legs.length ? { subset: true } : {}) }));
+        return finish(await send({ op: 'move-legs', symbol: sym, role, price: intent.price, expect: same.map((order) => ({ orderId: order.orderId, price: order.price! })), ...(same.length < entryLegs.length ? { subset: true } : {}) }));
       }
-      measure(`Posun ${name} → čára`, (s) => s.orders.some((order) => order.orderId === leg.orderId && order.price === intent.price));
-      return finish(await send({ op: 'move', orderId: leg.orderId, price: intent.price }));
+      const single = same[0] ?? leg;
+      measure(`Posun ${name} → čára`, (s) => s.orders.some((order) => order.orderId === single.orderId && order.price === intent.price));
+      return finish(await send({ op: 'move', orderId: single.orderId, price: intent.price }));
     }
     // Noha vstupu s ochranou se sama zrušit nedá (Rithmic by zrušil i sestru) — jen samostatná ochrana.
     if (!leg.tag?.startsWith('uiprot-')) return blocked(`${name} patří ke vstupu s ochranou — samotný zrušit nejde, jen zavřít pozici.`);
@@ -953,6 +972,6 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     mayHaveExposure: state === null || net != null || orders.some(order => order.status === 'working'), uncertain, dismissUncertain: clearUncertain, closeNow, tickSize: hello?.tickSize ?? null, pointValue: hello?.pointValue ?? null,
     averagePrice: net?.averagePrice ?? null,
     workingView, onPlaceEntry, onManageEntry, onBareLeg, bareLegTrade, ack, scaleIn, legsNote: legView.note,
-    extraOrders, onManageOrder, legCoverage, legCoverageTotal,
+    extraOrders, onManageOrder, legCoverage, legCoverageTotal, restStop,
   };
 }

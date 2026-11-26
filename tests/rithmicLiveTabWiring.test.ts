@@ -278,9 +278,11 @@ describe('hook místního procesu', () => {
     expect(rithmicLegView([leg('a', 'stop', 100), leg('b', 'stop', 100)], 2).note).toBeNull();
     // obě cesty posunu (panel/klávesa i čára) jdou při více nohách přes move-legs s výčtem noh
     // … a jen pro nohy na ceně hlavní čáry (části s jinou cenou mají vlastní čáry); při různých cenách s `subset`.
-    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: same\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\), \.\.\.\(same\.length < legs\.length \? \{ subset: true \} : \{\}\) \}\)/g)).toHaveLength(2);
+    expect(hook.match(/send\(\{ op: 'move-legs', symbol: sym, role, price: [a-zA-Z.]+, expect: same\.map\(\(order\) => \(\{ orderId: order\.orderId, price: order\.price! \}\)\), \.\.\.\(same\.length < entryLegs\.length \? \{ subset: true \} : \{\}\) \}\)/g)).toHaveLength(2);
+    // Samostatný SL zbytku (`uiprot-`) se mezi nohy vstupů nepočítá a posouvá se sám.
+    expect(hook.match(/const entryLegs = legs\.filter\(\(order\) => !order\.tag\?\.startsWith\('uiprot-'\)\);/g)).toHaveLength(2);
     // Jen v režimu víc vstupů (`state.multiEntry`); jinak dosavadní „všechny nohy role" — tah i BE hýbou celou pozicí.
-    expect(hook.match(/const same = (current|stateRef\.current)\?\.multiEntry === true \? legs\.filter\(\(order\) => order\.price === leg\.price\) : legs;/g)).toHaveLength(2);
+    expect(hook.match(/const same = leg\.tag\?\.startsWith\('uiprot-'\) \? \[leg\] : (current|stateRef\.current)\?\.multiEntry === true \? entryLegs\.filter\(\(order\) => order\.price === leg\.price\) : entryLegs;/g)).toHaveLength(2);
     // Spouštěč: víc vstupů na skutečném účtu jen na výslovné zapnutí; správa částí vždy, i v režimu jen pro zavírání.
     expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| \(LIVE_TRADING && !CLOSE_ONLY && process\.argv\.includes\('--multi-entry'\)\) \? \{ multiEntry: true \} : \{\}\)/);
     expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| LIVE_TRADING \? \{ multiManage: true \} : \{\}\)/);

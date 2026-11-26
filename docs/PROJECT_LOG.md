@@ -288,6 +288,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: SL pro nekrytou část pozice, lišta proti pozici se SL/TP, testy před skutečným účtem (NENASAZENO)
+Navazuje na zápis níže (commit e2e52d13); Filip: „zatím pokračuj“ (nenasazovat).
+- **SL nekrytého zbytku** (`services/rithmic/localExec.ts`, `case 'protect'`, jen `manageMulti()`): k pozici složené
+  z části s ochranou a části bez ní jde přidat JEDEN samostatný Stop (`uiprot-`) jen na kusy, které nekryje žádný
+  vstup s ochranou (`bracketExposure`). Jen SL (TP zbytku ne). Část jen s TP se počítá jako krytá. Hlídač dovolí
+  samostatný SL menší než zbytek, nikdy větší; součet expozic ho přičítá. Další vstup vedle něj dál nejde, částečné
+  zavření také ne. Appka: čip „+ SL“ zůstává i u částečně kryté pozice (`restStop`), SL zbytku se kreslí a posouvá
+  vždy zvlášť (mezi nohy vstupů se nepočítá).
+- **Lišta telefonu proti pozici se SL/TP:** počet ≥ zobrazená pozice → Zavřít celou (hlásí „Zavírám CELOU pozici (N ks)
+  a ruším čekající příkazy“), menší počet → stávající částečné zavření, pokud služba nabízí část přesně o tolik kusů.
+  Riziko (oponent): při zastaralém zobrazení „Prodat 1“ zavře celou skutečnou pozici — směr bezpečný, ale překvapení.
+- **Testy před skutečným účtem** (describe `multiEntry`): tři vstupy v jednom okamžiku × strop, rušení N přikoupení po
+  zavření vč. selhání, výpadek s N čekajícími a vyplněním v mezeře, výstraha po resyncu právě jednou, restart
+  s nepotvrzeným záměrem, Zavřít s nezrušitelnými příkazy (jeden zavírací příkaz, ohlášeno, vstupy stojí), SL zbytku
+  (šťastná cesta, plné krytí, zásah zvenčí, posun/zrušení, vstup vyplněný potom, čerstvé vyplnění).
+- Oponentura přírůstku: OK S VÝHRADAMI → zapracováno: SL zbytku se v appce kreslí a posouvá zvlášť i bez režimu víc
+  vstupů, hláška lišty, zpřísněný test Zavřít, další testy SL zbytku. Nezapracováno: holý vstup vyplněný po SL zbytku
+  nejde doochránit (SL zbytku zrušit a zadat znovu); čip se nabídne i u části jen s TP (služba odmítne); po zrušení
+  noh vstupu zvenčí hlídač zablokuje vstupy; restart s pracujícím SL zbytku bez testu.
+- **Ověření:** celá sada 4154, typy webu i služby 0, build OK. Simulace: Prodat na telefonu u longu se SL i TP pozici
+  zavřel; pozice ze tří částí kreslí „SL 1/3“ a další části zvlášť. **Neověřeno rukou:** čip „+ SL“ zbytku v grafu
+  (vedle existující čáry SL), tažení dalších čar; Rithmic Test ani skutečný účet.
+
 ### 2026-11-26 — Claude: rychlý Market z lišty s odebráním z pozice + víc čekajících vstupů (NENASAZENO)
 Zadání Filipa: (1) klepnutí na Koupit/Prodat v liště má odejít hned a Prodat v longu má z pozice odebrat;
 (2) víc Limitů najednou, bez podmínek na SL/TP („aby fungovalo vše“).

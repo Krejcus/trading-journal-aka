@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { livePhoneBareMarket, livePhonePillScaleIn, livePhonePosition, livePhoneSheetEntry } from '../lib/livePhoneOrders';
+import { livePhoneBareMarket, livePhoneOppositeTapPlan, livePhonePillScaleIn, livePhonePosition, livePhoneSheetEntry } from '../lib/livePhoneOrders';
 import { validateLeaderEntryPreview, buildLeaderEntryPreviewCommand } from '../lib/leaderEntryPreview';
 import type { TicketDraft } from '../lib/liveOrderTicket';
 
@@ -86,5 +86,16 @@ describe('lišta v pozici bez SL/TP: klepnutí proti pozici z ní odebere (26. 1
     expect(add.reduceOnly).toBeUndefined();
     const guarded = { side: 'buy' as const, quantity: 1, stopLoss: 24_990, targetPrice: 25_020, canAdd: true, reason: null, pendingAdd: null };
     expect(livePhonePillScaleIn('sell', 1, quote, guarded, 3)).toHaveProperty('error');
+  });
+});
+
+describe('lišta proti pozici se SL/TP: bezpečné cesty služby místo holého Marketu', () => {
+  it('celá zobrazená pozice (nebo víc) = Zavřít; část jen když ji služba pro přesně tolik kusů nabízí', () => {
+    expect(livePhoneOppositeTapPlan(1, { quantity: 1 }, null)).toEqual({ action: 'close' });
+    expect(livePhoneOppositeTapPlan(5, { quantity: 3 }, { quantity: 1 })).toEqual({ action: 'close' });
+    expect(livePhoneOppositeTapPlan(1, { quantity: 3 }, { quantity: 1 })).toEqual({ action: 'reduce' });
+    expect(livePhoneOppositeTapPlan(1, { quantity: 3 }, { quantity: 2 })).toMatchObject({ action: 'none', text: expect.stringContaining('o 2 ks') });
+    expect(livePhoneOppositeTapPlan(1, { quantity: 3 }, null)).toMatchObject({ action: 'none', text: expect.stringContaining('zavřít jde celou') });
+    expect(livePhoneOppositeTapPlan(0, { quantity: 3 }, { quantity: 1 })).toMatchObject({ action: 'none' });
   });
 });

@@ -27,6 +27,8 @@ export interface LivePhoneTradeBridge {
   manageOrder?: import('./liveExtraManage').LiveManageOrderCallback;
   /** Kolik kusů pozice kryje hlavní čára SL / TP (jen do štítku). */
   legCoverage?: { stopLoss: number; takeProfit: number } | null;
+  /** SL kryje jen část pozice: čip „+ SL" pro nekrytý zbytek. */
+  restStop?: boolean;
   /** Null = odeslat jde; jinak proč ne (čerstvost stavu, kopírka vypnutá, rozpracovaný vstup…). */
   blockedReason: string | null;
   marketSupported: boolean;
@@ -46,6 +48,11 @@ export interface LivePhoneTradeBridge {
   attach: (input: { entryOperationId: string; symbol: string; quantity: number; expectPrice: number; stopLoss: number; takeProfit: number; groupLimitStateHash?: string | null }) => Promise<LeaderOrderManageResult>;
   /** Flatten celé manual-only skupiny (jediný DEMO účet) safety cestou; vrací text výsledku. */
   flatten: () => Promise<string>;
+  /**
+   * Částečné zavření pozice se SL/TP: služba zavře jednu část (`quantity` kusů). Chybí = teď nejde (pozice nemá
+   * u každého vstupu SL i TP, má jen 1 ks, …). Lišta ho použije pro klepnutí proti pozici s ochranou.
+   */
+  reduce?: { quantity: number; run: () => Promise<{ status: 'sent' | 'blocked' | 'unknown'; text: string | null }> } | null;
   /**
    * Správa obchodu leadera z čar v grafu (posun SL/TP, BE, × zavřít/zrušit) — stejná
    * cesta jako PC `onManageEntry`. Zatím nenapojeno: bez ní jsou čáry jen zobrazení.
@@ -185,6 +192,20 @@ export function livePhoneScaleInBlocked(draft: TicketDraft, quantity: number, sc
   if (draft.type !== 'market' && quantity > 1) return 'Čekající přikoupení (Limit/Stop) jde zatím jen po 1 kontraktu — větší množství Marketem.';
   if (scaleIn.quantity + quantity > maxContracts) return `Pozice by měla ${scaleIn.quantity + quantity} kontraktů — strop účtu je ${maxContracts}.`;
   return scaleIn.canAdd ? null : scaleIn.reason ?? 'Přikoupení teď nejde.';
+}
+
+/**
+ * Klepnutí PROTI pozici, která má SL/TP (26. 11. 2026): holý Market by nechal ochranu na větší množství, než pozice
+ * má, proto jde přes stávající bezpečné cesty služby. Celá zobrazená pozice (nebo víc) = Zavřít; část = částečné
+ * zavření, pokud ho služba pro přesně tolik kusů nabízí. Jen volba cesty — obě si stav ověří samy.
+ */
+export function livePhoneOppositeTapPlan(quantity: number, scaleIn: Pick<LiveTicketScaleIn, 'quantity'>, reduce: { quantity: number } | null | undefined):
+  { action: 'close' } | { action: 'reduce' } | { action: 'none'; text: string } {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return { action: 'none', text: 'Neplatný počet kontraktů.' };
+  if (quantity >= scaleIn.quantity) return { action: 'close' };
+  if (!reduce) return { action: 'none', text: 'Z této pozice teď část odebrat nejde (každý vstup musí mít SL i TP) — zavřít jde celou.' };
+  if (reduce.quantity !== quantity) return { action: 'none', text: `Odebrat jde část o ${reduce.quantity} ks (tak je pozice složená) — nastav počet na ${reduce.quantity}, nebo zavři celou.` };
+  return { action: 'reduce' };
 }
 
 /** Lišta nad grafem: otevřená pozice, nebo jen čekající vstup (`pending` — zatím žádná pozice). */

@@ -2350,6 +2350,265 @@ describe('místní služba: víc čekajících vstupů a části pozice s různo
     t.broker.stop();
   });
 
+  it('tři vstupy v jednom okamžiku nepřekročí strop: rezervace vznikají dřív, než první z nich čeká na brokera', async () => {
+    const t = await setup({ config: { ...multi, maxPosition: 2 } });
+    const bare = (price: number) => t.run(entry({ limitPrice: price, stopPrice: undefined, targetPrice: undefined }));
+    const replies = await Promise.all([bare(6990), bare(6989), bare(6988)]);
+    expect(replies.filter((reply) => reply.ok)).toHaveLength(2);
+    expect(replies.filter((reply) => !reply.ok)[0]).toMatchObject({ sent: false, error: expect.stringMatching(/strop 2/) });
+    await flush();
+    await sleep(60);
+    expect(working(t, 'entry')).toHaveLength(2);
+    // Vstupy s ochranou ve stejném okamžiku: smí projít nejvýš tolik, kolik dovolí strop (mohou se i odmítnout navzájem).
+    const guarded = await setup({ config: { ...multi, maxPosition: 2 } });
+    const many = await Promise.all([6990, 6989, 6988].map((price) => guarded.run(entry({ limitPrice: price, stopPrice: price - 10, targetPrice: price + 20 }))));
+    expect(many.filter((reply) => reply.ok).length).toBeLessThanOrEqual(2);
+    await flush();
+    await sleep(80);
+    expect(working(guarded, 'entry').reduce((sum, o) => sum + o.quantity, 0)).toBeLessThanOrEqual(2);
+    t.broker.stop();
+    guarded.broker.stop();
+  });
+
+  it('po zavření pozice se zruší všechna čekající přikoupení (Limit, Stop, bez ochrany); když jedno zrušit nejde, incident a blokace', async () => {
+    const build = async () => {
+      const t = await setup({ config: multi });
+      t.exec.enableAutomation();
+      const first = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+      await fill(t, first, 6990);
+      const adds = [
+        await place(t, add({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7030 })),
+        await place(t, add({ orderType: 'Stop', limitPrice: undefined, triggerPrice: 7010, stopPrice: undefined, targetPrice: 7040 })),
+        await place(t, add({ limitPrice: 6983, stopPrice: undefined, targetPrice: undefined })),
+      ];
+      return { t, adds };
+    };
+    const closeByStop = async (t: Awaited<ReturnType<typeof setup>>) => {
+      const stopLeg = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open' && !o.userTag)!;
+      t.server.fill(stopLeg.basketId, 6980);
+    };
+    const ok = await build();
+    await closeByStop(ok.t);
+    await sleep(1_200);
+    for (const id of ok.adds) expect(ok.t.server.orders.get(id)!.status).not.toBe('open');
+    expect(ok.t.exec.state().incidents.filter((i) => i.kind === 'pending-add-cancelled')).toHaveLength(3);
+    expect(ok.t.exec.state().blocked).toBeNull();
+    ok.t.broker.stop();
+    const stuck = await build();
+    stuck.t.server.controls.cancelStuck = true;
+    await closeByStop(stuck.t);
+    await sleep(2_400);
+    expect(stuck.t.exec.state().blocked).toMatch(/^pending-add-cancel-failed/);
+    expect(stuck.t.exec.state().incidents.filter((i) => i.kind === 'pending-add-cancel-failed').length).toBe(3); // jeden pokus na příkaz, nic se neopakuje
+    stuck.t.broker.stop();
+  });
+
+  it('výpadek spojení s víc čekajícími vstupy: po obnově každý dál pracuje, vyplněný má pozici a ochranu, žádný falešný incident', async () => {
+    const t = await setup({ config: multi });
+    const a = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    const b = await place(t, { limitPrice: 6985, stopPrice: 6975, targetPrice: undefined });
+    const c = await place(t, { limitPrice: 6980, stopPrice: undefined, targetPrice: undefined });
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    t.server.fill(a, 6990);
+    for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+    expect(t.broker.isConnected()).toBe(true);
+    await sleep(500);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 1 })]);
+    expect(working(t, 'entry').map((o) => o.orderId).sort()).toEqual([b, c].sort());
+    expect(working(t, 'stop')).toHaveLength(1);
+    expect(working(t, 'target')).toHaveLength(1);
+    expect(t.exec.state().blocked).toBeNull();
+    expect(t.exec.state().incidents.map((i) => i.kind)).not.toContain('bracket-legs-missing');
+    t.broker.stop();
+  });
+
+  it('pozice zavřená během výpadku: po obnově vyjde výstraha o dál čekajících vstupech právě jednou', async () => {
+    const t = await setup({ config: multi });
+    const first = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await place(t, { limitPrice: 6970, stopPrice: undefined, targetPrice: undefined });
+    await fill(t, first, 6990);
+    const drop = async () => {
+      t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+      for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+      await sleep(400);
+    };
+    t.server.controls.muteLivePositions = true; // živá zpráva o nule nepřijde — pozici ukáže až snímek po obnově
+    const stopLeg = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open')!;
+    t.server.sockets.filter((socket) => socket.readyState === 1 && socket.infra === 2)[0].drop();
+    t.server.fill(stopLeg.basketId, 6980);
+    for (let i = 0; i < 80 && !t.broker.isConnected(); i += 1) await sleep(10);
+    await sleep(500);
+    const warnings = () => t.exec.state().incidents.filter((i) => i.kind === 'entries-working-after-close').length;
+    expect(warnings()).toBe(1);
+    await drop();
+    expect(warnings()).toBe(1);
+    t.broker.stop();
+  });
+
+  it('restart služby s nepotvrzeným vstupem s ochranou: další vstup neodejde, ani na druhou stranu', async () => {
+    const protectionStore = memoryProtectionStore();
+    const t = await setup({ config: multi, protectionStore });
+    t.server.controls.ignoreNextOrder = true; // vstup s ochranou odešel, výsledek není znám
+    const lost = await t.run(entry({ limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 }));
+    expect(lost).toMatchObject({ ok: false });
+    t.broker.stop();
+    const after = await setup({ server: t.server, registryStore: t.registryStore, protectionStore, config: multi });
+    const frames = after.frames();
+    expect(await after.run(entry({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7010 }))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/není potvrzený/) });
+    expect(await after.run(entry({ side: 'Sell', limitPrice: 7010, stopPrice: 7020, targetPrice: 6990 }))).toMatchObject({ ok: false, sent: false });
+    expect(await after.run(entry({ limitPrice: 6985, stopPrice: undefined, targetPrice: undefined }))).toMatchObject({ ok: false, sent: false });
+    expect(after.frames()).toBe(frames);
+    after.broker.stop();
+  });
+
+  it('Zavřít, když příkazy nejdou zrušit: jeden zavírací příkaz, pozice zavřená, zbylé příkazy ohlášené a vstupy zastavené', async () => {
+    const t = await setup({ config: multi });
+    const first = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await place(t, { limitPrice: 6985, stopPrice: 6975, targetPrice: undefined });
+    await fill(t, first, 6990);
+    t.server.controls.cancelStuck = true;
+    const exits = () => t.server.received.filter((frame) => frame.templateId === 3504).length;
+    const exitsBefore = exits();
+    const reply = await t.run({ op: 'flatten', clientId: 'flat-stuck', symbol: 'ESZ6' });
+    await sleep(600);
+    // Právě JEDEN zavírací příkaz (nic se neopakuje), pozice je zavřená, ale nezrušené příkazy dál pracují —
+    // služba to ohlásí a zastaví nové vstupy; nic se netváří jako „hotovo".
+    expect(reply).toMatchObject({ ok: true });
+    expect(exits() - exitsBefore).toBe(1);
+    const state = t.exec.state();
+    expect(state.positions.filter((p) => p.netQuantity !== 0)).toHaveLength(0);
+    expect(state.orders.filter((o) => o.status === 'working').map((o) => o.role).sort()).toEqual(['entry', 'stop', 'target']);
+    expect(state.incidents.map((i) => i.kind)).toEqual(expect.arrayContaining(['flatten-cancel-unconfirmed', 'flatten-orders-remain']));
+    expect(state.blocked).not.toBeNull();
+    // Další vstup do takového stavu neodejde.
+    expect(await t.run(entry({ limitPrice: 6984, stopPrice: 6974, targetPrice: 7010 }))).toMatchObject({ ok: false, sent: false });
+    t.broker.stop();
+  });
+
+  it('SL pro nekrytý zbytek pozice: jen na kusy bez ochrany, jen jeden, jen SL; ostatní části jdou dál spravovat', async () => {
+    const t = await setup({ config: multi });
+    const a = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await fill(t, a, 6990);
+    const bare = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined, quantity: 2 }));
+    expect(bare, JSON.stringify(bare)).toMatchObject({ ok: true });
+    await flush();
+    await fill(t, idOf(bare), 7000);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 3 })]);
+    const rest = (extra: Record<string, unknown> = {}) => t.run({ op: 'protect', clientId: `r${Math.random().toString(36).slice(2, 9)}`, symbol: 'ESZ6', kind: 'stop', price: 6975, ...extra });
+    expect(await rest({ kind: 'target', price: 7030 })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/jen SL/) });
+    const placed = await rest();
+    expect(placed, JSON.stringify(placed)).toMatchObject({ ok: true, result: { quantity: 2, rest: true } });
+    await flush();
+    await sleep(80);
+    expect(await rest({ price: 6970 })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/už SL má/) });
+    // Hlídač: samostatný SL 2 ks vedle vstupu s ochranou na 1 ks a pozice 3 — v pořádku, žádná blokace.
+    await sleep(300);
+    expect(t.exec.state().blocked).toBeNull();
+    // Noha vstupu s ochranou jde dál posunout (samostatný SL je pro službu známý příkaz).
+    const legOfEntry = working(t, 'stop').find((o) => o.entryId !== undefined)!;
+    expect(await t.run({ op: 'move', orderId: legOfEntry.orderId, price: 6982 })).toMatchObject({ ok: true });
+    // Další vstup vedle samostatné ochrany dál nejde; částečné zavření také ne.
+    expect(await t.run(entry(add({ limitPrice: 6985, stopPrice: 6975, targetPrice: 7030 })))).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/samostatný SL\/TP/) });
+    expect(await t.run({ op: 'reduce', clientId: 'rest-red', symbol: 'ESZ6' })).toMatchObject({ ok: false, sent: false });
+    // Spustí se SL vstupu (1 ks): zbývají 2 ks kryté samostatným SL — pořád bez incidentu.
+    const entryStop = [...t.server.orders.values()].find((o) => o.priceType === 4 && o.status === 'open' && !o.userTag?.startsWith('uiprot-') && o.basketId === legOfEntry.orderId)!;
+    t.server.fill(entryStop.basketId, 6982);
+    await sleep(500);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 2 })]);
+    expect(t.exec.state().blocked).toBeNull();
+    const standalone = [...t.server.orders.values()].find((o) => o.userTag?.startsWith('uiprot-') && o.status === 'open')!;
+    expect(standalone.quantity).toBe(2);
+    t.server.fill(standalone.basketId, 6975);
+    await sleep(500);
+    expect(t.exec.state().positions.filter((p) => p.netQuantity !== 0)).toHaveLength(0);
+    expect(t.exec.state().orders.filter((o) => o.status === 'working')).toHaveLength(0);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('SL zbytku: jde posunout i zrušit, čekající vstup s ochranou vyplněný potom nic nerozbije a Zavřít uklidí vše', async () => {
+    const t = await setup({ config: multi });
+    const a = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    const later = await place(t, { limitPrice: 6985, stopPrice: 6972, targetPrice: 7010 });
+    await fill(t, a, 6990);
+    const bare = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    await fill(t, idOf(bare), 7000);
+    const placed = await t.run({ op: 'protect', clientId: 'restmove', symbol: 'ESZ6', kind: 'stop', price: 6975 });
+    expect(placed, JSON.stringify(placed)).toMatchObject({ ok: true, result: { quantity: 1, rest: true } });
+    await flush();
+    await sleep(80);
+    const restId = (placed as { result: { orderId: string } }).result.orderId;
+    expect(await t.run({ op: 'move', orderId: restId, price: 6978 })).toMatchObject({ ok: true });
+    await sleep(80);
+    expect(t.server.orders.get(restId)).toMatchObject({ quantity: 1, status: 'open' });
+    // Čekající vstup s ochranou se vyplní až teď: pozice i krytí vzrostou stejně → žádný incident.
+    await fill(t, later, 6985);
+    await sleep(300);
+    expect(t.exec.state().positions).toEqual([expect.objectContaining({ netQuantity: 3 })]);
+    expect(t.exec.state().blocked).toBeNull();
+    // Zrušení SL zbytku jde (není to svázaný pár) a pak ho jde zadat znovu.
+    expect(await t.run({ op: 'cancel', orderId: restId })).toMatchObject({ ok: true });
+    await sleep(120);
+    expect(await t.run({ op: 'protect', clientId: 'restagain', symbol: 'ESZ6', kind: 'stop', price: 6974 })).toMatchObject({ ok: true, result: { quantity: 1 } });
+    await flush();
+    await sleep(80);
+    expect((await t.run({ op: 'flatten', clientId: 'flat-rest', symbol: 'ESZ6' })).ok).toBe(true);
+    await sleep(900);
+    expect(t.exec.state().positions.filter((p) => p.netQuantity !== 0)).toHaveLength(0);
+    expect(t.exec.state().orders.filter((o) => o.status === 'working')).toHaveLength(0);
+    t.broker.stop();
+  });
+
+  it('SL zbytku neodejde, dokud stav není jistý: čerstvé vyplnění, nejistý posun, bez správy částí', async () => {
+    const t = await setup({ config: { ...multi, positionSettleMs: 600 } });
+    const a = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await fill(t, a, 6990);
+    await sleep(500);
+    const bare = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    t.server.fill(idOf(bare), 7000);
+    await sleep(120);
+    const frames = t.frames();
+    // Těsně po vyplnění: pozice se teprve usazuje.
+    expect(await t.run({ op: 'protect', clientId: 'restearly', symbol: 'ESZ6', kind: 'stop', price: 6975 })).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    await sleep(700);
+    expect(await t.run({ op: 'protect', clientId: 'restok', symbol: 'ESZ6', kind: 'stop', price: 6975 })).toMatchObject({ ok: true });
+    t.broker.stop();
+    // Bez správy částí (ani `multiManage`): k pozici se vstupem s ochranou samostatný SL nejde jako dřív.
+    const plain = await setup({ config: { maxQuantity: 10, maxPosition: 10, positionSettleMs: 20 } });
+    const p = await place(plain, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await fill(plain, p, 6990);
+    expect(await plain.run({ op: 'protect', clientId: 'restplain', symbol: 'ESZ6', kind: 'stop', price: 6975 })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/pracující příkazy|vstupu s ochranou/) });
+    plain.broker.stop();
+  });
+
+  it('SL zbytku: plně krytá pozice ho nedostane; když pozici zmenší něco zvenčí, hlídač ohlásí přesah', async () => {
+    const full = await setup({ config: multi });
+    const a = await place(full, { limitPrice: 6990, stopPrice: 6980, targetPrice: undefined });
+    await fill(full, a, 6990);
+    const b = await place(full, add({ limitPrice: 6985, stopPrice: undefined, targetPrice: 7030 }));
+    await fill(full, b, 6985);
+    // Část jen s TP se počítá jako krytá (SL vedle jejího TP by byly dva nesvázané výstupy téhož kusu).
+    expect(await full.run({ op: 'protect', clientId: 'full1', symbol: 'ESZ6', kind: 'stop', price: 6975 })).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/není co přidat/) });
+    full.broker.stop();
+    const t = await setup({ config: multi });
+    const first = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
+    await fill(t, first, 6990);
+    const bare = await t.run(entry({ orderType: 'Market', limitPrice: undefined, referencePrice: 7000, stopPrice: undefined, targetPrice: undefined }));
+    await flush();
+    await fill(t, idOf(bare), 7000);
+    expect(await t.run({ op: 'protect', clientId: 'over1', symbol: 'ESZ6', kind: 'stop', price: 6975 })).toMatchObject({ ok: true });
+    await sleep(200);
+    expect(t.exec.state().blocked).toBeNull();
+    t.server.controls.muteLivePositions = true;
+    t.server.pushLivePosition('ACC1', 'ESZ6', 1); // pozice 1, ale SL vstupu 1 + SL zbytku 1 = 2
+    await sleep(400);
+    expect(t.exec.state().blocked).toMatch(/^(protection-exceeds-position|protective-order-mismatch)/);
+    t.broker.stop();
+  });
+
   it('Zavřít s pozicí, ochranami a třemi čekajícími vstupy zruší vše', async () => {
     const t = await setup({ config: multi });
     const first = await place(t, { limitPrice: 6990, stopPrice: 6980, targetPrice: 7010 });
