@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { LIVE_HOTKEY_BUSY_TEXT_SOLO, LIVE_HOTKEY_SOLO_FLATTEN_TEXT, liveHotkeyHelp, resolveLiveHotkey } from '../lib/liveHotkeys';
 import { rithmicLocalAllowedHere, takeRithmicTokenFromHash } from '../lib/rithmicLocalLink';
 import { rithmicScreenInstrumentIssue } from '../components/RithmicLiveChart';
-import { rithmicFlattenReply, rithmicLegView, rithmicTradeEvents } from '../hooks/useRithmicLocalTrading';
+import { rithmicFlattenReply, rithmicLegView, rithmicTradeEvents, UNIFIED_LINE_TICKS } from '../hooks/useRithmicLocalTrading';
 import { LIVE_MANAGE_BUSY_TEXT } from '../hooks/useLiveManageRunner';
 import { liveSoloNoticeText } from '../lib/liveSoloTexts';
 import { READ_ONLY_ALLOWED_TEMPLATES, RITHMIC_WRITE_TEMPLATES, readOnlyViolation } from '../services/rithmic/readOnlyGuard';
@@ -284,7 +284,10 @@ describe('hook místního procesu', () => {
     // Samostatný SL zbytku (`uiprot-`) se mezi nohy vstupů nepočítá a posouvá se sám.
     expect(hook.match(/const entryLegs = legs\.filter\(\(order\) => !order\.tag\?\.startsWith\('uiprot-'\)\);/g)).toHaveLength(2);
     // Jen v režimu víc vstupů (`state.multiEntry`); jinak dosavadní „všechny nohy role" — tah i BE hýbou celou pozicí.
-    expect(hook.match(/const same = leg\.tag\?\.startsWith\('uiprot-'\) \? \[leg\] : (current|stateRef\.current)\?\.multiEntry === true \? entryLegs\.filter\(\(order\) => order\.price === leg\.price\) : entryLegs;/g)).toHaveLength(2);
+    expect(hook.match(/const same = leg\.tag\?\.startsWith\('uiprot-'\) \? \[leg\] : (current|stateRef\.current)\?\.multiEntry === true \? entryLegs\.filter\(\(order\) => sameLineRef\.current\(order\.price, leg\.price\)\) : entryLegs;/g)).toHaveLength(2);
+    // Jednotná čára (26. 11. 2026): nohy do pár ticků od hlavní čáry (skluz Marketu při přikoupení) k ní patří.
+    expect(UNIFIED_LINE_TICKS).toBe(4);
+    expect(hook).toMatch(/const sameLine = \(a: number \| undefined, b: number \| undefined\) => a !== undefined && b !== undefined && Math\.abs\(a - b\) <= lineTolerance;/);
     // Spouštěč: víc vstupů na skutečném účtu jen na výslovné zapnutí; správa částí vždy, i v režimu jen pro zavírání.
     expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| \(LIVE_TRADING && !CLOSE_ONLY && process\.argv\.includes\('--multi-entry'\)\) \? \{ multiEntry: true \} : \{\}\)/);
     expect(server).toMatch(/\.\.\.\(IS_TEST_SYSTEM \|\| LIVE_TRADING \? \{ multiManage: true \} : \{\}\)/);

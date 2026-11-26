@@ -288,6 +288,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: jednotné SL/TP při přikoupení (jen appka) — NENASAZENO
+
+- Filip: „když přidávám/odebírám, ať je jednotný SL/TP a jen se navyšuje“ (ve volném režimu měl každý další vstup
+  vlastní SL/TP z šablony a v grafu přibývaly čáry).
+- `LiveTicketScaleIn.unify` (jen s `free`): pozice už SL nebo TP má → návrh na její stranu je převezme
+  (`liveUnifiedAddDraft`; lístek PC, jeden klik z grafu, list telefonu; lišta telefonu to dělala už dřív). Pozice
+  jen se SL → přikoupení jen se SL. Pozice bez SL/TP a víc čekajících vstupů z nuly beze změny (volné).
+- Jednotná čára: nohy do `UNIFIED_LINE_TICKS` = 4 ticků od hlavní čáry k ní patří (skluz Marketu — vzdálenosti nohou
+  se počítají od skutečného vyplnění). Čára ukazuje ochrannější SL / bližší TP, první posun srovná všechny na jednu
+  cenu (`move-legs` s výčtem noh a jejich skutečných cen). Jen zobrazení a výběr noh (INV-UI-01/02); služba beze změny.
+- Ověřeno: celá sada zelená, tsc 0; simulace PC: Market se SL+TP, druhý Market → „LONG 2“, jedna čára „SL 2“ a „TP 2“.
+  Telefon a skutečný účet NEOVĚŘENO.
+
 ### 2026-11-26 — Claude: druhá noha k ochraně ZE VSTUPU (vstup jen se SL → „+ TP“, a obráceně) — NENASAZENO
 
 - Filip na skutečném účtu vstoupil jen se SL (bracket STOP_ONLY, 1 ks) a čip „+ TP“ odmítal („pozice už má pracující

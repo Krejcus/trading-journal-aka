@@ -264,7 +264,7 @@ export default function LivePhoneOrderSheet({
   const previewKey = livePhoneSheetPreviewKey(resetKey, payload);
   const previewBlocked = livePhoneSheetPreviewBlocked({ blockedReason: trade?.blockedReason ?? null, problems, payload, liveQuote, now });
   const shownPreview = snapshot && previewKey !== '' && snapshot.key === previewKey ? snapshot : null;
-  const scaleLocked = trade?.scaleIn != null && trade.scaleIn.free !== true && trade.scaleIn.side === draft.side;
+  const scaleLocked = trade?.scaleIn != null && (trade.scaleIn.free !== true || trade.scaleIn.unify === true) && trade.scaleIn.side === draft.side;
 
   const update = (next: TicketDraft) => setDraft(next);
   const setSide = (side: 'buy' | 'sell') => {
