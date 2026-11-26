@@ -864,7 +864,10 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       // Druhá noha: jde jen k JEDNÉ samostatné ochraně opačného druhu — služba ji zruší a obě zadá znovu jako
       // svázaný pár (vyplnění jedné pak druhou zruší burza). Jestli to opravdu jde, rozhodne služba.
       const others = list.filter((order) => order.status === 'working' || order.status === 'pending');
-      if (others.length > 0 && !(others.length === 1 && others[0].tag?.startsWith('uiprot-') && others[0].role === (role === 'stop' ? 'target' : 'stop'))) {
+      // Totéž k jediné noze ZE VSTUPU (vstup odešel jen se SL nebo jen s TP) na celou pozici.
+      const opposite = role === 'stop' ? 'target' : 'stop';
+      const soleEntryLeg = others.length === 1 && others[0].entryId !== undefined && others[0].role === opposite && others[0].quantity - others[0].filledQuantity === heldNow;
+      if (others.length > 0 && !soleEntryLeg && !(others.length === 1 && others[0].tag?.startsWith('uiprot-') && others[0].role === opposite)) {
         return blocked('Pozice už má pracující příkazy (SL/TP ze vstupu nebo čekající vstup) — další ochranu přidat nejde.');
       }
       measure(`Přidání ${name} → čára`, (s) => s.orders.some((order) => order.symbol === sym && order.role === role && order.status === 'working'));

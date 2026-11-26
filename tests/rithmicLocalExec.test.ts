@@ -2623,3 +2623,182 @@ describe('místní služba: víc čekajících vstupů a části pozice s různo
     t.broker.stop();
   });
 });
+
+describe('místní služba: druhá noha k ochraně ZE VSTUPU (vstup jen se SL nebo jen s TP)', () => {
+  const protect = (extra: Record<string, unknown> = {}) => ({ op: 'protect', clientId: `p${Math.random().toString(36).slice(2, 10)}`, symbol: 'ESZ6', kind: 'target', price: 7010, ...extra });
+  async function filled(legs: Record<string, unknown>, config: Record<string, unknown> = {}) {
+    const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20, moveConfirmMs: 200, ...config } });
+    const placed = await t.run(entry(legs));
+    expect(placed.ok).toBe(true);
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    t.server.fill(entryId, 6990);
+    await sleep(120);
+    return { t, entryId };
+  }
+  const open = (t: Awaited<ReturnType<typeof setup>>) => [...t.server.orders.values()].filter((o) => o.status === 'open');
+
+  it('vstup jen se SL, potom TP: noha vstupu se zruší, záznam ochrany se uzavře a zadá se svázaný pár; nic se nehlásí', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    expect(t.exec.state().orders.map((o) => o.role)).toEqual(['stop']);
+    expect(t.exec.state().brackets.map((b) => b.state)).toEqual(['protected']);
+    const added = await t.run(protect());
+    expect(added).toMatchObject({ ok: true, result: { paired: true } });
+    await sleep(60);
+    const now = open(t);
+    expect(now).toHaveLength(2);
+    expect(now.every((o) => o.userTag.startsWith('uiprot-') && o.oco !== undefined && o.side === 2 && o.quantity === 1)).toBe(true);
+    expect(now.find((o) => o.priceType === 4)!.triggerPrice).toBe(6980);
+    expect(now.find((o) => o.priceType === 1)!.price).toBe(7010);
+    // Hlídač ochrany vstupu nesmí po lhůtě hlásit chybějící nohu — ochrana vstupu skončila záměrně.
+    await sleep(400);
+    const state = t.exec.state();
+    expect(state.blocked).toBeNull();
+    expect(state.incidents).toEqual([]);
+    expect(state.orders.map((o) => o.role).sort()).toEqual(['stop', 'target']);
+    expect(state.positions).toMatchObject([{ netQuantity: 1 }]);
+    // TP se vyplní → burza zruší SL, pozice 0.
+    t.server.fill(state.orders.find((o) => o.role === 'target')!.orderId, 7010);
+    await sleep(150);
+    expect(t.exec.state().positions).toEqual([]);
+    expect(t.exec.state().orders).toEqual([]);
+    expect(t.exec.state().blocked).toBeNull();
+    t.broker.stop();
+  });
+
+  it('vstup jen s TP, potom SL: totéž obráceně', async () => {
+    const { t } = await filled({ stopPrice: undefined });
+    expect(t.exec.state().orders.map((o) => o.role)).toEqual(['target']);
+    expect(await t.run(protect({ kind: 'stop', price: 6980 }))).toMatchObject({ ok: true, result: { paired: true } });
+    await sleep(300);
+    const now = open(t);
+    expect(now).toHaveLength(2);
+    expect(now.find((o) => o.priceType === 4)!.triggerPrice).toBe(6980);
+    expect(now.find((o) => o.priceType === 1)!.price).toBe(7010);
+    expect(t.exec.state().blocked).toBeNull();
+    expect(t.exec.state().incidents).toEqual([]);
+    t.broker.stop();
+  });
+
+  it('vstup se SL i TP: další ochrana neodejde a nic se neruší', async () => {
+    const { t } = await filled({});
+    const frames = t.frames();
+    expect(await t.run(protect({ price: 7012 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(protect({ kind: 'stop', price: 6978 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    expect(open(t)).toHaveLength(2);
+    t.broker.stop();
+  });
+
+  it('TP na špatné straně trhu nebo stejný druh nohy: nic se neruší', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    const frames = t.frames();
+    expect(await t.run(protect({ price: 6985 }))).toMatchObject({ ok: false, sent: false });
+    expect(await t.run(protect({ kind: 'stop', price: 6982 }))).toMatchObject({ ok: false, sent: false });
+    expect(t.frames()).toBe(frames);
+    expect(open(t)).toHaveLength(1);
+    expect(t.exec.state().brackets.map((b) => b.state)).toEqual(['protected']);
+    t.broker.stop();
+  });
+
+  it('zrušení nohy vstupu se nepotvrdí: pár neodejde, incident, noha pracuje dál a ochrana vstupu se dál hlídá', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    t.server.controls.cancelStuck = true;
+    const added = await t.run(protect());
+    expect(added).toMatchObject({ ok: false, sent: 'unknown' });
+    await sleep(80);
+    const now = open(t);
+    expect(now).toHaveLength(1);
+    expect(now[0].userTag.startsWith('uiprot-')).toBe(false);
+    expect(t.exec.state().blocked).toMatch(/protect-replace-uncertain/);
+    expect(t.exec.state().brackets.map((b) => b.state)).toEqual(['protected']);
+    t.broker.stop();
+  }, 15_000);
+
+  it('SL ze vstupu se vyplní v okamžiku zrušení: žádný pár, pozice zavřená, nic nezbylo', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    const stopId = t.exec.state().orders.find((o) => o.role === 'stop')!.orderId;
+    t.server.hooks.onRequest = (templateId) => { if (templateId === 316) { t.server.hooks.onRequest = undefined; t.server.fill(stopId, 6980); } };
+    const added = await t.run(protect());
+    expect(added.ok).toBe(false);
+    await sleep(200);
+    expect(open(t)).toHaveLength(0);
+    expect(t.exec.state().positions).toEqual([]);
+    expect([...t.server.orders.values()].some((o) => o.userTag.startsWith('uiprot-'))).toBe(false);
+    t.broker.stop();
+  }, 15_000);
+
+  it('Zavřít během výměny: po zavření nevznikne žádný pár ani osiřelý příkaz', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    let fired = false;
+    t.server.hooks.onRequest = (templateId) => {
+      if (templateId === 316 && !fired) { fired = true; void t.run({ op: 'flatten', clientId: 'f1', symbol: 'ESZ6' }); }
+    };
+    await t.run(protect());
+    await sleep(600);
+    t.server.hooks.onRequest = undefined;
+    expect(open(t)).toHaveLength(0);
+    expect(t.exec.state().positions.filter((p) => p.netQuantity !== 0)).toEqual([]);
+    t.broker.stop();
+  }, 15_000);
+
+  it('částečně vyplněný a zrušený vstup: noha se neuvolní, nic se neruší', async () => {
+    const t = await setup({ config: { protectiveGraceMs: 40, positionSettleMs: 20, moveConfirmMs: 200 } });
+    const account = t.broker.accountIds()[0];
+    await expect(t.broker.releaseBracketLeg(account, 'neznámý')).rejects.toThrow(/nemá hlídanou ochranu/);
+    const placed = await t.run(entry({ targetPrice: undefined }));
+    await flush();
+    const entryId = (placed as { result: { orderId: string } }).result.orderId;
+    // Vstup ještě čeká (nevyplněný): uvolnění nohy se odmítne před zápisem.
+    const frames = t.frames();
+    await expect(t.broker.releaseBracketLeg(account, entryId)).rejects.toThrow(/není celý vyplněný/);
+    expect(t.frames()).toBe(frames);
+    t.broker.stop();
+  });
+
+  it('víc kusů bez povolené výměny: nic se neruší', async () => {
+    const { t } = await filled({ targetPrice: undefined, quantity: 2 }, { multiPairSwap: false });
+    const frames = t.frames();
+    expect(await t.run(protect())).toMatchObject({ ok: false, sent: false, error: expect.stringMatching(/víc kusů/) });
+    expect(t.frames()).toBe(frames);
+    expect(open(t)).toHaveLength(1);
+    t.broker.stop();
+  });
+
+  it('restart po výměně: uzavřený záznam ochrany vstupu a pár → žádný incident, TP dál zavírá pozici', async () => {
+    const protectionStore = memoryProtectionStore();
+    const config = { protectiveGraceMs: 40, positionSettleMs: 20, moveConfirmMs: 200 };
+    const t = await setup({ config, protectionStore });
+    const placed = await t.run(entry({ targetPrice: undefined }));
+    await flush();
+    t.server.fill((placed as { result: { orderId: string } }).result.orderId, 6990);
+    await sleep(120);
+    expect((await t.run(protect())).ok).toBe(true);
+    await sleep(80);
+    t.broker.stop();
+    const after = await setup({ server: t.server, registryStore: t.registryStore, protectionStore, config });
+    await sleep(400);
+    const state = after.exec.state();
+    expect(state.blocked).toBeNull();
+    expect(state.incidents).toEqual([]);
+    expect(state.orders.map((o) => o.role).sort()).toEqual(['stop', 'target']);
+    after.server.fill(state.orders.find((o) => o.role === 'target')!.orderId, 7010);
+    await sleep(200);
+    expect(after.exec.state().positions.filter((p) => p.netQuantity !== 0)).toEqual([]);
+    expect(open(after)).toHaveLength(0);
+    after.broker.stop();
+  }, 15_000);
+
+  it('pár po zrušení nohy burza odmítne: incident „bez ochrany“, služba stojí, nic se neopakuje', async () => {
+    const { t } = await filled({ targetPrice: undefined });
+    t.server.controls.rejectNextOrder = 'odmítnuto';
+    const added = await t.run(protect());
+    expect(added.ok).toBe(false);
+    await sleep(120);
+    expect(open(t)).toHaveLength(0);
+    const state = t.exec.state();
+    expect(state.blocked).toMatch(/protection-removed|protect-replace/);
+    expect(state.positions).toMatchObject([{ netQuantity: 1 }]);
+    t.broker.stop();
+  });
+});

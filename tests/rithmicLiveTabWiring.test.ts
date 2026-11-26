@@ -259,7 +259,9 @@ describe('hook místního procesu', () => {
 
   it('SL/TP k otevřené pozici: jen jeden z nich, odebrat jde jen samostatnou ochranu', () => {
     const leg = hook.slice(hook.indexOf('const onBareLeg = useCallback'), hook.indexOf('const ack = useCallback'));
-    expect(leg).toMatch(/if \(others\.length > 0 && !\(others\.length === 1 && others\[0\]\.tag\?\.startsWith\('uiprot-'\) && others\[0\]\.role === \(role === 'stop' \? 'target' : 'stop'\)\)\) \{/);
+    // Druhá noha jde k jediné samostatné ochraně opačného druhu, nebo k jediné noze ze vstupu na celou pozici (26. 11. 2026).
+    expect(leg).toMatch(/const soleEntryLeg = others\.length === 1 && others\[0\]\.entryId !== undefined && others\[0\]\.role === opposite && others\[0\]\.quantity - others\[0\]\.filledQuantity === heldNow;/);
+    expect(leg).toMatch(/if \(others\.length > 0 && !soleEntryLeg && !\(others\.length === 1 && others\[0\]\.tag\?\.startsWith\('uiprot-'\) && others\[0\]\.role === opposite\)\) \{/);
     expect(leg).toMatch(/send\(\{ op: 'protect', clientId: newId\(\), symbol: sym, kind: role, price: intent\.price \}\)/);
     expect(leg).toMatch(/if \(!leg\.tag\?\.startsWith\('uiprot-'\)\) return blocked\(/);
     expect(leg).toMatch(/if \(!availableRef\.current\) return blocked\(NOT_READY\);/);

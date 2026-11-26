@@ -181,6 +181,14 @@ export interface RithmicBrokerPort extends BrokerPort {
    */
   beginBracketResize(accountId: number, entryBrokerOrderId: string, quantity: number): Promise<void>;
   endBracketResize(accountId: number, entryBrokerOrderId: string, exitedQuantity: number): Promise<void>;
+  /**
+   * Zruší JEDINOU pracující nohu ochrany vlastního (plně vyplněného) vstupu při otevřené pozici a záznam ochrany
+   * uzavře — krok výměny za svázaný pár SL+TP (vstup měl jen SL nebo jen TP). Záměr se uloží před zrušením.
+   * Vrací konečný stav nohy (zrušená / vyplněná), nebo `undefined`, když zrušení do lhůty nikdo nepotvrdil
+   * (záměr pak zůstává a po krátké toleranci se hlásí skutečný stav). Pozice je po úspěchu BEZ ochrany —
+   * volající musí hned zadat pár, nebo ohlásit incident. Nic se neopakuje.
+   */
+  releaseBracketLeg(accountId: number, entryBrokerOrderId: string): Promise<BrokerOrder | undefined>;
   /** Pozice ze snímku a potvrzených exekucí. Při chybějícím údaji vrací null. */
   executionNet(accountId: number, symbol: string): number | null;
   hasPendingWrites(accountId: number, symbol: string): boolean;
@@ -1172,6 +1180,12 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         }
         // Natrvalo uzavírá jen silná nula (`strongZero`); kontrola sama bracket z nuly nezavírá.
         const result = protection.bracketState(account, entryId, orderOf, net, false);
+        // Běží uvolnění nohy (výměna za pár): po dobu tolerance se nic nehlásí — skutečný stav se zkontroluje hned po ní.
+        const releaseLeft = protection.releaseEndsIn(account, entryId);
+        if (releaseLeft !== null) {
+          const again = setTimeout(() => { if (client === source) scheduleBracketCheck(source, account, entryId); }, releaseLeft + 200);
+          (again as { unref?: () => void }).unref?.();
+        }
         if (result.latch) {
           protection.closeBracket(account, entryId);
           bracketReported.delete(key);
@@ -1679,6 +1693,54 @@ export function createRithmicBroker(config: RithmicBrokerConfig): RithmicBrokerP
         if (now() >= deadline || client !== active) throw new Error('Rithmic: zmenšení ochrany není potvrzené stavem obou noh');
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
+    },
+    async releaseBracketLeg(accountId, entryId) {
+      const active = activeClient();
+      const text = accountText(accountId, true);
+      const intent = protection.bracketByEntry(accountId, entryId);
+      if (!intent || intent.closedAt !== undefined) throw new BrokerRequestNotSentError(`Rithmic: vstup ${entryId} nemá hlídanou ochranu`);
+      const entry = book.get(accountId, entryId);
+      // Jen CELÝ vyplněný vstup: po uvolnění se záznam už neotevírá, pozdní dovyplnění by zůstalo bez dohledu.
+      if (!entry || entry.status !== 'filled' || entry.filledQuantity !== entry.quantity) throw new BrokerRequestNotSentError('Rithmic: vstup není celý vyplněný — nohu neuvolňuji');
+      const legsNow = () => protection.legsOf(accountId, entryId).map((leg) => book.get(accountId, leg.orderId)).filter((order): order is BrokerOrder => order !== undefined && !TERMINAL.has(order.status));
+      const legs = legsNow();
+      if (legs.length !== 1 || legs[0].status !== 'working' || legs[0].filledQuantity !== 0) throw new BrokerRequestNotSentError('Rithmic: ochrana vstupu nemá právě jednu pracující nevyplněnou nohu');
+      const leg = legs[0];
+      assertNotFlattening(accountId, intent.symbol, 'uvolnění nohy ochrany');
+      if (!protection.beginRelease(accountId, entryId)) throw new BrokerRequestNotSentError('Rithmic: jiná změna ochrany tohoto vstupu už běží');
+      if (!(await saveProtection())) {
+        protection.endRelease(accountId, entryId, false);
+        throw new BrokerRequestNotSentError('Rithmic: záznam o uvolnění nohy nejde uložit — neodesílám');
+      }
+      const still = book.get(accountId, leg.brokerOrderId);
+      if (client !== active || !still || still.status !== 'working' || still.filledQuantity !== 0) {
+        protection.endRelease(accountId, entryId, false);
+        void saveProtection();
+        throw new BrokerRequestNotSentError('Rithmic: noha se během ukládání změnila — neodesílám');
+      }
+      const waiter = waitForTerminal(accountId, leg.brokerOrderId);
+      try {
+        await active.cancelOrder(text, leg.brokerOrderId);
+      } catch (error) {
+        waiter.cancel();
+        // Prokazatelně odmítnuto / neodesláno = noha pracuje dál; jinak záměr zůstává a rozhodne volající (incident).
+        if (error instanceof RithmicRequestError && error.outcome !== 'unknown') { protection.endRelease(accountId, entryId, false); void saveProtection(); }
+        return rethrowWrite(error, 'uvolnění nohy ochrany');
+      }
+      // Bez potvrzení záměr zůstává: po toleranci se zkontroluje skutečný stav (pozdě zrušená noha → záznam se uzavře,
+      // pracující noha → běžný stav „chráněno").
+      const recheck = () => { if (client === active) scheduleBracketCheck(active, accountId, entryId); };
+      if (!(await waiter.promise)) { recheck(); return undefined; }
+      const order = book.get(accountId, leg.brokerOrderId);
+      if (!order || !TERMINAL.has(order.status)) { recheck(); return undefined; }
+      // Zrušená bez plnění → ochrana vstupu končí (pozici dál chrání pár, který zadá volající). Vyplněná noha = běžný
+      // konec ochrany: záměr se jen smaže a stav dohlédne hlídač.
+      protection.endRelease(accountId, entryId, order.status === 'canceled' && order.filledQuantity === 0);
+      // Neuložený záznam výsledek nemění (noha je prokazatelně pryč): po restartu ho z knihy dohledá hlídač
+      // (starý záměr + noha zrušená bez plnění → uzavřít) a nedokončenou výměnu hlásí značka výměny.
+      await saveProtection();
+      if (client) scheduleBracketCheck(client, accountId, entryId);
+      return order;
     },
     async endBracketResize(accountId, entryId, exitedQuantity) {
       protection.endResize(accountId, entryId, exitedQuantity);
