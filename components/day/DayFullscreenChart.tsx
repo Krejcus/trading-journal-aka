@@ -45,6 +45,7 @@ import ChartNotesLayer from '../ChartNotesLayer';
 import { chartNotesOfTrades, type ChartNote } from '../../lib/chartNotes';
 import DayNotesLayer, { type DayBand, type DayPinPoint, type DayPinView } from './DayNotesLayer';
 import DayTouchDrawLayer from './DayTouchDrawLayer';
+import ChartFocusVeil from './ChartFocusVeil';
 import { dayAnchorTrade, focusTarget, reviewFocusKey, useReviewFocus } from './dayFocus';
 import type { DayController } from './useDayController';
 import { useLiveCandleBinding, type LiveCandleTarget } from '../../hooks/useLiveCandleBinding';
@@ -903,6 +904,8 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
             )}
             {tfSwap > 0 && <TimeframeSwapFx key={tfSwap} />}
             {cutFx && <ReplayCutFx key={cutFx.key} chartApi={paneApi(index)} time={cutFx.time} />}
+            {/* Zaostření: vybraná kresba zůstane jasná, okolí ztmavne (jen aktivní okno). */}
+            {visible && (!split || isActive) && !drawingNow && selected && <ChartFocusVeil api={paneApi(index)} target={{ kind: 'drawing', id: selected.id }} isDark={isDark} />}
             {/* Dotyky na kresby: výběr, přesun, úprava bodů vždy; s nástrojem v ruce crosshair. */}
             <DayTouchDrawLayer chartApi={paneApi(index)} containerRef={ref} enabled={!placing && !textEdit && replayPhase !== 'selecting' && (!split || isActive)} pathActive={pathActive} pathStyle={pathStyle} onPathEnd={toolDone} onDrawingDoubleTap={openSettingsFor} onDrawingLongPress={live ? openPositionMenu : undefined} />
             {/* Vrstva LIVE v okně (U3): souřadnice a měřítko tohoto okna; skryté okno ji nemá.

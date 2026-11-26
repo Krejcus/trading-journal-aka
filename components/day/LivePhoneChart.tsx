@@ -39,6 +39,7 @@ import {
   LivePhoneOrderLines, LivePhoneWorkingBadges, livePhoneDraftAfterAddBracket, livePhoneDraftAfterDrag, livePhoneDraftAfterRemove, livePhoneDraftLines,
   livePhoneMarketDraftFollow, livePhoneWorkingView, useLivePhoneLineState,
 } from './LivePhoneOrderLines';
+import ChartFocusVeil from './ChartFocusVeil';
 import { exitTouchCrosshair } from '../../services/chartTouchCrosshair';
 import { hideExactCrosshairOverlays } from '../../services/chartCrosshairPrecision';
 import { LivePhoneAlertLines, LivePhoneAlertList, LivePhoneAlertSheet, LivePhoneAlertsButton, LivePhoneCrosshairPlus, LivePhonePlusSheet } from './LivePhoneAlerts';
@@ -469,6 +470,7 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
   const alertEvents = useMemo(() => slots.alertEvents ?? (alertState.events ?? []).filter(event => !event.suppressed)
     .map(event => ({ id: event.id, alertId: event.alertId, at: event.at, price: event.level })), [slots.alertEvents, alertState.events]);
   const [selectedAlert, setSelectedAlert] = useState<string | null>(null);
+  const selectedAlertPrice = selectedAlert ? alertState.alerts.find(alert => alert.id === selectedAlert)?.price ?? null : null;
   const [editAlert, setEditAlert] = useState<string | null>(null);
   const [alertList, setAlertList] = useState(false);
   const [plus, setPlus] = useState<number | null>(null);
@@ -742,6 +744,8 @@ export default function LivePhoneChart({ trades, allTrades, sessions, isDark, on
             }}
             onManage={openManage}
           />
+          {/* Zaostření na vybrané upozornění; ovládací čáry obchodu výš zůstávají jasné. */}
+          {active && selectedAlertPrice != null && <ChartFocusVeil api={api} target={{ kind: 'price', price: selectedAlertPrice }} isDark={isDark} />}
           <LivePhoneAlertLines
             api={api}
             alerts={alertState.alerts}
