@@ -292,6 +292,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Příčina:** magnet chytal jen při tahu za úchyt. Při přesunu celé kresby (tělo position boxu, čára, obdélník) se nepřichytávalo vůbec — schválně, aby se kresba nezdeformovala. Vodorovná čára tažená mimo svůj bod navíc se silným magnetem uvízla: CandleKit posouvá kresbu po krocích (aktuální body + posun), takže přichycený bod se v dalším kroku přichytil zpět.
 - **Oprava (`services/chartDrawingMagnet.ts`, 4. parametr `installDrawingMagnet`):** při tahu za tělo (pozná se z `controller.drag`) se pamatuje nepřichycená poloha a přichycení se počítá z ní; všechny body se posunou stejně, tvar zůstává. Position box a vodorovná čára se chytají cenou na úroveň přes viditelné svíčky, kresby s více body přichytí bod, který je ke své svíčce nejblíž. Platí pro telefon i PC (stejný řadič).
 - **Ověřeno:** telefonní QA simulace syntetickými dotyky (silný magnet): čára, obdélník, position box a vodorovná čára se chytají a tvar drží; 4 nové testy, celá sada 4118 prošla, tsc čistý. **Neověřeno:** PC myší v prohlížeči, skutečný iPhone (build v telefonu je starší, ef3c1d3c).
+- **iPhone:** build z `50f28ccb` nainstalován přes stávající appku a spuštěn na LIVE (26. 11.); Filipem zatím neověřeno. Web dál nenasazen.
 - Zkoušené „zaostření“ na vybranou kresbu (ztmavení okolí) Filip zamítl — commit fc76b0f5 vrácen (0ffd2a52), nestavět.
 
 ### 2026-11-25 — Claude: iPhone build z větve `claude/chart-tf-duplicates-20261125` (ef3c1d3c) nainstalován; web NENASAZEN
