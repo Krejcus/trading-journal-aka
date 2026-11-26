@@ -1599,8 +1599,18 @@ export class LocalExec {
           // zadají znovu jako svázaný pár (OCO) — vyplnění jedné pak druhou zruší burza. Jiný tvar = odmítnout.
           const exitSide: OrderSide = net > 0 ? 'Sell' : 'Buy';
           const lone = working.length === 1 ? working[0] : null;
-          const pairWith = lone && lone.tag?.startsWith(PROTECT_TAG) && lone.status === 'working' && lone.side === exitSide
-            && lone.filledQuantity === 0 && lone.quantity === quantity && lone.orderType === (kind === 'stop' ? 'Limit' : 'Stop')
+          // Druhá noha k ochraně ZE VSTUPU (vstup odešel jen se SL nebo jen s TP, 26. 11. 2026): jediný otevřený vstup
+          // s ochranou, plně vyplněný, a jeho jediná noha opačného druhu kryje celou pozici. Noha se uvolní (adaptér
+          // uzavře záznam ochrany vstupu) a obě se zadají jako svázaný pár — stejný postup jako u samostatné ochrany.
+          const soleBracket = this.broker.listBrackets(accountId).filter((bracket) => bracket.symbol === symbol && !bracket.closed);
+          const entryLeg = lone && soleBracket.length === 1 ? soleBracket[0].legs.find((leg) => leg.orderId === lone.brokerOrderId) : undefined;
+          const swapEntryId = lone && entryLeg && soleBracket[0].legs.filter((leg) => { const order = this.orders.get(leg.orderId); return order !== undefined && !TERMINAL.has(order.status); }).length === 1
+            && entryLeg.role === (kind === 'stop' ? 'target' : 'stop')
+            && this.broker.bracketState(accountId, soleBracket[0].entryId).state === 'protected'
+            && TERMINAL.has(this.orders.get(soleBracket[0].entryId)?.status ?? '')
+            && this.broker.unresolvedBracketTags(accountId, symbol).length === 0 ? soleBracket[0].entryId : null;
+          const pairWith = lone && (lone.tag?.startsWith(PROTECT_TAG) ? lone.orderType === (kind === 'stop' ? 'Limit' : 'Stop') : swapEntryId !== null)
+            && lone.status === 'working' && lone.side === exitSide && lone.filledQuantity === 0 && lone.quantity === quantity
             && (kind === 'stop' ? lone.limitPrice : lone.stopPrice) !== undefined ? lone : null;
           // SL pro NEKRYTÝ zbytek pozice složené z víc částí (některé s ochranou, některé bez): samostatný Stop jen
           // na kusy, které žádný vstup s ochranou nekryje. Kryje jiné kusy než nohy vstupů, takže po vyplnění
@@ -1637,7 +1647,7 @@ export class LocalExec {
           // mohla být třetí, nesvázaný výstup. Nejdřív ověřit stav a potvrdit incident.
           if (this.legsUncertain.has(symbol)) return refuse('poslední změna ochrany skončila nejistě — ověř u brokera, co na pozici pracuje, a potvrď incident');
           // Vstup s ochranou, jehož nohy ještě nedorazily (nebo se neví): nohy jsou výstup → další by byl druhý.
-          if (restQuantity === null && openBrackets.length > 0) {
+          if (restQuantity === null && openBrackets.length > 0 && !(pairWith && swapEntryId !== null)) {
             return refuse('pozice patří ke vstupu s ochranou (jeho SL/TP se právě zakládají nebo hlídají) — další ochranu nezadávám');
           }
           // Těsně po vyplnění může být místní pozice ještě stará (např. právě vyplněná ochrana): počkat na zprávu
@@ -1692,7 +1702,13 @@ export class LocalExec {
               if (!this.setReplaceMarker({ symbol, at: this.now() })) return refuse('značku výměny ochrany nejde uložit — nic neměním');
               // 1) Zrušit původní nohu a POČKAT na potvrzení stavem. Bez potvrzení se pár nezadává (hrozily by dvě ochrany).
               try {
-                await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
+                if (swapEntryId !== null && !pairWith.tag?.startsWith(PROTECT_TAG)) {
+                  // Noha vstupu: zruší ji adaptér a záznam ochrany vstupu uzavře. Bez potvrzení se pár nezadává.
+                  const released = await this.broker.releaseBracketLeg(accountId, swapEntryId);
+                  if (!released) return fail('protect-replace-uncertain', `zrušení původního ${kind === 'stop' ? 'TP' : 'SL'} ze vstupu není potvrzené — nový pár nezadávám; ověř u brokera, jakou ochranu pozice má`);
+                } else {
+                  await this.broker.cancelOrder(accountId, pairWith.brokerOrderId);
+                }
               } catch (error) {
                 // Prokazatelně neodesláno = nic se nezměnilo. Cokoli jiného: stará ochrana mohla zmizet → incident.
                 if (error instanceof BrokerRequestNotSentError) { this.setReplaceMarker(null); throw error; }

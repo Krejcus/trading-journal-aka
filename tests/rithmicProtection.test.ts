@@ -1086,3 +1086,96 @@ describe('zavírání pozice', () => {
     second.broker.stop();
   });
 });
+
+describe('záznam ochrany: záměrné uvolnění jediné nohy (výměna za pár)', () => {
+  const ACC = 1;
+  function build(leg: { status: BrokerOrder['status']; filled?: number }) {
+    let clock = 1_000;
+    const protection = new RithmicProtection(memoryProtectionStore(), () => clock);
+    protection.addBracket({ tag: 't', accountId: ACC, symbol: 'ESZ6', side: 'Buy', quantity: 1, stopTicks: 40, entryId: 'E', createdAt: 1 });
+    const orders = new Map<string, BrokerOrder>();
+    const order = (id: string, status: BrokerOrder['status'], filled: number, extra: Partial<BrokerOrder> = {}): BrokerOrder => ({
+      brokerOrderId: id, accountId: ACC, symbol: 'ESZ6', side: 'Sell', orderType: 'Unsupported', quantity: 1, filledQuantity: filled, status, sourceVersion: '', ...extra,
+    } as BrokerOrder);
+    orders.set('E', order('E', 'filled', 1));
+    protection.observe(ACC, { basketId: 'S', originalBasketId: 'E', priceType: 'STOP_MARKET', bracketType: 'STOP_ONLY_STATIC', userTag: '' } as never);
+    orders.set('S', order('S', leg.status, leg.filled ?? 0, { stopPrice: 6980 }));
+    const orderOf = (id: string) => orders.get(id);
+    return { protection, set: (status: BrokerOrder['status'], filled = 0) => orders.set('S', order('S', status, filled, { stopPrice: 6980 })), tick: (ms: number) => { clock += ms; }, state: () => protection.bracketState(ACC, 'E', orderOf, 1) };
+  }
+
+  it('začátek jen jednou; běžící zmenšení nebo uzavřený záznam ho nepustí; starý záměr už neblokuje', () => {
+    const t = build({ status: 'working' });
+    expect(t.protection.beginRelease(ACC, 'E')).toBe(true);
+    expect(t.protection.beginRelease(ACC, 'E')).toBe(false);
+    expect(t.protection.releaseEndsIn(ACC, 'E')).toBeGreaterThan(0);
+    t.tick(11_000);
+    expect(t.protection.releaseEndsIn(ACC, 'E')).toBeNull();
+    expect(t.protection.beginRelease(ACC, 'E')).toBe(true);
+    t.protection.endRelease(ACC, 'E', true);
+    expect(t.protection.beginRelease(ACC, 'E')).toBe(false);
+    expect(t.protection.beginRelease(ACC, 'neznámý')).toBe(false);
+  });
+
+  it('během tolerance se zrušená noha nehlásí; po ní se záznam uzavře (noha zrušená bez plnění)', () => {
+    const t = build({ status: 'working' });
+    t.protection.beginRelease(ACC, 'E');
+    t.set('canceled');
+    expect(t.state()).toEqual({ state: 'protected', detail: '' });
+    t.tick(11_000);
+    expect(t.state()).toMatchObject({ state: 'done', latch: true });
+  });
+
+  it('po toleranci noha pracuje dál → chráněno; noha vyplněná → běžný konec, ne uvolnění', () => {
+    const working = build({ status: 'working' });
+    working.protection.beginRelease(ACC, 'E');
+    working.tick(11_000);
+    expect(working.state()).toEqual({ state: 'protected', detail: '' });
+    const filled = build({ status: 'working' });
+    filled.protection.beginRelease(ACC, 'E');
+    filled.set('filled', 1);
+    filled.tick(11_000);
+    expect(filled.state().state).toBe('done');
+  });
+
+  it('starý záměr s pracující nohou se smaže: pozdější zrušení nohy z jiného důvodu se hlásí, neuzavírá tiše', () => {
+    const t = build({ status: 'working' });
+    t.protection.beginRelease(ACC, 'E');
+    t.tick(11_000);
+    expect(t.state().state).toBe('protected');
+    expect(t.protection.bracketByEntry(ACC, 'E')!.releasing).toBeUndefined();
+    t.set('canceled');
+    t.tick(60_000);
+    expect(t.state().state).toBe('unprotected');
+    expect(t.protection.bracketByEntry(ACC, 'E')!.closedAt).toBeUndefined();
+  });
+
+  it('bez záměru je zrušená noha u otevřené pozice dál „bez ochrany“', () => {
+    const t = build({ status: 'canceled' });
+    expect(t.state().state).toBe('unprotected');
+  });
+
+  it('uvolněný záznam se uzavře a už se neotevírá; neúspěch záměr jen smaže', () => {
+    const t = build({ status: 'working' });
+    t.protection.beginRelease(ACC, 'E');
+    t.protection.endRelease(ACC, 'E', false);
+    expect(t.protection.bracketByEntry(ACC, 'E')).toMatchObject({ entryId: 'E' });
+    expect(t.protection.bracketByEntry(ACC, 'E')!.closedAt).toBeUndefined();
+    expect(t.protection.beginRelease(ACC, 'E')).toBe(true);
+    t.set('canceled');
+    t.protection.endRelease(ACC, 'E', true);
+    expect(t.protection.bracketByEntry(ACC, 'E')!.closedAt).toBeDefined();
+    expect(t.protection.reopenBracket(ACC, 'E')).toBe(false);
+    expect(t.state().state).toBe('done');
+  });
+
+  it('pozdě potvrzené uvolnění uzavřené hlídačem se také neotevírá', () => {
+    const t = build({ status: 'working' });
+    t.protection.beginRelease(ACC, 'E');
+    t.set('canceled');
+    t.tick(11_000);
+    t.protection.closeBracket(ACC, 'E');
+    expect(t.protection.reopenBracket(ACC, 'E')).toBe(false);
+    expect(t.protection.releaseEndsIn(ACC, 'E')).toBeNull();
+  });
+});

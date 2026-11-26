@@ -64,6 +64,11 @@ export interface LiveTicketScaleIn {
    * rozhoduje místní služba.
    */
   free?: boolean;
+  /**
+   * Jednotné SL/TP (Filip 26. 11. 2026): pozice už SL nebo TP má → další vstup na její stranu je převezme (panel
+   * je drží na cenách pozice), takže v grafu zůstává jedna čára SL a jedna TP a jen roste počet kusů. Jen s `free`.
+   */
+  unify?: boolean;
   /** Čekající přikoupení (čára s × v grafu); null = žádné. */
   pendingAdd: { price: number | null; quantity: number; orderType: string } | null;
 }
@@ -79,4 +84,16 @@ export function liveTicketScaleIn(position: LiveLeaderPosition): LiveTicketScale
     pendingAdd: position.pendingAdd
       ? { price: position.pendingAdd.price, quantity: position.pendingAdd.quantity, orderType: position.pendingAdd.orderType } : null,
   };
+}
+
+/**
+ * Jednotné SL/TP při přikoupení: návrh na stranu pozice dostane SL a TP pozice (chybějící noha = bez ní).
+ * Jen sestavení návrhu — jestli vstup projde, rozhodne místní služba.
+ */
+export function liveUnifiedAddDraft<T extends { side: 'buy' | 'sell'; stopLoss: number | null; takeProfit: number | null }>(
+  draft: T, scaleIn: Pick<LiveTicketScaleIn, 'side' | 'stopLoss' | 'targetPrice' | 'free' | 'unify'> | null | undefined,
+): T {
+  if (!scaleIn || scaleIn.free !== true || scaleIn.unify !== true || draft.side !== scaleIn.side) return draft;
+  if (draft.stopLoss === scaleIn.stopLoss && draft.takeProfit === scaleIn.targetPrice) return draft;
+  return { ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice };
 }

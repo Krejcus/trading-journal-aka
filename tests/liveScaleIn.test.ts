@@ -99,3 +99,25 @@ describe('telefon: Koupit / Prodat z lišty v pozici', () => {
     expect(livePhonePillScaleIn('buy', 1, quote, { ...bare, canAdd: false, reason: 'Pozice dosáhla limitu.' }, 5)).toEqual({ error: 'Pozice dosáhla limitu.' });
   });
 });
+
+describe('jednotné SL/TP při přikoupení (volný režim)', () => {
+  const base = { side: 'buy' as const, stopLoss: 100 as number | null, takeProfit: 130 as number | null, quantity: 1 };
+  const position = { side: 'buy' as const, stopLoss: 95 as number | null, targetPrice: 140 as number | null, free: true, unify: true };
+  it('návrh na stranu pozice převezme SL i TP pozice', async () => {
+    const { liveUnifiedAddDraft } = await import('../lib/liveScaleIn');
+    expect(liveUnifiedAddDraft(base, position)).toEqual({ ...base, stopLoss: 95, takeProfit: 140 });
+  });
+  it('pozice jen se SL → přikoupení jen se SL; shodný návrh se nemění (stejný objekt)', async () => {
+    const { liveUnifiedAddDraft } = await import('../lib/liveScaleIn');
+    expect(liveUnifiedAddDraft(base, { ...position, targetPrice: null })).toEqual({ ...base, stopLoss: 95, takeProfit: null });
+    const same = { ...base, stopLoss: 95, takeProfit: 140 };
+    expect(liveUnifiedAddDraft(same, position)).toBe(same);
+  });
+  it('opačná strana, pozice bez SL/TP (unify vypnuté), přísný režim ani chybějící pozice návrh nemění', async () => {
+    const { liveUnifiedAddDraft } = await import('../lib/liveScaleIn');
+    expect(liveUnifiedAddDraft({ ...base, side: 'sell' as const }, position)).toEqual({ ...base, side: 'sell' });
+    expect(liveUnifiedAddDraft(base, { ...position, unify: false })).toBe(base);
+    expect(liveUnifiedAddDraft(base, { ...position, free: false })).toBe(base);
+    expect(liveUnifiedAddDraft(base, null)).toBe(base);
+  });
+});

@@ -26,7 +26,7 @@ import { leaderManageBasis, type LiveChartPosition, type LiveChartPositionSummar
 import { LEADER_ENTRY_MARKET_QUOTE_MAX_AGE_MS, previewSymbolFromChartSource, type LeaderEntryPreviewResult, type LiveEntryPreviewDraft } from '../lib/leaderEntryPreview';
 import type { LeaderEntryPlaceResult } from '../lib/leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from '../lib/leaderOrderManage';
-import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
+import { liveUnifiedAddDraft, type LiveTicketScaleIn } from '../lib/liveScaleIn';
 import type { LivePhonePosition } from '../lib/livePhoneOrders';
 import { hasActiveLiveCommandTrace, markLiveCommandPaint, startLiveCommandTrace } from '../lib/liveCommandPerformance';
 import {
@@ -908,6 +908,12 @@ const LiveOrderTicket: React.FC<Props> = ({
       onDraft({ ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice });
     }
   }, [scaleIn, draft, onDraft]);
+  // Jednotné SL/TP (volný režim): pozice už SL nebo TP má → přikoupení je převezme, v grafu zůstává jedna čára.
+  useEffect(() => {
+    if (!freeAdd || !draft) return;
+    const unified = liveUnifiedAddDraft(draft, freeAdd);
+    if (unified !== draft) onDraft(unified);
+  }, [freeAdd, draft, onDraft]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

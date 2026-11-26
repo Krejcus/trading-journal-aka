@@ -102,7 +102,7 @@ import { buildLiveStatusStrip, liveAttentionReasons, type LiveStatusStripInput, 
 import type { LiveTabId } from '../lib/liveTab';
 import type { LiveScreenThemePreference } from '../services/liveScreenTheme';
 import LiveThemeToggle from './LiveThemeToggle';
-import type { LiveTicketScaleIn } from '../lib/liveScaleIn';
+import { liveUnifiedAddDraft, type LiveTicketScaleIn } from '../lib/liveScaleIn';
 import { runLiveBareLeg, type LiveBareLegIntent } from '../lib/liveBareLeg';
 
 /**
@@ -675,7 +675,8 @@ const LiveTradingScreen: React.FC<Props> = ({
       maxContracts: entryMaxContracts, template: customTemplate, scaleIn: entryScaleIn, base: base ?? null,
     });
     if (result.notes.length > 0) setLineNotice({ at: Date.now(), tone: 'warn', text: result.notes.join(' ') });
-    return result.draft;
+    // Jednotné SL/TP: nový návrh na stranu pozice, která už SL nebo TP má, je převezme hned (i bez otevřeného lístku).
+    return liveUnifiedAddDraft(result.draft, entryScaleIn);
   }, [customTemplate, entryMaxContracts, entryScaleIn, quote]);
 
   // U4 „Přidat SL/TP“ k vlastnímu holému Marketu: rozpracované nohy panelu a jejich čáry

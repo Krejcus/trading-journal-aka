@@ -3,7 +3,7 @@ import type { LeaderEntryPlaceResult } from './leaderEntryPlace';
 import type { LeaderOrderManageAction, LeaderOrderManageResult } from './leaderOrderManage';
 import type { LiveBareEntryRecord } from './liveBareEntry';
 import { snapToTick, ticketQuantity, type TicketDraft, type TicketInstrument } from './liveOrderTicket';
-import type { LiveTicketScaleIn } from './liveScaleIn';
+import { liveUnifiedAddDraft, type LiveTicketScaleIn } from './liveScaleIn';
 import type { LiveBareCloseOffer } from './liveBareCloseUi';
 import type { LiveCancelPendingView } from './liveCancelPendingUi';
 import type { CancelPendingItemResult, PendingOwnEntry } from './liveCancelPending';
@@ -168,6 +168,7 @@ export function liveBareEntryRecord(entry: LiveBareEntryRecord | null | undefine
  * jiné nepustí) a strop platí na celou pozici. Jen příprava návrhu — rozhoduje worker.
  */
 export function livePhoneScaleInDraft(draft: TicketDraft, scaleIn: LiveTicketScaleIn | null | undefined): TicketDraft {
+  if (scaleIn?.free && scaleIn.unify) return liveUnifiedAddDraft(draft, scaleIn);
   if (!scaleIn || scaleIn.free || draft.side !== scaleIn.side || scaleIn.stopLoss == null || scaleIn.targetPrice == null) return draft;
   return { ...draft, stopLoss: scaleIn.stopLoss, takeProfit: scaleIn.targetPrice };
 }

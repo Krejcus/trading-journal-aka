@@ -38,6 +38,17 @@ export interface BracketIntent {
    * (pak přibude `exitedOutside`), nebo neúspěch (pak je ochrana menší než expozice a hlásí se jako neúplná).
    */
   resizing?: { to: number; at: number };
+  /**
+   * Právě se uvolňuje jediná noha ochrany (výměna za svázaný pár SL+TP, 26. 11. 2026): noha se ruší záměrně při
+   * otevřené pozici. Zapisuje se PŘED zrušením; po potvrzeném zrušení se záznam ochrany uzavře. Krátce (jako u
+   * zmenšení) se chybějící noha nehlásí; nedoběhne-li výměna, hlásí se skutečný stav (pozice bez ochrany).
+   */
+  releasing?: { at: number };
+  /**
+   * Jediná noha byla záměrně uvolněna (výměna za pár) a záznam uzavřen při OTEVŘENÉ pozici: `closedAt` tu neznamená
+   * „expozice 0". Takový záznam se už znovu neotevírá — pozici dál chrání samostatný pár, ne tento vstup.
+   */
+  released?: true;
 }
 
 /** Jak dlouho smí noha během zmenšování ochrany mít už nové množství, než se nesoulad začne hlásit. */
@@ -253,6 +264,19 @@ export class RithmicProtection {
       // Nula z obyčejného čtení: stav je „hotovo", ale bracket se jí NEzavírá natrvalo.
       return active.length ? orphan('pozice je 0') : { state: 'done', detail: '' };
     }
+    // Záměrné uvolnění nohy (výměna za pár): po krátkou dobu se chybějící noha nehlásí — rozhoduje volající.
+    if (intent.releasing) {
+      if (this.now() - intent.releasing.at < RESIZE_TOLERANCE_MS) return { state: 'protected', detail: '' };
+      // Po toleranci rozhoduje kniha. Noha zrušená bez plnění (potvrzení přišlo pozdě, nebo služba mezitím spadla):
+      // ochrana vstupu skončila záměrně → záznam se uzavře (`latch`); nedokončenou výměnu hlásí volající a značka výměny.
+      // Cokoli jiného (noha pracuje dál, vyplnila se) se hodnotí běžně níže.
+      if (!active.length && legs.length > 0 && legs.every((leg) => leg.order?.status === 'canceled' && leg.order.filledQuantity === 0)) {
+        return { state: 'done', detail: '', latch: true };
+      }
+      // Noha po toleranci pracuje dál (zrušení u brokera neproběhlo): záměr končí. Kdyby zůstal, pozdější ztráta
+      // nohy z jiného důvodu (ruční zrušení, konec seance) by se tiše uzavřela místo hlášení „bez ochrany".
+      if (active.some((leg) => leg.order?.status === 'working')) delete intent.releasing;
+    }
     const problems: string[] = [];
     for (const role of ['stop', 'target'] as const) {
       if ((role === 'stop' ? intent.stopTicks : intent.targetTicks) === undefined) continue;
@@ -280,7 +304,7 @@ export class RithmicProtection {
   /** Vstup se po uzavření ještě vyplnil (závod zrušení × vyplnění): západka padá, hlídá se znovu. */
   reopenBracket(accountId: number, entryId: string): boolean {
     const intent = this.bracketByEntry(accountId, entryId);
-    if (!intent || intent.closedAt === undefined) return false;
+    if (!intent || intent.closedAt === undefined || intent.released) return false;
     delete intent.closedAt;
     return true;
   }
@@ -303,9 +327,41 @@ export class RithmicProtection {
     if (open && exitedQuantity > 0) intent.exitedOutside = (intent.exitedOutside ?? 0) + exitedQuantity;
   }
 
+  /** Začátek uvolnění jediné nohy ochrany (zapsat a uložit PŘED zrušením u brokera). */
+  beginRelease(accountId: number, entryId: string): boolean {
+    const intent = this.bracketByEntry(accountId, entryId);
+    // Starý záměr (po toleranci) už není běžící změna: noha po něm buď pracuje dál, nebo záznam uzavřel hlídač.
+    const running = intent?.releasing !== undefined && this.now() - intent.releasing.at < RESIZE_TOLERANCE_MS;
+    if (!intent || intent.closedAt !== undefined || intent.resizing || running) return false;
+    intent.releasing = { at: this.now() };
+    return true;
+  }
+
+  /** Za kolik ms skončí tolerance běžícího uvolnění nohy (null = žádné neběží). Pro naplánování kontroly po ní. */
+  releaseEndsIn(accountId: number, entryId: string): number | null {
+    const at = this.bracketByEntry(accountId, entryId)?.releasing?.at;
+    if (at === undefined) return null;
+    const left = RESIZE_TOLERANCE_MS - (this.now() - at);
+    return left > 0 ? left : null;
+  }
+
+  /** Konec uvolnění: `released` = noha je prokazatelně zrušená bez plnění → záznam ochrany se uzavírá. */
+  endRelease(accountId: number, entryId: string, released: boolean): void {
+    const intent = this.bracketByEntry(accountId, entryId);
+    if (!intent) return;
+    delete intent.releasing;
+    if (released) {
+      intent.released = true;
+      if (intent.closedAt === undefined) intent.closedAt = this.now();
+    }
+  }
+
   closeBracket(accountId: number, entryId: string): void {
     const intent = this.bracketByEntry(accountId, entryId);
-    if (intent && intent.closedAt === undefined) intent.closedAt = this.now();
+    if (!intent) return;
+    // Uzavření po záměrném uvolnění nohy (i pozdě potvrzeném): záznam se už neotevírá.
+    if (intent.releasing) { delete intent.releasing; intent.released = true; }
+    if (intent.closedAt === undefined) intent.closedAt = this.now();
   }
 
   // ---- zavírání pozice --------------------------------------------------------

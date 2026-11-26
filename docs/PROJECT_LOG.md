@@ -288,6 +288,44 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-26 — Claude: jednotné SL/TP při přikoupení (jen appka) — NENASAZENO
+
+- Filip: „když přidávám/odebírám, ať je jednotný SL/TP a jen se navyšuje“ (ve volném režimu měl každý další vstup
+  vlastní SL/TP z šablony a v grafu přibývaly čáry).
+- `LiveTicketScaleIn.unify` (jen s `free`): pozice už SL nebo TP má → návrh na její stranu je převezme
+  (`liveUnifiedAddDraft`; lístek PC, jeden klik z grafu, list telefonu; lišta telefonu to dělala už dřív). Pozice
+  jen se SL → přikoupení jen se SL. Pozice bez SL/TP a víc čekajících vstupů z nuly beze změny (volné).
+- Jednotná čára: nohy do `UNIFIED_LINE_TICKS` = 4 ticků od hlavní čáry k ní patří (skluz Marketu — vzdálenosti nohou
+  se počítají od skutečného vyplnění). Čára ukazuje ochrannější SL / bližší TP, první posun srovná všechny na jednu
+  cenu (`move-legs` s výčtem noh a jejich skutečných cen). Jen zobrazení a výběr noh (INV-UI-01/02); služba beze změny.
+- Ověřeno: celá sada zelená, tsc 0; simulace PC: Market se SL+TP, druhý Market → „LONG 2“, jedna čára „SL 2“ a „TP 2“.
+  Telefon a skutečný účet NEOVĚŘENO.
+
+### 2026-11-26 — Claude: druhá noha k ochraně ZE VSTUPU (vstup jen se SL → „+ TP“, a obráceně) — NENASAZENO
+
+- Filip na skutečném účtu vstoupil jen se SL (bracket STOP_ONLY, 1 ks) a čip „+ TP“ odmítal („pozice už má pracující
+  příkazy“). Nebyla to regrese: druhá noha šla jen k samostatné ochraně `uiprot-`.
+- Služba (`protect`, větev `pairWith`): jediná noha jediného otevřeného, CELÉHO vyplněného vstupu na celou pozici se
+  uvolní a obě nohy se zadají jako svázaný pár (stejné pojistky jako dosavadní výměna: značka výměny, potvrzení
+  zrušení bez plnění, u víc kusů `multiPairSwap` + 8 ticků + `canceledUnfilled`, incidenty `protection-removed`).
+- Adaptér: nový krok `releaseBracketLeg` (běžné `cancelOrder` nohu ochrany při otevřené pozici odmítá). Záznam ochrany
+  má nově záměr `releasing` (uložen PŘED zrušením; 10 s se chybějící noha nehlásí) a příznak `released`.
+  POZOR, nový význam: `closedAt` u záznamu s `released` NEZNAMENÁ „expozice 0“ — pozice je dál otevřená a chrání ji
+  pár `uiprot-`; takový záznam se už neotevírá (`reopenBracket`). Po toleranci: noha zrušená bez plnění → hlídač
+  záznam uzavře (nedokončenou výměnu hlásí incident služby a značka výměny); noha pracuje dál → záměr se smaže.
+- Appka (`useRithmicLocalTrading`, jen nabídka): „přidat nohu“ pouští i k jediné noze ze vstupu opačného druhu.
+- Dotčená pravidla: INV-DEFAULT-02/03, INV-OUTBOX-01/02/03, INV-DIVERGENCE-01, INV-FRESH-01, INV-MODE-02,
+  INV-BRAKE-03, INV-RECON-01/03, INV-TRAD-08, INV-UI-01/02, INV-MANUAL-01. Oponent (copier-design-critic): dvě kola
+  „OPRAVIT PŘED COMMITEM“ (pozdě potvrzené zrušení se nehlásilo; starý záměr mohl tiše uzavřít záznam), po opravách
+  OK S VÝHRADAMI.
+- Ověřeno: celá sada zelená, tsc web i služba 0; v simulaci (PC) vstup jen se SL → čip „+ TP“ → TP přidán, SL zůstal,
+  TP zasažen a pozice zavřena bez výstrahy.
+- NEOVĚŘENO proti Rithmicu: zrušení jediné nohy STOP_ONLY / TARGET_ONLY při otevřené pozici (čistota, pořadí a
+  zpoždění zpráv nad 1,5 s, `CANCELLATION_FAILED`). Doporučeno nejdřív Rithmic Test, pak 1 kontrakt.
+- Odložené testy: selhání uložení záznamu před/po zrušení; restart se záměrem na disku na úrovni služby.
+- Rozpracováno vedle (stash „wip: protection in parts“): víc TP = ochrana čipy po dílech (návrh B, oponent OK
+  s výhradami); návrh „zrušit pár a zadat nové“ zamítnut (1–3 s bez SL při každé úpravě).
+
 ### 2026-11-26 — Claude: rychlý Market, víc vstupů a SL zbytku NASAZENY (web + iPhone 134e2e62)
 
 - Filip: „nasaď a povol, ať můžu otestovat na live účtu“. Řetěz: celá sada 4154 zelená → tsc 0 → build → push
