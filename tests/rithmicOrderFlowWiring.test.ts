@@ -48,9 +48,10 @@ describe('order flow ve službě — pojistky zapojení', () => {
   it('start: feed vznikne bez čekání na síť, NQ se řeší až po odběru cen grafu a nečeká se na něj', () => {
     const create = at(server, 'createOrderFlowFeed(');
     const mainSubscribe = at(server, "const feedStartedAt = Date.now();\n  await ticker.subscribeMarketData(CONTRACT, 'CME');\n  feedOpen = true;");
-    const nq = at(server, 'void startOrderFlowNq();');
+    const nq = server.indexOf('void startOrderFlowNq();', mainSubscribe);
     expect(create).toBeLessThan(mainSubscribe);
     expect(nq).toBeGreaterThan(mainSubscribe);
+    expect(nq - mainSubscribe).toBeLessThan(700);
     expect(server.slice(at(server, 'if (ORDER_FLOW) {'), mainSubscribe)).not.toMatch(/await /);
     expect(server).not.toMatch(/await startOrderFlowNq\(/);
     expect(server).toMatch(/orderFlow\?\.feedOpened\(feedStartedAt, CONTRACT\);/);
@@ -61,7 +62,10 @@ describe('order flow ve službě — pojistky zapojení', () => {
     const subscribe = at(extra, "await ticker.subscribeMarketData(symbol, 'CME', 1);");
     expect(at(extra, 'flow.feedOpened(Date.now(), symbol);')).toBeGreaterThan(subscribe);
     expect(extra).toMatch(/if \(attempt < 2\) setTimeout\(/);
-    expect(extra).toMatch(/if \(!flow \|\| forcedOut \|\| !feedOpen\) return;/);
+    expect(extra).toMatch(/if \(!flow \|\| forcedOut \|\| !feedOpen \|\| epoch !== orderFlowEpoch\) return;/);
+    // Po potvrzení odběru se to dozvědí i už připojené stránky; pokus naplánovaný před výpadkem nic nepřihlásí.
+    expect(at(extra, "broadcast({ type: 'of-ready', orderFlow: capability });")).toBeGreaterThan(at(extra, 'flow.feedOpened(Date.now(), symbol);'));
+    expect(server).toMatch(/alertWatch\?\.feedLost\(\);\s+orderFlowEpoch \+= 1;\s+orderFlow\?\.feedLost\(\);/);
   });
 
   it('obnova cen: nejdřív kontrakt grafu, druhý odběr bez čekání; výpadek se order flow oznámí', () => {
@@ -69,7 +73,8 @@ describe('order flow ve službě — pojistky zapojení', () => {
     expect(restore).toMatch(/await ticker\.subscribeMarketData\(CONTRACT, 'CME'\);\s+feedOpen = true;\s+orderFlow\?\.feedOpened\(Date\.now\(\), CONTRACT\);/);
     expect(restore).toMatch(/for \(const symbol of orderFlowExtras\) void subscribeOrderFlowExtra\(symbol\);/);
     expect(restore).not.toMatch(/await subscribeOrderFlowExtra/);
-    expect(server).toMatch(/alertWatch\?\.feedLost\(\);\s+orderFlow\?\.feedLost\(\);/);
+    expect(restore).toMatch(/if \(orderFlow && orderFlowExtras\.size === 0 && [^\n]+\) void startOrderFlowNq\(\);/);
+    expect(server).toMatch(/if \(!flow \|\| orderFlowExtras\.size > 0 \|\| orderFlowNqLookups >= 3\) return;/);
   });
 
   it('žádost o odběr se řeší před rozpočtem příkazů, po kontrole odvolaného zařízení a nikdy nejde k brokerovi', () => {

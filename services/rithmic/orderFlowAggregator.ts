@@ -123,6 +123,14 @@ export class OrderFlowAggregator {
     }
   }
 
+  /**
+   * Část obchodů se ztratila (přetečení fronty): rozdělaná minuta už není úplná. Ceny tečou dál,
+   * jen pokrytí začíná znovu od teď.
+   */
+  breakCoverage(at: number): void {
+    for (const state of this.symbols.values()) if (state.feedOpenSince !== null) state.feedOpenSince = at;
+  }
+
   onTick(tick: RithmicTick): void {
     if (tick.kind !== 'trade' || tick.isSnapshot) return;
     const state = this.symbols.get(tick.symbol);

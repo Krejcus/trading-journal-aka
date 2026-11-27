@@ -115,6 +115,8 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
   let queue: RithmicTick[] = [];
   let queueHead = 0;
   let snapshotTurn = 0;
+  /** Fronta přetekla a část obchodů chybí — rozdělaná minuta se nesmí vést jako úplná. */
+  let coverageBroken = false;
   const counters = { bytes: 0, skipped: 0, resyncs: 0, maxWorkMs: 0, droppedTicks: 0, droppedDiskBytes: 0, since: now() };
 
   const fail = (label: string, error: unknown): void => {
@@ -233,11 +235,14 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     const dir = options.dir;
     const cutoff = cutoffDate();
     readdir(dir, (error, names) => {
-      if (error) return;
-      for (const name of names) {
-        const parsed = parseFileName(name);
-        if (parsed && parsed.date < cutoff) rm(join(dir, name), { force: true }, () => undefined);
-      }
+      // Běží mimo `guard` — vlastní pojistka, úklid nesmí nikdy shodit službu.
+      try {
+        if (error) return;
+        for (const name of names) {
+          const parsed = parseFileName(name);
+          if (parsed && parsed.date < cutoff) rm(join(dir, name), { force: true }, () => undefined);
+        }
+      } catch { /* úklid není podmínkou */ }
     });
   };
 
@@ -258,6 +263,7 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
   for (const [source, symbol] of Object.entries(options.sources)) registerSource(source, symbol);
 
   const drainQueue = (limit: number): void => {
+    if (coverageBroken) { coverageBroken = false; aggregator.breakCoverage(now()); }
     const end = Math.min(queue.length, queueHead + limit);
     for (; queueHead < end; queueHead += 1) aggregator.onTick(queue[queueHead]);
     if (queueHead >= queue.length) { queue = []; queueHead = 0; }
@@ -284,13 +290,16 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     let cells = 0;
     while (snapshot.next < snapshot.minutes.length && cells < SNAPSHOT_CELLS_PER_PART) {
       const minute = snapshot.minutes[snapshot.next];
-      snapshot.next += 1;
       const flat = aggregator.cells(client.symbol, minute);
+      // Minuta, která by část přeplnila, jde až do další (jedna minuta se nedělí).
+      if (cells > 0 && cells + flat.length / 4 > SNAPSHOT_CELLS_PER_PART) break;
+      snapshot.next += 1;
       if (flat.length === 0) continue;
       minutes.push([minute, flat]);
       cells += flat.length / 4;
     }
-    const trades = cells < SNAPSHOT_CELLS_PER_PART ? snapshot.trades.slice(snapshot.nextTrade, snapshot.nextTrade + SNAPSHOT_TRADES_PER_PART) : [];
+    // Velké obchody jen do části, která není plná buněk — část tak zůstává pod stropem velikosti.
+    const trades = cells < SNAPSHOT_CELLS_PER_PART / 4 ? snapshot.trades.slice(snapshot.nextTrade, snapshot.nextTrade + SNAPSHOT_TRADES_PER_PART) : [];
     snapshot.nextTrade += trades.length;
     const last = snapshot.next >= snapshot.minutes.length && snapshot.nextTrade >= snapshot.trades.length;
     const first = snapshot.part === 0;
@@ -314,12 +323,17 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     if (client.snapshot || client.pendingCount === 0) return;
     if (!ready(client)) { counters.skipped += 1; return; }
     const cells: Array<[number, OrderFlowCells]> = [];
+    let sent = 0;
+    // Jedna zpráva nese nejvýš tolik buněk co část snímku; zbytek počká na další otočku.
     for (const [minute, keys] of client.pendingCells) {
+      if (sent >= SNAPSHOT_CELLS_PER_PART) break;
       const flat = aggregator.cells(client.symbol, minute, keys);
-      if (flat.length > 0) cells.push([minute, flat]);
+      if (sent > 0 && sent + flat.length / 4 > SNAPSHOT_CELLS_PER_PART) break;
+      if (flat.length > 0) { cells.push([minute, flat]); sent += flat.length / 4; }
+      client.pendingCells.delete(minute);
+      client.pendingCount -= keys === null ? 1 : keys.size;
     }
-    client.pendingCells.clear();
-    client.pendingCount = 0;
+    if (client.pendingCells.size === 0) client.pendingCount = 0;
     if (cells.length === 0) return;
     client.seq += 1;
     send(client, { type: 'of', sub: client.sub, seq: client.seq, cells });
@@ -345,7 +359,7 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     },
     onTick(tick) {
       if (disabled || tick.kind !== 'trade' || tick.isSnapshot || !sourceOf.has(tick.symbol)) return;
-      if (queue.length - queueHead >= QUEUE_MAX) { counters.droppedTicks += 1; return; }
+      if (queue.length - queueHead >= QUEUE_MAX) { counters.droppedTicks += 1; coverageBroken = true; return; }
       queue.push(tick);
     },
     handle(socket, request) {
@@ -431,6 +445,8 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     advance() {
       guard('hodiny', () => {
         const at = now();
+        // Nejdřív dopočítat, co čeká ve frontě: po zaseknutí smyčky by hodiny jinak minutu uzavřely bez jejích obchodů.
+        drainQueue(QUEUE_PER_TURN);
         aggregator.advance(at);
         if (at - prunedAt > 6 * 3_600_000) { prunedAt = at; pruneFiles(); }
         // Uložený stav kontraktů, které se zdrojem nestaly (např. kontrakt před rolováním), po chvíli uvolnit.

@@ -314,36 +314,42 @@ async function main(): Promise<void> {
   let orderFlow: OrderFlowFeed | null = null;
   /** Kontrakty, které odebírá jen order flow (NQ vedle obchodovaného MNQ). */
   const orderFlowExtras = new Set<string>();
+  /** Roste s každým výpadkem tickeru: opakovaný pokus naplánovaný před výpadkem už nic nepřihlašuje. */
+  let orderFlowEpoch = 0;
+  /** Kolikrát se zkoušelo dohledat NQ (start + nejvýš dvě obnovy cen). */
+  let orderFlowNqLookups = 0;
   /**
    * Odběr kontraktu navíc — jen obchody (bez kotací, ty order flow nepotřebuje). Kontrakt se označí za tekoucí
    * až po potvrzení odběru: bez něj by se prázdné minuty tvářily jako pokryté. Když se odběr nepodaří, zkusí se
    * ještě dvakrát s odstupem a pak už ne (žádná smyčka); o další pokus se postará příští obnova cen.
    */
-  const subscribeOrderFlowExtra = async (symbol: string, attempt = 0): Promise<void> => {
+  const subscribeOrderFlowExtra = async (symbol: string, attempt = 0, epoch = orderFlowEpoch): Promise<void> => {
     const flow = orderFlow;
-    if (!flow || forcedOut || !feedOpen) return;
+    if (!flow || forcedOut || !feedOpen || epoch !== orderFlowEpoch) return;
     try {
       await ticker.subscribeMarketData(symbol, 'CME', 1);
+      if (epoch !== orderFlowEpoch) return; // mezitím výpadek: přihlásí to znovu obnova cen
       flow.feedOpened(Date.now(), symbol);
+      // Stránky se dozvědí, že zdroj teče (i když se odběr podařil až na další pokus), a vezmou si čerstvý snímek.
+      const capability = flow.capability();
+      if (capability) broadcast({ type: 'of-ready', orderFlow: capability });
     } catch (error) {
       console.log(`[order flow] odběr ${symbol} se nepodařil (${error instanceof Error ? error.message : String(error)})${attempt < 2 ? ' — zkusím znovu' : ' — tento zdroj zůstává bez dat do příští obnovy cen'}`);
-      if (attempt < 2) setTimeout(() => { void subscribeOrderFlowExtra(symbol, attempt + 1); }, attempt === 0 ? 5_000 : 20_000).unref();
+      if (attempt < 2) setTimeout(() => { void subscribeOrderFlowExtra(symbol, attempt + 1, epoch); }, attempt === 0 ? 5_000 : 20_000).unref();
     }
   };
   /** NQ jako zdroj order flow pro graf MNQ. Běží až po startu cen grafu a nikdy na něj nic nečeká. */
   const startOrderFlowNq = async (): Promise<void> => {
     const flow = orderFlow;
-    if (!flow) return;
+    if (!flow || orderFlowExtras.size > 0 || orderFlowNqLookups >= 3) return;
+    orderFlowNqLookups += 1;
     try {
       const nq = await ticker.frontMonthContract('NQ', 'CME');
       if (!nq || !/^NQ[FGHJKMNQUVXZ]\d{1,2}$/.test(nq)) throw new Error('Rithmic nepotvrdil aktuální kontrakt NQ');
       if (!flow.addSource('NQ', nq)) return;
       orderFlowExtras.add(nq);
-      await subscribeOrderFlowExtra(nq);
-      // Stránky připojené dřív se dozvědí, že přibyl zdroj (jinak by ho viděly až po dalším připojení).
-      const capability = flow.capability();
-      if (capability) broadcast({ type: 'of-ready', orderFlow: capability });
       console.log(`[order flow] přidán zdroj NQ = ${nq}`);
+      await subscribeOrderFlowExtra(nq);
     } catch (error) {
       console.log(`[order flow] NQ nejde odebírat (${error instanceof Error ? error.message : String(error)}) — zdroj jen kontrakt grafu`);
     }
@@ -549,6 +555,8 @@ async function main(): Promise<void> {
             feedOpen = true;
             orderFlow?.feedOpened(Date.now(), CONTRACT);
             for (const symbol of orderFlowExtras) void subscribeOrderFlowExtra(symbol); // bez čekání: obnova cen grafu na druhém odběru nezávisí
+            // NQ se při startu nepodařilo dohledat (výpadek, pomalá odpověď): zkusit to po obnově znovu, nejvýš dvakrát.
+            if (orderFlow && orderFlowExtras.size === 0 && /^MNQ[FGHJKMNQUVXZ]\d{1,2}$/.test(CONTRACT)) void startOrderFlowNq();
             console.log('[ticker] ceny obnoveny');
             scheduleBarRepair(barRepairWindow(feedGapFrom ?? Date.now(), Date.now()));
             feedGapFrom = null;
@@ -606,6 +614,7 @@ async function main(): Promise<void> {
           feedOpen = false;
           if (feedGapFrom === null) feedGapFrom = Date.now();
           alertWatch?.feedLost();
+          orderFlowEpoch += 1;
           orderFlow?.feedLost();
           candles.reset(CONTRACT);
           tickDirty = false;

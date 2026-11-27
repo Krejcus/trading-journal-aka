@@ -316,7 +316,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Neúplná data se přiznávají** (INV-UI-01): úsek, ve kterém služba neběžela celou dobu, má
   popisek „neúplný“; po chybě vrstva odběratelům pošle `of-error` a profil zmizí.
 - **Revize:** `copier-design-critic` (verdikt 1. kola „OPRAVIT PŘED COMMITEM“ — zahlcení
-  telefonního spojení snímkem, pokrytí NQ po nepovedené obnově, tiché vypnutí; opraveno),
+  telefonního spojení snímkem, pokrytí NQ po nepovedené obnově, tiché vypnutí; opraveno.
+  2. kolo „OK S VÝHRADAMI“, nic neblokuje; pět zobrazovacích výhrad taky opraveno),
   `code-reviewer` (appka; opraveno) a Codex `gpt-6.2-astra` (služba; 9 nálezů, opraveno).
 - **Ověřeno:** plná sada 4 271 testů, `tsc --noEmit`, lokální simulace (`tests/qa/start-rithmic.mjs
   --simulate` s umělým order flow) na PC i v telefonním zobrazení. **Neověřeno:** skutečná služba

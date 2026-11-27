@@ -200,10 +200,51 @@ describe('order flow — doručení klientům', () => {
     expect(snapshot).toMatchObject({ last: true, minutes: [], coverage: [], liveSince: null });
   });
 
-  it('obchody jen řadí do fronty a při zahlcení je zahodí, místo aby rostla paměť', () => {
-    const { feed } = make();
+  it('obchody jen řadí do fronty a při zahlcení je zahodí, místo aby rostla paměť; minuta pak není úplná', () => {
+    const { feed, clock } = make();
     for (let i = 0; i < 100_050; i += 1) feed.onTick(trade('NQZ6', 1_000, 25000, 1, 'buy', `o${i}`));
+    for (let i = 0; i < 30; i += 1) feed.flushTrades();
+    clock.at = T0 + 3 * 60_000 + 3_000;
+    feed.advance();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots();
+    const [snapshot] = socket.take();
+    expect((snapshot.minutes as Array<[number, number[]]>)[0]).toEqual([M0, [100000, 100_000, 0, 0]]);
+    // minuta, ve které se obchody ztratily, se nevede jako pokrytá
+    expect((snapshot.coverage as Array<[number, number]>).some(([from, to]) => from <= M0 && to > M0)).toBe(false);
     expect(feed.metricsLine()).toContain('ZAHOZENO obchodů 50');
+  });
+
+  it('hodiny před uzavřením minuty nejdřív dopočítají, co čeká ve frontě', () => {
+    const { feed, clock } = make();
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
+    clock.at = T0 + 3 * 60_000 + 3_000; // smyčka se zasekla: obchod je pořád jen ve frontě
+    feed.advance();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots();
+    expect(socket.take()[0].minutes).toEqual([[M0, [100000, 9, 0, 0]]]);
+    expect(feed.metricsLine()).not.toContain('opožděných');
+  });
+
+  it('nahromaděné změny odcházejí po částech, ne jednou obří zprávou', () => {
+    const { feed } = make();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots(); socket.take();
+    // pět minut po 700 cenách: do jedné zprávy se vejdou nejvýš dvě
+    for (let minute = 0; minute < 5; minute += 1) {
+      for (let step = 0; step < 700; step += 1) feed.onTick(trade('NQZ6', minute * 60_000 + step, 20000 + step * 0.25, 1, 'buy', `o${minute}-${step}`));
+    }
+    feed.flushTrades();
+    for (let i = 0; i < 4; i += 1) feed.flushCells();
+    const batches = socket.take().filter((message) => message.type === 'of');
+    expect(batches.length).toBe(3);
+    for (const batch of batches) expect(JSON.stringify(batch).length).toBeLessThan(ORDER_FLOW_HIGH_WATER);
+    expect(batches.map((message) => message.seq)).toEqual([1, 2, 3]);
+    const total = batches.reduce((sum, message) => sum + (message.cells as Array<[number, number[]]>).reduce((cells, row) => cells + row[1].length / 4, 0), 0);
+    expect(total).toBe(3_500);
   });
 
   it('odhlášení zastaví zprávy; neznámý zdroj a neplatný tvar odmítne', () => {
