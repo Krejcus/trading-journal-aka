@@ -296,6 +296,9 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             <Field label="Value area (%)"><NumberInput value={value.valueAreaPercent} min={30} max={95} step={5} onChange={valueAreaPercent => update('volumeProfile', { valueAreaPercent: Math.min(95, Math.max(30, valueAreaPercent || 70)) })} /></Field>
             <Check checked={value.extendPoc} onChange={extendPoc => update('volumeProfile', { extendPoc })} label="Neotestované POC protáhnout doprava" />
             <Check checked={value.showLabels} onChange={showLabels => update('volumeProfile', { showLabels })} label="Popisek úseku (název, delta, objem)" />
+            <h3 className="mb-2 mt-5 text-xs font-medium uppercase tracking-wide text-slate-500">Natažený profil</h3>
+            <Check checked={value.rangeTool} onChange={rangeTool => update('volumeProfile', { rangeTool })} label="Úsek z nástroje Časové rozpětí ukáže volume profil" />
+            <p className="mt-1 text-[11px] leading-snug text-slate-500">Kreslení → Měření → Časové rozpětí: natáhni úsek přes graf. Jde posunout, roztáhnout a smazat jako každá kresba a přenese se i na telefon. Funguje i s vypnutým profilem po seancích.</p>
             <p className="mt-2 text-[11px] leading-snug text-slate-500">Seance berou hodiny z nastavení levelů. Úsek, ve kterém služba neběžela celou dobu, je označený jako neúplný. {ORDER_FLOW_NOTE}</p>
           </div>; })()}
           {tab === 'style' && indicator === 'bubbles' && (() => { const value = draft.bubbles; return <div>
