@@ -128,6 +128,12 @@ export interface RithmicTick {
   gatewayAt: number | null;
   exchangeAt: number | null;
   receivedAt: number;
+  /**
+   * Kdo obchod vyvolal (market strana) a číslo jeho příkazu na burze — jen u obchodů. Jen pro zobrazení
+   * (order flow); nic z toho nesmí do cen pro příkazy ani do rozhodování.
+   */
+  aggressor?: 'buy' | 'sell' | null;
+  aggressorOrderId?: string | null;
 }
 
 export interface RithmicInstrumentPosition {
@@ -183,6 +189,12 @@ export interface RithmicClientConfig {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+/** Strana agresora obchodu (LastTrade.aggressor); neznámá nebo chybějící hodnota = null. */
+const aggressorSide = (v: unknown): 'buy' | 'sell' | null => {
+  if (typeof v !== 'number') return null;
+  const name = rithmicEnumName('LastTrade', 'TransactionType', v);
+  return name === 'BUY' ? 'buy' : name === 'SELL' ? 'sell' : null;
+};
 const num = (v: unknown): number | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
@@ -779,6 +791,7 @@ export class RithmicClient {
           gatewayAt: stamp(f.ssboe, f.usecs),
           exchangeAt: stamp(f.source_ssboe, f.source_usecs),
           receivedAt,
+          ...(message.templateId === 150 ? { aggressor: aggressorSide(f.aggressor), aggressorOrderId: str(f.aggressor_exchange_order_id) || null } : {}),
         });
         return;
       case 450:

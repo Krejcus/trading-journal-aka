@@ -29,6 +29,10 @@ NO_STOP=(--allow-no-stop)
 # bez toho platí jeden čekající vstup jako dřív. Jen pro obchodní režim (obchod / obnovit).
 MULTI=()
 [ "${VICE_VSTUPU:-}" = "ano" ] && MULTI=(--multi-entry)
+# ORDER_FLOW=ano zapne order flow pro indikátory Bubliny a Volume profil (odběr NQ, objem po cenách, velké
+# obchody). Jen zobrazení — do příkazů, upozornění ani svíček nezasahuje; platí ve všech režimech.
+FLOW=()
+[ "${ORDER_FLOW:-}" = "ano" ] && FLOW=(--order-flow)
 export RITHMIC_DEV_ORIGINS="http://localhost:5273"
 
 if [ ! -t 0 ] || [ ! -t 1 ]; then
@@ -40,16 +44,16 @@ case "$MODE" in
   obchod)
     npx tsx scripts/rithmic/grantLiveTrading.ts --system "$SYSTEM" --user "$LUCID_USER" --account "$LUCID_ACCOUNT" \
       --hours "${HODIN:-12}" --max-quantity "${KS:-3}" "${NO_STOP[@]}"
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading "${MULTI[@]}"
+    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading "${MULTI[@]}" "${FLOW[@]}"
     ;;
   obnovit)
-    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT" "${MULTI[@]}"
+    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT" "${MULTI[@]}" "${FLOW[@]}"
     ;;
   cteni)
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only
+    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only "${FLOW[@]}"
     ;;
   zavirani)
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --close-only
+    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --close-only "${FLOW[@]}"
     ;;
   *)
     echo "Neznámý režim: $MODE (obchod | obnovit | cteni | zavirani)" >&2

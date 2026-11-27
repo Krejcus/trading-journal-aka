@@ -28,6 +28,7 @@ import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
 import { createOrderJournal } from '../../services/rithmic/orderJournal';
 import { mergeRithmicDisplayHistory } from '../../lib/rithmicCandleSeed';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
+import { createOrderFlowFeed, type OrderFlowFeed } from '../../services/rithmic/orderFlowFeed';
 import { barRepairWindow, mergeRepairedBars, mergeRepairWindows, repairedBarsFrom, type BarRepairWindow } from '../../services/rithmic/barRepair';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
 import { createRithmicAlertWatch, type AlertWatchPersisted } from '../../services/rithmic/alertWatch';
@@ -56,6 +57,12 @@ const READ_ONLY = process.argv.includes('--read-only');
  */
 const CLOSE_ONLY = process.argv.includes('--close-only');
 const LIVE_TRADING = process.argv.includes('--live-trading') || CLOSE_ONLY;
+/**
+ * Order flow pro indikátory Bubliny a Volume profil (objem po cenách, velké obchody; u MNQ navíc odběr NQ).
+ * Výchozí stav je vypnuto. JEN ZOBRAZENÍ: nic z toho nejde do cen pro příkazy, upozornění ani svíček
+ * (services/rithmic/orderFlowFeed.ts). Chyba téhle vrstvy ji jen vypne, služba běží dál.
+ */
+const ORDER_FLOW = process.argv.includes('--order-flow');
 /** Kolik hodin dokončených minutových svíček si stránka po připojení vezme z historie Rithmicu. */
 const HISTORY_HOURS = 168;
 const GATEWAY = cli('gateway') ?? 'rprotocol-de.rithmic.com';
@@ -303,6 +310,17 @@ async function main(): Promise<void> {
 
   // Ceny: zvláštní spojení na ticker (adaptér ho nepoužívá). Jen pro zobrazení.
   const candles = new RithmicCandleBuilder();
+  /** Order flow (jen zobrazení); null, dokud není zapnutý přepínačem a nezjistí se kontrakty. */
+  let orderFlow: OrderFlowFeed | null = null;
+  /** Po obnově spojení znovu přihlásí odběr kontraktů, které má navíc jen order flow (NQ). */
+  const subscribeOrderFlowExtras = async (): Promise<void> => {
+    for (const symbol of orderFlow?.symbols() ?? []) {
+      if (symbol === CONTRACT) continue;
+      try { await ticker.subscribeMarketData(symbol, 'CME'); } catch (error) {
+        console.log(`[order flow] odběr ${symbol} se po obnově nepodařil (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+  };
   let tickCount = 0;
   // Měření (jen čísla do výpisu, nic neřídí): zpoždění ceny burza → Mac a odezva spárovaných zařízení.
   const quantiles = (values: number[]): string => {
@@ -502,6 +520,8 @@ async function main(): Promise<void> {
           if (plant === 'ticker') {
             await ticker.subscribeMarketData(CONTRACT, 'CME');
             feedOpen = true;
+            orderFlow?.feedOpened(Date.now());
+            void subscribeOrderFlowExtras(); // bez čekání: obnova cen grafu na druhém odběru nezávisí
             console.log('[ticker] ceny obnoveny');
             scheduleBarRepair(barRepairWindow(feedGapFrom ?? Date.now(), Date.now()));
             feedGapFrom = null;
@@ -530,8 +550,13 @@ async function main(): Promise<void> {
     url: gatewayUrl, credentials: creds, socketFactory, requestTimeoutMs: 10_000,
     events: {
       onTick: (tick) => {
-        if (tick.symbol !== CONTRACT) return;
+        if (tick.symbol !== CONTRACT) {
+          // Druhý odběr (NQ pro order flow) končí tady: NIKDY k upozorněním na cenu, do svíček, měření ani cen pro příkazy.
+          orderFlow?.onTick(tick);
+          return;
+        }
         tickCount += 1;
+        orderFlow?.onTick(tick);
         // Čas burzy a brány Rithmicu proti hodinám Macu (hodiny Macu se synchronizují přes síť; chyba v jednotkách ms).
         if (!tick.isSnapshot && tick.kind === 'trade') {
           if (tick.exchangeAt != null && exchangeLag.length < 20_000) exchangeLag.push(tick.receivedAt - tick.exchangeAt);
@@ -554,6 +579,7 @@ async function main(): Promise<void> {
           feedOpen = false;
           if (feedGapFrom === null) feedGapFrom = Date.now();
           alertWatch?.feedLost();
+          orderFlow?.feedLost();
           candles.reset(CONTRACT);
           tickDirty = false;
           lastBar = null;
@@ -590,9 +616,34 @@ async function main(): Promise<void> {
   }
   const ref = await ticker.referenceData(CONTRACT, 'CME');
   const tickSize = ref?.tickSize ?? 0.25;
+  if (ORDER_FLOW) {
+    // Chyba tady nesmí zastavit start služby: order flow se jen nespustí.
+    try {
+      const root = /^([A-Z0-9]+?)[FGHJKMNQUVXZ]\d{1,2}$/.exec(CONTRACT)?.[1] ?? CONTRACT;
+      const sources: Record<string, string> = {};
+      // Order flow se čte na NQ (velké příkazy), obchoduje se MNQ; ceny obou drží u sebe a krok je stejný.
+      if (root === 'MNQ') {
+        try {
+          const nq = await ticker.frontMonthContract('NQ', 'CME');
+          if (!nq || !/^NQ[FGHJKMNQUVXZ]\d{1,2}$/.test(nq)) throw new Error('Rithmic nepotvrdil aktuální kontrakt NQ');
+          await ticker.subscribeMarketData(nq, 'CME');
+          sources.NQ = nq;
+        } catch (error) {
+          console.log(`[order flow] NQ nejde odebírat (${error instanceof Error ? error.message : String(error)}) — zdroj jen ${root}`);
+        }
+      }
+      sources[root] = CONTRACT;
+      orderFlow = createOrderFlowFeed({ sources, tickSize, dir: results, slug: SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase() });
+      console.log(`[order flow] zapnuto: ${Object.entries(sources).map(([source, symbol]) => `${source} = ${symbol}`).join(', ')}`);
+    } catch (error) {
+      orderFlow = null;
+      console.log(`[order flow] nespuštěno (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
   const feedStartedAt = Date.now();
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
+  orderFlow?.feedOpened(feedStartedAt);
   // I první minuta po startu procesu je z ticků neúplná.
   scheduleBarRepair(barRepairWindow(feedStartedAt, Date.now()));
   void recentHistory(); // Warm the shared display cache after the live feed is subscribed.
@@ -810,7 +861,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', ...(access.local && LIVE_TRADING && !CLOSE_ONLY ? { maintenancePid: process.pid } : {}), readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', ...(orderFlow ? { orderFlow: orderFlow.capability() } : {}), ...(access.local && LIVE_TRADING && !CLOSE_ONLY ? { maintenancePid: process.pid } : {}), readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     if (alertWatch) send(socket, { type: 'alerts', ...alertWatch.status() });
@@ -824,7 +875,7 @@ async function main(): Promise<void> {
     void recentHistory().then(history => {
       if (history !== cached) sendHistory(history);
     });
-    socket.on('close', () => clients.delete(socket));
+    socket.on('close', () => { clients.delete(socket); orderFlow?.drop(socket); });
     socket.on('message', (raw) => {
       void (async () => {
         const receivedAt = performance.now();
@@ -860,6 +911,15 @@ async function main(): Promise<void> {
               finally { checkingRestart = false; }
             }
             send(socket, accepted ? { type: 'maintenanceReady' } : { type: 'maintenanceReply', accepted: false });
+            return;
+          }
+          // Order flow (jen zobrazení): přihlášení a odhlášení odběru. Žádný příkaz ani dotaz na brokera; strop žádostí
+          // má vrstva vlastní a rozpočtu obchodních příkazů se nedotkne. Smí i zařízení jen pro čtení.
+          const orderFlowRequest = (message as { orderFlow?: unknown }).orderFlow;
+          if (orderFlowRequest !== undefined && !message.command) {
+            if (access.deviceId && !activeDevice(access.deviceId)) { socket.terminate(); return; }
+            const problem = orderFlow ? orderFlow.handle(socket, orderFlowRequest) : 'order flow není ve službě zapnutý';
+            if (problem) send(socket, { type: 'of-error', message: problem });
             return;
           }
           // Měření otevření appky (kroky od návratu po první cenu): jen výpis, nic neřídí. Bere jen čísla a ano/ne.
@@ -959,6 +1019,7 @@ async function main(): Promise<void> {
     if (exchangeLag.length || gatewayLag.length) console.log(`[měření] cena burza → Mac: ${quantiles(exchangeLag)} · brána Rithmicu → Mac: ${quantiles(gatewayLag)}`);
     exchangeLag = [];
     gatewayLag = [];
+    if (orderFlow) console.log(orderFlow.metricsLine());
   }, 60_000).unref();
   console.log(`Aplikace u Rithmicu: "${APP_NAME}" · systém "${SYSTEM}"${READ_ONLY ? ' · JEN PRO ČTENÍ (příkazy vypnuté)' : ''}`);
   console.log(`Místní proces běží: ws://127.0.0.1:${PORT} · ${SYSTEM} · ${CONTRACT} · účet ${broker.accountIds()[0]}`);
