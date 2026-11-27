@@ -30,7 +30,11 @@ describe('OrderFlowStore', () => {
   it('mezera v pořadí zpráv nic nedomýšlí a vyžádá nový snímek', () => {
     const store = new OrderFlowStore();
     store.apply(snapshot());
+    let notified = 0;
+    store.subscribe(() => { notified += 1; });
     store.apply({ type: 'of', sub: 1, seq: 3, cells: [[M0, [100000, 99, 0, 0]]] });
+    store.apply({ type: 'of', sub: 1, seq: 4, cells: [[M0, [100000, 99, 0, 0]]] });
+    expect(notified).toBe(2); // každá neshoda se ohlásí, aby se žádost o snímek mohla opakovat
     expect(store.needsResync).toBe(true);
     expect([...store.minuteCells(M0)!].slice(0, 4)).toEqual([100000, 9, 1, 0]);
   });
@@ -93,69 +97,125 @@ describe('OrderFlowStore', () => {
 
 describe('OrderFlowLink', () => {
   const capability = { sources: { NQ: 'NQZ6', MNQ: 'MNQZ6' }, tickSize: 0.25, floors: { NQ: 5, MNQ: 20 }, keepDays: 7 };
+  const setup = (options: { now?: () => number; releaseDelayMs?: number; retryMs?: number } = {}) => {
+    const sent: unknown[] = [];
+    const link = new OrderFlowLink({ releaseDelayMs: 0, ...options });
+    const session = link.attach((request) => { sent.push(request); return true; });
+    return { sent, link, session };
+  };
 
   it('přihlásí odběr, až když data někdo chce a služba je umí', () => {
-    const sent: unknown[] = [];
-    const link = new OrderFlowLink();
-    link.attach((request) => { sent.push(request); return true; });
+    const { sent, link, session } = setup();
     const release = link.demand({ source: 'NQ', days: 7 });
     expect(sent).toEqual([]);
-    link.hello(capability);
+    session.hello(capability);
     expect(sent).toEqual([{ subscribe: true, source: 'NQ', days: 7 }]);
     const releaseSecond = link.demand({ source: 'NQ', days: 1 });
     expect(sent).toHaveLength(1);
-    release(); releaseSecond();
+    release(); releaseSecond(); release();
+    expect(sent.slice(1)).toEqual([{ subscribe: false }]);
+  });
+
+  it('krátké zrušení a obnovení zájmu (přestavba grafu) odběr nechá běžet', async () => {
+    const { sent, link, session } = setup({ releaseDelayMs: 30 });
+    session.hello(capability);
+    const release = link.demand({ source: 'NQ', days: 7 });
+    release();
+    const again = link.demand({ source: 'NQ', days: 7 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(sent).toEqual([{ subscribe: true, source: 'NQ', days: 7 }]);
+    again();
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(sent[1]).toEqual({ subscribe: false });
   });
 
   it('požadovaný zdroj, který služba nemá, nahradí dostupným a dny omezí', () => {
-    const sent: unknown[] = [];
-    const link = new OrderFlowLink();
-    link.attach((request) => { sent.push(request); return true; });
-    link.hello({ sources: { ES: 'ESZ6' }, tickSize: 0.25, keepDays: 3 });
+    const { sent, link, session } = setup();
+    session.hello({ sources: { ES: 'ESZ6' }, tickSize: 0.25, keepDays: 3 });
     link.demand({ source: 'NQ', days: 30 });
     expect(sent).toEqual([{ subscribe: true, source: 'ES', days: 3 }]);
   });
 
+  it('nový zdroj od služby (of-ready) přepne odběr z náhradního na požadovaný', () => {
+    const { sent, link, session } = setup();
+    session.hello({ sources: { MNQ: 'MNQZ6' }, tickSize: 0.25, keepDays: 7 });
+    link.demand({ source: 'NQ', days: 7 });
+    session.message(snapshot({ source: 'MNQ', symbol: 'MNQZ6' }));
+    expect(link.store.source).toBe('MNQ');
+    session.hello(capability);
+    expect(sent).toEqual([{ subscribe: true, source: 'MNQ', days: 7 }, { subscribe: true, source: 'NQ', days: 7 }]);
+    // opožděný snímek starého zdroje už úložiště znovu nenaplní
+    session.message(snapshot({ sub: 9, source: 'MNQ', symbol: 'MNQZ6' }));
+    session.message(snapshot({ sub: 10 }));
+    expect(link.store.source).toBe('NQ');
+  });
+
   it('po konci relace data smaže a po novém hello odběr přihlásí znovu', () => {
-    const sent: unknown[] = [];
-    const link = new OrderFlowLink();
-    link.attach((request) => { sent.push(request); return true; });
-    link.hello(capability);
+    const { sent, link, session } = setup();
+    session.hello(capability);
     link.demand({ source: 'NQ', days: 1 });
-    link.message(snapshot());
+    session.message(snapshot());
     expect(link.store.minutes()).toHaveLength(1);
-    link.sessionReset();
+    session.sessionReset();
     expect(link.store.minutes()).toEqual([]);
-    link.hello(capability);
+    session.message(snapshot());
+    expect(link.store.minutes()).toEqual([]); // bez odběru se snímek nepřijme
+    session.hello(capability);
     expect(sent).toEqual([{ subscribe: true, source: 'NQ', days: 1 }, { subscribe: true, source: 'NQ', days: 1 }]);
   });
 
-  it('služba bez order flow: nic neposílá; chybu služby jen zobrazí', () => {
-    const sent: unknown[] = [];
-    const link = new OrderFlowLink();
-    link.attach((request) => { sent.push(request); return true; });
-    link.hello(undefined);
+  it('služba bez order flow: nic neposílá', () => {
+    const { sent, link, session } = setup();
+    session.hello(undefined);
     link.demand({ source: 'NQ', days: 1 });
     expect(sent).toEqual([]);
-    expect(link.message({ type: 'of-error', message: 'order flow není ve službě zapnutý' })).toBe(true);
-    expect(link.error).toContain('není');
   });
 
-  it('po mezeře ve zprávách požádá o nový snímek nejvýš jednou za 2 s', () => {
-    const sent: unknown[] = [];
-    let now = 10_000;
-    const link = new OrderFlowLink(() => now);
-    link.attach((request) => { sent.push(request); return true; });
-    link.hello(capability);
+  it('odmítnutí služby: data zmizí, chyba se ukáže a odběr se po chvíli zkusí znovu', async () => {
+    const { sent, link, session } = setup({ retryMs: 30 });
+    session.hello(capability);
     link.demand({ source: 'NQ', days: 1 });
-    link.message(snapshot());
-    link.message({ type: 'of', sub: 1, seq: 5, cells: [] });
-    link.message({ type: 'of', sub: 1, seq: 6, cells: [] });
+    session.message(snapshot());
+    expect(session.message({ type: 'of-error', message: 'příliš mnoho změn odběru order flow za krátkou dobu' })).toBe(true);
+    expect(link.error).toContain('příliš mnoho');
+    expect(link.store.minutes()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(sent).toEqual([{ subscribe: true, source: 'NQ', days: 1 }, { subscribe: true, source: 'NQ', days: 1 }]);
+  });
+
+  it('po mezeře ve zprávách žádá o nový snímek nejvýš jednou za 2 s, ale opakovaně, dokud nepřijde', () => {
+    let now = 10_000;
+    const { sent, session, link } = setup({ now: () => now });
+    session.hello(capability);
+    link.demand({ source: 'NQ', days: 1 });
+    session.message(snapshot());
+    session.message({ type: 'of', sub: 1, seq: 5, cells: [] });
+    session.message({ type: 'of', sub: 1, seq: 6, cells: [] });
     expect(sent).toHaveLength(2);
     now += 2_500;
-    link.message({ type: 'of', sub: 1, seq: 9, cells: [] });
-    expect(sent).toHaveLength(2); // needsResync už je nastavené, další žádost až po novém snímku
+    session.message({ type: 'of', sub: 1, seq: 9, cells: [] });
+    expect(sent).toHaveLength(3); // první žádost se ztratila? další neshoda ji po 2 s zopakuje
+    session.message(snapshot({ sub: 2 }));
+    expect(link.store.needsResync).toBe(false);
+  });
+
+  it('druhé spojení appky převezme spojku; staré už nic nezmění ani nesmaže', () => {
+    const first = setup();
+    const link = first.link;
+    first.session.hello(capability);
+    link.demand({ source: 'NQ', days: 1 });
+    const sentSecond: unknown[] = [];
+    const second = link.attach((request) => { sentSecond.push(request); return true; });
+    second.hello(capability);
+    second.message(snapshot());
+    expect(sentSecond).toEqual([{ subscribe: true, source: 'NQ', days: 1 }]);
+    first.session.sessionReset();
+    first.session.detach();
+    expect(first.session.message({ type: 'of-error', message: 'x' })).toBe(true);
+    expect(link.store.minutes()).toHaveLength(1);
+    expect(link.error).toBeNull();
+    second.detach();
+    expect(link.store.minutes()).toEqual([]);
   });
 });
 

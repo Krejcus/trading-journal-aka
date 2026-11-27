@@ -92,7 +92,7 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
   // ── Úseky a profily (cache) ──
   let segmentCache: { key: string; segments: ProfileSegment[] } | null = null;
   const profileCache = new Map<string, { profile: OrderFlowProfile | null; rev: number; from: number; to: number; params: string }>();
-  const touchCache = new Map<string, { length: number; touched: boolean }>();
+  const touchCache = new Map<string, { firstTime: number; scannedTo: number; touched: boolean }>();
 
   const segments = (settings: VolumeProfileIndicatorSettings, levels: LevelsIndicatorSettings): ProfileSegment[] => {
     const minutes = store.minutes();
@@ -116,23 +116,27 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
     return profile;
   };
 
+  /**
+   * Dotkla se cena po konci úseku jeho POC? Výsledek se pamatuje podle úseku, řádku, timeframu a ceny POC
+   * a hledání pokračuje od času, kam už došlo (ne od indexu — pole svíček se s timeframem mění).
+   */
   const pocTouched = (id: string, pocPrice: number, afterSec: number): boolean => {
     const candles = inputs.candles();
-    const cached = touchCache.get(id);
-    if (cached?.touched) return true;
-    let start = cached ? Math.max(0, cached.length - 1) : 0;
-    if (!cached) {
-      let lo = 0; let hi = candles.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < afterSec) lo = mid + 1; else hi = mid; }
-      start = lo;
-    }
+    const key = `${id}|${inputs.timeframe()}|${pocPrice}`;
+    const firstTime = candles[0]?.time ?? 0;
+    const cached = touchCache.get(key);
+    if (cached && cached.firstTime === firstTime && cached.touched) return true;
+    const resumeFrom = cached && cached.firstTime === firstTime ? Math.max(afterSec, cached.scannedTo) : afterSec;
+    let lo = 0; let hi = candles.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < resumeFrom) lo = mid + 1; else hi = mid; }
     let touched = false;
-    for (let i = start; i < candles.length; i += 1) {
+    for (let i = lo; i < candles.length; i += 1) {
       const candle = candles[i];
-      if (candle.time >= afterSec && candle.low <= pocPrice && candle.high >= pocPrice) { touched = true; break; }
+      if (candle.low <= pocPrice && candle.high >= pocPrice) { touched = true; break; }
     }
     if (touchCache.size > 400) touchCache.clear();
-    touchCache.set(id, { length: candles.length, touched });
+    // Poslední svíčka se ještě tvoří — příště se projde znovu.
+    touchCache.set(key, { firstTime, scannedTo: candles[candles.length - 1]?.time ?? afterSec, touched });
     return touched;
   };
 
@@ -243,7 +247,7 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           }
           const nakedPoc = (fromX: number, y: number) => {
             const pocPrice = ((profile.rowMin + profile.poc) * profile.rowTicks + (profile.rowTicks - 1) / 2) * tickSize;
-            if (pocTouched(`${id}|${rowTicks}`, pocPrice, to)) return;
+            if (pocTouched(id, pocPrice, to)) return;
             const lineY = Math.round(y) + 0.5;
             context.save(); context.setLineDash([6, 4]); context.strokeStyle = rgba(settings.pocColor, 0.75); context.lineWidth = 1;
             context.beginPath(); context.moveTo(Math.max(0, fromX), lineY); context.lineTo(mediaSize.width, lineY); context.stroke(); context.restore();
@@ -312,16 +316,17 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
 
   // ── Bubliny ──
   const pulseStart = new Map<string, number>();
-  let newestSeen = 0;
+  /** Obchody, které už jednou zapulzovaly (i když se pak doplnily o další dílčí obchod). */
+  const pulsed = new Set<string>();
   const notePulses = (): void => {
-    if (!store.complete) { newestSeen = 0; pulseStart.clear(); return; }
+    if (!store.complete) { pulseStart.clear(); pulsed.clear(); return; }
     const now = Date.now();
-    const fresh = store.trades(Math.max(newestSeen, now - 5_000));
-    for (const trade of fresh) {
-      if (!pulseStart.has(trade.id) && now - trade.at < 5_000) pulseStart.set(trade.id, performance.now());
-      if (trade.at > newestSeen) newestSeen = trade.at;
+    for (const trade of store.trades(now - 5_000)) {
+      if (pulsed.has(trade.id)) continue;
+      pulsed.add(trade.id);
+      pulseStart.set(trade.id, performance.now());
     }
-    if (pulseStart.size > 500) pulseStart.clear();
+    if (pulsed.size > 4_000) { pulsed.clear(); pulseStart.clear(); }
   };
 
   const bubbleRenderer: IPrimitivePaneRenderer = {
@@ -372,7 +377,9 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
     },
   };
 
-  const unsubscribe = store.subscribe(() => { notePulses(); invalidate(); });
+  // Data dál tečou i při indikátorech skrytých podle timeframu — překreslovat kvůli nim graf nemá smysl.
+  const anythingShown = (): boolean => inputs.showBubbles() || inputs.showProfile() || (inputs.ranges?.().length ?? 0) > 0;
+  const unsubscribe = store.subscribe(() => { if (!anythingShown()) return; notePulses(); invalidate(); });
   notePulses();
 
   const profileViews = [{ zOrder: () => 'bottom' as const, renderer: () => profileRenderer }];

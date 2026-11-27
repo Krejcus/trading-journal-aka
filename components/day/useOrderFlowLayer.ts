@@ -96,7 +96,8 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
         showBubbles: () => settingsRef.current.bubbles.enabled && indicatorVisibleOnTimeframe(timeframeRef.current, settingsRef.current.bubbles.visibility),
         showProfile: () => settingsRef.current.volumeProfile.enabled && indicatorVisibleOnTimeframe(timeframeRef.current, settingsRef.current.volumeProfile.visibility),
         candles: () => candlesRef.current,
-        ranges: () => rangesRef.current,
+        // Natažené úseky se řídí viditelností profilu podle timeframu.
+        ranges: () => (indicatorVisibleOnTimeframe(timeframeRef.current, settingsRef.current.volumeProfile.visibility) ? rangesRef.current : []),
         isDark: () => darkRef.current,
         leftInset: () => insetRef.current,
       });

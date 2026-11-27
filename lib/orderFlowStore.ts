@@ -67,6 +67,8 @@ export class OrderFlowStore {
 
   private sub: number | null = null;
   private seq = 0;
+  /** Zdroj, o který si appka řekla: `undefined` = bez omezení, `null` = teď žádný odběr (snímek se nepřijme). */
+  private expected: string | null | undefined = undefined;
   private readonly cells = new Map<number, Int32Array>();
   private sortedMinutes: number[] | null = null;
   private tradeList: OrderFlowTrade[] = [];
@@ -80,6 +82,12 @@ export class OrderFlowStore {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
+
+  /**
+   * Který zdroj se teď čeká. Opožděný snímek z odběru, který už appka odhlásila nebo přepnula na jiný
+   * zdroj, by jinak úložiště znovu naplnil starými daty.
+   */
+  expectSource(source: string | null): void { this.expected = source; }
 
   /** Konec relace nebo změna zdroje: nic starého se nesmí tvářit jako živé. */
   reset(): void {
@@ -99,6 +107,7 @@ export class OrderFlowStore {
     if (sub === null) return true;
     if (type === 'of-snapshot') {
       if (message.reset === true) {
+        if (this.expected !== undefined && message.source !== this.expected) return true;
         this.cells.clear(); this.sortedMinutes = null;
         this.tradeList = []; this.tradeIndex.clear(); this.tradesSorted = true;
         this.sub = sub; this.seq = 0; this.complete = false; this.needsResync = false; this.coverage = []; this.liveSince = null;
@@ -124,8 +133,10 @@ export class OrderFlowStore {
     if (sub !== this.sub) return true;
     const seq = typeof message.seq === 'number' ? message.seq : null;
     if (seq === null || seq !== this.seq + 1) {
-      // Chybí zpráva: obraz už nemusí sedět. Nedomýšlet — vyžádat nový snímek.
-      if (!this.needsResync) { this.needsResync = true; this.emit(); }
+      // Chybí zpráva: obraz už nemusí sedět. Nedomýšlet — vyžádat nový snímek. Hlásí se při každé další
+      // neshodě, aby se žádost opakovala, dokud nový snímek nepřijde (spojka to brzdí na jednou za 2 s).
+      this.needsResync = true;
+      this.emit();
       return true;
     }
     this.seq = seq;

@@ -97,8 +97,9 @@ describe('order flow ve službě — pojistky zapojení', () => {
 
   it('appka: zprávy order flow jdou mimo stav Reactu a příkazy se jich netýkají', () => {
     const branch = hook.slice(at(hook, "} else if (message.type === 'of' || message.type === 'of-trade'"), at(hook, "} else if (message.type === 'tick') {"));
-    expect(branch).toMatch(/orderFlowLink\.message\(message\);/);
+    expect(branch).toMatch(/orderFlow\?\.message\(message\);/);
     expect(branch).not.toMatch(/set[A-Z]\w*\(/);
-    expect(hook).toMatch(/orderFlowLink\.sessionReset\(/);
+    expect(hook).toMatch(/orderFlow\?\.sessionReset\(\);/);
+    expect(hook).toMatch(/orderFlow = orderFlowLink\.attach\(\(request\) => connection\.sendOrderFlow\(request\)\);/);
   });
 });

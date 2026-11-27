@@ -20,7 +20,7 @@ import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
 import { liveExtraOrdersKey, type LiveExtraOrders } from '../lib/liveExtraOrderLines';
 import { RithmicPendingJournal, type PendingRithmicCommand } from '../lib/rithmicPendingJournal';
 import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
-import { orderFlowLink } from '../lib/orderFlowLink';
+import { orderFlowLink, type OrderFlowSession } from '../lib/orderFlowLink';
 import { liveChartFills, type LiveChartWorkingOrders } from './useLiveChartData';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
@@ -259,6 +259,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     let sessionScope = '';
     /** Pro které `hello` už order flow zná schopnosti služby (druhé hello s historií odběr neruší). */
     let orderFlowHelloScope = '';
+    /** Order flow tohoto spojení (jen zobrazení); jiné současné spojení appky do něj nemluví. */
+    let orderFlow: OrderFlowSession | null = null;
     let recoveryGeneration = 0;
     let identity: Hello | null = null;
     function lookupPending(item: PendingRithmicCommand, info: Hello) {
@@ -323,7 +325,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
           setClosedPnl(undefined);
           priceRef.current = null;
           feedBox.reset();
-          orderFlowLink.sessionReset();
+          orderFlowHelloScope = '';
+          orderFlow?.sessionReset();
           setFeedLive(false);
           setSilent(false);
           setPrice(null);
@@ -373,13 +376,13 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             setCandles((current) => mergeSeedCandles(current, bars, sameSource));
             if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
             // Order flow (jen zobrazení): co služba umí. Druhé `hello` (s historií) odběr nechává běžet.
-            if (orderFlowHelloScope !== scope || !orderFlowLink.capability) { orderFlowHelloScope = scope; orderFlowLink.hello((message as { orderFlow?: unknown }).orderFlow); }
+            if (orderFlowHelloScope !== scope) { orderFlowHelloScope = scope; orderFlow?.hello((message as { orderFlow?: unknown }).orderFlow); }
           } else if (message.type === 'of-ready') {
             // Služba po startu přidala zdroj (NQ): nové schopnosti, odběr se přihlásí znovu.
-            orderFlowLink.hello((message as { orderFlow?: unknown }).orderFlow);
+            orderFlow?.hello((message as { orderFlow?: unknown }).orderFlow);
           } else if (message.type === 'of' || message.type === 'of-trade' || message.type === 'of-snapshot' || message.type === 'of-error') {
             // Order flow jde rovnou do úložiště mimo React — žádné překreslení obrazovky, žádná cena pro příkazy.
-            orderFlowLink.message(message);
+            orderFlow?.message(message);
           } else if (message.type === 'tick') {
             const bar = message.bar ? candle(message.bar as Bar) : null;
             const tickPrice = typeof message.price === 'number' ? message.price : null;
@@ -436,7 +439,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       },
     });
     connectionRef.current = connection;
-    const detachOrderFlow = orderFlowLink.attach((request) => connection.sendOrderFlow(request));
+    orderFlow = orderFlowLink.attach((request) => connection.sendOrderFlow(request));
     connection.start();
     // Návrat do appky (telefon): iOS spojení na pozadí uspí a zavře. Nečekat na časovač dalšího pokusu — připojit hned.
     const wake = () => {
@@ -448,7 +451,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (typeof window !== 'undefined') { window.addEventListener('pageshow', wake); window.addEventListener('online', wake); }
     return () => {
       connectionRef.current = null;
-      detachOrderFlow();
+      orderFlow?.detach();
       connection.stop();
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
       if (typeof window !== 'undefined') { window.removeEventListener('pageshow', wake); window.removeEventListener('online', wake); }

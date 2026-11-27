@@ -2194,6 +2194,8 @@ export const readOrderFlowIndicators = (): Record<OrderFlowIndicatorId, boolean>
   return { bubbles: settings.bubbles.enabled, volumeProfile: settings.volumeProfile.enabled };
 };
 export const toggleOrderFlowIndicator = (id: OrderFlowIndicatorId): void => {
+  // Jen profil deníku (LIVE): v otevřené backtest session by se zapsal styl všem jejím panelům.
+  if (!isIndicatorJournalProfile()) return;
   const current = loadPanelIndicatorSettings(ORDER_FLOW_SETTINGS_PANEL, ORDER_FLOW_LEGACY_KEY);
   const next = { ...current, [id]: { ...current[id], enabled: !current[id].enabled } } as AlphaTradeIndicatorSettings;
   const target: PanelSettingsTarget = { panelId: ORDER_FLOW_SETTINGS_PANEL, allPanels: true };
