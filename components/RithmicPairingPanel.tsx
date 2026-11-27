@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { forgetRithmicDevice, pairRithmicDevice, readRithmicDeviceLink, type RithmicDeviceLink } from '../lib/rithmicDeviceLink';
+import { forgetRithmicDevice, onRithmicDeviceLinkRestored, pairRithmicDevice, readRithmicDeviceLink, type RithmicDeviceLink } from '../lib/rithmicDeviceLink';
 
 const SCOPE_TEXT: Record<RithmicDeviceLink['scope'], string> = { full: 'obchodování podle režimu služby', close: 'jen zavírání a správa ochrany', read: 'jen čtení' };
 const LAST_HOST_KEY = 'at:rithmic:last-host';
@@ -25,6 +25,7 @@ const RithmicPairingPanel: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
   useEffect(() => { if (initial) { setHost(initial.host); setCode(initial.code); } }, [initial?.host, initial?.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => onRithmicDeviceLinkRestored(() => { setLink(readRithmicDeviceLink()); onChanged(); }), [onChanged]);
 
   const field = `w-full rounded-xl border px-3 py-2.5 text-[16px] outline-none ${isDark ? 'border-white/15 bg-white/[0.06] text-white placeholder:text-white/35' : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'}`;
   const muted = isDark ? 'text-white/60' : 'text-slate-500';

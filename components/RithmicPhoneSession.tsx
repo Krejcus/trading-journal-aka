@@ -1,10 +1,13 @@
 import React, { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRithmicLocalTrading } from '../hooks/useRithmicLocalTrading';
 import { rithmicLocalAuth, rithmicLocalUrl } from '../lib/rithmicLocalLink';
+import { onRithmicDeviceLinkRestored } from '../lib/rithmicDeviceLink';
 
 export function usePhoneSession(open: boolean, simulationUrl?: string) {
   const [version, setVersion] = useState(0);
   const refreshPairing = useCallback(() => setVersion(value => value + 1), []);
+  // Spárování obnovené z Klíčenky (po přeinstalování) doběhne až po prvním vykreslení — pak si ho přečíst znovu.
+  useEffect(() => onRithmicDeviceLinkRestored(refreshPairing), [refreshPairing]);
   const url = useMemo(() => simulationUrl ?? rithmicLocalUrl(), [simulationUrl, version]);
   const deviceAuth = useMemo(() => (simulationUrl ? null : rithmicLocalAuth()), [simulationUrl, version]);
   const trading = useRithmicLocalTrading({ url, enabled: open, auth: deviceAuth });

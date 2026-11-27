@@ -45,6 +45,8 @@ if (isNativeBuild) {
   void registerNativeNotificationActions().catch(error => {
     console.error('[Native bootstrap] Notification action registration failed:', error);
   });
+  // Spárování telefonu s Macem po přeinstalování appky: z Klíčenky zpět do běžného úložiště (párovat znovu netřeba).
+  void import('./lib/rithmicDeviceLink').then(({ restoreRithmicDeviceLink }) => restoreRithmicDeviceLink()).catch(() => undefined);
 }
 
 // Liquid-glass LUPA (backdrop-filter: url(#svg displacement)) funguje JEN v Chromiu —

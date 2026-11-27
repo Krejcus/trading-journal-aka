@@ -2,7 +2,9 @@
  * Spárování TOHOTO zařízení (telefon) s místní Rithmic službou na Macu.
  *
  * Co se kde drží:
- *  - adresa služby, id a název zařízení, rozsah: běžné úložiště appky (nejsou tajné);
+ *  - adresa služby, id a název zařízení, rozsah: běžné úložiště appky (nejsou tajné) a v nativní appce navíc
+ *    kopie v iOS Klíčence — Klíčenka přežije přeinstalování appky, běžné úložiště ne (27. 11. 2026: po čisté
+ *    reinstalaci zůstal klíč v Klíčence, ale bez adresy a id se telefon musel párovat znovu);
  *  - klíč zařízení: v nativní appce JEN v iOS Klíčence (vázaný na toto zařízení, dostupný po odemčení);
  *    mimo nativní appku (vývoj, zkušební stránka) v úložišti prohlížeče.
  *
@@ -29,6 +31,8 @@ export interface RithmicKeyVault {
 }
 
 export const RITHMIC_DEVICE_LINK_KEY = 'at:rithmic:device-link';
+/** Událost okna: spárování se obnovilo z Klíčenky (po přeinstalování appky) — kdo si ho přečetl dřív, ať si ho přečte znovu. */
+export const RITHMIC_DEVICE_LINK_EVENT = 'alphatrade:rithmic-device-link';
 export const RITHMIC_DEVICE_SECRET_KEY = 'at:rithmic:device-key';
 const KEY_SHAPE = /^[A-Za-z0-9_-]{40,128}$/;
 const TAILNET_HOST = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.ts\.net$/;
@@ -116,9 +120,52 @@ export async function forgetRithmicDevice(vault?: RithmicKeyVault | null): Promi
   try { window.localStorage.removeItem(RITHMIC_DEVICE_LINK_KEY); } catch { /* úložiště není dostupné */ }
   try {
     const store = vault === undefined ? await nativeVault() : vault;
-    if (store) await store.secureRemove({ key: RITHMIC_DEVICE_SECRET_KEY });
-    else browserStore().removeItem(RITHMIC_DEVICE_SECRET_KEY);
+    if (store) {
+      await store.secureRemove({ key: RITHMIC_DEVICE_SECRET_KEY });
+      // Bez kopie v Klíčence — jinak by se zrušené spárování po přeinstalování samo vrátilo.
+      await store.secureRemove({ key: RITHMIC_DEVICE_LINK_KEY });
+    } else browserStore().removeItem(RITHMIC_DEVICE_SECRET_KEY);
   } catch { /* klíč už není */ }
+}
+
+/**
+ * Po přeinstalování appky: běžné úložiště je prázdné, ale klíč i kopie spárování zůstaly v Klíčence.
+ * Spárování se vrátí do běžného úložiště a ohlásí se událostí — telefon se nemusí párovat znovu.
+ * Jen když v Klíčence je obojí a platné; jinak se nic nemění (zařízení zůstane nespárované). Když služba
+ * zařízení mezitím odvolala, první připojení ho odmítne a appka nabídne nové spárování jako dosud.
+ * Vrací obnovené spárování, nebo null.
+ */
+export async function restoreRithmicDeviceLink(input: {
+  vault?: RithmicKeyVault | null;
+  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  notify?: () => void;
+} = {}): Promise<RithmicDeviceLink | null> {
+  try {
+    const here = env();
+    if (!rithmicDeviceLinkAllowed(here)) return null;
+    const storage = input.storage === undefined ? (typeof window === 'undefined' ? null : window.localStorage) : input.storage;
+    if (!storage || storage.getItem(RITHMIC_DEVICE_LINK_KEY)) return null;
+    const store = input.vault === undefined ? await nativeVault() : input.vault;
+    if (!store) return null;
+    const [saved, key] = await Promise.all([store.secureGet({ key: RITHMIC_DEVICE_LINK_KEY }), store.secureGet({ key: RITHMIC_DEVICE_SECRET_KEY })]);
+    const link = parseLink(saved.value, here.dev);
+    if (!link || !key.value || !KEY_SHAPE.test(key.value)) return null;
+    // Mezitím mohlo proběhnout nové spárování v téhle relaci — to má přednost.
+    if (storage.getItem(RITHMIC_DEVICE_LINK_KEY)) return null;
+    storage.setItem(RITHMIC_DEVICE_LINK_KEY, JSON.stringify(link));
+    (input.notify ?? (() => { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(RITHMIC_DEVICE_LINK_EVENT)); }))();
+    return link;
+  } catch {
+    // Zamčený telefon nebo chyba Klíčenky: nic se neobnoví, při dalším spuštění appky se to zkusí znovu.
+    return null;
+  }
+}
+
+/** Posluchač obnovení spárování z Klíčenky; vrací odhlášení. */
+export function onRithmicDeviceLinkRestored(handler: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  window.addEventListener(RITHMIC_DEVICE_LINK_EVENT, handler);
+  return () => window.removeEventListener(RITHMIC_DEVICE_LINK_EVENT, handler);
 }
 
 export interface RithmicPairSocket {
@@ -185,6 +232,9 @@ export function pairRithmicDevice(input: {
           if (store) await store.secureSet({ key: RITHMIC_DEVICE_SECRET_KEY, value: key });
           else browserStore().setItem(RITHMIC_DEVICE_SECRET_KEY, key);
           (input.storage ?? window.localStorage).setItem(RITHMIC_DEVICE_LINK_KEY, JSON.stringify(link));
+          // Kopie spárování do Klíčenky, aby přežilo přeinstalování appky. Selhání není chyba párování —
+          // jen by se po příštím přeinstalování muselo párovat znovu.
+          if (store) { try { await store.secureSet({ key: RITHMIC_DEVICE_LINK_KEY, value: JSON.stringify(link) }); } catch { /* viz výše */ } }
           finish({ ok: true, link });
         } catch {
           // Klíč nejde uložit → zařízení je u služby zapsané, ale nepoužitelné: na Macu ho odvolej a spáruj znovu.

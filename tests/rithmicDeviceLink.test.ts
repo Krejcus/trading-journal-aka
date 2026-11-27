@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeRithmicEndpoint, pairRithmicDevice, parseRithmicPairLink, readRithmicDeviceKey, forgetRithmicDevice, RITHMIC_DEVICE_SECRET_KEY, type RithmicKeyVault, type RithmicPairSocket } from '../lib/rithmicDeviceLink';
+import { normalizeRithmicEndpoint, pairRithmicDevice, parseRithmicPairLink, readRithmicDeviceKey, forgetRithmicDevice, restoreRithmicDeviceLink, RITHMIC_DEVICE_LINK_KEY, RITHMIC_DEVICE_SECRET_KEY, type RithmicKeyVault, type RithmicPairSocket } from '../lib/rithmicDeviceLink';
 import { RithmicLocalConnection, type RithmicLinkSocket } from '../lib/rithmicLocalConnection';
 
 const KEY = 'k'.repeat(43);
@@ -97,6 +97,64 @@ describe('spárování zařízení: průběh', () => {
     const result = await pairRithmicDevice({ endpoint: 'mac.tail1.ts.net', code: 'ABCD2345', name: 'x', socketFactory: silent.factory, vault: memoryVault(), timeoutMs: 30 });
     expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/Mac neodpověděl/) });
     expect(silent.urls).toHaveLength(1);
+  });
+});
+
+describe('spárování přežije přeinstalování appky', () => {
+  const memoryStorage = () => {
+    const data = new Map<string, string>();
+    return { data, getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v); }, removeItem: (k: string) => { data.delete(k); } };
+  };
+  const pairOnce = async (vault: ReturnType<typeof memoryVault>, storage: ReturnType<typeof memoryStorage>) => {
+    const { factory } = fakeSocket((socket) => socket.onmessage?.({ data: JSON.stringify({ type: 'paired', ok: true, deviceId: 'a1b2c3d4e5f6', key: KEY, scope: 'full', name: 'iPhone' }) }));
+    return pairRithmicDevice({ endpoint: 'mac.tail1.ts.net', code: 'ABCD2345', name: 'iPhone', socketFactory: factory, vault, storage, now: () => 7 });
+  };
+
+  it('spárování se uloží i do Klíčenky a po vymazání běžného úložiště se z ní vrátí', async () => {
+    const vault = memoryVault();
+    const first = memoryStorage();
+    expect((await pairOnce(vault, first)).ok).toBe(true);
+    // Kopie v Klíčence nenese klíč — ten je pod vlastní položkou.
+    expect(vault.data.get(RITHMIC_DEVICE_LINK_KEY)).not.toContain(KEY);
+    // Přeinstalování: běžné úložiště prázdné, Klíčenka zůstala.
+    const fresh = memoryStorage();
+    let notified = 0;
+    const link = await restoreRithmicDeviceLink({ vault, storage: fresh, notify: () => { notified += 1; } });
+    expect(link).toEqual({ endpoint: 'wss://mac.tail1.ts.net', deviceId: 'a1b2c3d4e5f6', name: 'iPhone', scope: 'full', pairedAt: 7 });
+    expect(JSON.parse(fresh.data.get(RITHMIC_DEVICE_LINK_KEY)!)).toEqual(link);
+    expect(notified).toBe(1);
+    expect([...fresh.data.values()].join('')).not.toContain(KEY);
+  });
+
+  it('nic neobnoví, když je běžné úložiště plné, chybí klíč nebo je kopie poškozená', async () => {
+    const vault = memoryVault();
+    const storage = memoryStorage();
+    await pairOnce(vault, storage);
+    let notified = 0;
+    const notify = () => { notified += 1; };
+    expect(await restoreRithmicDeviceLink({ vault, storage, notify })).toBeNull(); // spárování tu už je
+    const noKey = memoryVault(); noKey.data.set(RITHMIC_DEVICE_LINK_KEY, vault.data.get(RITHMIC_DEVICE_LINK_KEY)!);
+    expect(await restoreRithmicDeviceLink({ vault: noKey, storage: memoryStorage(), notify })).toBeNull();
+    const broken = memoryVault(); broken.data.set(RITHMIC_DEVICE_SECRET_KEY, KEY); broken.data.set(RITHMIC_DEVICE_LINK_KEY, '{"endpoint":"https://evil.example.com","deviceId":"a1b2c3d4e5f6","scope":"full"}');
+    expect(await restoreRithmicDeviceLink({ vault: broken, storage: memoryStorage(), notify })).toBeNull();
+    expect(await restoreRithmicDeviceLink({ vault: null, storage: memoryStorage(), notify })).toBeNull();
+    expect(notified).toBe(0);
+  });
+
+  it('zamčený telefon (Klíčenku nejde přečíst) nic nerozbije a nic neobnoví', async () => {
+    const locked: RithmicKeyVault = { secureGet: async () => { throw new Error('locked'); }, secureSet: async () => undefined, secureRemove: async () => undefined };
+    const storage = memoryStorage();
+    expect(await restoreRithmicDeviceLink({ vault: locked, storage, notify: () => undefined })).toBeNull();
+    expect(storage.data.size).toBe(0);
+  });
+
+  it('zrušení spárování v telefonu smaže i kopii v Klíčence, takže se po přeinstalování nevrátí', async () => {
+    const vault = memoryVault();
+    await pairOnce(vault, memoryStorage());
+    await forgetRithmicDevice(vault);
+    expect(vault.data.has(RITHMIC_DEVICE_LINK_KEY)).toBe(false);
+    expect(vault.data.has(RITHMIC_DEVICE_SECRET_KEY)).toBe(false);
+    expect(await restoreRithmicDeviceLink({ vault, storage: memoryStorage(), notify: () => undefined })).toBeNull();
   });
 });
 

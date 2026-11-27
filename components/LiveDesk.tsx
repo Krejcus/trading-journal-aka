@@ -14,6 +14,7 @@ import type { LivePhoneChartSlots } from './day/LivePhoneChart';
 import { useLiveLayout } from '../hooks/useLiveLayout';
 import { isNativeShell } from '../utils/nativeShell';
 import { rithmicLocalAvailable, rithmicPairingOffered } from '../lib/rithmicLocalLink';
+import { onRithmicDeviceLinkRestored } from '../lib/rithmicDeviceLink';
 import { NO_LIVE_COPIER, NO_PHONE_COPIER_CHIP } from '../lib/liveNoCopier';
 
 export type LiveDeskPhoneChartSlots = LivePhoneChartSlots & { onLeave: () => void };
@@ -42,7 +43,9 @@ const LiveDesk: React.FC<LiveDeskProps> = ({ userId, theme, phoneChart }) => {
   const isDark = theme !== 'light';
   const { narrow } = useLiveLayout();
   const phoneLayout = narrow || isNativeShell();
-  const [configured] = useState(rithmicLocalAvailable);
+  const [configured, setConfigured] = useState(rithmicLocalAvailable);
+  // Spárování obnovené z Klíčenky po přeinstalování appky doběhne až po prvním vykreslení.
+  useEffect(() => onRithmicDeviceLinkRestored(() => setConfigured(rithmicLocalAvailable())), []);
   const [pairingHere] = useState(rithmicPairingOffered);
   const [tab, setTab] = useState<DeskTab>(initialTab);
   const [phoneMenuOpen, setPhoneMenuOpen] = useState(false);
