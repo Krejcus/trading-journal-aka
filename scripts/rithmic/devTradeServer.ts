@@ -312,13 +312,40 @@ async function main(): Promise<void> {
   const candles = new RithmicCandleBuilder();
   /** Order flow (jen zobrazení); null, dokud není zapnutý přepínačem a nezjistí se kontrakty. */
   let orderFlow: OrderFlowFeed | null = null;
-  /** Po obnově spojení znovu přihlásí odběr kontraktů, které má navíc jen order flow (NQ). */
-  const subscribeOrderFlowExtras = async (): Promise<void> => {
-    for (const symbol of orderFlow?.symbols() ?? []) {
-      if (symbol === CONTRACT) continue;
-      try { await ticker.subscribeMarketData(symbol, 'CME'); } catch (error) {
-        console.log(`[order flow] odběr ${symbol} se po obnově nepodařil (${error instanceof Error ? error.message : String(error)})`);
-      }
+  /** Kontrakty, které odebírá jen order flow (NQ vedle obchodovaného MNQ). */
+  const orderFlowExtras = new Set<string>();
+  /**
+   * Odběr kontraktu navíc — jen obchody (bez kotací, ty order flow nepotřebuje). Kontrakt se označí za tekoucí
+   * až po potvrzení odběru: bez něj by se prázdné minuty tvářily jako pokryté. Když se odběr nepodaří, zkusí se
+   * ještě dvakrát s odstupem a pak už ne (žádná smyčka); o další pokus se postará příští obnova cen.
+   */
+  const subscribeOrderFlowExtra = async (symbol: string, attempt = 0): Promise<void> => {
+    const flow = orderFlow;
+    if (!flow || forcedOut || !feedOpen) return;
+    try {
+      await ticker.subscribeMarketData(symbol, 'CME', 1);
+      flow.feedOpened(Date.now(), symbol);
+    } catch (error) {
+      console.log(`[order flow] odběr ${symbol} se nepodařil (${error instanceof Error ? error.message : String(error)})${attempt < 2 ? ' — zkusím znovu' : ' — tento zdroj zůstává bez dat do příští obnovy cen'}`);
+      if (attempt < 2) setTimeout(() => { void subscribeOrderFlowExtra(symbol, attempt + 1); }, attempt === 0 ? 5_000 : 20_000).unref();
+    }
+  };
+  /** NQ jako zdroj order flow pro graf MNQ. Běží až po startu cen grafu a nikdy na něj nic nečeká. */
+  const startOrderFlowNq = async (): Promise<void> => {
+    const flow = orderFlow;
+    if (!flow) return;
+    try {
+      const nq = await ticker.frontMonthContract('NQ', 'CME');
+      if (!nq || !/^NQ[FGHJKMNQUVXZ]\d{1,2}$/.test(nq)) throw new Error('Rithmic nepotvrdil aktuální kontrakt NQ');
+      if (!flow.addSource('NQ', nq)) return;
+      orderFlowExtras.add(nq);
+      await subscribeOrderFlowExtra(nq);
+      // Stránky připojené dřív se dozvědí, že přibyl zdroj (jinak by ho viděly až po dalším připojení).
+      const capability = flow.capability();
+      if (capability) broadcast({ type: 'of-ready', orderFlow: capability });
+      console.log(`[order flow] přidán zdroj NQ = ${nq}`);
+    } catch (error) {
+      console.log(`[order flow] NQ nejde odebírat (${error instanceof Error ? error.message : String(error)}) — zdroj jen kontrakt grafu`);
     }
   };
   let tickCount = 0;
@@ -520,8 +547,8 @@ async function main(): Promise<void> {
           if (plant === 'ticker') {
             await ticker.subscribeMarketData(CONTRACT, 'CME');
             feedOpen = true;
-            orderFlow?.feedOpened(Date.now());
-            void subscribeOrderFlowExtras(); // bez čekání: obnova cen grafu na druhém odběru nezávisí
+            orderFlow?.feedOpened(Date.now(), CONTRACT);
+            for (const symbol of orderFlowExtras) void subscribeOrderFlowExtra(symbol); // bez čekání: obnova cen grafu na druhém odběru nezávisí
             console.log('[ticker] ceny obnoveny');
             scheduleBarRepair(barRepairWindow(feedGapFrom ?? Date.now(), Date.now()));
             feedGapFrom = null;
@@ -617,24 +644,12 @@ async function main(): Promise<void> {
   const ref = await ticker.referenceData(CONTRACT, 'CME');
   const tickSize = ref?.tickSize ?? 0.25;
   if (ORDER_FLOW) {
-    // Chyba tady nesmí zastavit start služby: order flow se jen nespustí.
+    // Chyba tady nesmí zastavit start služby: order flow se jen nespustí. Žádné čekání na síť — jen načtení
+    // uložených dnů z disku (jediná delší synchronní práce, a to ještě před odběrem cen a prvním příkazem).
     try {
       const root = /^([A-Z0-9]+?)[FGHJKMNQUVXZ]\d{1,2}$/.exec(CONTRACT)?.[1] ?? CONTRACT;
-      const sources: Record<string, string> = {};
-      // Order flow se čte na NQ (velké příkazy), obchoduje se MNQ; ceny obou drží u sebe a krok je stejný.
-      if (root === 'MNQ') {
-        try {
-          const nq = await ticker.frontMonthContract('NQ', 'CME');
-          if (!nq || !/^NQ[FGHJKMNQUVXZ]\d{1,2}$/.test(nq)) throw new Error('Rithmic nepotvrdil aktuální kontrakt NQ');
-          await ticker.subscribeMarketData(nq, 'CME');
-          sources.NQ = nq;
-        } catch (error) {
-          console.log(`[order flow] NQ nejde odebírat (${error instanceof Error ? error.message : String(error)}) — zdroj jen ${root}`);
-        }
-      }
-      sources[root] = CONTRACT;
-      orderFlow = createOrderFlowFeed({ sources, tickSize, dir: results, slug: SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase() });
-      console.log(`[order flow] zapnuto: ${Object.entries(sources).map(([source, symbol]) => `${source} = ${symbol}`).join(', ')}`);
+      orderFlow = createOrderFlowFeed({ sources: { [root]: CONTRACT }, tickSize, dir: results, slug: SYSTEM.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase() });
+      console.log(`[order flow] zapnuto: ${root} = ${CONTRACT}`);
     } catch (error) {
       orderFlow = null;
       console.log(`[order flow] nespuštěno (${error instanceof Error ? error.message : String(error)})`);
@@ -643,7 +658,10 @@ async function main(): Promise<void> {
   const feedStartedAt = Date.now();
   await ticker.subscribeMarketData(CONTRACT, 'CME');
   feedOpen = true;
-  orderFlow?.feedOpened(feedStartedAt);
+  orderFlow?.feedOpened(feedStartedAt, CONTRACT);
+  // Order flow se čte na NQ (velké příkazy), obchoduje se MNQ; ceny obou drží u sebe a krok je stejný.
+  // Až po odběru cen grafu a bez čekání: pomalé nebo odmítnuté NQ start služby ani ceny nezdrží.
+  if (orderFlow && /^MNQ[FGHJKMNQUVXZ]\d{1,2}$/.test(CONTRACT)) void startOrderFlowNq();
   // I první minuta po startu procesu je z ticků neúplná.
   scheduleBarRepair(barRepairWindow(feedStartedAt, Date.now()));
   void recentHistory(); // Warm the shared display cache after the live feed is subscribed.
@@ -861,7 +879,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     // Identita hned (systém, režim, kontrakt) se svíčkami od startu; historie dorazí druhou zprávou, až bude.
     const liveBars = (at: number, after: number) => [...candles.finished(CONTRACT), ...(candles.current(CONTRACT, at) ? [candles.current(CONTRACT, at)!] : [])].filter((bar) => bar.time > after);
-    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', ...(orderFlow ? { orderFlow: orderFlow.capability() } : {}), ...(access.local && LIVE_TRADING && !CLOSE_ONLY ? { maintenancePid: process.pid } : {}), readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
+    const hello = (bars: unknown[], at: number) => send(socket, { type: 'hello', ...(orderFlow?.capability() ? { orderFlow: orderFlow.capability() } : {}), ...(access.local && LIVE_TRADING && !CLOSE_ONLY ? { maintenancePid: process.pid } : {}), readOnly: READ_ONLY, closeOnly: CLOSE_ONLY, live: LIVE_TRADING, account: broker.accountName(broker.accountIds()[0]), limits: effectiveLimits(), feed: freshPrice(at) !== null, system: SYSTEM, symbol: CONTRACT, tickSize, pointValue: ref?.pointValue ?? null, price: candles.lastPrice(CONTRACT, at, 30_000) ?? freshPrice(at) ?? displayPrice(at), bars });
     hello(liveBars(now, -Infinity), now);
     send(socket, { type: 'state', state: exec!.state() });
     if (alertWatch) send(socket, { type: 'alerts', ...alertWatch.status() });
@@ -919,7 +937,8 @@ async function main(): Promise<void> {
           if (orderFlowRequest !== undefined && !message.command) {
             if (access.deviceId && !activeDevice(access.deviceId)) { socket.terminate(); return; }
             const problem = orderFlow ? orderFlow.handle(socket, orderFlowRequest) : 'order flow není ve službě zapnutý';
-            if (problem) send(socket, { type: 'of-error', message: problem });
+            // Odpověď jen do volné fronty: zahlcené nebo zaseknuté spojení se chybami nezaplňuje.
+            if (problem && socket.bufferedAmount < 64 * 1024) send(socket, { type: 'of-error', message: problem });
             return;
           }
           // Měření otevření appky (kroky od návratu po první cenu): jen výpis, nic neřídí. Bere jen čísla a ano/ne.

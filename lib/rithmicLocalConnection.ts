@@ -190,9 +190,10 @@ export class RithmicLocalConnection {
    * příkazů, nečeká se na odpověď a selhání nikdy není „nejistý příkaz“. Vrací, zda zpráva odešla.
    */
   sendOrderFlow(request: { subscribe: boolean; source?: string; days?: number }): boolean {
-    const socket = this.socket;
-    if (!socket || !this.isOpen()) return false;
-    try { socket.send(JSON.stringify({ orderFlow: request })); return true; } catch { return false; }
+    // Jako měření níže: jiný název než `socket`, protože příkazy smí odcházet jen z jediného místa (`send`).
+    const link = this.socket;
+    if (!link || !this.isOpen()) return false;
+    try { link.send(JSON.stringify({ orderFlow: request })); return true; } catch { return false; }
   }
 
   /** Odešle příkaz právě jednou. Bez spojení se neodešle; bez odpovědi je výsledek „unknown". */

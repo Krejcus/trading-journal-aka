@@ -2,14 +2,16 @@
  * Doručení order flow (objem po minutách a cenách, velké obchody) klientům místní služby.
  * JEN ZOBRAZENÍ: žádný příkaz, žádný dotaz na brokera, nic z toho nevstupuje do cen pro příkazy.
  *
- * Zásady:
+ * Zásady (služba obchoduje naostro a vše běží v jedné smyčce událostí s potvrzeními příkazů):
+ *  - příjem obchodu jen zařadí do fronty; počítání, skládání zpráv i disk běží v časovačích;
+ *  - každý krok má strop práce (obchodů na otočku, buněk na zprávu, jeden kus snímku na otočku);
  *  - data dostane jen klient, který si o ně řekl (telefon s vypnutým indikátorem neplatí ani bajt);
  *  - buňky se posílají s CELKOVÝMI hodnotami, takže opakování ani přeskočená dávka nic nerozbije;
  *  - pomalé spojení se nezahlcuje: dávka se přeskočí a změny počkají, při velkém skluzu přijde nový snímek;
- *  - snímek odchází po kouscích mezi jinou prací, aby dlouhé skládání zprávy nezdrželo smyčku,
- *    ve které běží i potvrzení příkazů.
+ *  - paměť i fronta zápisů na disk mají strop; při přetečení se zahazuje order flow, nikdy nic jiného;
+ *  - chyba kdekoli tady vrstvu jen vypne — ceny, upozornění a příkazy běží dál.
  */
-import { appendFile, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { appendFile, readFileSync, readdir, readdirSync, rm, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RithmicTick } from './rithmicClient';
 import { OrderFlowAggregator, type OrderFlowCells, type OrderFlowMinuteRecord, type OrderFlowTradeRow } from './orderFlowAggregator';
@@ -21,7 +23,7 @@ export interface OrderFlowSocket {
 }
 
 export interface OrderFlowFeedOptions {
-  /** Zdroj → kontrakt, např. { NQ: 'NQZ6', MNQ: 'MNQZ6' }. */
+  /** Zdroj → kontrakt, např. { MNQ: 'MNQZ6' }. Další zdroj (NQ) jde přidat později přes `addSource`. */
   sources: Record<string, string>;
   tickSize: number;
   /** Nejmenší sečtený příkaz vedený jako velký obchod, podle zdroje. */
@@ -37,13 +39,18 @@ export interface OrderFlowFeedOptions {
 }
 
 export interface OrderFlowFeed {
-  capability(): { sources: Record<string, string>; tickSize: number; floors: Record<string, number>; keepDays: number };
+  /** Co služba umí; null, když se vrstva po chybě vypnula (klient pak order flow nenabízí jako živý). */
+  capability(): { sources: Record<string, string>; tickSize: number; floors: Record<string, number>; keepDays: number } | null;
   symbols(): string[];
+  /** Přidá zdroj, jehož odběr se podařil až po startu (NQ). Vrací false, pokud už existuje. */
+  addSource(source: string, symbol: string): boolean;
+  /** Obchod z tickeru: jen zařadí do fronty (žádná práce v cestě cen). */
   onTick(tick: RithmicTick): void;
-  /** Zpráva klienta `{ subscribe, source, days }`. Vrací chybu k vypsání, nebo null. */
+  /** Zpráva klienta `{ subscribe, source, days }`. Vrací chybu k odeslání klientovi, nebo null. */
   handle(socket: OrderFlowSocket, request: unknown): string | null;
   drop(socket: OrderFlowSocket): void;
-  feedOpened(at: number): void;
+  /** Ceny tečou — pro jeden kontrakt, nebo pro všechny. */
+  feedOpened(at: number, symbol?: string): void;
   feedLost(): void;
   flushTrades(): void;
   flushCells(): void;
@@ -54,12 +61,20 @@ export interface OrderFlowFeed {
 }
 
 const OPEN = 1;
-/** Nad tímto množstvím neodeslaných bajtů se klientovi další order flow nepřidává. */
-export const ORDER_FLOW_HIGH_WATER = 512 * 1024;
-const SNAPSHOT_CELLS_PER_PART = 12_000;
-const SNAPSHOT_TRADES_PER_PART = 3_000;
-const MAX_PENDING_CELLS = 20_000;
-const MAX_PENDING_TRADES = 2_000;
+/** Nad tímto množstvím neodeslaných bajtů se klientovi order flow nepřidává (ať nepředbíhá potvrzení příkazů). */
+export const ORDER_FLOW_HIGH_WATER = 48 * 1024;
+/**
+ * Jedna část snímku ≈ 35 kB. Order flow jde stejným spojením jako odpovědi na příkazy, tep a cena: na slabém
+ * spojení telefonu (~1 Mb/s) tak před nimi nikdy nestojí víc než zlomek sekundy dat pro zobrazení.
+ */
+const SNAPSHOT_CELLS_PER_PART = 1_500;
+const SNAPSHOT_TRADES_PER_PART = 600;
+const MAX_PENDING_CELLS = 6_000;
+const MAX_PENDING_TRADES = 1_000;
+const QUEUE_MAX = 100_000;
+const QUEUE_PER_TURN = 4_000;
+const DISK_QUEUE_MAX_BYTES = 4 * 1024 * 1024;
+const MAX_STORED_TRADES = 30_000;
 const DEFAULT_FLOORS: Record<string, number> = { NQ: 5, MNQ: 20, ES: 10, MES: 30 };
 
 interface Client {
@@ -69,12 +84,11 @@ interface Client {
   sub: number;
   days: number;
   seq: number;
-  /** Minuty, které ještě zbývá poslat ve snímku; null = snímek hotový. */
+  /** Co ještě zbývá poslat ve snímku; null = snímek hotový. */
   snapshot: { minutes: number[]; next: number; trades: OrderFlowTradeRow[]; nextTrade: number; part: number } | null;
   pendingCells: Map<number, Set<number> | null>;
   pendingCount: number;
   pendingTrades: Map<string, OrderFlowTradeRow>;
-  requests: number[];
 }
 
 const dayOf = (minute: number): string => new Date(minute * 1_000).toISOString().slice(0, 10);
@@ -83,91 +97,172 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
   const now = options.now ?? Date.now;
   const log = options.log ?? ((line: string) => console.log(line));
   const keepDays = Math.min(14, Math.max(1, options.keepDays ?? 7));
-  const sources = { ...options.sources };
+  const sources: Record<string, string> = {};
   const floors: Record<string, number> = {};
   const sourceOf = new Map<string, string>();
-  for (const [source, symbol] of Object.entries(sources)) {
-    floors[source] = Math.max(1, Math.floor(options.floors?.[source] ?? DEFAULT_FLOORS[source] ?? 5));
-    sourceOf.set(symbol, source);
-  }
   const aggregator = new OrderFlowAggregator({
     tickSize: options.tickSize,
     tradeFloor: (symbol) => floors[sourceOf.get(symbol) ?? ''] ?? 5,
     keepMs: keepDays * 86_400_000,
+    maxTrades: MAX_STORED_TRADES,
   });
-  for (const symbol of sourceOf.keys()) aggregator.addSymbol(symbol);
 
   const clients = new Map<OrderFlowSocket, Client>();
+  const requestLog = new Map<OrderFlowSocket, number[]>();
+  const limitNotified = new Set<OrderFlowSocket>();
   let subCounter = 0;
   let disabled = false;
-  const counters = { bytes: 0, messages: 0, skipped: 0, resyncs: 0, maxWorkMs: 0, since: now() };
-  const timed = (work: () => void): void => {
+  let queue: RithmicTick[] = [];
+  let queueHead = 0;
+  let snapshotTurn = 0;
+  const counters = { bytes: 0, skipped: 0, resyncs: 0, maxWorkMs: 0, droppedTicks: 0, droppedDiskBytes: 0, since: now() };
+
+  const fail = (label: string, error: unknown): void => {
+    // Chyba order flow nesmí nikdy ohrozit ceny ani příkazy: vrstva se vypne a služba běží dál.
+    disabled = true;
+    queue = []; queueHead = 0;
+    log(`[order flow] VYPNUTO po chybě v kroku „${label}“: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    // Odběratelé se to musí dozvědět — zamrzlý profil se nesmí tvářit jako živý (INV-UI-01).
+    const text = JSON.stringify({ type: 'of-error', message: 'order flow se ve službě po chybě vypnul' });
+    for (const client of clients.values()) { try { if (client.socket.readyState === OPEN) client.socket.send(text); } catch { /* spojení už je pryč */ } }
+    clients.clear();
+  };
+  const guard = (label: string, work: () => void): void => {
+    if (disabled) return;
     const started = performance.now();
-    work();
+    try { work(); } catch (error) { fail(label, error); }
     const took = performance.now() - started;
     if (took > counters.maxWorkMs) counters.maxWorkMs = took;
   };
   const send = (client: Client, message: unknown): void => {
     const text = JSON.stringify(message);
     counters.bytes += text.length;
-    counters.messages += 1;
     // Zavírající se spojení smí odeslání odmítnout — jen tenhle klient o odběr přijde, vrstva běží dál.
     try { client.socket.send(text); } catch { clients.delete(client.socket); }
   };
   const ready = (client: Client): boolean => client.socket.readyState === OPEN && client.socket.bufferedAmount < ORDER_FLOW_HIGH_WATER;
 
   // ── Disk: denní soubory, aby profil přežil restart služby (mezipaměť zobrazení, ne záznam deníku) ──
-  const prefix = (symbol: string) => `orderflow-${options.slug ?? 'local'}-${symbol}-`;
+  const filePrefix = `orderflow-${options.slug ?? 'local'}-`;
+  const fileName = (symbol: string, minute: number) => `${filePrefix}${symbol}-${dayOf(minute)}.jsonl`;
+  /** Rozebere název souboru; cizí soubory (jiná předpona, jiný tvar) vrací null. */
+  const parseFileName = (name: string): { symbol: string; date: string } | null => {
+    if (!name.startsWith(filePrefix) || !name.endsWith('.jsonl')) return null;
+    const match = /^([A-Z0-9]{1,12})-(\d{4}-\d{2}-\d{2})$/.exec(name.slice(filePrefix.length, -'.jsonl'.length));
+    return match ? { symbol: match[1], date: match[2] } : null;
+  };
+  const cutoffDate = (): string => dayOf(Math.floor((now() - (keepDays + 1) * 86_400_000) / 1_000));
   let chain: Promise<void> = Promise.resolve();
-  let warned = false;
-  const append = (symbol: string, minute: number, line: string): void => {
-    if (!options.dir) return;
-    const path = join(options.dir, `${prefix(symbol)}${dayOf(minute)}.jsonl`);
-    const warn = (error: unknown) => { if (!warned) { warned = true; log(`[order flow] zápis na disk nejde (${error instanceof Error ? error.message : String(error)}; ${path})`); } };
+  let queuedBytes = 0;
+  let diskWarned = false;
+  const diskWarn = (text: string): void => { if (!diskWarned) { diskWarned = true; log(`[order flow] ${text}`); } };
+  const append = (path: string, text: string): void => {
+    if (queuedBytes + text.length > DISK_QUEUE_MAX_BYTES) {
+      // Pomalý nebo plný disk: zahodit order flow, nehromadit paměť obchodující služby.
+      counters.droppedDiskBytes += text.length;
+      diskWarn(`disk nestíhá (${Math.round(queuedBytes / 1024)} kB ve frontě) — část order flow se neuloží; po restartu bude profil pro ten úsek neúplný`);
+      return;
+    }
+    queuedBytes += text.length;
     chain = chain.then(() => new Promise<void>((resolve) => {
-      try { appendFile(path, line, { mode: 0o600 }, (error) => { if (error) warn(error); resolve(); }); } catch (error) { warn(error); resolve(); }
+      const done = (error?: unknown) => { queuedBytes -= text.length; if (error) diskWarn(`zápis na disk nejde (${error instanceof Error ? error.message : String(error)}; ${path})`); resolve(); };
+      try { appendFile(path, text, { mode: 0o600 }, (error) => done(error ?? undefined)); } catch (error) { done(error); }
     })).catch(() => undefined);
   };
   const persist = (): void => {
+    if (!options.dir) { for (const symbol of sourceOf.keys()) aggregator.takePersist(symbol); return; }
+    const batches = new Map<string, string[]>();
+    const line = (symbol: string, minute: number, text: string) => {
+      const path = join(options.dir!, fileName(symbol, minute));
+      const list = batches.get(path);
+      if (list) list.push(text); else batches.set(path, [text]);
+    };
     for (const symbol of sourceOf.keys()) {
       const { minutes, trades } = aggregator.takePersist(symbol);
-      for (const record of minutes) append(symbol, record.minute, `${JSON.stringify({ m: record.minute, v: record.covered ? 1 : 0, c: record.cells })}\n`);
-      for (const row of trades) append(symbol, Math.floor(row[1] / 1_000), `${JSON.stringify({ t: row })}\n`);
+      for (const record of minutes) line(symbol, record.minute, JSON.stringify({ m: record.minute, v: record.covered ? 1 : 0, c: record.cells }));
+      for (const row of trades) line(symbol, Math.floor(row[1] / 1_000), JSON.stringify({ t: row }));
     }
+    // Jeden zápis na soubor a otočku, ne jeden na řádek.
+    for (const [path, lines] of batches) append(path, `${lines.join('\n')}\n`);
   };
+
+  /** Uložený stav všech kontraktů nalezených na disku; kontrakt si ho vezme, až se stane zdrojem. */
+  const stored = new Map<string, { minutes: OrderFlowMinuteRecord[]; trades: OrderFlowTradeRow[] }>();
+  let storedAt = now();
   const load = (): void => {
     if (!options.dir) return;
-    const at = now();
-    const cutoff = dayOf(Math.floor((at - (keepDays + 1) * 86_400_000) / 1_000));
+    const started = performance.now();
+    const cutoff = cutoffDate();
+    const cutoffMinute = Math.floor((now() - keepDays * 86_400_000) / 60_000) * 60;
     let names: string[] = [];
-    try { names = readdirSync(options.dir); } catch { return; }
-    for (const symbol of sourceOf.keys()) {
-      const head = prefix(symbol);
-      const minutes: OrderFlowMinuteRecord[] = [];
-      const trades: OrderFlowTradeRow[] = [];
-      for (const name of names.sort()) {
-        const date = name.startsWith(head) && name.endsWith('.jsonl') ? name.slice(head.length, -'.jsonl'.length) : '';
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-        if (date < cutoff) { try { rmSync(join(options.dir, name), { force: true }); } catch { /* úklid není podmínkou */ } continue; }
-        let text = '';
-        try { text = readFileSync(join(options.dir, name), 'utf8'); } catch { continue; }
-        for (const line of text.split('\n')) {
-          if (!line) continue;
+    try { names = readdirSync(options.dir).sort(); } catch { return; }
+    for (const name of names) {
+      const parsed = parseFileName(name);
+      if (!parsed) continue;
+      if (parsed.date < cutoff) { try { rmSync(join(options.dir, name), { force: true }); } catch { /* úklid není podmínkou */ } continue; }
+      let text = '';
+      try { text = readFileSync(join(options.dir, name), 'utf8'); } catch { continue; }
+      let entry = stored.get(parsed.symbol);
+      if (!entry) { entry = { minutes: [], trades: [] }; stored.set(parsed.symbol, entry); }
+      let start = 0;
+      while (start < text.length) {
+        let end = text.indexOf('\n', start);
+        if (end < 0) end = text.length;
+        if (end > start) {
           try {
-            const record = JSON.parse(line) as { m?: unknown; v?: unknown; c?: unknown; t?: unknown };
+            const record = JSON.parse(text.slice(start, end)) as { m?: unknown; v?: unknown; c?: unknown; t?: unknown };
             if (typeof record.m === 'number' && Array.isArray(record.c) && record.c.every((value) => Number.isInteger(value))) {
-              minutes.push({ minute: record.m, covered: record.v === 1, cells: record.c as number[] });
+              if (record.m >= cutoffMinute) entry.minutes.push({ minute: record.m, covered: record.v === 1, cells: record.c as number[] });
             } else if (Array.isArray(record.t) && record.t.length === 8 && typeof record.t[0] === 'string' && record.t.slice(1).every((value) => typeof value === 'number' && Number.isFinite(value))) {
-              trades.push(record.t as OrderFlowTradeRow);
+              entry.trades.push(record.t as OrderFlowTradeRow);
+              // Strop už při čtení: rušný týden nesmí nafouknout paměť při startu.
+              if (entry.trades.length > MAX_STORED_TRADES * 2) entry.trades.splice(0, entry.trades.length - MAX_STORED_TRADES);
             }
           } catch { /* poškozený řádek (např. nedopsaný při pádu) se přeskočí */ }
         }
+        start = end + 1;
       }
-      aggregator.restore(symbol, minutes, trades, at);
-      if (minutes.length || trades.length) log(`[order flow] ${symbol}: z disku ${minutes.length} minut a ${trades.length} velkých obchodů`);
     }
+    storedAt = now();
+    const took = Math.round(performance.now() - started);
+    if (stored.size > 0) log(`[order flow] z disku načteno za ${took} ms: ${[...stored.entries()].map(([symbol, entry]) => `${symbol} ${entry.minutes.length} minut, ${entry.trades.length} velkých obchodů`).join(' · ')}`);
   };
+  let prunedAt = now();
+  const pruneFiles = (): void => {
+    if (!options.dir) return;
+    const dir = options.dir;
+    const cutoff = cutoffDate();
+    readdir(dir, (error, names) => {
+      if (error) return;
+      for (const name of names) {
+        const parsed = parseFileName(name);
+        if (parsed && parsed.date < cutoff) rm(join(dir, name), { force: true }, () => undefined);
+      }
+    });
+  };
+
+  const registerSource = (source: string, symbol: string): boolean => {
+    if (!/^[A-Z0-9]{1,12}$/.test(symbol) || Object.prototype.hasOwnProperty.call(sources, source) || sourceOf.has(symbol)) return false;
+    sources[source] = symbol;
+    floors[source] = Math.max(1, Math.floor(options.floors?.[source] ?? DEFAULT_FLOORS[source] ?? 5));
+    sourceOf.set(symbol, source);
+    aggregator.addSymbol(symbol);
+    const saved = stored.get(symbol);
+    if (saved) { aggregator.restore(symbol, saved.minutes, saved.trades, now()); stored.delete(symbol); }
+    return true;
+  };
+
+  // Načtení z disku je jediná delší synchronní práce a běží jen tady — při vytvoření, tedy při startu
+  // služby před přihlášením odběru cen a před prvním příkazem.
   try { load(); } catch (error) { log(`[order flow] načtení z disku selhalo (${error instanceof Error ? error.message : String(error)}) — začíná se od teď`); }
+  for (const [source, symbol] of Object.entries(options.sources)) registerSource(source, symbol);
+
+  const drainQueue = (limit: number): void => {
+    const end = Math.min(queue.length, queueHead + limit);
+    for (; queueHead < end; queueHead += 1) aggregator.onTick(queue[queueHead]);
+    if (queueHead >= queue.length) { queue = []; queueHead = 0; }
+    else if (queueHead > 8_192) { queue = queue.slice(queueHead); queueHead = 0; }
+  };
 
   const startSnapshot = (client: Client): void => {
     const from = now() - client.days * 86_400_000;
@@ -175,15 +270,16 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     client.pendingCount = 0;
     client.pendingTrades.clear();
     client.seq = 0;
+    // Od nejnovějšího: to, co je v grafu právě vidět, dorazí první; starší dny se doplní za tím.
     client.snapshot = {
-      minutes: aggregator.minutes(client.symbol, Math.floor(from / 60_000) * 60), next: 0,
-      trades: aggregator.tradesSince(client.symbol, from), nextTrade: 0, part: 0,
+      minutes: aggregator.minutes(client.symbol, Math.floor(from / 60_000) * 60).reverse(), next: 0,
+      trades: aggregator.tradesSince(client.symbol, from).slice().reverse(), nextTrade: 0, part: 0,
     };
   };
 
   const pumpClient = (client: Client): void => {
     const snapshot = client.snapshot;
-    if (!snapshot || !ready(client)) return;
+    if (!snapshot) return;
     const minutes: Array<[number, OrderFlowCells]> = [];
     let cells = 0;
     while (snapshot.next < snapshot.minutes.length && cells < SNAPSHOT_CELLS_PER_PART) {
@@ -238,53 +334,54 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     send(client, { type: 'of-trade', sub: client.sub, seq: client.seq, trades });
   };
 
-  const guard = (label: string, work: () => void): void => {
-    if (disabled) return;
-    try { timed(work); } catch (error) {
-      // Chyba order flow nesmí nikdy ohrozit ceny ani příkazy: vrstva se vypne a služba běží dál.
-      disabled = true;
-      log(`[order flow] VYPNUTO po chybě v kroku „${label}“: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-    }
-  };
-
   const feed: OrderFlowFeed = {
-    capability: () => ({ sources: { ...sources }, tickSize: options.tickSize, floors: { ...floors }, keepDays }),
+    capability: () => (disabled ? null : { sources: { ...sources }, tickSize: options.tickSize, floors: { ...floors }, keepDays }),
     symbols: () => [...sourceOf.keys()],
+    addSource(source, symbol) {
+      if (disabled) return false;
+      let added = false;
+      guard('nový zdroj', () => { added = registerSource(source, symbol); });
+      return added;
+    },
     onTick(tick) {
-      if (disabled) return;
-      try { aggregator.onTick(tick); } catch (error) {
-        disabled = true;
-        log(`[order flow] VYPNUTO po chybě při zpracování obchodu: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-      }
+      if (disabled || tick.kind !== 'trade' || tick.isSnapshot || !sourceOf.has(tick.symbol)) return;
+      if (queue.length - queueHead >= QUEUE_MAX) { counters.droppedTicks += 1; return; }
+      queue.push(tick);
     },
     handle(socket, request) {
-      if (disabled) return 'order flow je po chybě vypnutý';
-      if (!request || typeof request !== 'object') return 'neplatná zpráva order flow';
-      const body = request as { subscribe?: unknown; source?: unknown; days?: unknown };
       const at = now();
-      const existing = clients.get(socket);
-      const requests = (existing?.requests ?? []).filter((time) => at - time < 10_000);
-      if (requests.length >= 6) return 'příliš mnoho změn odběru order flow za krátkou dobu';
-      requests.push(at);
-      if (body.subscribe !== true) {
-        if (existing) clients.set(socket, { ...existing, requests, source: '', symbol: '', snapshot: null, pendingCells: new Map(), pendingCount: 0, pendingTrades: new Map() });
-        return null;
+      const body = request && typeof request === 'object' ? request as { subscribe?: unknown; source?: unknown; days?: unknown } : null;
+      // Odhlášení se vyhoví vždy a hned — nesmí ho zadržet strop ani stav vrstvy.
+      if (body && body.subscribe === false) { clients.delete(socket); return null; }
+      // Každý pokus se počítá ještě před kontrolou obsahu; nad strop se odpoví jen jednou.
+      const attempts = (requestLog.get(socket) ?? []).filter((time) => at - time < 10_000);
+      if (attempts.length >= 6) {
+        requestLog.set(socket, attempts);
+        if (limitNotified.has(socket)) return null;
+        limitNotified.add(socket);
+        return 'příliš mnoho změn odběru order flow za krátkou dobu';
       }
+      attempts.push(at);
+      requestLog.set(socket, attempts);
+      limitNotified.delete(socket);
+      if (!body || body.subscribe !== true) return 'neplatná žádost o order flow';
+      if (disabled) return 'order flow je po chybě vypnutý';
       const source = typeof body.source === 'string' ? body.source : '';
       const symbol = Object.prototype.hasOwnProperty.call(sources, source) ? sources[source] : undefined;
       if (!symbol) return `neznámý zdroj order flow „${source.slice(0, 12)}“`;
       const days = typeof body.days === 'number' && Number.isFinite(body.days) ? Math.min(keepDays, Math.max(1, Math.floor(body.days))) : 1;
       subCounter += 1;
-      const client: Client = { socket, source, symbol, sub: subCounter, days, seq: 0, snapshot: null, pendingCells: new Map(), pendingCount: 0, pendingTrades: new Map(), requests };
+      const client: Client = { socket, source, symbol, sub: subCounter, days, seq: 0, snapshot: null, pendingCells: new Map(), pendingCount: 0, pendingTrades: new Map() };
       clients.set(socket, client);
       guard('snímek', () => startSnapshot(client));
       return null;
     },
-    drop(socket) { clients.delete(socket); },
-    feedOpened(at) { guard('obnova cen', () => aggregator.feedOpened(at)); },
-    feedLost() { guard('výpadek cen', () => aggregator.feedLost()); },
+    drop(socket) { clients.delete(socket); requestLog.delete(socket); limitNotified.delete(socket); },
+    feedOpened(at, symbol) { guard('obnova cen', () => aggregator.feedOpened(at, symbol)); },
+    feedLost() { guard('výpadek cen', () => { drainQueue(Infinity); aggregator.feedLost(); }); },
     flushTrades() {
       guard('velké obchody', () => {
+        drainQueue(QUEUE_PER_TURN);
         for (const symbol of sourceOf.keys()) {
           const rows = aggregator.drainTrades(symbol);
           if (rows.length === 0) continue;
@@ -301,6 +398,7 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     },
     flushCells() {
       guard('buňky', () => {
+        drainQueue(QUEUE_PER_TURN);
         for (const symbol of sourceOf.keys()) {
           const changes = aggregator.drainCells(symbol);
           if (changes.length === 0) continue;
@@ -321,20 +419,40 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
         persist();
       });
     },
-    pumpSnapshots() { guard('snímek', () => { for (const client of clients.values()) if (client.snapshot) pumpClient(client); }); },
-    advance() { guard('hodiny', () => aggregator.advance(now())); },
-    metricsLine() {
-      const at = now();
-      const seconds = Math.max(1, (at - counters.since) / 1_000);
-      const parts = [...sourceOf.entries()].map(([symbol, source]) => {
-        const stats = aggregator.takeStats(symbol);
-        return `${source} ${(stats.trades / seconds).toFixed(1)} obch./s · ${stats.orders} příkazů [${stats.sizeHistogram.join(' ')}]${stats.noSide ? ` · bez strany ${stats.noSide}` : ''}${stats.late ? ` · opožděných ${stats.late}` : ''}`;
+    pumpSnapshots() {
+      guard('snímek', () => {
+        // Jeden kus jednomu klientovi na otočku (střídavě): skládání zprávy nesmí zdržet potvrzení příkazů.
+        const waiting = [...clients.values()].filter((client) => client.snapshot && ready(client));
+        if (waiting.length === 0) return;
+        snapshotTurn = (snapshotTurn + 1) % waiting.length;
+        pumpClient(waiting[snapshotTurn]);
       });
-      const line = `[order flow] ${disabled ? 'VYPNUTO · ' : ''}${parts.join(' | ')} | odběratelů ${[...clients.values()].filter((client) => client.symbol).length} · ${Math.round(counters.bytes / seconds)} B/s · nejdelší krok ${counters.maxWorkMs.toFixed(1)} ms${counters.skipped ? ` · přeskočeno ${counters.skipped}` : ''}${counters.resyncs ? ` · nových snímků ${counters.resyncs}` : ''}`;
-      counters.bytes = 0; counters.messages = 0; counters.skipped = 0; counters.resyncs = 0; counters.maxWorkMs = 0; counters.since = at;
-      return line;
     },
-    stop() { for (const timer of timers) clearInterval(timer); clients.clear(); },
+    advance() {
+      guard('hodiny', () => {
+        const at = now();
+        aggregator.advance(at);
+        if (at - prunedAt > 6 * 3_600_000) { prunedAt = at; pruneFiles(); }
+        // Uložený stav kontraktů, které se zdrojem nestaly (např. kontrakt před rolováním), po chvíli uvolnit.
+        if (stored.size > 0 && at - storedAt > 300_000) stored.clear();
+      });
+    },
+    metricsLine() {
+      try {
+        const at = now();
+        const seconds = Math.max(1, (at - counters.since) / 1_000);
+        const parts = [...sourceOf.entries()].map(([symbol, source]) => {
+          const stats = aggregator.takeStats(symbol);
+          return `${source} ${(stats.trades / seconds).toFixed(1)} obch./s · ${stats.orders} příkazů [${stats.sizeHistogram.join(' ')}]${stats.noSide ? ` · bez strany ${stats.noSide}` : ''}${stats.late ? ` · opožděných ${stats.late}` : ''}`;
+        });
+        const line = `[order flow] ${disabled ? 'VYPNUTO · ' : ''}${parts.join(' | ')} | odběratelů ${clients.size} · ${Math.round(counters.bytes / seconds)} B/s · nejdelší krok ${counters.maxWorkMs.toFixed(1)} ms${counters.skipped ? ` · přeskočeno ${counters.skipped}` : ''}${counters.resyncs ? ` · nových snímků ${counters.resyncs}` : ''}${counters.droppedTicks ? ` · ZAHOZENO obchodů ${counters.droppedTicks}` : ''}${counters.droppedDiskBytes ? ` · neuloženo ${Math.round(counters.droppedDiskBytes / 1024)} kB` : ''}`;
+        counters.bytes = 0; counters.skipped = 0; counters.resyncs = 0; counters.maxWorkMs = 0; counters.droppedTicks = 0; counters.droppedDiskBytes = 0; counters.since = at;
+        return line;
+      } catch (error) {
+        return `[order flow] výpis selhal (${error instanceof Error ? error.message : String(error)})`;
+      }
+    },
+    stop() { for (const timer of timers) clearInterval(timer); clients.clear(); requestLog.clear(); limitNotified.clear(); },
   };
 
   const timers: Array<ReturnType<typeof setInterval>> = [];

@@ -99,6 +99,26 @@ describe('OrderFlowAggregator — velké obchody', () => {
     expect(new Set(rows.map((row) => row[0])).size).toBe(4);
   });
 
+  it('příkaz rozdělený přes hranu minuty zůstane jednou událostí se součtem', () => {
+    const a = make(5);
+    a.onTick(trade(59_990, 25000, 6, 'buy', 'A'));
+    expect(a.drainTrades('NQZ6').map((row) => row[3])).toEqual([6]);
+    a.onTick(trade(60_005, 25000.25, 7, 'buy', 'A'));
+    const rows = a.drainTrades('NQZ6');
+    expect(rows.map((row) => [row[0], row[3], row[4]])).toEqual([['A', 13, 2]]);
+    expect(a.tradesSince('NQZ6', T0)).toHaveLength(1);
+  });
+
+  it('stejné číslo příkazu po jiném příkazu je nová událost, první se nepřepíše', () => {
+    const a = make(5);
+    a.onTick(trade(1_000, 25000, 6, 'buy', 'A'));
+    a.onTick(trade(1_100, 25000, 8, 'sell', 'B'));
+    a.onTick(trade(1_200, 25000, 7, 'buy', 'A'));
+    a.onTick(trade(1_300, 25000, 1, 'sell', 'C'));
+    const rows = a.tradesSince('NQZ6', T0);
+    expect(rows.map((row) => [row[0], row[3]])).toEqual([['A', 6], ['B', 8], ['A#2', 7]]);
+  });
+
   it('obchod bez strany jde jen do objemu, nikdy do velkých obchodů', () => {
     const a = make(1);
     a.onTick(trade(1_000, 25000, 50, null, 'A'));
@@ -142,13 +162,55 @@ describe('OrderFlowAggregator — pokrytí a disk', () => {
     expect(a.takeStats('NQZ6').late).toBe(1);
   });
 
-  it('po výpadku uzavře rozdělanou minutu jako neúplnou', () => {
+  it('po výpadku nechá rozdělanou minutu otevřenou jako neúplnou a zbytek téže minuty dopočítá', () => {
     const a = make();
     a.onTick(trade(1_000, 25000, 6, 'buy', 'A'));
     a.feedLost();
+    expect(a.liveSince('NQZ6')).toBeNull();
+    // ceny se vrátily ještě v téže minutě: další obchody se nezahazují jako opožděné
+    a.feedOpened(T0 + 20_000);
+    a.onTick(trade(30_000, 25000, 4, 'sell', 'B'));
+    a.advance(T0 + 125_000);
+    expect(a.takeStats('NQZ6').late).toBe(0);
+    expect(a.coverage('NQZ6', M0)).toEqual([[M0 + 60, M0 + 120]]);
+    expect(a.takePersist('NQZ6').minutes[0]).toEqual({ minute: M0, cells: [100000, 6, 4, 0], covered: false });
+  });
+
+  it('výpadek bez návratu: minutu uzavřou hodiny jako neúplnou a nic dalšího se za pokryté nepočítá', () => {
+    const a = make();
+    a.onTick(trade(1_000, 25000, 6, 'buy', 'A'));
+    a.feedLost();
+    a.advance(T0 + 10 * 60_000);
     expect(a.coverage('NQZ6', M0)).toEqual([]);
     expect(a.takePersist('NQZ6').minutes).toEqual([{ minute: M0, cells: [100000, 6, 0, 0], covered: false }]);
+  });
+
+  it('kontrakt, jehož odběr se nepotvrdil, není pokrytý, i když druhý teče', () => {
+    const a = new OrderFlowAggregator({ tickSize: 0.25, tradeFloor: () => 5 });
+    a.addSymbol('MNQZ6'); a.addSymbol('NQZ6');
+    a.feedOpened(T0 - 120_000, 'MNQZ6');
+    a.advance(T0 + 5 * 60_000 + 3_000);
+    expect(a.coverage('MNQZ6', M0)).toEqual([[M0, M0 + 300]]);
+    expect(a.coverage('NQZ6', M0 - 600)).toEqual([]);
     expect(a.liveSince('NQZ6')).toBeNull();
+    expect(a.takePersist('NQZ6').minutes).toEqual([]);
+  });
+
+  it('restart uprostřed minuty: objem z disku se s novým sečte, nepřepíše', () => {
+    const first = make();
+    first.onTick(trade(1_000, 25000, 6, 'buy', 'A'));
+    first.feedLost();
+    first.advance(T0 + 62_000);
+    const saved = first.takePersist('NQZ6');
+    const second = new OrderFlowAggregator({ tickSize: 0.25, tradeFloor: () => 5 });
+    second.addSymbol('NQZ6');
+    second.restore('NQZ6', saved.minutes, saved.trades, T0 + 30_000);
+    second.feedOpened(T0 + 30_000);
+    second.onTick(trade(40_000, 25000, 3, 'buy', 'B'));
+    second.onTick(trade(40_500, 25000.25, 2, 'sell', 'C'));
+    second.advance(T0 + 125_000);
+    expect(second.cells('NQZ6', M0)).toEqual([100000, 9, 0, 0, 100001, 0, 2, 0]);
+    expect(second.coverage('NQZ6', M0)).toEqual([[M0 + 60, M0 + 120]]);
   });
 
   it('obnoví stav z uložených záznamů a nic z něj neposílá jako změnu', () => {

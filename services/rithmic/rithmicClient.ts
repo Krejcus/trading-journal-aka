@@ -189,12 +189,13 @@ export interface RithmicClientConfig {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-/** Strana agresora obchodu (LastTrade.aggressor); neznámá nebo chybějící hodnota = null. */
-const aggressorSide = (v: unknown): 'buy' | 'sell' | null => {
-  if (typeof v !== 'number') return null;
-  const name = rithmicEnumName('LastTrade', 'TransactionType', v);
-  return name === 'BUY' ? 'buy' : name === 'SELL' ? 'sell' : null;
-};
+/**
+ * Strana agresora obchodu (LastTrade.aggressor); neznámá nebo chybějící hodnota = null. Čísla enumu se
+ * zjistí jednou — obchodů chodí tisíce za sekundu a tahle cesta běží i s vypnutým order flow.
+ */
+const AGGRESSOR_BUY = rithmicEnum('LastTrade', 'TransactionType', 'BUY');
+const AGGRESSOR_SELL = rithmicEnum('LastTrade', 'TransactionType', 'SELL');
+const aggressorSide = (v: unknown): 'buy' | 'sell' | null => (v === AGGRESSOR_BUY ? 'buy' : v === AGGRESSOR_SELL ? 'sell' : null);
 const num = (v: unknown): number | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);

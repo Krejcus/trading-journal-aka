@@ -374,6 +374,9 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
             // Order flow (jen zobrazení): co služba umí. Druhé `hello` (s historií) odběr nechává běžet.
             if (orderFlowHelloScope !== scope || !orderFlowLink.capability) { orderFlowHelloScope = scope; orderFlowLink.hello((message as { orderFlow?: unknown }).orderFlow); }
+          } else if (message.type === 'of-ready') {
+            // Služba po startu přidala zdroj (NQ): nové schopnosti, odběr se přihlásí znovu.
+            orderFlowLink.hello((message as { orderFlow?: unknown }).orderFlow);
           } else if (message.type === 'of' || message.type === 'of-trade' || message.type === 'of-snapshot' || message.type === 'of-error') {
             // Order flow jde rovnou do úložiště mimo React — žádné překreslení obrazovky, žádná cena pro příkazy.
             orderFlowLink.message(message);

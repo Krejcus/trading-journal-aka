@@ -42,7 +42,7 @@ export interface OrderFlowStats {
   sizeHistogram: number[];
 }
 
-interface Group { id: string; at: number; side: 1 | -1; size: number; fills: number; lo: number; hi: number; priceSize: number; emittedSize: number }
+interface Group { id: string; orderId: string | null; at: number; side: 1 | -1; size: number; fills: number; lo: number; hi: number; priceSize: number; emittedSize: number }
 
 interface SymbolState {
   formingMinute: number | null;
@@ -63,6 +63,8 @@ interface SymbolState {
   persistTrades: OrderFlowTradeRow[];
   stats: OrderFlowStats;
   synthetic: number;
+  /** Kolikrát už se číslo příkazu objevilo jako samostatná skupina (stejné číslo po přestávce = nová bublina). */
+  seenOrders: Map<string, number>;
 }
 
 const HISTOGRAM_EDGES = [1, 2, 5, 10, 20, 50, 100];
@@ -91,25 +93,32 @@ export class OrderFlowAggregator {
     this.symbols.set(symbol, {
       formingMinute: null, forming: new Map(), formingDirty: new Set(), finished: new Map(), finishedDirty: [], covered: new Set(),
       lastClosed: null, lastFinished: null, feedOpenSince: null, open: null, trades: [], dirtyTrades: new Map(), persistMinutes: [], persistTrades: [],
-      stats: emptyStats(), synthetic: 0,
+      stats: emptyStats(), synthetic: 0, seenOrders: new Map(),
     });
   }
 
   has(symbol: string): boolean { return this.symbols.has(symbol); }
 
-  /** Ceny začaly téct (start nebo obnova po výpadku). Minuta, ve které se to stalo, je neúplná. */
-  feedOpened(at: number): void {
-    for (const state of this.symbols.values()) {
+  /**
+   * Ceny začaly téct (start nebo obnova po výpadku) — pro jeden kontrakt, nebo pro všechny. Minuta, ve které
+   * se to stalo, je neúplná. Kontrakt, jehož odběr se nepodařil, se za tekoucí nepovažuje.
+   */
+  feedOpened(at: number, symbol?: string): void {
+    for (const [name, state] of this.symbols) {
+      if (symbol !== undefined && name !== symbol) continue;
       state.feedOpenSince = at;
       state.lastClosed = minuteOf(at);
     }
   }
 
-  /** Výpadek cen: rozdělaná minuta se uzavře jako neúplná a rozpracovaný příkaz se dokončí. */
+  /**
+   * Výpadek cen: rozpracovaný příkaz se dokončí a rozdělaná minuta zůstane otevřená jako neúplná — když se
+   * ceny vrátí ještě v téže minutě, její zbytek se dopočítá; jinak ji uzavřou hodiny (`advance`).
+   */
   feedLost(): void {
     for (const [symbol, state] of this.symbols) {
       state.feedOpenSince = null;
-      this.finishMinute(symbol, state);
+      this.closeGroup(symbol, state);
       state.lastClosed = null;
     }
   }
@@ -144,7 +153,7 @@ export class OrderFlowAggregator {
     }
     const orderId = tick.aggressorOrderId || null;
     const open = state.open;
-    if (open && orderId !== null && open.id === orderId && open.side === side) {
+    if (open && orderId !== null && open.orderId === orderId && open.side === side) {
       open.size += size; open.fills += 1; open.priceSize += key * size;
       if (key < open.lo) open.lo = key;
       if (key > open.hi) open.hi = key;
@@ -152,7 +161,15 @@ export class OrderFlowAggregator {
     }
     this.closeGroup(tick.symbol, state);
     state.synthetic += 1;
-    state.open = { id: orderId ?? `x${ms}-${state.synthetic}`, at: ms, side, size, fills: 1, lo: key, hi: key, priceSize: key * size, emittedSize: 0 };
+    let id = orderId ?? `x${ms}-${state.synthetic}`;
+    if (orderId !== null) {
+      // Totéž číslo příkazu po přestávce (jiný příkaz mezi tím): nová bublina s vlastním id, ne přepis té první.
+      const seen = state.seenOrders.get(orderId) ?? 0;
+      if (seen > 0) id = `${orderId}#${seen + 1}`;
+      if (state.seenOrders.size > 20_000) state.seenOrders.clear();
+      state.seenOrders.set(orderId, seen + 1);
+    }
+    state.open = { id, orderId, at: ms, side, size, fills: 1, lo: key, hi: key, priceSize: key * size, emittedSize: 0 };
   }
 
   /**
@@ -290,16 +307,25 @@ export class OrderFlowAggregator {
     return out;
   }
 
-  private finishMinute(symbol: string, state: SymbolState): void {
-    this.closeGroup(symbol, state);
+  private finishMinute(_symbol: string, state: SymbolState): void {
+    // Rozpracovaný příkaz se s minutou NEuzavírá: dílčí obchody jednoho příkazu můžou padnout přes její hranu.
     const minute = state.formingMinute;
     if (minute === null) return;
+    // Minuta už uložená z dřívějšího běhu služby (restart uprostřed minuty): objem se sečte, nepřepíše.
+    const earlier = state.finished.get(minute);
+    if (earlier) {
+      for (let i = 0; i < earlier.length; i += 4) {
+        const cell = state.forming.get(earlier[i]);
+        if (cell) { cell[0] += earlier[i + 1]; cell[1] += earlier[i + 2]; cell[2] += earlier[i + 3]; }
+        else state.forming.set(earlier[i], [earlier[i + 1], earlier[i + 2], earlier[i + 3]]);
+      }
+    }
     const keys = [...state.forming.keys()].sort((a, b) => a - b);
     const flat = new Int32Array(keys.length * 4);
     keys.forEach((key, index) => { const cell = state.forming.get(key)!; flat.set([key, cell[0], cell[1], cell[2]], index * 4); });
-    const covered = state.feedOpenSince !== null && state.feedOpenSince <= minute * 1_000;
+    const covered = !earlier && state.feedOpenSince !== null && state.feedOpenSince <= minute * 1_000;
     state.finished.set(minute, flat);
-    if (covered) state.covered.add(minute);
+    if (covered) state.covered.add(minute); else state.covered.delete(minute);
     state.finishedDirty.push(minute);
     state.persistMinutes.push({ minute, cells: Array.from(flat), covered });
     state.forming = new Map();

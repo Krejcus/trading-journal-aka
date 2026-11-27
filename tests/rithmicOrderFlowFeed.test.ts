@@ -30,10 +30,10 @@ class FakeSocket {
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function make(options: { now?: () => number; dir?: string } = {}): { feed: OrderFlowFeed; clock: { at: number } } {
+function make(options: { now?: () => number; dir?: string; logs?: string[] } = {}): { feed: OrderFlowFeed; clock: { at: number } } {
   const clock = { at: T0 + 10_000 };
   const feed = createOrderFlowFeed({
-    sources: { NQ: 'NQZ6', MNQ: 'MNQZ6' }, tickSize: 0.25, timers: false, log: () => undefined,
+    sources: { NQ: 'NQZ6', MNQ: 'MNQZ6' }, tickSize: 0.25, timers: false, log: (line) => { options.logs?.push(line); },
     now: options.now ?? (() => clock.at), dir: options.dir, slug: 'test',
   });
   feed.feedOpened(T0 - 120_000);
@@ -110,36 +110,130 @@ describe('order flow — doručení klientům', () => {
     for (let minute = 0; minute < 40; minute += 1) {
       for (let step = 0; step < 400; step += 1) feed.onTick(trade('NQZ6', minute * 60_000 + step, 25000 + step * 0.25, 1, 'buy', `o${minute}-${step}`));
     }
-    feed.flushCells();
+    for (let i = 0; i < 8; i += 1) { feed.flushTrades(); feed.flushCells(); }
     feed.handle(socket, { subscribe: true, source: 'NQ', days: 1 });
     feed.pumpSnapshots();
     expect(socket.sent).toHaveLength(1);
     expect(socket.sent[0]).toMatchObject({ part: 0, last: false, reset: true });
+    // nejnovější minuta jde první: to, co je v grafu vidět, dorazí hned
+    expect((socket.sent[0].minutes as Array<[number, number[]]>)[0][0]).toBe(M0 + 39 * 60);
     feed.onTick(trade('NQZ6', 39 * 60_000 + 500, 25000, 7, 'sell', 'late'));
     feed.flushTrades(); feed.flushCells();
     expect(socket.sent).toHaveLength(1);
-    feed.pumpSnapshots();
-    expect(socket.sent[1]).toMatchObject({ part: 1, last: true });
+    for (let i = 0; i < 40 && socket.sent[socket.sent.length - 1].last !== true; i += 1) feed.pumpSnapshots();
+    const parts = socket.sent.filter((message) => message.type === 'of-snapshot');
+    expect(parts[parts.length - 1]).toMatchObject({ last: true });
+    expect(parts.length).toBeGreaterThan(8);
+    // žádná část nepřeroste strop, za kterým by zdržela odpovědi na příkazy na stejném spojení
+    for (const part of parts) expect(JSON.stringify(part).length).toBeLessThan(ORDER_FLOW_HIGH_WATER);
     feed.flushTrades(); feed.flushCells();
-    expect(socket.sent.slice(2).map((message) => message.type)).toEqual(['of-trade', 'of']);
-    const total = socket.sent.slice(0, 2).reduce((sum, message) => sum + (message.minutes as Array<[number, number[]]>).reduce((cells, row) => cells + row[1].length / 4, 0), 0);
+    expect(socket.sent.slice(parts.length).map((message) => message.type)).toEqual(['of-trade', 'of']);
+    const total = parts.reduce((sum, message) => sum + (message.minutes as Array<[number, number[]]>).reduce((cells, row) => cells + row[1].length / 4, 0), 0);
     expect(total).toBe(16_000);
   });
 
-  it('odhlášení zastaví zprávy; neznámý zdroj a zahlcení žádostmi odmítne', () => {
+  it('jeden kus snímku na otočku, klienti se střídají', () => {
+    const { feed } = make();
+    for (let minute = 0; minute < 20; minute += 1) {
+      for (let step = 0; step < 400; step += 1) feed.onTick(trade('NQZ6', minute * 60_000 + step, 25000 + step * 0.25, 1, 'buy', `o${minute}-${step}`));
+    }
+    for (let i = 0; i < 4; i += 1) feed.flushCells();
+    const a = new FakeSocket(); const b = new FakeSocket();
+    feed.handle(a, { subscribe: true, source: 'NQ' });
+    feed.handle(b, { subscribe: true, source: 'NQ' });
+    for (let i = 0; i < 4; i += 1) feed.pumpSnapshots();
+    expect(a.sent.length + b.sent.length).toBe(4);
+    expect(a.sent.length).toBe(2);
+    expect(b.sent.length).toBe(2);
+  });
+
+  it('klient, kterému se nahromadí moc změn, dostane nový snímek místo obří dávky', () => {
+    const { feed } = make();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots(); socket.take();
+    socket.bufferedAmount = ORDER_FLOW_HIGH_WATER + 1;
+    for (let step = 0; step < 6_500; step += 1) feed.onTick(trade('NQZ6', 1_000, 20000 + step * 0.25, 1, 'buy', `o${step}`));
+    for (let i = 0; i < 3; i += 1) { feed.flushTrades(); feed.flushCells(); }
+    expect(socket.sent).toEqual([]);
+    socket.bufferedAmount = 0;
+    feed.pumpSnapshots();
+    expect(socket.sent[0]).toMatchObject({ type: 'of-snapshot', part: 0, reset: true });
+    expect(feed.metricsLine()).toContain('nových snímků');
+  });
+
+  it('chyba uvnitř vrstvu jen vypne: nic nevyhodí, odběratelé dostanou zprávu a služba ji přestane nabízet', () => {
+    const logs: string[] = [];
+    let broken = false;
+    const base = T0 + 10_000;
+    const { feed } = make({ logs, now: () => { if (broken) throw new Error('rozbité hodiny'); return base; } });
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots(); socket.take();
+    broken = true;
+    expect(() => feed.advance()).not.toThrow();
+    expect(socket.take()).toEqual([{ type: 'of-error', message: 'order flow se ve službě po chybě vypnul' }]);
+    expect(feed.capability()).toBeNull();
+    expect(logs.join('\n')).toContain('VYPNUTO');
+    expect(() => { feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A')); feed.flushTrades(); feed.flushCells(); feed.pumpSnapshots(); feed.feedLost(); }).not.toThrow();
+    expect(socket.sent).toEqual([]);
+    broken = false;
+    expect(feed.handle(new FakeSocket(), { subscribe: true, source: 'NQ' })).toContain('vypnutý');
+    expect(feed.metricsLine()).toContain('VYPNUTO');
+  });
+
+  it('zdroj přidaný po startu má data až od potvrzení svého odběru', () => {
+    const clock = { at: T0 + 10_000 };
+    const feed = createOrderFlowFeed({ sources: { MNQ: 'MNQZ6' }, tickSize: 0.25, timers: false, log: () => undefined, now: () => clock.at });
+    feed.feedOpened(T0 - 120_000, 'MNQZ6');
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'early'));
+    expect(feed.addSource('NQ', 'NQZ6')).toBe(true);
+    expect(feed.addSource('NQ', 'NQH7')).toBe(false);
+    expect(feed.capability()?.sources).toEqual({ MNQ: 'MNQZ6', NQ: 'NQZ6' });
+    clock.at = T0 + 5 * 60_000 + 3_000;
+    feed.flushTrades(); feed.advance();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots();
+    const [snapshot] = socket.take();
+    // obchod před přidáním zdroje se nepočítá; odběr NQ se nepotvrdil → nic není pokryté
+    expect(snapshot).toMatchObject({ last: true, minutes: [], coverage: [], liveSince: null });
+  });
+
+  it('obchody jen řadí do fronty a při zahlcení je zahodí, místo aby rostla paměť', () => {
+    const { feed } = make();
+    for (let i = 0; i < 100_050; i += 1) feed.onTick(trade('NQZ6', 1_000, 25000, 1, 'buy', `o${i}`));
+    expect(feed.metricsLine()).toContain('ZAHOZENO obchodů 50');
+  });
+
+  it('odhlášení zastaví zprávy; neznámý zdroj a neplatný tvar odmítne', () => {
     const { feed } = make();
     const socket = new FakeSocket();
     expect(feed.handle(socket, { subscribe: true, source: 'ES' })).toContain('neznámý zdroj');
     expect(feed.handle(socket, { subscribe: true, source: '__proto__' })).toContain('neznámý zdroj');
+    expect(feed.handle(socket, { subscribe: 'ano', source: 'NQ' })).toContain('neplatná');
+    expect(feed.handle(socket, 'cokoli')).toContain('neplatná');
     feed.handle(socket, { subscribe: true, source: 'NQ' });
     feed.pumpSnapshots(); socket.take();
     feed.handle(socket, { subscribe: false });
     feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
     feed.flushTrades(); feed.flushCells();
     expect(socket.sent).toEqual([]);
-    const other = new FakeSocket();
-    for (let i = 0; i < 6; i += 1) expect(feed.handle(other, { subscribe: true, source: 'NQ' })).toBeNull();
-    expect(feed.handle(other, { subscribe: true, source: 'NQ' })).toContain('příliš mnoho');
+  });
+
+  it('strop žádostí počítá i odmítnuté pokusy, odpoví jen jednou a odhlášení pustí vždy', () => {
+    const { feed } = make();
+    const socket = new FakeSocket();
+    for (let i = 0; i < 5; i += 1) expect(feed.handle(socket, { subscribe: true, source: 'ES' })).toContain('neznámý zdroj');
+    expect(feed.handle(socket, { subscribe: true, source: 'NQ' })).toBeNull();
+    feed.pumpSnapshots(); socket.take();
+    expect(feed.handle(socket, { subscribe: true, source: 'NQ' })).toContain('příliš mnoho');
+    expect(feed.handle(socket, { subscribe: true, source: 'NQ' })).toBeNull();
+    // nad stropem: odhlášení se i tak provede a zprávy přestanou
+    expect(feed.handle(socket, { subscribe: false })).toBeNull();
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
+    feed.flushTrades(); feed.flushCells();
+    expect(socket.sent).toEqual([]);
   });
 
   it('chyba odeslání jednoho klienta nevypne vrstvu ostatním', () => {
@@ -188,6 +282,32 @@ describe('order flow — disk', () => {
     expect(snapshot.minutes).toEqual([[M0, [100000, 9, 0, 0]]]);
     expect((snapshot.trades as unknown[][]).map((row) => row[0])).toEqual(['A']);
     expect(snapshot.coverage).toEqual([[M0, M0 + 60]]);
+  });
+
+  it('když disk nejde (chybí složka), jednou to vypíše a běží dál', async () => {
+    const logs: string[] = [];
+    const { feed } = make({ dir: join(tmpdir(), 'of-neexistuje', String(Date.now())), logs });
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots(); socket.take();
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
+    feed.onTick(trade('NQZ6', 61_000, 25001, 1, 'sell', 'B'));
+    feed.onTick(trade('NQZ6', 121_000, 25001, 1, 'sell', 'C'));
+    feed.flushTrades(); feed.flushCells(); feed.flushCells();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(logs.filter((line) => line.includes('zápis na disk nejde'))).toHaveLength(1);
+    expect(feed.capability()).not.toBeNull();
+    expect(socket.sent.some((message) => message.type === 'of')).toBe(true);
+  });
+
+  it('po rolování kontraktu smaže staré soubory i jiného kontraktu, cizí soubory nechá', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'of-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, 'orderflow-test-NQU6-2026-09-01.jsonl'), `{"m":1,"v":1,"c":[]}\n`);
+    writeFileSync(join(dir, 'orderflow-jiny-NQZ6-2026-09-01.jsonl'), 'jiný systém\n');
+    writeFileSync(join(dir, 'orders-test-2026-09-01.jsonl'), 'deník příkazů\n');
+    make({ dir });
+    expect(readdirSync(dir).sort()).toEqual(['orderflow-jiny-NQZ6-2026-09-01.jsonl', 'orders-test-2026-09-01.jsonl']);
   });
 
   it('poškozený řádek přeskočí a staré soubory smaže', () => {
