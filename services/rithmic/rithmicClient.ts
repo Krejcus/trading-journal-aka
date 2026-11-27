@@ -641,8 +641,11 @@ export class RithmicClient {
   /**
    * Historie jednotlivých obchodů (history plant, šablona 206 → 207, tick bar po 1 obchodu). Jen čtení, jen
    * k zobrazení order flow. Vrací řádky tak, jak přišly (čas na mikrosekundy, cena, objem, bid/ask objem =
-   * strana agresora), a konečnou odpověď kvůli `request_key` pro pokračování. Hloubku, strop řádků na žádost
-   * a význam pokračování měří `scripts/rithmic/measureTickHistory.ts` — do jejich změření nic jiného nevolá.
+   * strana agresora), a konečnou odpověď. Změřeno 27. 11. 2026 na LucidTrading (measureTickHistory.ts):
+   * bez `resume` nejvýš 10 000 řádků na žádost; s `resume_bars` přišlo celé 2h okno najednou (352 794 obchodů
+   * za 8,6 s). Každý obchod má právě jednu stranu (bid xor ask = volume) a čas na µs. Data jen u běžícího
+   * kontraktu (NQZ6 60 dní zpět ano; prošlé U6/M6/Z5 prázdné). NEVOLAT ze služby během obchodování:
+   * dekódování statisíců řádků by zdrželo smyčku, která vyřizuje příkazy.
    */
   async tickBarReplay(request: { symbol: string; exchange: string; fromSec: number; toSec: number; maxCount?: number; resume?: boolean; timeoutMs?: number }): Promise<{
     rows: Array<{ sec: number; usecs: number; seq: number | null; stamps: number; price: number; volume: number; bidVolume: number; askVolume: number; trades: number }>;

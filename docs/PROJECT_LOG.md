@@ -288,6 +288,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-27 — Claude: sonda historie obchodů Rithmicu — order flow jde dopočítat zpětně
+
+- Sonda `scripts/rithmic/measureTickHistory.ts` (jen čtení, history plant, tick bar po 1 obchodu, šablona 206),
+  spuštěná Filipem při vypnuté službě, 30 žádostí bez odmítnutí.
+- **Strana agresora u každého obchodu** (bid xor ask objem = volume, 0 nejasných) a **čas na µs**: delta,
+  profil i přibližné bubliny (seskupení podle času a strany) jdou spočítat stejně jako živě.
+- **Hloubka = běžící kontrakt.** NQZ6 před 2, 7, 30 i 60 dny ano; prošlé NQU6/NQM6/NQZ5 prázdné (i svíčky).
+  Zpětně jde tedy doplnit zhruba od posledního přechodu kontraktu, starší jen archivem.
+- **Strop 10 000 řádků na žádost**, navázání novou žádostí od posledního času funguje (~0,37 s / 10 000).
+  `resume_bars: true` vrátil celé 2h okno najednou: 352 794 obchodů za 8,6 s.
+- Otevřené: objem z obchodů vycházel na ~86 % objemu minutových svíček za stejné okno (nejspíš svíčka navíc
+  na hraně okna, ověřit po minutách); kolik obchodů má celý den (rozpočet došel dřív); jestli history plant
+  snese druhé přihlášení vedle služby. Stahování nesmí běžet v obchodní smyčce služby.
+
 ### 2026-11-27 — Claude: natažený volume profil jako vlastní nástroj v liště kreslení (web + iPhone)
 
 - Natažený profil už není „Časové rozpětí + přepínač v nastavení“, ale samostatný nástroj
