@@ -14,7 +14,7 @@ describe('TradingView-like drawing tool groups', () => {
     expect(tools).toHaveLength(new Set(tools).size);
     expect(tools).toEqual(expect.arrayContaining([
       'TrendLine', 'Ray', 'ExtendedLine', 'HorizontalLine', 'HorizontalRay', 'VerticalLine', 'CrossLine', 'ParallelChannel',
-      'FibRetracement', 'FibExtension', 'Arrow', 'Text', 'Rectangle', 'Circle', 'Triangle', 'PriceRange', 'DateRange',
+      'FibRetracement', 'FibExtension', 'Arrow', 'Text', 'Rectangle', 'Circle', 'Triangle', 'PriceRange', 'DateRange', 'VolumeProfile',
       'LongPosition', 'ShortPosition',
     ]));
   });

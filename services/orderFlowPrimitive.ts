@@ -229,6 +229,16 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
         context.font = `11px ${FONT}`;
         context.textBaseline = 'alphabetic';
 
+        // Popisky už nakreslené v tomto snímku: další, který by je přepsal, jde o řádek níž.
+        const placedLabels: Array<{ x: number; y: number; w: number }> = [];
+        const labelAt = (text: string, x: number, y: number) => {
+          const w = context.measureText(text).width;
+          let row = y;
+          for (let tries = 0; tries < 6 && placedLabels.some((p) => Math.abs(p.y - row) < 13 && x < p.x + p.w + 6 && p.x < x + w + 6); tries += 1) row += 14;
+          placedLabels.push({ x, y: row, w });
+          context.fillText(text, x, row);
+        };
+
         const drawOne = (id: string, label: string, from: number, to: number, nominalFrom: number, closed: boolean, boxed: boolean, selected: boolean) => {
           const xFrom = xOfTime(from, 1, timeframe, stepSec);
           const xTo = xOfTime(to - 60, -1, timeframe, stepSec);
@@ -239,10 +249,8 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           const left = !boxed && trueLeft < inset && right > inset + 48 ? inset : trueLeft;
           const profile = profileFor(id, from, to, rowTicks, settings.valueAreaPercent);
           if (!profile) {
-            if (boxed) {
-              context.strokeStyle = 'rgba(41,98,255,.6)'; context.setLineDash([4, 3]); context.strokeRect(Math.round(left) + 0.5, 8.5, Math.round(right - left), mediaSize.height - 17); context.setLineDash([]);
-              context.fillStyle = textColor; context.fillText('Pro tento úsek nejsou data order flow', left + 6, 24);
-            }
+            // Rámeček kreslí sama kresba (nástroj Volume profil); tady jen říct, proč je prázdný.
+            if (boxed) { context.fillStyle = textColor; labelAt('Pro tento úsek nejsou data order flow', Math.max(4, left + 6), LABEL_MIN_Y); }
             return;
           }
           const nakedPoc = (fromX: number, y: number) => {
@@ -267,11 +275,8 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           }
           const width = Math.max(24, Math.min(280, (right - trueLeft) * settings.widthPercent / 100, Math.max(24, right - left)));
           const span = drawProfile(context, profile, settings, left + 1, width, mediaSize.height, tickSize);
-          if (boxed) {
-            context.fillStyle = `rgba(41,98,255,${selected ? 0.08 : 0.04})`; context.fillRect(left, span.top, right - left, span.bottom - span.top);
-            context.strokeStyle = `rgba(41,98,255,${selected ? 0.95 : 0.5})`; context.lineWidth = selected ? 1.5 : 1;
-            context.strokeRect(Math.round(left) + 0.5, Math.round(span.top) + 0.5, Math.round(right - left), Math.round(span.bottom - span.top));
-          }
+          // Obrys rámečku kreslí sama kresba; tady jen jemné podbarvení úseku s daty.
+          if (boxed) { context.fillStyle = `rgba(41,98,255,${selected ? 0.07 : 0.035})`; context.fillRect(left, span.top, right - left, span.bottom - span.top); }
           const complete = store.covered(nominalFrom, Math.max(nominalFrom, to - 60));
           if (settings.showLabels || boxed) {
             const pocPrice = ((profile.rowMin + profile.poc) * profile.rowTicks) * tickSize;
@@ -287,7 +292,7 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
             if (text) {
               context.fillStyle = complete ? textColor : 'rgba(245,176,65,.95)';
               // Horní pruh grafu patří legendě — popisek pod něj.
-              context.fillText(text, Math.max(4, left + 4), Math.max(LABEL_MIN_Y, span.top - 6));
+              labelAt(text, Math.max(4, left + 4), Math.max(LABEL_MIN_Y, span.top - 6));
             }
           }
           if (closed && settings.extendPoc && span.pocY !== null && !boxed) nakedPoc(right, span.pocY);

@@ -48,6 +48,7 @@ const toolTitle = (tool: Drawing['tool']) => ({
   Text: 'Text',
   PriceRange: 'Price range',
   DateRange: 'Date range',
+  VolumeProfile: 'Volume profil',
 }[tool] ?? 'Drawing');
 
 const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = props => <select

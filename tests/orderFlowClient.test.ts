@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OrderFlowLink } from '../lib/orderFlowLink';
 import { mergeCells, OrderFlowStore, parseOrderFlowCapability } from '../lib/orderFlowStore';
 import { orderFlowBubbleRadius, orderFlowSizeLabel, selectOrderFlowBubbles } from '../services/orderFlowBubbles';
-import { autoRowTicks, buildOrderFlowProfile, orderFlowProfileSegments, valueAreaBounds, zoneHour } from '../services/orderFlowProfile';
+import { autoRowTicks, buildOrderFlowProfile, orderFlowPriceRange, orderFlowProfileSegments, valueAreaBounds, zoneHour } from '../services/orderFlowProfile';
 
 const M0 = Date.UTC(2026, 10, 27, 14, 30, 0) / 1000;
 const snapshot = (extra: Record<string, unknown> = {}) => ({
@@ -261,6 +261,13 @@ describe('volume profil', () => {
     expect(days[0].nominalFrom).toBe(at(0, 0));
     // obchodní den se láme v 18:00 New Yorku = 00:00 Prahy (zima)
     expect(days.map((segment) => segment.key)).toEqual(['2026-11-27', '2026-11-28']);
+  });
+
+  it('cenový rozsah úseku pro přichycení rámečku nataženého profilu', () => {
+    const store = new OrderFlowStore();
+    store.apply(snapshot({ minutes: [[M0, [100000, 1, 0, 0, 100008, 0, 1, 0]], [M0 + 60, [99996, 1, 0, 0]], [M0 + 120, [100020, 1, 0, 0]]] }));
+    expect(orderFlowPriceRange(store, M0, M0 + 120)).toEqual({ high: 25002, low: 24999 });
+    expect(orderFlowPriceRange(store, M0 + 600, M0 + 900)).toBeNull();
   });
 
   it('automatický řádek má aspoň tři pixely', () => {

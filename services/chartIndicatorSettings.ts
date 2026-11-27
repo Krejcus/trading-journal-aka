@@ -177,8 +177,6 @@ export interface VolumeProfileIndicatorSettings {
   valueAreaPercent: number;
   /** Protáhnout POC uzavřeného úseku doprava, dokud se ho cena nedotkne. */
   extendPoc: boolean;
-  /** Natažený profil: úsek nakreslený nástrojem Časové rozpětí (Měření) ukáže svůj volume profil. Zapíná se ručně. */
-  rangeTool: boolean;
   showLabels: boolean;
   volumeColor: string;
   buyColor: string;
@@ -339,8 +337,6 @@ export const DEFAULT_INDICATOR_SETTINGS: AlphaTradeIndicatorSettings = {
     valueArea: true,
     valueAreaPercent: 70,
     extendPoc: true,
-    // Výchozí vypnuto: stávající kresby Časové rozpětí se samy od sebe nezmění a nic nezačne odebírat data.
-    rangeTool: false,
     showLabels: true,
     volumeColor: '#8ea2c4',
     buyColor: '#26a69a',

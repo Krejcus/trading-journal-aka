@@ -1,14 +1,16 @@
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
-index 773eea4..ec1f7ae 100644
+index 773eea4..d02c44b 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
-@@ -800,11 +800,19 @@ var TOOL_POINTS = {
+@@ -800,11 +800,21 @@ var TOOL_POINTS = {
    Triangle: 3,
    ParallelChannel: 3,
    Arrow: 2,
 +  Text: 1,
    PriceRange: 2,
    DateRange: 2,
++  // AlphaTrade: natažený volume profil — úsek času, profil kreslí aplikace (order flow).
++  VolumeProfile: 2,
 +  LongPosition: 1,
 +  ShortPosition: 1,
    FibRetracement: 2,
@@ -23,7 +25,7 @@ index 773eea4..ec1f7ae 100644
  var DEFAULT_STYLE = {
    color: "#2962ff",
    width: 2,
-@@ -813,6 +821,205 @@ var DEFAULT_STYLE = {
+@@ -813,6 +823,205 @@ var DEFAULT_STYLE = {
  };
  var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
  var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
@@ -229,7 +231,7 @@ index 773eea4..ec1f7ae 100644
  
  // src/drawing/geometry.ts
  function distToSegment(p, a, b) {
-@@ -933,6 +1140,7 @@ var DrawingEngine = class {
+@@ -933,6 +1142,7 @@ var DrawingEngine = class {
    }
    /** Commit the draft (or a complete one-point drawing) as a real drawing. */
    commit(drawing) {
@@ -237,7 +239,7 @@ index 773eea4..ec1f7ae 100644
      this.drawings.push(drawing);
      this.draft = null;
      this.activeTool = null;
-@@ -955,7 +1163,9 @@ var DrawingEngine = class {
+@@ -955,7 +1165,9 @@ var DrawingEngine = class {
    setPoints(id, points) {
      const d = this.getById(id);
      if (!d) return;
@@ -248,7 +250,7 @@ index 773eea4..ec1f7ae 100644
      this.emit();
    }
    setStyle(id, patch) {
-@@ -1043,8 +1253,9 @@ var DrawingEngine = class {
+@@ -1043,8 +1255,9 @@ var DrawingEngine = class {
  
  // src/drawing/DrawingPrimitive.ts
  var Renderer = class {
@@ -259,7 +261,7 @@ index 773eea4..ec1f7ae 100644
    }
    draw(target) {
      target.useBitmapCoordinateSpace((scope) => {
-@@ -1054,6 +1265,8 @@ var Renderer = class {
+@@ -1054,6 +1267,8 @@ var Renderer = class {
        const BIG = (W + H) * 4;
        for (const s of this.shapes) {
          const { style, tool } = s.drawing;
@@ -268,7 +270,7 @@ index 773eea4..ec1f7ae 100644
          const a = s.anchors[0];
          const b = s.anchors[1];
          const c = s.anchors[2];
-@@ -1068,42 +1281,54 @@ var Renderer = class {
+@@ -1068,42 +1283,54 @@ var Renderer = class {
          ctx.strokeStyle = style.color;
          ctx.fillStyle = style.fill ?? "transparent";
          ctx.lineWidth = Math.max(1, style.width) * hpr;
@@ -334,7 +336,27 @@ index 773eea4..ec1f7ae 100644
              }
              break;
            case "Rectangle":
-@@ -1130,6 +1355,37 @@ var Renderer = class {
+@@ -1118,6 +1345,19 @@ var Renderer = class {
+               ctx.strokeRect(x, y, w, h);
+             }
+             break;
++          case "VolumeProfile":
++            if (ax != null && ay != null && bx != null && by != null) {
++              const x = Math.min(ax, bx);
++              const y = Math.min(ay, by);
++              const w = Math.abs(bx - ax);
++              const h = Math.abs(by - ay);
++              ctx.save();
++              ctx.globalAlpha = 0.85;
++              ctx.setLineDash([5 * hpr, 4 * hpr]);
++              ctx.strokeRect(x, y, w, h);
++              ctx.restore();
++            }
++            break;
+           case "Circle":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const ecx = (ax + bx) / 2;
+@@ -1130,6 +1370,37 @@ var Renderer = class {
                ctx.stroke();
              }
              break;
@@ -372,7 +394,7 @@ index 773eea4..ec1f7ae 100644
            case "Triangle":
              if (ax != null && ay != null && bx != null && by != null && cx != null && cy != null) {
                ctx.beginPath();
-@@ -1198,14 +1454,195 @@ var Renderer = class {
+@@ -1198,14 +1469,195 @@ var Renderer = class {
                }
              }
              break;
@@ -575,7 +597,7 @@ index 773eea4..ec1f7ae 100644
                }
              }
              break;
-@@ -1225,17 +1662,103 @@ var Renderer = class {
+@@ -1225,17 +1677,103 @@ var Renderer = class {
            default:
              if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
          }
@@ -686,7 +708,7 @@ index 773eea4..ec1f7ae 100644
              ctx.fill();
              ctx.stroke();
            }
-@@ -1251,6 +1774,91 @@ function line(ctx, x1, y1, x2, y2) {
+@@ -1251,6 +1789,91 @@ function line(ctx, x1, y1, x2, y2) {
    ctx.lineTo(x2, y2);
    ctx.stroke();
  }
@@ -778,7 +800,7 @@ index 773eea4..ec1f7ae 100644
  function norm(dx, dy) {
    const len = Math.hypot(dx, dy) || 1;
    return { x: dx / len, y: dy / len };
-@@ -1267,24 +1875,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
+@@ -1267,24 +1890,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
    ctx.stroke();
  }
  var PaneView = class {
@@ -834,7 +856,7 @@ index 773eea4..ec1f7ae 100644
    }
    attached(param) {
      this.chart = param.chart;
-@@ -1297,31 +1933,74 @@ var DrawingPrimitive = class {
+@@ -1297,31 +1948,74 @@ var DrawingPrimitive = class {
      this.requestUpdate = null;
    }
    paneViews() {
@@ -918,7 +940,7 @@ index 773eea4..ec1f7ae 100644
      const y = this.series.priceToCoordinate(p.price);
      return { x: x == null ? null : x, y: y == null ? null : y };
    }
-@@ -1360,11 +2039,25 @@ var DrawingController = class {
+@@ -1360,11 +2054,25 @@ var DrawingController = class {
      this.el = null;
      this.primitive = null;
      this.drag = null;
@@ -944,7 +966,7 @@ index 773eea4..ec1f7ae 100644
    }
    init(ctx) {
      this.chart = ctx.chart;
-@@ -1383,13 +2076,33 @@ var DrawingController = class {
+@@ -1383,13 +2091,33 @@ var DrawingController = class {
      const down = (e) => this.onDown(e);
      const move = (e) => this.onMove(e);
      const up = () => this.onUp();
@@ -978,7 +1000,7 @@ index 773eea4..ec1f7ae 100644
      this.cleanup.push(() => window.removeEventListener("mouseup", up));
      this.cleanup.push(() => window.removeEventListener("keydown", key));
    }
-@@ -1403,6 +2116,7 @@ var DrawingController = class {
+@@ -1403,6 +2131,7 @@ var DrawingController = class {
        }
      }
      this.engine.destroy();
@@ -986,7 +1008,7 @@ index 773eea4..ec1f7ae 100644
      this.chart = null;
      this.series = null;
      this.el = null;
-@@ -1410,15 +2124,33 @@ var DrawingController = class {
+@@ -1410,15 +2139,33 @@ var DrawingController = class {
    }
    // ── pointer / keyboard ───────────────────────────────────────────────────────
    onDown(e) {
@@ -1022,7 +1044,7 @@ index 773eea4..ec1f7ae 100644
        if (need === 1) {
          this.engine.commit({
            id: this.engine.newDrawingId(),
-@@ -1442,30 +2174,66 @@ var DrawingController = class {
+@@ -1442,30 +2189,66 @@ var DrawingController = class {
        return;
      }
      const hit = this.hitTest(e.offsetX, e.offsetY);
@@ -1096,7 +1118,7 @@ index 773eea4..ec1f7ae 100644
      } else {
        const dt = dp.time - this.drag.last.time;
        const dpr = dp.price - this.drag.last.price;
-@@ -1473,39 +2241,121 @@ var DrawingController = class {
+@@ -1473,39 +2256,121 @@ var DrawingController = class {
        this.engine.setPoints(this.drag.id, points);
      }
      this.drag.last = dp;
@@ -1222,7 +1244,7 @@ index 773eea4..ec1f7ae 100644
      const y = this.series.priceToCoordinate(p.price);
      if (x == null || y == null) return null;
      return { x, y };
-@@ -1514,27 +2364,54 @@ var DrawingController = class {
+@@ -1514,27 +2379,54 @@ var DrawingController = class {
      const p = { x: px, y: py };
      const list = this.engine.getDrawings();
      const selId = this.engine.getSelectedId();
@@ -1287,7 +1309,7 @@ index 773eea4..ec1f7ae 100644
      const t = this.tol;
      switch (d.tool) {
        case "HorizontalLine":
-@@ -1548,6 +2425,13 @@ var DrawingController = class {
+@@ -1548,17 +2440,42 @@ var DrawingController = class {
        case "TrendLine":
        case "Arrow":
          return !!b && distToSegment(p, a, b) <= t;
@@ -1301,9 +1323,10 @@ index 773eea4..ec1f7ae 100644
        case "Ray":
          return !!b && distToRay(p, a, b) <= t;
        case "ExtendedLine":
-@@ -1555,10 +2439,27 @@ var DrawingController = class {
+         return !!b && distToLine(p, a, b) <= t;
        case "Rectangle":
        case "PriceRange":
++      case "VolumeProfile":
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
 +      case "LongPosition":
 +      case "ShortPosition":
@@ -1329,7 +1352,7 @@ index 773eea4..ec1f7ae 100644
        case "Triangle":
          return !!b && !!c && (distToSegment(p, a, b) <= t || distToSegment(p, b, c) <= t || distToSegment(p, c, a) <= t);
        case "ParallelChannel": {
-@@ -1567,7 +2468,29 @@ var DrawingController = class {
+@@ -1567,7 +2484,29 @@ var DrawingController = class {
          return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
        }
        case "FibRetracement":
@@ -1361,16 +1384,18 @@ index 773eea4..ec1f7ae 100644
          return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
        default:
 diff --git a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
-index e58972e..ac0e8c0 100644
+index e58972e..8a1a5df 100644
 --- a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
 +++ b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
-@@ -799,11 +799,19 @@ var TOOL_POINTS = {
+@@ -799,11 +799,21 @@ var TOOL_POINTS = {
    Triangle: 3,
    ParallelChannel: 3,
    Arrow: 2,
 +  Text: 1,
    PriceRange: 2,
    DateRange: 2,
++  // AlphaTrade: natažený volume profil — úsek času, profil kreslí aplikace (order flow).
++  VolumeProfile: 2,
 +  LongPosition: 1,
 +  ShortPosition: 1,
    FibRetracement: 2,
@@ -1385,7 +1410,7 @@ index e58972e..ac0e8c0 100644
  var DEFAULT_STYLE = {
    color: "#2962ff",
    width: 2,
-@@ -812,6 +820,205 @@ var DEFAULT_STYLE = {
+@@ -812,6 +822,205 @@ var DEFAULT_STYLE = {
  };
  var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
  var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
@@ -1591,7 +1616,7 @@ index e58972e..ac0e8c0 100644
  
  // src/drawing/geometry.ts
  function distToSegment(p, a, b) {
-@@ -932,6 +1139,7 @@ var DrawingEngine = class {
+@@ -932,6 +1141,7 @@ var DrawingEngine = class {
    }
    /** Commit the draft (or a complete one-point drawing) as a real drawing. */
    commit(drawing) {
@@ -1599,7 +1624,7 @@ index e58972e..ac0e8c0 100644
      this.drawings.push(drawing);
      this.draft = null;
      this.activeTool = null;
-@@ -954,7 +1162,9 @@ var DrawingEngine = class {
+@@ -954,7 +1164,9 @@ var DrawingEngine = class {
    setPoints(id, points) {
      const d = this.getById(id);
      if (!d) return;
@@ -1610,7 +1635,7 @@ index e58972e..ac0e8c0 100644
      this.emit();
    }
    setStyle(id, patch) {
-@@ -1042,8 +1252,9 @@ var DrawingEngine = class {
+@@ -1042,8 +1254,9 @@ var DrawingEngine = class {
  
  // src/drawing/DrawingPrimitive.ts
  var Renderer = class {
@@ -1621,7 +1646,7 @@ index e58972e..ac0e8c0 100644
    }
    draw(target) {
      target.useBitmapCoordinateSpace((scope) => {
-@@ -1053,6 +1264,8 @@ var Renderer = class {
+@@ -1053,6 +1266,8 @@ var Renderer = class {
        const BIG = (W + H) * 4;
        for (const s of this.shapes) {
          const { style, tool } = s.drawing;
@@ -1630,7 +1655,7 @@ index e58972e..ac0e8c0 100644
          const a = s.anchors[0];
          const b = s.anchors[1];
          const c = s.anchors[2];
-@@ -1067,42 +1280,54 @@ var Renderer = class {
+@@ -1067,42 +1282,54 @@ var Renderer = class {
          ctx.strokeStyle = style.color;
          ctx.fillStyle = style.fill ?? "transparent";
          ctx.lineWidth = Math.max(1, style.width) * hpr;
@@ -1696,7 +1721,27 @@ index e58972e..ac0e8c0 100644
              }
              break;
            case "Rectangle":
-@@ -1129,6 +1354,37 @@ var Renderer = class {
+@@ -1117,6 +1344,19 @@ var Renderer = class {
+               ctx.strokeRect(x, y, w, h);
+             }
+             break;
++          case "VolumeProfile":
++            if (ax != null && ay != null && bx != null && by != null) {
++              const x = Math.min(ax, bx);
++              const y = Math.min(ay, by);
++              const w = Math.abs(bx - ax);
++              const h = Math.abs(by - ay);
++              ctx.save();
++              ctx.globalAlpha = 0.85;
++              ctx.setLineDash([5 * hpr, 4 * hpr]);
++              ctx.strokeRect(x, y, w, h);
++              ctx.restore();
++            }
++            break;
+           case "Circle":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const ecx = (ax + bx) / 2;
+@@ -1129,6 +1369,37 @@ var Renderer = class {
                ctx.stroke();
              }
              break;
@@ -1734,7 +1779,7 @@ index e58972e..ac0e8c0 100644
            case "Triangle":
              if (ax != null && ay != null && bx != null && by != null && cx != null && cy != null) {
                ctx.beginPath();
-@@ -1197,14 +1453,195 @@ var Renderer = class {
+@@ -1197,14 +1468,195 @@ var Renderer = class {
                }
              }
              break;
@@ -1937,7 +1982,7 @@ index e58972e..ac0e8c0 100644
                }
              }
              break;
-@@ -1224,17 +1661,103 @@ var Renderer = class {
+@@ -1224,17 +1676,103 @@ var Renderer = class {
            default:
              if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
          }
@@ -2048,7 +2093,7 @@ index e58972e..ac0e8c0 100644
              ctx.fill();
              ctx.stroke();
            }
-@@ -1250,6 +1773,91 @@ function line(ctx, x1, y1, x2, y2) {
+@@ -1250,6 +1788,91 @@ function line(ctx, x1, y1, x2, y2) {
    ctx.lineTo(x2, y2);
    ctx.stroke();
  }
@@ -2140,7 +2185,7 @@ index e58972e..ac0e8c0 100644
  function norm(dx, dy) {
    const len = Math.hypot(dx, dy) || 1;
    return { x: dx / len, y: dy / len };
-@@ -1266,24 +1874,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
+@@ -1266,24 +1889,52 @@ function arrowHead(ctx, x1, y1, x2, y2, size) {
    ctx.stroke();
  }
  var PaneView = class {
@@ -2196,7 +2241,7 @@ index e58972e..ac0e8c0 100644
    }
    attached(param) {
      this.chart = param.chart;
-@@ -1296,31 +1932,74 @@ var DrawingPrimitive = class {
+@@ -1296,31 +1947,74 @@ var DrawingPrimitive = class {
      this.requestUpdate = null;
    }
    paneViews() {
@@ -2280,7 +2325,7 @@ index e58972e..ac0e8c0 100644
      const y = this.series.priceToCoordinate(p.price);
      return { x: x == null ? null : x, y: y == null ? null : y };
    }
-@@ -1359,11 +2038,25 @@ var DrawingController = class {
+@@ -1359,11 +2053,25 @@ var DrawingController = class {
      this.el = null;
      this.primitive = null;
      this.drag = null;
@@ -2306,7 +2351,7 @@ index e58972e..ac0e8c0 100644
    }
    init(ctx) {
      this.chart = ctx.chart;
-@@ -1382,13 +2075,33 @@ var DrawingController = class {
+@@ -1382,13 +2090,33 @@ var DrawingController = class {
      const down = (e) => this.onDown(e);
      const move = (e) => this.onMove(e);
      const up = () => this.onUp();
@@ -2340,7 +2385,7 @@ index e58972e..ac0e8c0 100644
      this.cleanup.push(() => window.removeEventListener("mouseup", up));
      this.cleanup.push(() => window.removeEventListener("keydown", key));
    }
-@@ -1402,6 +2115,7 @@ var DrawingController = class {
+@@ -1402,6 +2130,7 @@ var DrawingController = class {
        }
      }
      this.engine.destroy();
@@ -2348,7 +2393,7 @@ index e58972e..ac0e8c0 100644
      this.chart = null;
      this.series = null;
      this.el = null;
-@@ -1409,15 +2123,33 @@ var DrawingController = class {
+@@ -1409,15 +2138,33 @@ var DrawingController = class {
    }
    // ── pointer / keyboard ───────────────────────────────────────────────────────
    onDown(e) {
@@ -2384,7 +2429,7 @@ index e58972e..ac0e8c0 100644
        if (need === 1) {
          this.engine.commit({
            id: this.engine.newDrawingId(),
-@@ -1441,30 +2173,66 @@ var DrawingController = class {
+@@ -1441,30 +2188,66 @@ var DrawingController = class {
        return;
      }
      const hit = this.hitTest(e.offsetX, e.offsetY);
@@ -2458,7 +2503,7 @@ index e58972e..ac0e8c0 100644
      } else {
        const dt = dp.time - this.drag.last.time;
        const dpr = dp.price - this.drag.last.price;
-@@ -1472,39 +2240,121 @@ var DrawingController = class {
+@@ -1472,39 +2255,121 @@ var DrawingController = class {
        this.engine.setPoints(this.drag.id, points);
      }
      this.drag.last = dp;
@@ -2584,7 +2629,7 @@ index e58972e..ac0e8c0 100644
      const y = this.series.priceToCoordinate(p.price);
      if (x == null || y == null) return null;
      return { x, y };
-@@ -1513,27 +2363,54 @@ var DrawingController = class {
+@@ -1513,27 +2378,54 @@ var DrawingController = class {
      const p = { x: px, y: py };
      const list = this.engine.getDrawings();
      const selId = this.engine.getSelectedId();
@@ -2649,7 +2694,7 @@ index e58972e..ac0e8c0 100644
      const t = this.tol;
      switch (d.tool) {
        case "HorizontalLine":
-@@ -1547,6 +2424,13 @@ var DrawingController = class {
+@@ -1547,17 +2439,42 @@ var DrawingController = class {
        case "TrendLine":
        case "Arrow":
          return !!b && distToSegment(p, a, b) <= t;
@@ -2663,9 +2708,10 @@ index e58972e..ac0e8c0 100644
        case "Ray":
          return !!b && distToRay(p, a, b) <= t;
        case "ExtendedLine":
-@@ -1554,10 +2438,27 @@ var DrawingController = class {
+         return !!b && distToLine(p, a, b) <= t;
        case "Rectangle":
        case "PriceRange":
++      case "VolumeProfile":
          return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
 +      case "LongPosition":
 +      case "ShortPosition":
@@ -2691,7 +2737,7 @@ index e58972e..ac0e8c0 100644
        case "Triangle":
          return !!b && !!c && (distToSegment(p, a, b) <= t || distToSegment(p, b, c) <= t || distToSegment(p, c, a) <= t);
        case "ParallelChannel": {
-@@ -1566,7 +2467,29 @@ var DrawingController = class {
+@@ -1566,7 +2483,29 @@ var DrawingController = class {
          return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
        }
        case "FibRetracement":

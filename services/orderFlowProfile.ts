@@ -155,3 +155,15 @@ export function autoRowTicks(pixelsPerTick: number, minPixels = 3): number {
   for (const ticks of [1, 2, 4, 8, 20, 40, 80, 200, 400]) if (ticks * pixelsPerTick >= minPixels) return ticks;
   return 400;
 }
+
+/** Nejvyšší a nejnižší cena (v jednotkách ceny), na které se v úseku [fromSec, toSec) obchodovalo; null bez dat. */
+export function orderFlowPriceRange(store: { minutes(from: number, to: number): number[]; minuteCells(minute: number): ArrayLike<number> | undefined; tickSize: number }, fromSec: number, toSec: number): { high: number; low: number } | null {
+  let low = Infinity; let high = -Infinity;
+  for (const minute of store.minutes(fromSec, toSec)) {
+    const cells = store.minuteCells(minute);
+    if (!cells || cells.length < 4) continue;
+    if (cells[0] < low) low = cells[0];
+    if (cells[cells.length - 4] > high) high = cells[cells.length - 4];
+  }
+  return Number.isFinite(low) ? { high: high * store.tickSize, low: low * store.tickSize } : null;
+}

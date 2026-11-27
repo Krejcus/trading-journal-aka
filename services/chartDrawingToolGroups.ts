@@ -49,7 +49,7 @@ export const CHART_DRAWING_TOOL_GROUPS: readonly ChartDrawingToolGroup[] = [
   {
     id: 'measure',
     title: 'Měření',
-    tools: ['PriceRange', 'DateRange'],
+    tools: ['PriceRange', 'DateRange', 'VolumeProfile'],
     defaultTool: 'PriceRange',
     dividerBefore: true,
   },

@@ -1179,6 +1179,10 @@ const PriceRangeToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}
 const DateRangeToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M4.5 7v10M19.5 7v10M7 12h10M9.5 9.5 7 12l2.5 2.5M14.5 9.5 17 12l-2.5 2.5" />
 </ToolSvg>;
+/** Natažený volume profil: vodorovné pruhy objemu v úseku, nejdelší (POC) uprostřed. */
+const VolumeProfileToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
+  <path d="M4 4.5v15M4 7h6M4 10h10M4 13h15M4 16h8M4 19h4" />
+</ToolSvg>;
 const LongPositionToolIcon: React.FC<ToolIconProps> = props => <ToolSvg {...props}>
   <path d="M5.7 5.5H21M3 18.5h18" />
   <circle cx="4.25" cy="5.5" r="1.45" />
@@ -1231,6 +1235,7 @@ export const ALPHATRADE_DRAWING_TOOLS: AlphaTradeDrawingTool[] = [
   { id: 'ParallelChannel', title: 'Paralelní kanál', icon: ParallelChannelToolIcon, dividerBefore: true },
   { id: 'PriceRange', title: 'Cenové rozpětí', icon: PriceRangeToolIcon },
   { id: 'DateRange', title: 'Časové rozpětí', icon: DateRangeToolIcon },
+  { id: 'VolumeProfile', title: 'Volume profil', icon: VolumeProfileToolIcon },
   { id: 'LongPosition', title: 'Long position', icon: LongPositionToolIcon },
   { id: 'ShortPosition', title: 'Short position', icon: ShortPositionToolIcon },
   { id: 'FibRetracement', title: 'Fibonacci retracement', icon: FibToolIcon },

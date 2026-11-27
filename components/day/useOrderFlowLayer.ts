@@ -5,13 +5,16 @@ import { orderFlowLink } from '../../lib/orderFlowLink';
 import { indicatorVisibleOnTimeframe, type AlphaTradeIndicatorSettings } from '../../services/chartIndicatorSettings';
 import type { MarketTimeframe } from '../../services/marketDataCalculations';
 import { createOrderFlowPrimitives, type OrderFlowPrimitives, type OrderFlowRange } from '../../services/orderFlowPrimitive';
+import { orderFlowPriceRange } from '../../services/orderFlowProfile';
 
-/** Kreslicí nástroj, jehož úsek ukáže natažený volume profil. */
-const RANGE_TOOL = 'DateRange';
+/** Kreslicí nástroj nataženého volume profilu (vlastní nástroj v liště kreslení, Měření → Volume profil). */
+const RANGE_TOOL = 'VolumeProfile';
+/** Za jak dlouho po poslední změně vybrané kresby se rámeček přichytí k cenovému rozsahu dat. */
+const SNAP_DELAY_MS = 400;
 
 /**
- * Indikátory Bubliny a Volume profil v LIVE grafu (PC i telefon) a natažený profil v nástroji
- * Časové rozpětí. Data jdou z místní služby Rithmicu stávajícím spojením appky; odběr se přihlásí,
+ * Indikátory Bubliny a Volume profil v LIVE grafu (PC i telefon) a natažený profil (nástroj Volume
+ * profil v liště kreslení). Data jdou z místní služby Rithmicu stávajícím spojením appky; odběr se přihlásí,
  * jen když je některý indikátor zapnutý nebo je v grafu natažený úsek, a odhlásí, když je nikdo
  * nechce. Vrstvy se připojí jednou a čtou přes refy — s tickem, se změnou nastavení ani při tažení
  * úseku se nepřestavují a graf se kvůli nim nepřekresluje v Reactu.
@@ -45,10 +48,34 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
   // Jen „je v grafu nějaký úsek“ — mění se zřídka. Samotné úseky (i při tažení) jdou přes ref.
   const [hasRanges, setHasRanges] = useState(false);
 
-  const rangeTool = live && settings.volumeProfile.rangeTool;
+  const rangeTool = live;
   useEffect(() => {
     const engine = rangeTool ? apiRef.current?.drawing?.engine : null;
     if (!engine) { rangesRef.current = []; setHasRanges(false); primitivesRef.current?.invalidate(); return undefined; }
+    let snapTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * Rámeček kresby si uživatel natáhne přes čas; výška se po chvíli klidu přichytí k nejvyšší a nejnižší
+     * ceně, na které se v úseku obchodovalo — tak jde profil vybrat a posouvat klepnutím kamkoli do něj.
+     * Jen u kresby vybrané TADY (právě nakreslená nebo upravovaná): kresby z jiného zařízení se nepřepisují,
+     * aby se dvě zařízení s různě dlouhou historií o výšku nepřetahovala.
+     */
+    const snap = () => {
+      snapTimer = null;
+      if (engine.getDraft() !== null || engine.getActiveTool() !== null) return;
+      const id = engine.getSelectedId();
+      const drawing = id ? engine.getById(id) : undefined;
+      if (!drawing || drawing.tool !== RANGE_TOOL || drawing.points.length < 2) return;
+      const store = orderFlowLink.store;
+      const a = Number(drawing.points[0].time); const b = Number(drawing.points[1].time);
+      if (!store.symbol || !Number.isFinite(a) || !Number.isFinite(b)) return;
+      const range = orderFlowPriceRange(store, Math.floor(Math.min(a, b) / 60) * 60, Math.floor(Math.max(a, b) / 60) * 60 + 60);
+      if (!range) return;
+      const tick = store.tickSize;
+      const top = range.high + tick / 2; const bottom = range.low - tick / 2;
+      const current = [Number(drawing.points[0].price), Number(drawing.points[1].price)];
+      if (Math.abs(Math.max(...current) - top) < tick / 2 && Math.abs(Math.min(...current) - bottom) < tick / 2) return;
+      engine.setPoints(drawing.id, [{ ...drawing.points[0], price: top }, { ...drawing.points[1], price: bottom }]);
+    };
     const sync = () => {
       const selected = engine.getSelectedId();
       const draft = engine.getDraft();
@@ -62,9 +89,18 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
       rangesRef.current = ranges;
       setHasRanges(ranges.length > 0);
       primitivesRef.current?.invalidate();
+      if (ranges.some((range) => range.selected)) {
+        if (snapTimer !== null) clearTimeout(snapTimer);
+        snapTimer = setTimeout(snap, SNAP_DELAY_MS);
+      }
     };
     sync();
-    return engine.onChange(sync);
+    const unsubscribe = engine.onChange(sync);
+    // Data k právě nakreslenému úseku můžou dorazit až po něm (snímek) — přichytit i potom.
+    const unsubscribeData = orderFlowLink.store.subscribe(() => {
+      if (snapTimer === null && rangesRef.current.some((range) => range.selected)) snapTimer = setTimeout(snap, SNAP_DELAY_MS);
+    });
+    return () => { unsubscribe(); unsubscribeData(); if (snapTimer !== null) clearTimeout(snapTimer); };
   }, [apiRef, apiEpoch, rangeTool]);
 
   const bubblesOn = live && settings.bubbles.enabled;
