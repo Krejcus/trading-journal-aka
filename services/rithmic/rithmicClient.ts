@@ -638,6 +638,52 @@ export class RithmicClient {
     return [...byTime.values()].sort((a, b) => a.time - b.time);
   }
 
+  /**
+   * Historie jednotlivých obchodů (history plant, šablona 206 → 207, tick bar po 1 obchodu). Jen čtení, jen
+   * k zobrazení order flow. Vrací řádky tak, jak přišly (čas na mikrosekundy, cena, objem, bid/ask objem =
+   * strana agresora), a konečnou odpověď kvůli `request_key` pro pokračování. Hloubku, strop řádků na žádost
+   * a význam pokračování měří `scripts/rithmic/measureTickHistory.ts` — do jejich změření nic jiného nevolá.
+   */
+  async tickBarReplay(request: { symbol: string; exchange: string; fromSec: number; toSec: number; maxCount?: number; resume?: boolean; timeoutMs?: number }): Promise<{
+    rows: Array<{ sec: number; usecs: number; seq: number | null; stamps: number; price: number; volume: number; bidVolume: number; askVolume: number; trades: number }>;
+    terminal: { rpCode: string[]; requestKey: string; fields: RithmicFields } | null;
+    sentAt: number; completedAt: number;
+  }> {
+    const response = await this.plant('history').request(206, {
+      symbol: request.symbol,
+      exchange: request.exchange,
+      bar_type: rithmicEnum('RequestTickBarReplay', 'BarType', 'TICK_BAR'),
+      bar_sub_type: rithmicEnum('RequestTickBarReplay', 'BarSubType', 'REGULAR'),
+      bar_type_specifier: '1',
+      start_index: Math.floor(request.fromSec),
+      finish_index: Math.floor(request.toSec),
+      ...(request.maxCount !== undefined ? { user_max_count: request.maxCount } : {}),
+      // Žádost nemá pole request_key; `resume_bars` má podle protokolu navázat na předchozí zastropovanou odpověď.
+      ...(request.resume ? { resume_bars: true } : {}),
+      direction: rithmicEnum('RequestTickBarReplay', 'Direction', 'FIRST'),
+      time_order: rithmicEnum('RequestTickBarReplay', 'TimeOrder', 'FORWARDS'),
+    }, { timeoutMs: request.timeoutMs ?? 60_000, settleQuietMs: 2_000 });
+    // Časy a pořadí jsou v protokolu opakovaná pole; u tick baru po 1 obchodu čekáme jednu hodnotu.
+    const first = (v: unknown): unknown => (Array.isArray(v) ? v[0] : v);
+    const rows = response.rows
+      .map((m) => ({
+        sec: num(first(m.fields.data_bar_ssboe)) ?? 0,
+        usecs: num(first(m.fields.data_bar_usecs)) ?? 0,
+        seq: num(Number(first(m.fields.data_bar_seq_num))),
+        stamps: Array.isArray(m.fields.data_bar_ssboe) ? m.fields.data_bar_ssboe.length : 1,
+        price: num(m.fields.close_price) ?? num(m.fields.open_price) ?? 0,
+        volume: num(m.fields.volume) ?? 0,
+        bidVolume: num(m.fields.bid_volume) ?? 0,
+        askVolume: num(m.fields.ask_volume) ?? 0,
+        trades: num(m.fields.num_trades) ?? 0,
+      }))
+      .filter((row) => row.sec > 0 && row.price > 0);
+    const terminal = response.terminal
+      ? { rpCode: rithmicStrings(response.terminal.fields.rp_code), requestKey: str(response.terminal.fields.request_key), fields: response.terminal.fields }
+      : null;
+    return { rows, terminal, sentAt: response.sentAt, completedAt: response.completedAt };
+  }
+
   async showBrackets(accountId: string): Promise<Array<{ basketId: string; targetTicks: number | null; targetQuantity: number | null; targetQuantityReleased: number | null }>> {
     const response = await this.plant('order').request(338, this.accountFields(accountId));
     return [...response.rows, ...(response.terminal ? [response.terminal] : [])]

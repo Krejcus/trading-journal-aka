@@ -361,6 +361,26 @@ describe('RithmicClient', () => {
     expect(Date.now() - started).toBeLessThan(5_000); // skončilo po tichu, ne až po vypršení
   });
 
+  it('historie obchodů: tick bar po 1 obchodu, strana z bid/ask objemu, konečná odpověď s request_key', async () => {
+    const { server, client } = setup({}, 10_000);
+    await client.connect(['history']);
+    const socket = server.sockets.find((x) => x.readyState === 1)!;
+    const pending = client.tickBarReplay({ symbol: 'NQZ6', exchange: 'CME', fromSec: 1_000, toSec: 2_000, resume: true });
+    await flush();
+    const request = server.received.find((r) => r.templateId === 206)!;
+    expect(request.fields).toMatchObject({ symbol: 'NQZ6', exchange: 'CME', bar_type: 1, bar_sub_type: 1, bar_type_specifier: '1', start_index: 1_000, finish_index: 2_000, resume_bars: true });
+    const userMsg = request.fields.user_msg as string[];
+    socket.push(207, { user_msg: userMsg, rq_handler_rp_code: ['0'], data_bar_ssboe: [1_100], data_bar_usecs: [250], close_price: 25_000.25, volume: 3, ask_volume: 3, bid_volume: 0, num_trades: 1 });
+    socket.push(207, { user_msg: userMsg, rq_handler_rp_code: ['0'], data_bar_ssboe: [1_101], data_bar_usecs: [0], close_price: 25_000, volume: 2, ask_volume: 0, bid_volume: 2, num_trades: 1 });
+    socket.push(207, { user_msg: userMsg, rp_code: ['0'], request_key: 'k1' });
+    const result = await pending;
+    expect(result.rows).toEqual([
+      { sec: 1_100, usecs: 250, seq: null, stamps: 1, price: 25_000.25, volume: 3, bidVolume: 0, askVolume: 3, trades: 1 },
+      { sec: 1_101, usecs: 0, seq: null, stamps: 1, price: 25_000, volume: 2, bidVolume: 2, askVolume: 0, trades: 1 },
+    ]);
+    expect(result.terminal).toMatchObject({ rpCode: ['0'], requestKey: 'k1' });
+  });
+
   it('bez jediného řádku čtení historie po tichu NEskončí — vyprší jako neznámé', async () => {
     const { client } = setup({}, 2_000);
     await client.connect(['history']);

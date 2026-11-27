@@ -490,6 +490,7 @@ export function createFakeRithmicServer(options: FakeRithmicOptions = {}) {
         socket.push(325, { user_msg: userMsg, rp_code: ['7', 'no data'] });
         return;
       case 202:
+      case 206:
         // Historie: test sám pošle řádky (a případně nic) — jako LucidTrading 19. 11., který závěrečnou odpověď neposlal.
         return;
       default:
