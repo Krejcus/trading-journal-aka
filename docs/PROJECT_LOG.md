@@ -288,6 +288,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-27 — Claude: kresby do vteřiny, krátké štítky a magnet NASAZENY (web + iPhone 09478dea)
+
+- Na Filipovo „nasaď vše najednou a zapni to“: push `09478dea` na main (web na
+  produkci ověřen — nasazený bundle obsahuje odběr `chart-drawings-`), migrace
+  `20261126180000_chart_drawings_realtime.sql` aplikována na produkci
+  (`chart_drawings` je v publikaci `supabase_realtime`, historie migrací
+  doplněna přes `migration repair`), iPhone build z téhož commitu nainstalován.
+- Nasazeno tím: okamžitý propis kreseb, krátké štítky příkazů v telefonním LIVE
+  grafu (dc17a6bc), magnet při přesunu celé kresby, oprava zdvojených boxů po
+  přepnutí TF.
+- **Neověřeno:** skutečné zpoždění kresby telefon ↔ PC (testuje Filip); čára
+  návrhu vstupu s čárkovaným obrysem na telefonu.
+- Past: `migration repair` z Documents nenajde soubor migrace (zastaralý
+  checkout) — pustit z dočasné složky s kopií `supabase/.temp` a souboru migrace.
+
 ### 2026-11-26 — Claude: kresby mezi zařízeními do vteřiny (NENASAZENO, migrace neaplikovaná)
 
 - **Proč:** kresba z telefonu dorazila na PC za 1,5 s až ~60 s — odeslání
