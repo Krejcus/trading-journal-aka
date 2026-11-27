@@ -29,6 +29,14 @@ const KEYCHAIN = arg('keychain', TEST ? 'alphatrade-rithmic-test' : 'alphatrade-
 const MAX_REQUESTS = Math.min(40, Math.max(5, Number(arg('max-requests', '30')) || 30));
 if (!SYSTEM || !USER) { console.error('Chybí --system nebo --user.'); process.exit(2); }
 if (!TEST && !/^rprotocol(-[a-z0-9]+)?\.rithmic\.com$/.test(GATEWAY)) { console.error('Neznámá brána.'); process.exit(2); }
+// Pojistka: stejné přihlášení jako služba — když pro stejný systém běží, sonda se vůbec nepřipojí.
+try {
+  const running = execFileSync('pgrep', ['-fl', 'devTradeServer'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (running.split('\n').some((line) => line.includes(`--system ${SYSTEM}`))) {
+    console.error(`Pro systém "${SYSTEM}" běží služba — sonda se nepřipojí. Nejdřív službu zastav.`);
+    process.exit(2);
+  }
+} catch { /* pgrep nic nenašel */ }
 
 // ── Kontrakt NQ podle data (čtvrtletní H/M/U/Z, přechod 8 dní před expirací = 3. pátek) ──
 const MONTH_CODES: Record<number, string> = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
