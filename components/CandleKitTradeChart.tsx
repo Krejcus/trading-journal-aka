@@ -3178,7 +3178,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const orderFlowLive = orderFlow && !replayActive;
   useOrderFlowLayer({
     apiRef, apiEpoch: chartApiEpoch, live: orderFlowLive, settings: indicatorSettings, timeframe,
-    candlesRef: visibleCandlesRef, isDark, phone: phoneLayout,
+    candlesRef: visibleCandlesRef, isDark, phone: phoneLayout, leftInset: hideDrawingToolbar ? 0 : 56,
   });
   // Legend lookup is rebuilt only when the rendered candle series changes,
   // never on unrelated toolbar/hover renders. Value copies preserve provider

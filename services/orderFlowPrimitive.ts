@@ -28,6 +28,8 @@ export interface OrderFlowLayerInputs {
   candles: () => ReadonlyArray<{ time: number; high: number; low: number }>;
   /** Natažené profily (kreslicí nástroj): úseky v sekundách. */
   ranges?: () => readonly OrderFlowRange[];
+  /** Šířka pruhu vlevo, který překrývá lišta kreslení — přichycený profil začíná až za ním. */
+  leftInset?: () => number;
   isDark: () => boolean;
 }
 
@@ -41,6 +43,7 @@ export interface OrderFlowPrimitives {
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const PULSE_MS = 700;
+const LABEL_MIN_Y = 88;
 
 const rgba = (hex: string, alpha: number): string => {
   const value = hex.trim().replace('#', '');
@@ -226,7 +229,10 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           const xFrom = xOfTime(from, 1, timeframe, stepSec);
           const xTo = xOfTime(to - 60, -1, timeframe, stepSec);
           if (xFrom === null || xTo === null) return;
-          const left = xFrom - barSpacing / 2; const right = Math.max(xTo + barSpacing / 2, left + barSpacing);
+          const trueLeft = xFrom - barSpacing / 2; const right = Math.max(xTo + barSpacing / 2, trueLeft + barSpacing);
+          // Začátek úseku odrolovaný vlevo mimo obraz: profil se přichytí k levému okraji, dokud je úsek vidět.
+          const inset = inputs.leftInset?.() ?? 0;
+          const left = !boxed && trueLeft < inset && right > inset + 48 ? inset : trueLeft;
           const profile = profileFor(id, from, to, rowTicks, settings.valueAreaPercent);
           if (!profile) {
             if (boxed) {
@@ -235,7 +241,27 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
             }
             return;
           }
-          const width = Math.max(24, Math.min(280, (right - left) * settings.widthPercent / 100));
+          const nakedPoc = (fromX: number, y: number) => {
+            const pocPrice = ((profile.rowMin + profile.poc) * profile.rowTicks + (profile.rowTicks - 1) / 2) * tickSize;
+            if (pocTouched(`${id}|${rowTicks}`, pocPrice, to)) return;
+            const lineY = Math.round(y) + 0.5;
+            context.save(); context.setLineDash([6, 4]); context.strokeStyle = rgba(settings.pocColor, 0.75); context.lineWidth = 1;
+            context.beginPath(); context.moveTo(Math.max(0, fromX), lineY); context.lineTo(mediaSize.width, lineY); context.stroke(); context.restore();
+            if (settings.showLabels) {
+              context.fillStyle = rgba(settings.pocColor, 0.95); context.font = `10px ${FONT}`;
+              const text = `nPOC ${label}`; context.fillText(text, mediaSize.width - context.measureText(text).width - 6, lineY - 4);
+              context.font = `11px ${FONT}`;
+            }
+          };
+          if (right <= 0) {
+            // Celý úsek je vlevo mimo obraz: zbývá jen neotestované POC, které do záběru zasahuje.
+            if (closed && settings.extendPoc && !boxed) {
+              const y = series.priceToCoordinate(((profile.rowMin + profile.poc) * profile.rowTicks + (profile.rowTicks - 1) / 2) * tickSize);
+              if (y !== null && y >= 0 && y <= mediaSize.height) nakedPoc(0, y);
+            }
+            return;
+          }
+          const width = Math.max(24, Math.min(280, (right - trueLeft) * settings.widthPercent / 100, Math.max(24, right - left)));
           const span = drawProfile(context, profile, settings, left + 1, width, mediaSize.height, tickSize);
           if (boxed) {
             context.fillStyle = `rgba(41,98,255,${selected ? 0.08 : 0.04})`; context.fillRect(left, span.top, right - left, span.bottom - span.top);
@@ -245,23 +271,22 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           const complete = store.covered(nominalFrom, Math.max(nominalFrom, to - 60));
           if (settings.showLabels || boxed) {
             const pocPrice = ((profile.rowMin + profile.poc) * profile.rowTicks) * tickSize;
-            const text = `${label}  Δ ${signed(profile.delta)} · ${compact(profile.total)}${boxed ? ` · POC ${pocPrice.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ''}${complete ? '' : ' · neúplný'}`;
-            context.fillStyle = complete ? textColor : 'rgba(245,176,65,.95)';
-            context.fillText(text, Math.max(4, left + 4), Math.max(12, span.top - 6));
-          }
-          if (closed && settings.extendPoc && span.pocY !== null && !boxed) {
-            const pocPrice = ((profile.rowMin + profile.poc) * profile.rowTicks + (profile.rowTicks - 1) / 2) * tickSize;
-            if (!pocTouched(`${id}|${rowTicks}`, pocPrice, to)) {
-              const y = Math.round(span.pocY) + 0.5;
-              context.save(); context.setLineDash([6, 4]); context.strokeStyle = rgba(settings.pocColor, 0.75); context.lineWidth = 1;
-              context.beginPath(); context.moveTo(Math.max(0, right), y); context.lineTo(mediaSize.width, y); context.stroke(); context.restore();
-              if (settings.showLabels) {
-                context.fillStyle = rgba(settings.pocColor, 0.95); context.font = `10px ${FONT}`;
-                const text = `nPOC ${label}`; context.fillText(text, mediaSize.width - context.measureText(text).width - 6, y - 4);
-                context.font = `11px ${FONT}`;
-              }
+            const flag = complete ? '' : ' · neúplný';
+            // Úzký úsek (telefon, vyšší timeframe): popisek se zkrátí, aby nepřelézal do sousedního úseku.
+            const room = Math.max(40, right - left - 8);
+            const text = [
+              `${label}  Δ ${signed(profile.delta)} · ${compact(profile.total)}${boxed ? ` · POC ${pocPrice.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ''}${flag}`,
+              `${label}  Δ ${signed(profile.delta)}${flag}`,
+              `${label}${flag}`,
+              label,
+            ].find((candidate) => context.measureText(candidate).width <= room);
+            if (text) {
+              context.fillStyle = complete ? textColor : 'rgba(245,176,65,.95)';
+              // Horní pruh grafu patří legendě — popisek pod něj.
+              context.fillText(text, Math.max(4, left + 4), Math.max(LABEL_MIN_Y, span.top - 6));
             }
           }
+          if (closed && settings.extendPoc && span.pocY !== null && !boxed) nakedPoc(right, span.pocY);
         };
 
         if (showPeriodic) {

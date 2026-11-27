@@ -14,7 +14,7 @@ import { createOrderFlowPrimitives, type OrderFlowPrimitives, type OrderFlowRang
  *
  * JEN ZOBRAZENÍ (INV-UI-04): nic odsud nevstupuje do cen ani stavu pro příkazy.
  */
-export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe, candlesRef, rangesRef, rangesKey = '', isDark, phone }: {
+export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe, candlesRef, rangesRef, rangesKey = '', isDark, phone, leftInset = 0 }: {
   apiRef: MutableRefObject<ChartViewApi | null>;
   /** Roste, když je graf (znovu) připravený. */
   apiEpoch: number;
@@ -29,6 +29,8 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
   rangesKey?: string;
   isDark: boolean;
   phone: boolean;
+  /** Šířka pruhu vlevo pod lištou kreslení (px). */
+  leftInset?: number;
 }) {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -36,6 +38,8 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
   timeframeRef.current = timeframe;
   const darkRef = useRef(isDark);
   darkRef.current = isDark;
+  const insetRef = useRef(leftInset);
+  insetRef.current = leftInset;
   const primitivesRef = useRef<OrderFlowPrimitives | null>(null);
 
   const bubblesOn = live && settings.bubbles.enabled;
@@ -70,6 +74,7 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
         candles: () => candlesRef.current,
         ranges: () => rangesRef?.current ?? [],
         isDark: () => darkRef.current,
+        leftInset: () => insetRef.current,
       });
       series.attachPrimitive(primitives.profile);
       series.attachPrimitive(primitives.bubbles);
@@ -86,5 +91,5 @@ export function useOrderFlowLayer({ apiRef, apiEpoch, live, settings, timeframe,
   }, [apiRef, apiEpoch, wanted, candlesRef, rangesRef]);
 
   // Změna nastavení, timeframu, vzhledu nebo natažených úseků: jen překreslit.
-  useEffect(() => { primitivesRef.current?.invalidate(); }, [settings.bubbles, settings.volumeProfile, settings.levels, timeframe, isDark, rangesKey]);
+  useEffect(() => { primitivesRef.current?.invalidate(); }, [settings.bubbles, settings.volumeProfile, settings.levels, timeframe, isDark, rangesKey, leftInset]);
 }
