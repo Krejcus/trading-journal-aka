@@ -288,10 +288,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
-### 2026-11-27 — Claude: order flow v LIVE grafu — Bubliny a Volume profil (větev, NENASAZENO)
+### 2026-11-27 — Claude: order flow v LIVE grafu — Bubliny a Volume profil (web NASAZEN 71567ef0; služba a iPhone NE)
 
-- Větev `claude/orderflow-20261127` (worktree `~/alphatrade-worktrees/orderflow-design`), nic
-  nepushnuto. Filip po náhledu `mockups/orderflow-preview.html` vybral bubliny velkých obchodů
+- **Nasazení:** na Filipovo „Ano, nasaď web“ push `71567ef0` na main (posun bez slučování, main se
+  mezitím nezměnil); Vercel produkce READY, nasazený balíček obsahuje příjem `of-snapshot`.
+  **Služba běží dál ze starého commitu bez order flow** — dokud ji Filip neposune a nespustí
+  s `ORDER_FLOW=ano`, v grafu se nic nekreslí a nabídka u obou řádků píše „služba order flow
+  neposílá“. iPhone build neproběhl (telefon má starý balíček).
+- Větev `claude/orderflow-20261127` (worktree `~/alphatrade-worktrees/orderflow-design`).
+  Filip po náhledu `mockups/orderflow-preview.html` vybral bubliny velkých obchodů
   a volume profil (i natažený); zdroj order flow je **NQ**, graf a příkazy zůstávají MNQ.
   Návrh a zdůvodnění: `docs/reviews/orderflow-profile-bubbles-design-20261127.md`.
 - **Data ověřená sondou na Lucidu 27. 11.** (pustil Filip při vypnuté službě): každý obchod MNQ
