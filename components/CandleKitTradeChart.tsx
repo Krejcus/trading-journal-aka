@@ -200,6 +200,7 @@ import { bindChartAppearanceAuth } from '../services/chartAppearanceAuth';
 import { supabase } from '../services/supabase';
 import { mergeIndicatorSettings } from '../services/chartIndicatorSettings';
 import { useOrderFlowLayer } from './day/useOrderFlowLayer';
+import { orderFlowLink } from '../lib/orderFlowLink';
 import { nearestCandleIndex } from '../services/candleSearch';
 import { journalIndicatorProfile, readTradeChartIndicators, rememberLatestIndicatorSettings, writeTradeChartIndicators } from '../services/detailIndicators';
 import {
@@ -794,13 +795,22 @@ export const WorkspaceIndicatorMenu: React.FC<{
     window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
     return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
   }, [custom.orderFlow]);
+  // Posílá místní služba order flow? (Starší služba nebo služba bez přepínače ne — řádek to řekne.)
+  const [orderFlowAvailable, setOrderFlowAvailable] = useState(() => orderFlowLink.capability !== null);
+  useEffect(() => {
+    if (!custom.orderFlow) return undefined;
+    const sync = () => setOrderFlowAvailable(orderFlowLink.capability !== null);
+    sync();
+    return orderFlowLink.subscribe(sync);
+  }, [custom.orderFlow]);
+  const orderFlowDetail = (text: string) => (orderFlowAvailable ? text : 'služba order flow neposílá (ORDER_FLOW=ano)');
   const customRows = [
     { label: 'Fair Value Gaps', detail: 'FVG', active: custom.showFvg, onClick: custom.onToggleFvg },
     { label: 'AlphaTrade levely', detail: 'PDH, PDL, PWH, PWL…', active: custom.showLevels, onClick: custom.onToggleLevels },
     { label: 'Market Structure', detail: 'CHoCH / BOS', active: custom.showStructure, onClick: custom.onToggleStructure },
     ...(custom.orderFlow ? [
-      { label: 'Bubliny', detail: 'velké obchody · order flow', active: orderFlowState.bubbles, onClick: () => toggleOrderFlowIndicator('bubbles') },
-      { label: 'Volume profil', detail: 'seance / den · order flow', active: orderFlowState.volumeProfile, onClick: () => toggleOrderFlowIndicator('volumeProfile') },
+      { label: 'Bubliny', detail: orderFlowDetail('velké obchody · order flow'), active: orderFlowState.bubbles, onClick: () => toggleOrderFlowIndicator('bubbles') },
+      { label: 'Volume profil', detail: orderFlowDetail('seance / den · order flow'), active: orderFlowState.volumeProfile, onClick: () => toggleOrderFlowIndicator('volumeProfile') },
     ] : []),
   ];
 
