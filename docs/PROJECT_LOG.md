@@ -288,6 +288,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-27 — Claude: spárování telefonu s Macem přežije přeinstalování appky (iPhone 76789bb0)
+
+- Proč: po čisté reinstalaci appky (kvůli pasti s Živými aktivitami se instaluje vždy čistě) chtěl telefon
+  pokaždé nový párovací kód. Klíč zařízení byl v Klíčence odjakživa a reinstalaci přežil, jenže adresa
+  Macu, id zařízení a rozsah byly jen v běžném úložišti appky, které reinstalace smaže.
+- Oprava (`lib/rithmicDeviceLink.ts`): při spárování se kopie těchto netajných údajů uloží i do Klíčenky;
+  při nativním startu (`index.tsx`) `restoreRithmicDeviceLink()` vrátí spárování do běžného úložiště, jen
+  když je v Klíčence obojí platné, a ohlásí to událostí (LiveDesk, telefonní relace a panel párování si ho
+  přečtou znovu). Zrušení spárování v telefonu maže i kopii. Službu ani pravidla párování to nemění:
+  odvolání na Macu platí dál a odvolané zařízení služba při prvním připojení odmítne.
+- Ověřeno na iPhonu: spárováno 17:12:49, pak čistá reinstalace 17:13:03–17:13:10 → telefon se k službě
+  připojil sám v 17:13:11. Odvolána nepoužívaná párování iPhonu `cbce8042f1e7`, `b3a1bc0374a6`,
+  `95fd7917953e` a `be53fd15cc80` (Filip); platné je jen `4fb0afb1d9c6`.
+- iPhone běží z commitu 76789bb0 (obsahuje i order flow z 01b611f5).
+
 ### 2026-11-27 — Claude: order flow v LIVE grafu — Bubliny a Volume profil (web NASAZEN 71567ef0; služba a iPhone NE)
 
 - **Nasazení:** na Filipovo „Ano, nasaď web“ push `71567ef0` na main (posun bez slučování, main se
