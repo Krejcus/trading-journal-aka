@@ -288,6 +288,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-27 — Claude: natažený volume profil jako vlastní nástroj v liště kreslení (web + iPhone)
+
+- Natažený profil už není „Časové rozpětí + přepínač v nastavení“, ale samostatný nástroj
+  **Kreslení → Měření → Volume profil** (`VolumeProfile`, 2 body). Candle-kit ho kreslí jako
+  čárkovaný obdélník (renderer + hit-test zevnitř rámečku v `patches/@getcandlekit+charts+0.1.0.patch`,
+  `.js` i `.cjs`); profil uvnitř kreslí `orderFlowPrimitive` jen s jemným podbarvením.
+- Výška rámečku se 400 ms po změně **vybrané** kresby přichytí k high/low obchodovaných cen úseku
+  (`orderFlowPriceRange`, ± půl ticku) — klik kamkoli do profilu ho vybere. Kresby z jiného zařízení
+  se nepřepisují (různě dlouhá historie by se přetahovala). Přepínač `rangeTool` z nastavení odstraněn.
+- Popisky profilů se v jednom snímku nepřekrývají (další jde o řádek níž).
+- Jen zobrazení (INV-UI-04), jádra kopírky se netýká. Ověřeno v simulaci (`rithmic-simulation`):
+  nakreslení, přichycení, posun, reload; na skutečných datech Rithmicu ověření čeká.
+
 ### 2026-11-27 — Claude: spárování telefonu s Macem přežije přeinstalování appky (iPhone 76789bb0)
 
 - Proč: po čisté reinstalaci appky (kvůli pasti s Živými aktivitami se instaluje vždy čistě) chtěl telefon
