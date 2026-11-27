@@ -4,7 +4,7 @@ import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing, DrawingToolId } from '@getcandlekit/charts';
 import { Camera, Check, ChevronDown, ClipboardCheck, Scissors, ChevronLeft, Redo2, MoreHorizontal, Settings, SlidersHorizontal, Expand, GripVertical, Lock, Shrink, Undo2, Magnet, Maximize2, Mic, Minimize2, Pause, PenLine, Play, SkipForward, StepBack, StepForward, Star, StickyNote, Trash2, Unlock, X } from 'lucide-react';
 import type { Trade } from '../../types';
-import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS } from '../CandleKitTradeChart';
+import CandleKitTradeChart, { ALPHATRADE_DRAWING_TOOLS, SHARED_INDICATOR_SETTINGS_EVENT, readOrderFlowIndicators, toggleOrderFlowIndicator, type OrderFlowIndicatorId } from '../CandleKitTradeChart';
 import ChartJumpToNow from './ChartJumpToNow';
 import GenericDrawingSettingsDialog from '../GenericDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from '../GenericDrawingFloatingToolbar';
@@ -286,7 +286,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
   // Menu ⋯ (jako „Analysis hub“ v TradingView): rozvržení, indikátory, nastavení grafu, přehrávání.
   const [hubOpen, setHubOpen] = useState(false);
   const [chartReq, setChartReq] = useState<{ pane: number; n: number } | null>(null);
-  const [indicatorReq, setIndicatorReq] = useState<{ pane: number; id: 'fvg' | 'levels' | 'structure'; n: number } | null>(null);
+  const [indicatorReq, setIndicatorReq] = useState<{ pane: number; id: 'fvg' | 'levels' | 'structure' | OrderFlowIndicatorId; n: number } | null>(null);
   const setLayout = (next: DayChartLayout) => { setLayoutState(next); writeDayChartLayout(window.localStorage, next); rememberPhoneChartView(); setMaximized(false); };
   const [sync, setSyncState] = useState<DayChartSync>(() => readDayChartSync(window.localStorage));
   const setSync = (next: DayChartSync) => { setSyncState(next); writeDayChartSync(window.localStorage, next); };
@@ -858,6 +858,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 onToggleFvg={() => toggleIndicator('fvg')}
                 onToggleLevels={() => toggleIndicator('levels')}
                 onToggleStructure={() => toggleIndicator('structure')}
+                orderFlow={Boolean(live) && !replayOn}
               />
             ) : index === 0 ? (
               <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, textAlign: 'center' }}>
@@ -1096,6 +1097,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onChartSettings={() => { setHubOpen(false); setChartReq({ pane: split ? activePane : 0, n: Date.now() }); }}
           onReplay={() => { setHubOpen(false); startReplay(); }}
           extra={live?.hubExtra}
+          orderFlow={Boolean(live)}
           scope={ctl ? { value: ctl.scope, onPick: next => { setHubOpen(false); pickScope(next); } } : null}
           onClose={() => setHubOpen(false)}
         />
@@ -1501,7 +1503,7 @@ function LayoutSheet({ layout, activeId, sync, onSync, onPick, onClose }: {
 const MAGNET_LABEL: Record<'off' | 'weak' | 'strong', string> = { off: 'vyp.', weak: 'slabý', strong: 'silný' };
 
 /** Menu ⋯ grafu dne (TradingView „Analysis hub“): vše, co se nevešlo do spodní lišty. */
-function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, extra = null, onClose }: {
+function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, onMagnet, locked, onLock, onToggleIndicator, onIndicatorSettings, onLayout, onChartSettings, onReplay, extra = null, orderFlow = false, onClose }: {
   /** Rozsah dne (Den / London / New York); bez dne null. */
   scope: { value: 'day' | 'london' | 'ny'; onPick: (next: 'day' | 'london' | 'ny') => void } | null;
   layoutCells: Parameters<typeof ChartLayoutGlyph>[0]['cells'];
@@ -1512,7 +1514,9 @@ function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, on
   locked: boolean;
   onLock: () => void;
   onToggleIndicator: (id: 'fvg' | 'levels' | 'structure') => void;
-  onIndicatorSettings: (id: 'fvg' | 'levels' | 'structure') => void;
+  onIndicatorSettings: (id: 'fvg' | 'levels' | 'structure' | OrderFlowIndicatorId) => void;
+  /** LIVE graf: nabídnout i indikátory order flow (Bubliny, Volume profil) — jinde pro ně nejsou data. */
+  orderFlow?: boolean;
   onLayout: () => void;
   onChartSettings: () => void;
   onReplay: () => void;
@@ -1528,7 +1532,20 @@ function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, on
     { id: 'fvg', label: 'Fair Value Gaps', detail: 'AlphaTrade FVG INSTANT' },
     { id: 'structure', label: 'Struktura', detail: 'AlphaTrade BOS/CHoCH' },
   ];
-  const activeCount = rows.filter(row => indicators[row.id]).length;
+  // Order flow: zapnutí je součást stylu indikátorů; stav se čte z něj a po změně znovu.
+  const [flow, setFlow] = useState(readOrderFlowIndicators);
+  useEffect(() => {
+    if (!orderFlow) return undefined;
+    const sync = () => setFlow(readOrderFlowIndicators());
+    sync();
+    window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
+  }, [orderFlow]);
+  const flowRows: { id: OrderFlowIndicatorId; label: string; detail: string }[] = orderFlow ? [
+    { id: 'bubbles', label: 'Bubliny', detail: 'Velké obchody · order flow' },
+    { id: 'volumeProfile', label: 'Volume profil', detail: 'Seance / den · order flow' },
+  ] : [];
+  const activeCount = rows.filter(row => indicators[row.id]).length + flowRows.filter(row => flow[row.id]).length;
   const toggle = (on: boolean, onClick: () => void, label: string) => (
     <button type="button" role="switch" aria-checked={on} aria-label={label} className="dj-btn" onClick={onClick} style={{ width: 46, height: 28, borderRadius: 99, padding: 3, boxSizing: 'border-box', border: '1px solid var(--dj-line)', cursor: 'pointer', background: on ? 'linear-gradient(180deg,#6366f1,#4f46e5)' : 'var(--dj-chip)', display: 'flex', justifyContent: on ? 'flex-end' : 'flex-start', flex: 'none' }}>
       <span style={{ width: 20, height: 20, borderRadius: 99, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
@@ -1600,6 +1617,16 @@ function AnalysisHub({ scope, layoutCells, indicators, canReplay, magnetMode, on
                   </div>
                   <button type="button" className="dj-btn" aria-label={`Nastavení a šablony: ${row.label}`} onClick={() => onIndicatorSettings(row.id)} style={{ ...iconButton, width: 38, height: 38 }}><Settings size={18} /></button>
                   {toggle(indicators[row.id], () => onToggleIndicator(row.id), row.label)}
+                </div>
+              ))}
+              {flowRows.map(row => (
+                <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px 8px 12px', borderTop: '1px solid var(--dj-line)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{row.label}</p>
+                    <p style={{ margin: '1px 0 0', fontSize: 11.5, color: 'var(--dj-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.detail}</p>
+                  </div>
+                  <button type="button" className="dj-btn" aria-label={`Nastavení a šablony: ${row.label}`} onClick={() => onIndicatorSettings(row.id)} style={{ ...iconButton, width: 38, height: 38 }}><Settings size={18} /></button>
+                  {toggle(flow[row.id], () => toggleOrderFlowIndicator(row.id), row.label)}
                 </div>
               ))}
             </div>

@@ -1245,6 +1245,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onPositionQuickOrder={context.tradingSettings.quickOrderButton || context.liveOrderEntry ? context.onPositionQuickOrder : undefined}
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
+            orderFlow={Boolean(context.liveOrderEntry)}
             // Pravý klik do grafu vyplní panel Objednávka; v sólo DEMO na flat účtu odešle Limit/Stop bez SL/TP hned.
             chartOrderLabelSuffix={context.liveOrderEntry?.chartOrderInstant ? ' · hned BEZ SL/TP' : context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
             // Za přehrávání je cena pod kurzorem historická: alert jen v živém panelu exekuce.
@@ -3384,6 +3385,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleFvg: () => activeControl.updateConfig({ showFvg: !activeControl.config.showFvg }),
             onToggleLevels: () => activeControl.updateConfig({ showLevels: !activeControl.config.showLevels }),
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
+            // Bubliny a Volume profil: jen graf s živým tokem z místní služby (jinde pro ně nejsou data).
+            orderFlow: Boolean(liveCandles) && !backtestSession,
           }}
         />}
         {activeControl && <IndicatorTemplateFavorites

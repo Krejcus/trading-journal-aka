@@ -185,6 +185,16 @@ export class RithmicLocalConnection {
 
   isOpen(): boolean { return this.socket?.readyState === OPEN && this.authenticated; }
 
+  /**
+   * Přihlášení nebo odhlášení odběru order flow (jen zobrazení). Není to příkaz: nic se nezapisuje do deníku
+   * příkazů, nečeká se na odpověď a selhání nikdy není „nejistý příkaz“. Vrací, zda zpráva odešla.
+   */
+  sendOrderFlow(request: { subscribe: boolean; source?: string; days?: number }): boolean {
+    const socket = this.socket;
+    if (!socket || !this.isOpen()) return false;
+    try { socket.send(JSON.stringify({ orderFlow: request })); return true; } catch { return false; }
+  }
+
   /** Odešle příkaz právě jednou. Bez spojení se neodešle; bez odpovědi je výsledek „unknown". */
   send(command: { op: string } & Record<string, unknown>): Promise<RithmicLinkReply> {
     return new Promise((resolve) => {

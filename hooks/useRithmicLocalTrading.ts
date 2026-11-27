@@ -20,6 +20,7 @@ import { liveWorkingOrderView } from '../lib/liveWorkingOrderLines';
 import { liveExtraOrdersKey, type LiveExtraOrders } from '../lib/liveExtraOrderLines';
 import { RithmicPendingJournal, type PendingRithmicCommand } from '../lib/rithmicPendingJournal';
 import { RithmicLocalConnection } from '../lib/rithmicLocalConnection';
+import { orderFlowLink } from '../lib/orderFlowLink';
 import { liveChartFills, type LiveChartWorkingOrders } from './useLiveChartData';
 
 /** Obrazovka chce číslo účtu „leadera"; u jednoho účtu jen formální. */
@@ -256,6 +257,8 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     /** Holé Markety, které právě čekají na odpověď služby (ne nejisté) — jen v paměti této relace. */
     const quickInFlight = new Set<string>();
     let sessionScope = '';
+    /** Pro které `hello` už order flow zná schopnosti služby (druhé hello s historií odběr neruší). */
+    let orderFlowHelloScope = '';
     let recoveryGeneration = 0;
     let identity: Hello | null = null;
     function lookupPending(item: PendingRithmicCommand, info: Hello) {
@@ -320,6 +323,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
           setClosedPnl(undefined);
           priceRef.current = null;
           feedBox.reset();
+          orderFlowLink.sessionReset();
           setFeedLive(false);
           setSilent(false);
           setPrice(null);
@@ -368,6 +372,11 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
             candleScopeRef.current = scope;
             setCandles((current) => mergeSeedCandles(current, bars, sameSource));
             if (typeof info.price === 'number') { priceRef.current = info.price; setPrice(info.price); feedBox.push(info.price, bars.at(-1) ?? null); }
+            // Order flow (jen zobrazení): co služba umí. Druhé `hello` (s historií) odběr nechává běžet.
+            if (orderFlowHelloScope !== scope || !orderFlowLink.capability) { orderFlowHelloScope = scope; orderFlowLink.hello((message as { orderFlow?: unknown }).orderFlow); }
+          } else if (message.type === 'of' || message.type === 'of-trade' || message.type === 'of-snapshot' || message.type === 'of-error') {
+            // Order flow jde rovnou do úložiště mimo React — žádné překreslení obrazovky, žádná cena pro příkazy.
+            orderFlowLink.message(message);
           } else if (message.type === 'tick') {
             const bar = message.bar ? candle(message.bar as Bar) : null;
             const tickPrice = typeof message.price === 'number' ? message.price : null;
@@ -424,6 +433,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
       },
     });
     connectionRef.current = connection;
+    const detachOrderFlow = orderFlowLink.attach((request) => connection.sendOrderFlow(request));
     connection.start();
     // Návrat do appky (telefon): iOS spojení na pozadí uspí a zavře. Nečekat na časovač dalšího pokusu — připojit hned.
     const wake = () => {
@@ -435,6 +445,7 @@ export function useRithmicLocalTrading({ url, enabled, onMeasure, auth = null }:
     if (typeof window !== 'undefined') { window.addEventListener('pageshow', wake); window.addEventListener('online', wake); }
     return () => {
       connectionRef.current = null;
+      detachOrderFlow();
       connection.stop();
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
       if (typeof window !== 'undefined') { window.removeEventListener('pageshow', wake); window.removeEventListener('online', wake); }

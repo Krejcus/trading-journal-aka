@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import ChartColorPicker, { colorWithAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 
-import { DEFAULT_INDICATOR_SETTINGS, HTF_FVG_TIMEFRAMES, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
+import { DEFAULT_INDICATOR_SETTINGS, HTF_FVG_TIMEFRAMES, ORDER_FLOW_SOURCES, VOLUME_PROFILE_ROW_SIZES, type OrderFlowSourceId, type VolumeProfileIndicatorSettings, type VolumeProfileRowSize, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
 export * from '../services/chartIndicatorSettings';
 
 type IndicatorId = keyof AlphaTradeIndicatorSettings;
@@ -13,7 +13,12 @@ const titles: Record<IndicatorId, string> = {
   fvg: 'AlphaTrade FVG INSTANT (CZ)',
   structure: 'AlphaTrade BoS/ChoCh (CZ)',
   levels: 'Liquidity Levels CZ – Advanced',
+  bubbles: 'Bubliny – velké obchody (order flow)',
+  volumeProfile: 'Volume profil (order flow)',
 };
+
+const selectClass = 'h-9 w-full rounded-md border border-slate-300 px-2 text-[13px]';
+const ORDER_FLOW_NOTE = 'Data jdou z místní služby Rithmicu a jen do LIVE grafu. Zdroj NQ čte velké příkazy na plném kontraktu; graf a příkazy zůstávají na MNQ.';
 
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="grid min-h-10 grid-cols-1 items-stretch gap-1 py-1 text-[13px] text-slate-800 sm:grid-cols-[minmax(0,1fr)_280px] sm:items-center sm:gap-3 sm:py-0">
@@ -86,6 +91,11 @@ export const normalizeIndicatorTemplate = <K extends keyof AlphaTradeIndicatorSe
       if (legacy.bullOpacity === undefined) normalized.bullOpacity = legacy.fillOpacity;
       if (legacy.bearOpacity === undefined) normalized.bearOpacity = legacy.fillOpacity;
     }
+  }
+  // Řádek profilu je „auto“ nebo číslo — obecné slučování podle typu výchozí hodnoty by číslo zahodilo.
+  if (indicator === 'volumeProfile' && value && typeof value === 'object') {
+    const rowSize = (value as { rowSize?: unknown }).rowSize;
+    if ((VOLUME_PROFILE_ROW_SIZES as readonly unknown[]).includes(rowSize)) normalized.rowSize = rowSize;
   }
   return normalized as unknown as AlphaTradeIndicatorSettings[K];
 };
@@ -259,7 +269,46 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             <Field label="RTH open"><NumberInput value={value.rthOpenHour} min={0} max={23} onChange={rthOpenHour => update('levels', { rthOpenHour })} /><span>:</span><NumberInput value={value.rthOpenMinute} min={0} max={59} onChange={rthOpenMinute => update('levels', { rthOpenMinute })} /></Field>
             <Check checked={value.showBiasTable} onChange={showBiasTable => update('levels', { showBiasTable })} label="Bias tabulka (vpravo nahoře)" />
           </div>; })()}
-          {tab === 'style' && <div>
+          {tab === 'inputs' && indicator === 'bubbles' && (() => { const value = draft.bubbles; return <div>
+            <h3 className="mb-2 mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">Bubliny</h3>
+            <Check checked={value.enabled} onChange={enabled => update('bubbles', { enabled })} label="Zobrazit bubliny velkých obchodů" />
+            <Field label="Zdroj"><select value={value.source} onChange={event => {
+              const source = event.target.value as OrderFlowSourceId;
+              // Mikro kontrakt má desetinovou hodnotu: práh se přepočte, aby znamenal zhruba totéž.
+              const minSize = source === value.source ? value.minSize : Math.max(1, Math.round(source === 'MNQ' ? value.minSize * 10 : value.minSize / 10));
+              update('bubbles', { source, minSize });
+            }} className={selectClass}>{ORDER_FLOW_SOURCES.map(source => <option key={source} value={source}>{source}</option>)}</select></Field>
+            <Field label="Nejmenší příkaz (kontrakty)"><NumberInput value={value.minSize} min={1} max={100000} onChange={minSize => update('bubbles', { minSize: Math.max(1, Math.round(minSize) || 1) })} /></Field>
+            <Field label="Velikost kruhů"><NumberInput value={value.scale} min={0.3} max={3} step={0.1} onChange={scale => update('bubbles', { scale: Math.min(3, Math.max(0.3, scale || 1)) })} /></Field>
+            <Field label="Nejvíc bublin v grafu"><NumberInput value={value.maxCount} min={10} max={2000} step={10} onChange={maxCount => update('bubbles', { maxCount: Math.min(2000, Math.max(10, Math.round(maxCount) || 300)) })} /></Field>
+            <Check checked={value.showSize} onChange={showSize => update('bubbles', { showSize })} label="Velikost příkazu v bublině" />
+            <p className="mt-2 text-[11px] leading-snug text-slate-500">Bublina = jeden market příkaz sečtený ze všech dílčích obchodů. Zelená nákup, červená prodej. {ORDER_FLOW_NOTE}</p>
+          </div>; })()}
+          {tab === 'inputs' && indicator === 'volumeProfile' && (() => { const value = draft.volumeProfile; return <div>
+            <h3 className="mb-2 mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">Volume profil</h3>
+            <Check checked={value.enabled} onChange={enabled => update('volumeProfile', { enabled })} label="Zobrazit volume profil" />
+            <Field label="Zdroj (společný s Bublinami)"><select value={draft.bubbles.source} onChange={event => update('bubbles', { source: event.target.value as OrderFlowSourceId })} className={selectClass}>{ORDER_FLOW_SOURCES.map(source => <option key={source} value={source}>{source}</option>)}</select></Field>
+            <Field label="Úsek"><select value={value.period} onChange={event => update('volumeProfile', { period: event.target.value as VolumeProfileIndicatorSettings['period'] })} className={selectClass}><option value="session">Seance (Asie, Londýn, New York)</option><option value="day">Obchodní den</option></select></Field>
+            <Field label="Zobrazení"><select value={value.display} onChange={event => update('volumeProfile', { display: event.target.value as VolumeProfileIndicatorSettings['display'] })} className={selectClass}><option value="volume">Objem</option><option value="split">Nákup / prodej</option><option value="delta">Objem + delta</option></select></Field>
+            <Field label="Řádek"><select value={String(value.rowSize)} onChange={event => update('volumeProfile', { rowSize: (event.target.value === 'auto' ? 'auto' : Number(event.target.value)) as VolumeProfileRowSize })} className={selectClass}>{VOLUME_PROFILE_ROW_SIZES.map(size => <option key={String(size)} value={String(size)}>{size === 'auto' ? 'Podle přiblížení' : size === 1 ? '1 tick' : `${size / 4} b`}</option>)}</select></Field>
+            <Field label="Šířka (% úseku)"><NumberInput value={value.widthPercent} min={10} max={90} step={5} onChange={widthPercent => update('volumeProfile', { widthPercent: Math.min(90, Math.max(10, widthPercent || 35)) })} /></Field>
+            <Check checked={value.valueArea} onChange={valueArea => update('volumeProfile', { valueArea })} label="Value area" />
+            <Field label="Value area (%)"><NumberInput value={value.valueAreaPercent} min={30} max={95} step={5} onChange={valueAreaPercent => update('volumeProfile', { valueAreaPercent: Math.min(95, Math.max(30, valueAreaPercent || 70)) })} /></Field>
+            <Check checked={value.extendPoc} onChange={extendPoc => update('volumeProfile', { extendPoc })} label="Neotestované POC protáhnout doprava" />
+            <Check checked={value.showLabels} onChange={showLabels => update('volumeProfile', { showLabels })} label="Popisek úseku (název, delta, objem)" />
+            <p className="mt-2 text-[11px] leading-snug text-slate-500">Seance berou hodiny z nastavení levelů. Úsek, ve kterém služba neběžela celou dobu, je označený jako neúplný. {ORDER_FLOW_NOTE}</p>
+          </div>; })()}
+          {tab === 'style' && indicator === 'bubbles' && (() => { const value = draft.bubbles; return <div>
+            <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">Barvy</h3>
+            <Field label="Nákup / prodej"><ColorInput label="Bublina nákupu" value={value.buyColor} opacity={value.opacity} onChange={(buyColor, opacity) => update('bubbles', { buyColor, opacity })} /><ColorInput label="Bublina prodeje" value={value.sellColor} opacity={value.opacity} onChange={(sellColor, opacity) => update('bubbles', { sellColor, opacity })} /></Field>
+          </div>; })()}
+          {tab === 'style' && indicator === 'volumeProfile' && (() => { const value = draft.volumeProfile; return <div>
+            <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">Barvy</h3>
+            <Field label="Objem"><ColorInput label="Objem" value={value.volumeColor} opacity={value.opacity} onChange={(volumeColor, opacity) => update('volumeProfile', { volumeColor, opacity })} /></Field>
+            <Field label="Nákup / prodej"><ColorInput label="Nákup" value={value.buyColor} opacity={value.opacity} onChange={(buyColor, opacity) => update('volumeProfile', { buyColor, opacity })} /><ColorInput label="Prodej" value={value.sellColor} opacity={value.opacity} onChange={(sellColor, opacity) => update('volumeProfile', { sellColor, opacity })} /></Field>
+            <Field label="POC"><ColorInput label="POC" value={value.pocColor} onChange={pocColor => update('volumeProfile', { pocColor })} /></Field>
+          </div>; })()}
+          {tab === 'style' && indicator !== 'bubbles' && indicator !== 'volumeProfile' && <div>
             <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">Graphic objects</h3>
             {indicator === 'fvg' && <Check checked={draft.fvg.boxes} onChange={boxes => update('fvg', { boxes })} label="Boxes" />}
             <Check checked={styleFlags.paneLabels} onChange={paneLabels => update(indicator, { paneLabels } as never)} label="Pane labels" />

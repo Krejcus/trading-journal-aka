@@ -199,6 +199,7 @@ import {
 import { bindChartAppearanceAuth } from '../services/chartAppearanceAuth';
 import { supabase } from '../services/supabase';
 import { mergeIndicatorSettings } from '../services/chartIndicatorSettings';
+import { useOrderFlowLayer } from './day/useOrderFlowLayer';
 import { nearestCandleIndex } from '../services/candleSearch';
 import { journalIndicatorProfile, readTradeChartIndicators, rememberLatestIndicatorSettings, writeTradeChartIndicators } from '../services/detailIndicators';
 import {
@@ -308,7 +309,7 @@ interface CandleKitTradeChartProps {
   hideOhlcLegend?: boolean;
   /** Otevření nastavení zvenku (menu ⋯ grafu dne na telefonu): každé nové číslo = otevřít. */
   chartSettingsRequest?: number;
-  indicatorSettingsRequest?: { id: 'fvg' | 'levels' | 'structure'; n: number } | null;
+  indicatorSettingsRequest?: { id: 'fvg' | 'levels' | 'structure' | OrderFlowIndicatorId; n: number } | null;
   compactMode?: boolean;
   hideDrawingToolbar?: boolean;
   keyboardShortcutsActive?: boolean;
@@ -394,6 +395,11 @@ interface CandleKitTradeChartProps {
    * na kotvu (poslední svíčka na samém okraji) a uživateli zahodil záběr.
    */
   liveSeries?: boolean;
+  /**
+   * Graf napojený na obchodní spojení místní služby Rithmicu (LIVE na PC i telefonu): jen tam jsou data pro
+   * indikátory order flow (Bubliny, Volume profil). Jen zobrazení.
+   */
+  orderFlow?: boolean;
   /** Přípona položek objednávky v pravém menu (LIVE: „· návrh“ — jen vyplní panel). */
   chartOrderLabelSuffix?: string;
   /** LIVE: pravý klik → rychlý alert na ceně pod kurzorem. Jen upozornění, nic neobchoduje. */
@@ -407,11 +413,15 @@ interface CandleKitTradeChartProps {
 }
 
 type AlphaTradeIndicatorId = 'fvg' | 'levels' | 'structure';
+/** Indikátory order flow (data z místní služby Rithmicu, jen v LIVE grafu). */
+export type OrderFlowIndicatorId = 'bubbles' | 'volumeProfile';
+const ORDER_FLOW_INDICATOR_TITLES: Record<OrderFlowIndicatorId, string> = { bubbles: 'Bubliny – velké obchody', volumeProfile: 'Volume profil' };
 
 interface ChartIndicatorLegendItem {
   id: string;
   title: string;
   customId?: AlphaTradeIndicatorId;
+  orderFlowId?: OrderFlowIndicatorId;
   libraryName?: string;
 }
 
@@ -476,7 +486,10 @@ const ChartIndicatorLegend: React.FC<{
   /** Telefon: seznam rozbalený, klepnutí na řádek ho označí a ukáže akce (jako TradingView). */
   touch?: boolean;
   defaultOpen?: boolean;
+  /** Zapnuté indikátory order flow (jen LIVE graf): nastavení a odebrání. */
+  orderFlow?: { bubbles: boolean; volumeProfile: boolean; onEdit: (id: OrderFlowIndicatorId) => void; onRemove: (id: OrderFlowIndicatorId) => void };
 }> = ({
+  orderFlow,
   isDark,
   timeframe,
   showFvg,
@@ -521,6 +534,8 @@ const ChartIndicatorLegend: React.FC<{
     ...(showStructure ? [{ id: 'custom:structure', title: 'AlphaTrade BOS/CHoCH (CZ)', customId: 'structure' as const }] : []),
     ...(showFvg ? [{ id: 'custom:fvg', title: 'AlphaTrade FVG INSTANT (CZ)', customId: 'fvg' as const }] : []),
     ...(showLevels ? [{ id: 'custom:levels', title: 'Liquidity Levels CZ – Advanced', customId: 'levels' as const }] : []),
+    ...(orderFlow?.bubbles ? [{ id: 'orderflow:bubbles', title: ORDER_FLOW_INDICATOR_TITLES.bubbles, orderFlowId: 'bubbles' as const }] : []),
+    ...(orderFlow?.volumeProfile ? [{ id: 'orderflow:volumeProfile', title: ORDER_FLOW_INDICATOR_TITLES.volumeProfile, orderFlowId: 'volumeProfile' as const }] : []),
   ];
   const libraryNames = Array.from(new Set([...activeLibraryIndicators, ...hiddenLibrary.keys()]));
   const libraryTitles = new Map(
@@ -579,6 +594,7 @@ const ChartIndicatorLegend: React.FC<{
     controller.remove(item.libraryName);
   };
   const remove = (item: ChartIndicatorLegendItem) => {
+    if (item.orderFlowId) { orderFlow?.onRemove(item.orderFlowId); return; }
     if (item.customId) {
       const toggle = ({ fvg: onToggleFvg, levels: onToggleLevels, structure: onToggleStructure }[item.customId]);
       toggle?.();
@@ -636,11 +652,14 @@ const ChartIndicatorLegend: React.FC<{
                     : paneButtons === 'never'
                       ? 'pointer-events-none hidden'
                       : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'} ${isDark ? 'bg-[#111821]' : 'bg-white'}`}>
-                    <button type="button" onClick={() => toggleVisibility(item)} className="rounded p-1 hover:bg-slate-500/15" title={hidden ? 'Zobrazit indikátor' : 'Skrýt indikátor'} aria-label={hidden ? `Zobrazit ${item.title}` : `Skrýt ${item.title}`}>
+                    {!item.orderFlowId && <button type="button" onClick={() => toggleVisibility(item)} className="rounded p-1 hover:bg-slate-500/15" title={hidden ? 'Zobrazit indikátor' : 'Skrýt indikátor'} aria-label={hidden ? `Zobrazit ${item.title}` : `Skrýt ${item.title}`}>
                       {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
+                    </button>}
                     {!readOnly && <button type="button" onClick={() => {
-                      if (item.customId) {
+                      if (item.orderFlowId) {
+                        setOpen(false);
+                        orderFlow?.onEdit(item.orderFlowId);
+                      } else if (item.customId) {
                         setOpen(false);
                         onEditCustom(item.customId);
                       } else {
@@ -678,6 +697,8 @@ export interface WorkspaceIndicatorControls {
   onToggleFvg: () => void;
   onToggleLevels: () => void;
   onToggleStructure: () => void;
+  /** Nabídnout i indikátory order flow (Bubliny, Volume profil) — jen u LIVE grafu, jinde pro ně nejsou data. */
+  orderFlow?: boolean;
 }
 
 /** Uložení a načtení celé sady indikátorů aktivního grafu (šablony). */
@@ -764,10 +785,23 @@ export const WorkspaceIndicatorMenu: React.FC<{
   const rowClass = `w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-[10px] font-bold transition-colors ${isDark ? 'hover:bg-white/5 text-slate-300' : 'hover:bg-slate-50 text-slate-700'}`;
   const checkClass = (active: boolean) => `w-4 h-4 shrink-0 rounded border flex items-center justify-center ${active ? 'bg-blue-500 border-blue-500 text-white' : isDark ? 'border-white/15' : 'border-slate-300'}`;
 
+  // Order flow: zapnutí je součást stylu indikátorů (profil), ne panelu — stav se čte z něj a po změně znovu.
+  const [orderFlowState, setOrderFlowState] = useState(() => (typeof window === 'undefined' ? { bubbles: false, volumeProfile: false } : readOrderFlowIndicators()));
+  useEffect(() => {
+    if (!custom.orderFlow) return undefined;
+    const sync = () => setOrderFlowState(readOrderFlowIndicators());
+    sync();
+    window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
+  }, [custom.orderFlow]);
   const customRows = [
     { label: 'Fair Value Gaps', detail: 'FVG', active: custom.showFvg, onClick: custom.onToggleFvg },
     { label: 'AlphaTrade levely', detail: 'PDH, PDL, PWH, PWL…', active: custom.showLevels, onClick: custom.onToggleLevels },
     { label: 'Market Structure', detail: 'CHoCH / BOS', active: custom.showStructure, onClick: custom.onToggleStructure },
+    ...(custom.orderFlow ? [
+      { label: 'Bubliny', detail: 'velké obchody · order flow', active: orderFlowState.bubbles, onClick: () => toggleOrderFlowIndicator('bubbles') },
+      { label: 'Volume profil', detail: 'seance / den · order flow', active: orderFlowState.volumeProfile, onClick: () => toggleOrderFlowIndicator('volumeProfile') },
+    ] : []),
   ];
 
   return (
@@ -2150,6 +2184,27 @@ const persistPanelIndicatorSettings = (
 };
 
 /**
+ * Indikátory order flow (Bubliny, Volume profil): zapnutí je součást stylu indikátorů, takže se
+ * ukládá a synchronizuje s ním (šablony, další zařízení). Nabídka i telefon čtou a přepínají tady.
+ */
+const ORDER_FLOW_SETTINGS_PANEL = 'order-flow';
+const ORDER_FLOW_LEGACY_KEY = 'alphatrade:chart-indicators:order-flow';
+export const readOrderFlowIndicators = (): Record<OrderFlowIndicatorId, boolean> => {
+  const settings = loadPanelIndicatorSettings(ORDER_FLOW_SETTINGS_PANEL, ORDER_FLOW_LEGACY_KEY);
+  return { bubbles: settings.bubbles.enabled, volumeProfile: settings.volumeProfile.enabled };
+};
+export const toggleOrderFlowIndicator = (id: OrderFlowIndicatorId): void => {
+  const current = loadPanelIndicatorSettings(ORDER_FLOW_SETTINGS_PANEL, ORDER_FLOW_LEGACY_KEY);
+  const next = { ...current, [id]: { ...current[id], enabled: !current[id].enabled } } as AlphaTradeIndicatorSettings;
+  const target: PanelSettingsTarget = { panelId: ORDER_FLOW_SETTINGS_PANEL, allPanels: true };
+  // Nejdřív uložit, pak rozeslat — grafy si při události přečtou už novou hodnotu.
+  persistPanelIndicatorSettings(next, target, ORDER_FLOW_LEGACY_KEY);
+  window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
+    detail: { settings: next, source: Symbol('order-flow-toggle'), target, persisted: true },
+  }));
+};
+
+/**
  * Úprava z detailu obchodu: stejný zdroj jako fullscreen obchodu (globální
  * nastavení, jeho první 1m panel) a „naposledy použitý“ styl, ze kterého
  * detail čte. Otevřenou backtest session nikdy nepřepíše.
@@ -2259,6 +2314,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   positionQuickOrderDisabledReason,
   positionQuickOrderLabel = 'Rychlá objednávka z position boxu',
   liveSeries = false,
+  orderFlow = false,
   chartOrderLabelSuffix = '',
   onNeedOlderHistory,
   olderHistoryLoading = false,
@@ -2414,7 +2470,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // Čte se z primitivy na cenové ose — ta se kvůli přepnutí nepřestavuje.
   const phoneLayoutRef = useRef(phoneLayout);
   phoneLayoutRef.current = phoneLayout;
-  const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | null>(null);
+  const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | OrderFlowIndicatorId | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     left: number;
     top: number;
@@ -3118,6 +3174,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   visibleCandlesRef.current = visibleCandles;
   const timeframeRef = useRef(timeframe);
   timeframeRef.current = timeframe;
+  // Order flow (Bubliny, Volume profil): jen graf s živým tokem a bez přehrávání — jinde data nejsou.
+  const orderFlowLive = orderFlow && !replayActive;
+  useOrderFlowLayer({
+    apiRef, apiEpoch: chartApiEpoch, live: orderFlowLive, settings: indicatorSettings, timeframe,
+    candlesRef: visibleCandlesRef, isDark, phone: phoneLayout,
+  });
   // Legend lookup is rebuilt only when the rendered candle series changes,
   // never on unrelated toolbar/hover renders. Value copies preserve provider
   // corrections even if an upstream array is mutated in place.
@@ -6593,6 +6655,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           settingsBackupRef.current = structuredClone(indicatorSettings);
           setSettingsDialogIndicator(id);
         }}
+        orderFlow={orderFlowLive ? {
+          bubbles: indicatorSettings.bubbles.enabled,
+          volumeProfile: indicatorSettings.volumeProfile.enabled,
+          onEdit: id => {
+            settingsBackupRef.current = structuredClone(indicatorSettings);
+            setSettingsDialogIndicator(id);
+          },
+          onRemove: toggleOrderFlowIndicator,
+        } : undefined}
         offsetForToolbar={!hideDrawingToolbar}
         readOnly={indicatorSettingsOverride != null && !onIndicatorSettingsSaved}
       />
@@ -6662,7 +6733,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             };
             save(next);
             // Styl nestačí: panel, kde indikátor vypnutý, by změnu vůbec neukázal.
-            if (allPanels && settingsDialogIndicator) onIndicatorAppliedToAllPanels?.(settingsDialogIndicator);
+            if (allPanels && settingsDialogIndicator && settingsDialogIndicator !== 'bubbles' && settingsDialogIndicator !== 'volumeProfile') onIndicatorAppliedToAllPanels?.(settingsDialogIndicator);
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
             if (previous && isIndicatorJournalProfile()) {

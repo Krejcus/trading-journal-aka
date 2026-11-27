@@ -7,6 +7,7 @@ import { createRithmicBroker } from '../../services/rithmic/rithmicBroker';
 import { memoryProtectionStore } from '../../services/rithmic/rithmicProtection';
 import { LocalExec } from '../../services/rithmic/localExec';
 import { RithmicCandleBuilder } from '../../services/rithmic/rithmicCandleBuilder';
+import { createOrderFlowFeed } from '../../services/rithmic/orderFlowFeed';
 import { createDeviceGateway, type DeviceStore } from '../../services/rithmic/deviceGateway';
 import { scopeProblem, type DeviceRegistryState, type DeviceScope } from '../../services/rithmic/devicePairing';
 
@@ -67,12 +68,43 @@ export async function attachSimulation(http: Server, port: number) {
     if (req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) { socket.destroy(); return; }
     ws.handleUpgrade(req, socket, head, client => ws.emit('connection', client, req));
   });
+  // Order flow jako ve skutečné službě (stejný modul), s umělými obchody pro NQ i MNQ: opakovatelná „náhoda“
+  // z času, občas velký příkaz rozdělený do dílčích obchodů se stejným číslem příkazu agresora.
+  const orderFlow = createOrderFlowFeed({ sources: { NQ: 'NQZ6', MNQ: symbol }, tickSize: 0.25, log: (line) => console.log(`[simulace] ${line}`) });
+  let flowOrder = 0;
+  const noise = (seed: number) => { const x = Math.sin(seed * 12.9898) * 43758.5453; return x - Math.floor(x); };
+  function flow(at: number, previous: number) {
+    for (const [contract, base, bigFrom] of [['NQZ6', 4, 25], [symbol, 8, 120]] as const) {
+      const seed = Math.floor(at / 250) + (contract === symbol ? 7_919 : 0);
+      const drift = price - previous;
+      const count = 1 + Math.floor(noise(seed) * 4);
+      for (let i = 0; i < count; i += 1) {
+        const r = noise(seed * 3.1 + i * 17.3);
+        const buy = noise(seed * 5.7 + i) < 0.5 + Math.max(-0.3, Math.min(0.3, drift * 0.4));
+        const big = noise(seed * 9.1 + i * 3) > 0.985;
+        const total = big ? Math.round(bigFrom * (1 + noise(seed + i) * 5)) : 1 + Math.floor(r * r * base);
+        const fills = big ? 2 + Math.floor(noise(seed * 2 + i) * 5) : 1;
+        const id = `sim-${flowOrder += 1}`;
+        const tradePrice = price + (buy ? 0.25 : 0) + Math.round((noise(seed * 1.3 + i) - 0.5) * 6) * 0.25;
+        let left = total;
+        for (let fill = 0; fill < fills && left > 0; fill += 1) {
+          const size = fill === fills - 1 ? left : Math.max(1, Math.floor(left / (fills - fill)));
+          left -= size;
+          orderFlow.onTick({ symbol: contract, exchange: 'CME', kind: 'trade', tradePrice: tradePrice + (buy ? fill : -fill) * 0.25, tradeSize: size, bidPrice: null, askPrice: null,
+            exchangeAt: at, gatewayAt: at, receivedAt: at, isSnapshot: false, aggressor: buy ? 'buy' : 'sell', aggressorOrderId: id });
+        }
+      }
+    }
+  }
   function record(at: number) {
+    const previous = price;
     price = priceAt(at);
     candles.onTick({ symbol, exchange: 'CME', kind: 'trade', tradePrice: price, tradeSize: 1, bidPrice: null, askPrice: null,
       exchangeAt: at, gatewayAt: at, receivedAt: at, isSnapshot: false });
+    flow(at, previous);
   }
   const now = Date.now();
+  orderFlow.feedOpened(Math.floor(now / minute) * minute - 361 * minute);
   for (let at = Math.floor(now / minute) * minute - 360 * minute; at < now; at += 10_000) record(at);
   record(now);
   // Brána pro spárovaná zařízení jako ve skutečné službě (stejný modul), na vlastním portu vedle stránky:
@@ -93,13 +125,18 @@ export async function attachSimulation(http: Server, port: number) {
   function serve(client: WebSocket, access: { scope: DeviceScope; local: boolean; dropOp: string | null }) {
     let dropOp = access.dropOp;
     served.add(client);
-    client.on('close', () => served.delete(client));
+    client.on('close', () => { served.delete(client); orderFlow.drop(client); });
     const current = candles.current(symbol, Date.now());
-    send(client, { type: 'hello', system: 'Rithmic Test', account: 'LOCAL-SIM', limits, readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
+    send(client, { type: 'hello', orderFlow: orderFlow.capability(), system: 'Rithmic Test', account: 'LOCAL-SIM', limits, readOnly: false, live: false, symbol, tickSize: 0.25, pointValue: 2, feed: true, price, bars: [...candles.finished(symbol), ...(current ? [current] : [])] });
     send(client, { type: 'state', state: exec.state() });
     client.on('message', async raw => {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
+      if (message?.orderFlow !== undefined && !message.command) {
+        const problem = orderFlow.handle(client, message.orderFlow);
+        if (problem) send(client, { type: 'of-error', message: problem });
+        return;
+      }
       if (!message?.command || typeof message.id !== 'string') return;
       if (message.command.op === 'lookup') {
         const result = await commandStatus(broker, message.command, symbol).catch(() => null);
@@ -142,6 +179,6 @@ export async function attachSimulation(http: Server, port: number) {
   const simClosed = () => Math.round(lastCloses.reduce((sum, close) => sum + close.pointsTotal * 2, 0) * 100) / 100;
   const beats = setInterval(() => broadcast({ type: 'beat', feed: true, at: Date.now(), pnl: { closed: simClosed(), at: Date.now() } }), 1000);
   http.once('close', () => {
-    clearInterval(ticks); clearInterval(beats); unsubscribe(); unsubscribeCloses(); exec.detach(); broker.stop(); ws.close(); deviceServer.close();
+    clearInterval(ticks); clearInterval(beats); orderFlow.stop(); unsubscribe(); unsubscribeCloses(); exec.detach(); broker.stop(); ws.close(); deviceServer.close();
   });
 }

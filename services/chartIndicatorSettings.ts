@@ -139,10 +139,59 @@ export interface LevelsIndicatorSettings {
   visibility: IndicatorVisibilitySettings;
 }
 
+/** Zdroj order flow: NQ (čtou se tam velké příkazy) nebo mikro kontrakt grafu. */
+export const ORDER_FLOW_SOURCES = ['NQ', 'MNQ'] as const;
+export type OrderFlowSourceId = typeof ORDER_FLOW_SOURCES[number];
+export const VOLUME_PROFILE_ROW_SIZES = ['auto', 1, 2, 4, 8, 20] as const;
+export type VolumeProfileRowSize = typeof VOLUME_PROFILE_ROW_SIZES[number];
+
+/** Bubliny velkých obchodů (order flow z místní služby Rithmicu; data jen v LIVE grafu). */
+export interface BubblesIndicatorSettings {
+  enabled: boolean;
+  /** Platí pro Bubliny i Volume profil — služba posílá jeden zdroj. */
+  source: OrderFlowSourceId;
+  /** Nejmenší sečtený příkaz v kontraktech zdroje, který se kreslí. */
+  minSize: number;
+  /** Násobek velikosti kruhů. */
+  scale: number;
+  buyColor: string;
+  sellColor: string;
+  /** Krytí výplně v procentech. */
+  opacity: number;
+  showSize: boolean;
+  maxCount: number;
+  visibility: IndicatorVisibilitySettings;
+}
+
+/** Volume profil po seancích nebo dnech (order flow; data jen v LIVE grafu). */
+export interface VolumeProfileIndicatorSettings {
+  enabled: boolean;
+  period: 'session' | 'day';
+  /** Objem, rozdělení nákup/prodej, nebo objem se sloupcem delty. */
+  display: 'volume' | 'split' | 'delta';
+  /** Řádek v ticích, nebo podle přiblížení. */
+  rowSize: VolumeProfileRowSize;
+  /** Šířka profilu v procentech šířky úseku. */
+  widthPercent: number;
+  valueArea: boolean;
+  valueAreaPercent: number;
+  /** Protáhnout POC uzavřeného úseku doprava, dokud se ho cena nedotkne. */
+  extendPoc: boolean;
+  showLabels: boolean;
+  volumeColor: string;
+  buyColor: string;
+  sellColor: string;
+  pocColor: string;
+  opacity: number;
+  visibility: IndicatorVisibilitySettings;
+}
+
 export interface AlphaTradeIndicatorSettings {
   fvg: FvgIndicatorSettings;
   structure: StructureIndicatorSettings;
   levels: LevelsIndicatorSettings;
+  bubbles: BubblesIndicatorSettings;
+  volumeProfile: VolumeProfileIndicatorSettings;
 }
 
 const visibilityDefaults = (): IndicatorVisibilitySettings => ({
@@ -267,6 +316,35 @@ export const DEFAULT_INDICATOR_SETTINGS: AlphaTradeIndicatorSettings = {
     statusInputs: true,
     visibility: visibilityDefaults(),
   },
+  bubbles: {
+    enabled: false,
+    source: 'NQ',
+    minSize: 15,
+    scale: 1,
+    buyColor: '#26a69a',
+    sellColor: '#ef5350',
+    opacity: 35,
+    showSize: true,
+    maxCount: 300,
+    visibility: visibilityDefaults(),
+  },
+  volumeProfile: {
+    enabled: false,
+    period: 'session',
+    display: 'split',
+    rowSize: 'auto',
+    widthPercent: 35,
+    valueArea: true,
+    valueAreaPercent: 70,
+    extendPoc: true,
+    showLabels: true,
+    volumeColor: '#8ea2c4',
+    buyColor: '#26a69a',
+    sellColor: '#ef5350',
+    pocColor: '#f5b041',
+    opacity: 45,
+    visibility: visibilityDefaults(),
+  },
 };
 
 export const indicatorVisibleOnTimeframe = (
@@ -284,6 +362,9 @@ export const indicatorVisibleOnTimeframe = (
   return visibility.days && visibility.dayFrom <= 1 && visibility.dayTo >= 1;
 };
 
+
+const clampNumber = (value: unknown, min: number, max: number, fallback: number): number =>
+  (typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
 
 /** Uložené (i starší, neúplné) nastavení doplněné o výchozí hodnoty. */
 export const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicatorSettings => {
@@ -312,6 +393,25 @@ export const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicato
         ...defaults.levels,
         ...parsed.levels,
         visibility: { ...defaults.levels.visibility, ...parsed.levels?.visibility },
+      },
+      bubbles: {
+        ...defaults.bubbles,
+        ...parsed.bubbles,
+        source: (ORDER_FLOW_SOURCES as readonly string[]).includes(String(parsed.bubbles?.source)) ? parsed.bubbles!.source! : defaults.bubbles.source,
+        minSize: clampNumber(parsed.bubbles?.minSize, 1, 100_000, defaults.bubbles.minSize),
+        scale: clampNumber(parsed.bubbles?.scale, 0.3, 3, defaults.bubbles.scale),
+        maxCount: clampNumber(parsed.bubbles?.maxCount, 10, 2_000, defaults.bubbles.maxCount),
+        visibility: { ...defaults.bubbles.visibility, ...parsed.bubbles?.visibility },
+      },
+      volumeProfile: {
+        ...defaults.volumeProfile,
+        ...parsed.volumeProfile,
+        period: parsed.volumeProfile?.period === 'day' ? 'day' : 'session',
+        display: parsed.volumeProfile?.display === 'volume' || parsed.volumeProfile?.display === 'delta' ? parsed.volumeProfile.display : 'split',
+        rowSize: (VOLUME_PROFILE_ROW_SIZES as readonly unknown[]).includes(parsed.volumeProfile?.rowSize) ? parsed.volumeProfile!.rowSize! : defaults.volumeProfile.rowSize,
+        widthPercent: clampNumber(parsed.volumeProfile?.widthPercent, 10, 90, defaults.volumeProfile.widthPercent),
+        valueAreaPercent: clampNumber(parsed.volumeProfile?.valueAreaPercent, 30, 95, defaults.volumeProfile.valueAreaPercent),
+        visibility: { ...defaults.volumeProfile.visibility, ...parsed.volumeProfile?.visibility },
       },
     };
   } catch {
