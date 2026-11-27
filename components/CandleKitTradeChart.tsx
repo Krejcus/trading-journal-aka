@@ -3180,7 +3180,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const orderFlowLive = orderFlow && !replayActive;
   useOrderFlowLayer({
     apiRef, apiEpoch: chartApiEpoch, live: orderFlowLive, settings: indicatorSettings, timeframe,
-    candlesRef: visibleCandlesRef, isDark, phone: phoneLayout, leftInset: hideDrawingToolbar ? 0 : 56,
+    // Na PC leží přes levý okraj grafu lišta kreslení (i ta společná z workspace) — přichycený profil začíná za ní.
+    candlesRef: visibleCandlesRef, isDark, phone: phoneLayout, leftInset: phoneLayout ? 0 : 56,
   });
   // Legend lookup is rebuilt only when the rendered candle series changes,
   // never on unrelated toolbar/hover renders. Value copies preserve provider

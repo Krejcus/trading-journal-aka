@@ -1,0 +1,1563 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order flow náhled</title>
+<style>
+  :root {
+    --bg: #090d12; --bg-top: #131722; --grid: #1e2530; --scale: #8794a5;
+    --text: #e6ebf5; --muted: #8a95ab; --panel: #10151f; --line: #232c3d; --chip: #1a2233;
+    --accent: #2962ff; --buy: #26a69a; --sell: #ef5350; --poc: #f5b041;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-top); flex-wrap: wrap; }
+  .sym { font-weight: 700; font-size: 14px; margin-right: 6px; }
+  .sym small { color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .seg { display: inline-flex; background: var(--chip); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
+  .seg button, .btn { background: transparent; color: var(--text); border: 0; border-radius: 6px; padding: 4px 9px; font: inherit; cursor: pointer; white-space: nowrap; }
+  .seg button:hover, .btn:hover { background: #222c40; }
+  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .btn { background: var(--chip); border: 1px solid var(--line); }
+  .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .rpBox { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .rpBox .rpOnly { display: none; }
+  .rpBox.on .rpOnly { display: inline-flex; }
+  #rpScrub { width: 150px; }
+  .rpTime { font-variant-numeric: tabular-nums; color: var(--text); min-width: 118px; font-weight: 600; }
+  .main { display: grid; grid-template-columns: 1fr 310px; min-height: 0; }
+  .chartWrap { position: relative; min-height: 0; min-width: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  .legend { position: absolute; left: 8px; top: 6px; background: rgba(9,13,18,.72); padding: 3px 7px; border-radius: 6px; font-size: 12px; color: var(--scale); pointer-events: none; font-variant-numeric: tabular-nums; }
+  .legend b { color: var(--text); }
+  .tip { position: absolute; pointer-events: none; background: #182032; border: 1px solid #2c3850; border-radius: 8px; padding: 7px 9px; font-size: 12px; line-height: 1.45; color: var(--text); max-width: 280px; box-shadow: 0 8px 24px rgba(0,0,0,.45); display: none; z-index: 3; font-variant-numeric: tabular-nums; }
+  .tip .t { font-weight: 700; margin-bottom: 2px; }
+  .tip .m { color: var(--muted); }
+  .side { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px 14px 30px; }
+  .side h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 8px; font-weight: 600; }
+  .side h2:first-child { margin-top: 2px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 7px 0; }
+  .row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .row .v { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+  input[type=range] { width: 130px; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+  .side .seg { display: flex; width: 100%; }
+  .side .seg button { flex: 1; padding: 5px 4px; font-size: 12px; }
+  .ranges { margin: 6px 0 0; padding: 0; list-style: none; }
+  .ranges li { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; margin-bottom: 5px; font-size: 12px; cursor: pointer; }
+  .ranges li.sel { border-color: var(--accent); }
+  .ranges li span { color: var(--muted); }
+  .ranges li button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 2px; }
+  .ranges li button:hover { color: var(--sell); }
+  .quote { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-variant-numeric: tabular-nums; }
+  .quote > div { border-radius: 7px; padding: 5px 8px; display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .quote .qb { background: rgba(38,166,154,.16); } .quote .qa { background: rgba(239,83,80,.16); }
+  .quote small { color: var(--muted); font-size: 10px; } .quote span { color: var(--muted); }
+  .qbar { grid-column: 1 / -1; height: 4px; border-radius: 3px; background: rgba(239,83,80,.65); overflow: hidden; padding: 0 !important; }
+  .qbar i { display: block; height: 100%; background: rgba(38,166,154,.95); }
+  .tape { height: 236px; overflow: hidden; margin-top: 6px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--line); border-radius: 8px; padding: 3px 0; }
+  .tr { display: grid; grid-template-columns: 64px 1fr 44px 14px; padding: 0 8px; gap: 4px; }
+  .tr span:nth-child(3) { text-align: right; } .tr span:nth-child(4) { color: var(--muted); font-size: 10px; text-align: right; }
+  .tr.b { color: #4fd1b5; } .tr.s { color: #ff7b78; }
+  .tr.big { font-weight: 700; } .tr.big.b { background: rgba(38,166,154,.22); } .tr.big.s { background: rgba(239,83,80,.22); }
+  .dom { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  .dom:empty { display: none; }
+  .dh, .dr { display: grid; grid-template-columns: 38px 1fr 74px 1fr 38px; }
+  .dh { color: var(--muted); font-size: 10px; border-bottom: 1px solid var(--line); text-align: center; }
+  .dr span { padding: 0 5px; } .dr .bv { text-align: right; color: #7fe0c9; } .dr .av { color: #ff9a96; }
+  .dr .pr { text-align: center; color: #c9d2e3; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+  .dr.top .pr { background: #1c2536; color: #fff; font-weight: 700; } .dr.wall .bv, .dr.wall .av { font-weight: 700; color: #fff; }
+  .dr i { font-style: normal; font-size: 10px; } .dr i.up { color: #4fd1b5; } .dr i.dn { color: #ff7b78; }
+  .dr span:first-child { text-align: right; }
+  .tapeInfo { color: var(--muted); font-size: 12px; margin-top: 5px; }
+  .note { color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 10px; }
+  .note p { margin: 0 0 7px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: -1px; margin-right: 4px; }
+  @media (max-width: 860px) {
+    body { overflow: auto; }
+    .app { height: auto; }
+    .main { grid-template-columns: 1fr; }
+    .chartWrap { height: 70vh; }
+    .side { border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <div class="sym">MNQ1! <small>simulovaná data · 18.–20. 11.</small></div>
+    <div class="seg" id="tfSeg">
+      <button data-tf="1">1m</button><button data-tf="5" class="on">5m</button><button data-tf="15">15m</button>
+    </div>
+    <button class="btn" id="toolBtn" title="Natáhnout vlastní profil (P)">▥ Natáhnout profil</button>
+    <button class="btn" id="autoBtn" title="Automatické měřítko ceny">Auto</button>
+    <div class="rpBox" id="rpBox">
+      <button class="btn" id="rpPlay" title="Přehrát / pauza (mezerník)">▶ Přehrát</button>
+      <button class="btn rpOnly" id="rpStep" title="O svíčku dál (→)">⏭</button>
+      <button class="btn" id="rpPick" title="Klikni do grafu, odkud přehrávat">✂ Odkud</button>
+      <div class="seg" id="rpSpeed" title="Rychlost (60× = 1 minuta za 1 s)"><button data-s="10">10×</button><button data-s="30">30×</button><button data-s="60" class="on">60×</button><button data-s="300">300×</button><button data-s="1200">1200×</button></div>
+      <input type="range" class="rpOnly" id="rpScrub" min="0" step="0.01" title="Posun v čase">
+      <span class="rpTime rpOnly" id="rpTime"></span>
+      <button class="btn rpOnly" id="rpExit" title="Ukončit přehrávání a ukázat všechna data">✕ Všechna data</button>
+    </div>
+  </div>
+  <div class="main">
+    <div class="chartWrap" id="wrap">
+      <canvas id="cv"></canvas>
+      <div class="legend" id="legend"></div>
+      <div class="tip" id="tip"></div>
+    </div>
+    <aside class="side">
+      <p style="color:var(--muted);font-size:12px;margin:0 0 4px">Mezerník = přehrát/pauza · → = o svíčku · ✂ = vyber začátek · kolečko = zoom · táhni = posun · táhni cenovou osu = měřítko · P = profil · Del = smazat</p>
+      <h2>Páska · Time &amp; Sales (L1)</h2>
+      <div class="quote" id="quote"></div>
+      <div class="tape" id="tape"></div>
+      <div class="tapeInfo" id="tapeInfo"></div>
+      <div class="row"><span>Filtr pásky</span><input type="range" data-k="tapeMin" min="1" max="100" step="1" value="1"><span class="v" data-v="tapeMin"></span></div>
+
+      <h2>Heatmapa likvidity · L2 náhled</h2>
+      <div class="row"><label><input type="checkbox" data-k="hm"> Zobrazit</label><label><input type="checkbox" data-k="hmDepth"> Hloubka u osy</label></div>
+      <div class="row"><span>Plná barva od</span><input type="range" data-k="hmMax" min="60" max="800" step="20" value="260"><span class="v" data-v="hmMax"></span></div>
+      <div class="row"><span>Krytí</span><input type="range" data-k="hmOpacity" min="0.2" max="1" step="0.05" value="0.9"><span class="v" data-v="hmOpacity"></span></div>
+      <div class="row"><label><input type="checkbox" data-k="hmPulled"> × Stažené velké limity (≥ 150 ks)</label></div>
+      <div class="dom" id="dom"></div>
+
+      <h2>Footprint</h2>
+      <div class="seg" data-seg="fp"><button data-val="auto">Auto</button><button data-val="always">Vždy</button><button data-val="off">Vyp.</button></div>
+      <div class="seg" data-seg="fpMode" style="margin-top:6px"><button data-val="ba">Bid × Ask</button><button data-val="delta">Delta</button><button data-val="vol">Objem</button></div>
+      <div class="seg" data-seg="fpRow" style="margin-top:6px"><button data-val="auto">Řádek auto</button><button data-val="1">1 tick</button><button data-val="4">1 b</button><button data-val="8">2 b</button></div>
+      <div class="row"><button class="btn" id="fpZoom" style="width:100%">🔍 Přiblížit na footprint</button></div>
+      <div class="row"><span>Imbalance</span><input type="range" data-k="imbRatio" min="150" max="600" step="25" value="300"><span class="v" data-v="imbRatio"></span></div>
+      <div class="row"><label><input type="checkbox" data-k="stacked"> Stacked imbalance (3+) jako zóny</label></div>
+      <div class="row"><label><input type="checkbox" data-k="ua"> Nedokončené aukce</label></div>
+
+      <h2>Bubliny – velké obchody</h2>
+      <div class="row"><label><input type="checkbox" data-k="bubbles" checked> Zobrazit</label></div>
+      <div class="row"><span>Min. velikost</span><input type="range" data-k="bubbleMin" min="20" max="250" step="5" value="80"><span class="v" data-v="bubbleMin"></span></div>
+      <div class="row"><span>Velikost bublin</span><input type="range" data-k="bubbleScale" min="0.5" max="2" step="0.1" value="1"><span class="v" data-v="bubbleScale"></span></div>
+
+      <h2>Absorpce</h2>
+      <div class="row"><label><input type="checkbox" data-k="absorb" checked> Zobrazit</label></div>
+      <div class="row"><span>Min. agresivní objem</span><input type="range" data-k="absorbMin" min="100" max="3000" step="50" value="350"><span class="v" data-v="absorbMin"></span></div>
+      <div class="row"><label><input type="checkbox" data-k="absorbLevels" checked> Úroveň do průrazu</label></div>
+      <div class="row"><label><input type="checkbox" data-k="ice"> ◆ Icebergy (z L1 kotace)</label></div>
+      <div class="row"><label><input type="checkbox" data-k="dd"> Delta divergence</label></div>
+
+      <h2>VWAP</h2>
+      <div class="row"><label><input type="checkbox" data-k="vwap"> Zobrazit</label><label><input type="checkbox" data-k="vwapBands"> Pásma ±1σ ±2σ</label></div>
+      <div class="seg" data-seg="vwapAnchor"><button data-val="day">Od začátku dne</button><button data-val="ny">Od NY 15:30</button></div>
+
+      <h2>Volume profil</h2>
+      <div class="seg" data-seg="periodic">
+        <button data-val="off">Vyp.</button><button data-val="day">Denní</button><button data-val="session" class="on">Seance</button>
+      </div>
+      <div class="row"><label><input type="checkbox" data-k="visible"> Viditelný rozsah (vpravo)</label></div>
+      <div class="row"><span>Vlastní profily</span><button class="btn" id="toolBtn2">▥ Natáhnout</button></div>
+      <ul class="ranges" id="ranges"></ul>
+
+      <h2>Zobrazení profilu</h2>
+      <div class="seg" data-seg="display">
+        <button data-val="vol">Objem</button><button data-val="split">Nákup/Prodej</button><button data-val="delta" class="on">+ Delta</button>
+      </div>
+      <div class="row" style="margin-top:9px"><span>Řádek</span></div>
+      <div class="seg" data-seg="row">
+        <button data-val="auto" class="on">Auto</button><button data-val="1">1 tick</button><button data-val="4">1 b</button><button data-val="8">2 b</button><button data-val="20">5 b</button>
+      </div>
+      <div class="row" style="margin-top:9px"><span>Šířka</span><input type="range" data-k="width" min="0.15" max="0.9" step="0.05" value="0.4"><span class="v" data-v="width"></span></div>
+      <div class="row"><label><input type="checkbox" data-k="va" checked> Value area 70 %</label></div>
+      <div class="row"><label><input type="checkbox" data-k="npoc" checked> Neotestované POC</label></div>
+
+      <h2>Pod grafem</h2>
+      <div class="row"><label><input type="checkbox" data-k="deltaStrip" checked> Delta svíček</label></div>
+      <div class="row"><label><input type="checkbox" data-k="cvd" checked> Kumulativní delta (den)</label></div>
+      <div class="row"><label><input type="checkbox" data-k="stats"> Statistiky svíček (objem, Δ, max/min Δ, CVD, obchody)</label></div>
+
+      <div class="note">
+        <p><span class="dot" style="background:var(--buy)"></span>agresivní nákup (market buy) · <span class="dot" style="background:var(--sell)"></span>agresivní prodej</p>
+        <p><b>Absorpce</b> = velký agresivní objem narazí na úroveň a cena dál nejde (pasivní limity ho „spolkly“). Zelený kruh ▲ = prodeje absorbované u dna (podpora), červený ▼ = nákupy absorbované u vrcholu.</p>
+        <p><b>Delta</b> = nákupy − prodeje na řádku. Žlutý řádek = POC, světlejší pás = value area.</p>
+        <p><b>Footprint</b>: vlevo bid = market prodeje, vpravo ask = market nákupy. Tučně/proužek = diagonální imbalance, žlutý rámeček = POC svíčky, oranžová čárka = nedokončená aukce. ◆ = iceberg.</p>
+        <p><b>Heatmapa</b>: barva = kolik limitních příkazů čeká na ceně (tmavá málo → modrá → žlutá → bílá hodně). Zeď, která se ztenčuje, se ujídá; zeď, která zmizí těsně před cenou, je stažená (×). DOM: Δ = změna za 30 s, zelená přidávání, červená stahování.</p>
+        <p><b>Z L1 jde</b> vše tady: páska, footprint, delta, CVD, profily, VWAP, bubliny, absorpce, imbalance, icebergy (odhad z kotace). Heatmapa, DOM, hloubka a stažené limity potřebují <b>L2</b> (hloubku trhu) – tady jsou simulované.</p>
+        <p>Data jsou simulovaná. Ostrá verze potřebuje ticky se stranou agresora a nejlepší bid/ask s velikostí.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>
+(() => {
+'use strict';
+const TICK = 0.25;
+const AXW = 76, TAXH = 24, DSTRIP = 64, ST_ROW = 14;
+const COL = { up: '#d1d5db', upB: '#9ca3af', dn: '#1f5bc4', buy: '38,166,154', sell: '239,83,80', poc: '245,176,65', acc: '41,98,255' };
+
+// ---------- simulace ----------
+function mulberry(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const R = mulberry(20261127);
+const randn = () => { let u = 0; while (!u) u = R(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * R()); };
+
+const DAYS = ['St 18. 11.', 'Čt 19. 11.', 'Pá 20. 11.'];
+const NOW_MIN = 17 * 60 + 40;
+const SESS = [{ k: 'asia', name: 'Asie', from: 0, to: 540 }, { k: 'lon', name: 'Londýn', from: 540, to: 930 }, { k: 'ny', name: 'New York', from: 930, to: 1380 }];
+
+function activity(m) {
+  if (m < 540) return 0.22 + 0.06 * Math.sin(m / 70);
+  if (m < 930) return 0.55 + (m < 570 ? 0.55 * (1 - (m - 540) / 30) : 0);
+  if (m < 1320) { let a = 1; if (m < 990) a += 0.9 * (1 - (m - 930) / 60); if (m >= 1110 && m < 1200) a *= 0.6; if (m >= 1290) a += 0.5; return a; }
+  return 0.3;
+}
+
+const base = [];
+const TP = [], TS = [], TB = [], TQ = [], TQB = [], TQA = []; // obchody: cena (ticky), velikost, nákup=1, zobrazená velikost na zasažené straně, L1 bid/ask velikost po obchodu
+const P0 = Math.round(25380 / TICK);
+(function simulate() {
+  let price = Math.round(25380 / TICK), trend = 0, absorb = null;
+  for (let di = 0; di < DAYS.length; di++) {
+    const last = di === DAYS.length - 1, endM = last ? NOW_MIN : 1380;
+    const plan = [];
+    const pick = (a, b, n) => { for (let i = 0; i < n; i++) plan.push(Math.round(a + R() * (b - a))); };
+    pick(150, 480, 1); pick(565, 900, 3); pick(945, 1290, last ? 2 : 4);
+    plan.sort((a, b) => a - b);
+    for (let i = 1; i < plan.length; i++) if (plan[i] - plan[i - 1] < 35) plan[i] = plan[i - 1] + 35;
+    for (let m = 0; m < endM; m++) {
+      const act = activity(m);
+      trend += -trend * 0.035 + randn() * 0.085;
+      trend = Math.max(-0.8, Math.min(0.8, trend));
+      if (!absorb && plan.length && plan[0] <= m && m < endM - 15) {
+        plan.shift();
+        const dir = trend > 0.12 ? -1 : trend < -0.12 ? 1 : (R() < 0.5 ? 1 : -1);
+        absorb = { dir, level: price - dir * (2 + Math.floor(R() * 3)), until: m + 3 + Math.floor(R() * 3), big: 2 + Math.floor(R() * 3) };
+      }
+      const n = Math.max(4, Math.round(120 * act * (0.7 + R() * 0.6)));
+      const mp = new Map(), prints = [];
+      let o = null, c = null, h = -Infinity, l = Infinity, run = 0, dmax = 0, dmin = 0; const k0 = TP.length;
+      const disp = () => Math.max(1, Math.round(Math.exp(2.1 + 0.6 * randn())));
+      const add = (p, buy, size) => {
+        let e = mp.get(p); if (!e) { e = [0, 0]; mp.set(p, e); }
+        e[buy ? 0 : 1] += size; if (p > h) h = p; if (p < l) l = p; if (o === null) o = p; c = p;
+        run += buy ? size : -size; if (run > dmax) dmax = run; if (run < dmin) dmin = run;
+        TP.push(p); TS.push(size); TB.push(buy ? 1 : 0); TQ.push(disp()); TQB.push(disp()); TQA.push(disp());
+        if (size >= 20) prints.push({ p, buy, size, k: TP.length - 1 });
+      };
+      for (let k = 0; k < n; k++) {
+        let pBuy = 0.5 + 0.12 * trend + (base.length ? (25380 / TICK - price) * 0.00012 : 0), mul = 1;
+        if (absorb) { pBuy = absorb.dir > 0 ? 0.22 : 0.78; mul = 2.4; }
+        const buy = R() < pBuy;
+        let size = Math.max(1, Math.round(Math.exp(1.0 + 0.9 * randn()) * mul)), big = false;
+        if (R() < 0.0011 * (0.4 + act)) { size = 30 + Math.floor(Math.pow(R(), 2.2) * 260); big = true; }
+        add(buy ? price : price - 1, buy, size); // nákup na asku, prodej na bidu (o tick níž)
+        if (R() < 0.5) {
+          let st = (buy ? 1 : -1) * (R() < 0.25 ? 2 : 1);
+          if (big && !absorb) st *= 2;
+          let np = price + st;
+          if (absorb) { if (absorb.dir > 0 && np < absorb.level) np = absorb.level; if (absorb.dir < 0 && np > absorb.level) np = absorb.level; }
+          price = np;
+        }
+      }
+      if (absorb) {
+        if (absorb.big > 0 && R() < 0.75) { add(absorb.dir > 0 ? absorb.level - 1 : absorb.level, absorb.dir < 0, 60 + Math.floor(R() * 170)); absorb.big--; }
+        if (m >= absorb.until) { trend = absorb.dir * 0.6; absorb = null; }
+      }
+      const len = h - l + 1, buyA = new Int32Array(len), sellA = new Int32Array(len);
+      let vol = 0, delta = 0;
+      for (const [p, e] of mp) { buyA[p - l] += e[0]; sellA[p - l] += e[1]; vol += e[0] + e[1]; delta += e[0] - e[1]; }
+      base.push({ t: di * 1440 + m, day: di, m, o, h, l, c, buy: buyA, sell: sellA, vol, delta, prints, k0, k1: TP.length, trades: TP.length - k0, dmax, dmin });
+    }
+  }
+})();
+
+function tradeMinute(k) { let lo = 0, hi = base.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (base[mid].k0 <= k) lo = mid; else hi = mid - 1; } return lo; }
+
+// Iceberg z L1: na jedné ceně se proobchoduje mnohem víc, než kolik tam kdy bylo vidět, a cena úroveň neprorazí
+const ICE = [];
+(function detectIcebergs() {
+  const runs = [null, null], MIN = 150;
+  for (let k = 0; k < TP.length; k++) {
+    const p = TP[k], side = TB[k];
+    for (const sd of [0, 1]) {
+      const r = runs[sd]; if (!r) continue;
+      if ((sd === 0 ? p < r.p : p > r.p) || k - r.kLast > 900) runs[sd] = null;
+    }
+    const r = runs[side];
+    if (r && r.p === p) {
+      r.vol += TS[k]; r.disp = Math.max(r.disp, TQ[k]); r.kLast = k; r.n++;
+      if (!r.ev && r.vol >= MIN && r.vol >= 5 * r.disp && r.n >= 6) { r.ev = { k, p, buy: !!side, k0: r.k0, volAt: r.vol, t: base[tradeMinute(k)].t }; ICE.push(r.ev); }
+      if (r.ev) { r.ev.vol = r.vol; r.ev.disp = r.disp; r.ev.kLast = k; r.ev.n = r.n; }
+    } else runs[side] = { p, vol: TS[k], disp: TQ[k], k0: k, kLast: k, n: 1, ev: null };
+  }
+})();
+
+// ---------- L2: simulace knihy (heatmapa, DOM) ----------
+const SNAP = 6, DEPTH = 240, DW = 2 * DEPTH + 1, NS = base.length * SNAP; // snímek knihy každých 10 s, ±240 ticků (±60 b)
+const BOOK = new Int16Array(NS * DW), BC = new Int32Array(NS), WALLS = [];
+const T2B = new Int32Array(DAYS.length * 1440).fill(-1); base.forEach((b, i) => { T2B[b.t] = i; });
+function h2(a, b) { let x = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0; x = Math.imul(x ^ (x >>> 13), 1274126177); return ((x ^ (x >>> 16)) >>> 0) / 4294967296; }
+(function simulateBook() {
+  const R2 = mulberry(4242); let active = [];
+  const baseD = new Float64Array(DW); for (let d = 0; d < DW; d++) baseD[d] = 4 + 30 * (1 - Math.exp(-d / 22));
+  for (let mi = 0; mi < base.length; mi++) {
+    const b = base[mi], n = b.k1 - b.k0, act = activity(b.m);
+    for (let j = 0; j < SNAP; j++) {
+      const s = mi * SNAP + j, ka = b.k0 + Math.floor(j / SNAP * n), kb = b.k0 + Math.floor((j + 1) / SNAP * n);
+      let lo = Infinity, hi = -Infinity;
+      for (let k = ka; k < kb; k++) {
+        const p = TP[k]; if (p < lo) lo = p; if (p > hi) hi = p;
+        for (const w of active) if (w.p === p && (w.side < 0) === !TB[k]) w.size -= TS[k]; // zeď se ujídá
+      }
+      const kl = Math.max(b.k0, kb - 1), ask = TB[kl] ? TP[kl] : TP[kl] + 1; BC[s] = ask;
+      const still = [];
+      for (const w of active) {
+        let reason = null;
+        if (w.size <= 0 || (w.side < 0 ? lo < w.p : hi > w.p)) reason = 'fill';
+        else if (w.spoof && (w.side < 0 ? ask - 1 - w.p : w.p - ask) <= w.spoofDist) reason = 'pull';
+        else if (s >= w.sEnd) reason = 'expire';
+        if (reason) { w.s1 = s; w.reason = reason; w.sizeEnd = Math.max(0, w.size); } else still.push(w);
+      }
+      active = still;
+      if (R2() < 0.05 + 0.08 * act) {
+        const side = R2() < 0.5 ? -1 : 1, dist = 5 + Math.floor(Math.pow(R2(), 1.4) * 70);
+        const w = { p: side > 0 ? ask + dist : ask - 1 - dist, side, size0: 70 + Math.floor(Math.pow(R2(), 2) * 480), s0: s, sEnd: s + SNAP * (4 + Math.floor(R2() * 50)), spoof: R2() < 0.35, spoofDist: 1 + Math.floor(R2() * 4) };
+        w.size = w.size0; active.push(w); WALLS.push(w);
+      }
+      const off = s * DW, tq = Math.floor(s / 4), fr = (s % 4) / 4;
+      for (let jj = 0; jj < DW; jj++) {
+        const p = ask + jj - DEPTH, d = p >= ask ? p - ask : ask - 1 - p;
+        const nz = h2(p, tq) * (1 - fr) + h2(p, tq + 1) * fr;
+        let v = baseD[d] * (0.55 + 1.1 * nz);
+        if (p % 100 === 0) v += 40 + 60 * h2(p, 7); else if (p % 20 === 0) v += 12 * h2(p, 3);
+        BOOK[off + jj] = v;
+      }
+      for (const w of active) {
+        const jj = w.p - ask + DEPTH;
+        if (jj >= 0 && jj < DW && (w.side > 0 ? w.p >= ask : w.p < ask)) BOOK[off + jj] = Math.min(32767, BOOK[off + jj] + w.size);
+      }
+    }
+  }
+  for (const w of active) { w.s1 = NS; w.reason = 'open'; }
+})();
+
+function barSums(b) {
+  let v = 0, pv = 0, p2v = 0;
+  for (let k = 0; k < b.buy.length; k++) { const q = b.buy[k] + b.sell[k]; if (!q) continue; const x = b.l + k - P0; v += q; pv += x * q; p2v += x * x * q; }
+  return [v, pv, p2v];
+}
+const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+function accum(b, prev) {
+  const s = barSums(b), same = prev && prev.day === b.day;
+  b.cvd = (same ? prev.cvd : 0) + b.delta;
+  b.cD = same ? add3(prev.cD, s) : s;
+  b.cN = b.m >= 930 ? (same && prev.cN ? add3(prev.cN, s) : s) : null;
+}
+const vw = c => { const m = c[1] / c[0]; return [P0 + m, Math.sqrt(Math.max(0, c[2] / c[0] - m * m))]; };
+
+function aggregate(tf) {
+  if (tf === 1) return base;
+  const out = []; let cur = null;
+  for (const b of base) {
+    const m0 = Math.floor(b.m / tf) * tf, key = b.day * 10000 + m0;
+    if (!cur || cur.key !== key) { cur = { key, t: b.day * 1440 + m0, day: b.day, m: m0, o: b.o, h: b.h, l: b.l, c: b.c, parts: [b] }; out.push(cur); }
+    else { cur.parts.push(b); if (b.h > cur.h) cur.h = b.h; if (b.l < cur.l) cur.l = b.l; cur.c = b.c; }
+  }
+  for (const a of out) {
+    const len = a.h - a.l + 1; a.buy = new Int32Array(len); a.sell = new Int32Array(len); a.vol = 0; a.delta = 0; a.prints = [];
+    let run = 0; a.trades = 0; a.dmax = -Infinity; a.dmin = Infinity;
+    for (const p of a.parts) {
+      for (let k = 0; k < p.buy.length; k++) { a.buy[p.l - a.l + k] += p.buy[k]; a.sell[p.l - a.l + k] += p.sell[k]; }
+      a.vol += p.vol; a.delta += p.delta; for (const pr of p.prints) a.prints.push(pr);
+      a.dmax = Math.max(a.dmax, run + p.dmax); a.dmin = Math.min(a.dmin, run + p.dmin); run += p.delta; a.trades += p.trades;
+    }
+    delete a.parts; delete a.key;
+  }
+  return out;
+}
+
+const TF = {};
+function tfData(tf) {
+  if (TF[tf]) return TF[tf];
+  const bars = aggregate(tf);
+  const spans = { day: [], session: [] };
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const dk = b.day, sk = b.day * 10 + SESS.findIndex(s => b.m >= s.from && b.m < s.to);
+    const ld = spans.day[spans.day.length - 1];
+    if (!ld || ld.key !== dk) spans.day.push({ key: dk, i0: i, i1: i, name: DAYS[b.day] }); else ld.i1 = i;
+    const ls = spans.session[spans.session.length - 1];
+    if (!ls || ls.key !== sk) spans.session.push({ key: sk, i0: i, i1: i, name: SESS[sk % 10].name }); else ls.i1 = i;
+  }
+  // kumulativní delta a VWAP součty po dnech
+  for (let i = 0; i < bars.length; i++) accum(bars[i], bars[i - 1]);
+  return (TF[tf] = { tf, bars, spans, prof: new Map(), abs: new Map() });
+}
+
+// ---------- přehrávání ----------
+const RP = { on: false, playing: false, pos: 0, mi: 0, kEnd: 0, speed: 60, start: null };
+function setPos(pos) {
+  RP.pos = Math.max(0, Math.min(base.length - 1e-6, pos));
+  RP.mi = Math.floor(RP.pos);
+  const b = base[RP.mi], frac = RP.pos - RP.mi;
+  RP.kEnd = b.k0 + Math.floor(frac * (b.k1 - b.k0));
+}
+function buildPartial(tf, tTf, bi0, prev) {
+  const parts = base.slice(bi0, RP.mi), cur = base[RP.mi], kA = cur.k0, kB = RP.kEnd;
+  let h = -Infinity, l = Infinity;
+  for (const p of parts) { if (p.h > h) h = p.h; if (p.l < l) l = p.l; }
+  for (let k = kA; k < kB; k++) { if (TP[k] > h) h = TP[k]; if (TP[k] < l) l = TP[k]; }
+  if (!isFinite(h)) return null;
+  const len = h - l + 1, buy = new Int32Array(len), sell = new Int32Array(len), prints = [];
+  let vol = 0, delta = 0, dmax = -Infinity, dmin = Infinity, trades = kB - kA;
+  for (const p of parts) {
+    for (let k = 0; k < p.buy.length; k++) { buy[p.l - l + k] += p.buy[k]; sell[p.l - l + k] += p.sell[k]; }
+    dmax = Math.max(dmax, delta + p.dmax); dmin = Math.min(dmin, delta + p.dmin); trades += p.trades;
+    vol += p.vol; delta += p.delta; for (const pr of p.prints) prints.push(pr);
+  }
+  for (let k = kA; k < kB; k++) {
+    if (TB[k]) buy[TP[k] - l] += TS[k]; else sell[TP[k] - l] += TS[k];
+    vol += TS[k]; delta += TB[k] ? TS[k] : -TS[k]; dmax = Math.max(dmax, delta); dmin = Math.min(dmin, delta);
+    if (TS[k] >= 20) prints.push({ p: TP[k], buy: !!TB[k], size: TS[k], k });
+  }
+  const o = parts.length ? parts[0].o : TP[kA], c = kB > kA ? TP[kB - 1] : parts[parts.length - 1].c;
+  const day = cur.day, m = Math.floor(cur.m / tf) * tf;
+  const bar = { t: tTf, day, m, o, h, l, c, buy, sell, vol, delta, prints, trades, dmax, dmin, live: true };
+  accum(bar, prev); return bar;
+}
+function makeView() {
+  const d = tfData(S.tf);
+  if (!RP.on || S.tool === 'pick') return { tf: S.tf, bars: d.bars, spans: d.spans, prof: d.prof, full: d, partialIdx: Infinity };
+  const tf = S.tf, cb = base[RP.mi], tTf = cb.day * 1440 + Math.floor(cb.m / tf) * tf;
+  const ti = findIdx(d.bars, tTf), bi0 = findIdx(base, tTf);
+  const bars = d.bars.slice(0, ti);
+  const part = buildPartial(tf, tTf, bi0, bars[bars.length - 1]);
+  let partialIdx = Infinity;
+  if (part) { bars.push(part); partialIdx = bars.length - 1; }
+  const n = bars.length, cut = list => list.filter(sp => sp.i0 < n).map(sp => sp.i1 >= n ? { ...sp, i1: n - 1 } : sp);
+  return { tf, bars, spans: { day: cut(d.spans.day), session: cut(d.spans.session) }, prof: d.prof, full: d, partialIdx };
+}
+let VV = null, VKEY = '';
+function D() {
+  const key = S.tf + '|' + (RP.on && S.tool !== 'pick' ? RP.mi + ':' + RP.kEnd : 'full');
+  if (!VV || VKEY !== key) { VKEY = key; VV = makeView(); }
+  return VV;
+}
+
+// ---------- profil ----------
+function buildProfile(bars, i0, i1, rowT) {
+  let rMin = Infinity, rMax = -Infinity;
+  for (let i = i0; i <= i1; i++) { rMin = Math.min(rMin, Math.floor(bars[i].l / rowT)); rMax = Math.max(rMax, Math.floor(bars[i].h / rowT)); }
+  const n = rMax - rMin + 1, buy = new Float64Array(n), sell = new Float64Array(n);
+  let total = 0, delta = 0;
+  for (let i = i0; i <= i1; i++) {
+    const b = bars[i];
+    for (let k = 0; k < b.buy.length; k++) {
+      const r = Math.floor((b.l + k) / rowT) - rMin;
+      buy[r] += b.buy[k]; sell[r] += b.sell[k];
+    }
+    total += b.vol; delta += b.delta;
+  }
+  let poc = 0, maxVol = 0, maxAbsD = 1;
+  for (let r = 0; r < n; r++) { const v = buy[r] + sell[r]; if (v > maxVol) { maxVol = v; poc = r; } maxAbsD = Math.max(maxAbsD, Math.abs(buy[r] - sell[r])); }
+  let lo = poc, hi = poc, acc = maxVol;
+  while (acc < total * 0.7 && (lo > 0 || hi < n - 1)) {
+    const up = hi < n - 1 ? buy[hi + 1] + sell[hi + 1] : -1, dn = lo > 0 ? buy[lo - 1] + sell[lo - 1] : -1;
+    if (up >= dn) { hi++; acc += up; } else { lo--; acc += dn; }
+  }
+  return { rMin, n, rowT, buy, sell, poc, val: lo, vah: hi, total, delta, maxVol, maxAbsD, i0, i1 };
+}
+function profileCached(d, kind, span, rowT) {
+  const key = kind + '|' + span.i0 + '|' + span.i1 + '|' + rowT;
+  if (span.i1 >= d.partialIdx) return buildProfile(d.bars, span.i0, span.i1, rowT);
+  let p = d.prof.get(key); if (!p) { p = buildProfile(d.bars, span.i0, span.i1, rowT); d.prof.set(key, p); }
+  return p;
+}
+const rowLow = (p, r) => (p.rMin + r) * p.rowT;
+const rowPrice = (p, r) => (p.rMin + r) * p.rowT + (p.rowT - 1) / 2; // střed řádku v ticích
+
+// ---------- absorpce ----------
+function detectAbsorption(d, thr) {
+  const key = String(thr); if (d.abs.has(key)) return d.abs.get(key);
+  const bars = d.bars, K = Math.max(1, Math.ceil(5 / d.tf)), out = [];
+  for (let i = 0; i < bars.length - K; i++) {
+    const b = bars[i], rng = b.h - b.l, zone = Math.min(rng, Math.max(3, Math.round(rng * 0.3)));
+    for (const dir of [1, -1]) {
+      let best = null;
+      for (let k = 0; k <= zone; k++) {
+        const idx = dir > 0 ? k : rng - k; let a = 0, ps = 0;
+        for (let j = idx - 1; j <= idx + 1; j++) { if (j < 0 || j > rng) continue; a += dir > 0 ? b.sell[j] : b.buy[j]; ps += dir > 0 ? b.buy[j] : b.sell[j]; }
+        if (!best || a > best.a) best = { a, ps, idx };
+      }
+      if (!best || best.a < thr || best.a < 1.6 * best.ps) continue;
+      const lvl = b.l + best.idx;
+      let held = true;
+      for (let j = i + 1; j <= i + K; j++) if (dir > 0 ? bars[j].l < lvl - 2 : bars[j].h > lvl + 2) { held = false; break; }
+      if (!held) continue;
+      let end = bars.length - 1, open = true;
+      for (let j = i + 1; j < bars.length; j++) if (dir > 0 ? bars[j].l < lvl - 6 : bars[j].h > lvl + 6) { end = j; open = false; break; }
+      let after = 0; // reakce: max pohyb ve směru za K*3 svíček
+      for (let j = i + 1; j <= Math.min(bars.length - 1, i + K * 3); j++) after = Math.max(after, dir > 0 ? bars[j].h - lvl : lvl - bars[j].l);
+      const prev = out.findLast ? out.findLast(e => e.dir === dir) : [...out].reverse().find(e => e.dir === dir);
+      const ev = { i, dir, p: lvl, a: best.a, ps: best.ps, end, open, after, K };
+      if (prev && i - prev.i <= K + 1 && Math.abs(lvl - prev.p) <= 4) { if (ev.a > prev.a) Object.assign(prev, ev); continue; }
+      out.push(ev);
+    }
+  }
+  d.abs.set(key, out); return out;
+}
+
+// ---------- stav ----------
+const S = {
+  tf: 5, offset: 0, spacing: 8, auto: true, pMin: 0, pMax: 1,
+  bubbles: true, bubbleMin: 80, bubbleScale: 1,
+  absorb: true, absorbLevels: true, absorbMinByTf: { 1: 350, 5: 800, 15: 1300 },
+  periodic: 'session', visible: false, display: 'delta', row: 'auto', width: 0.4, va: true, npoc: true,
+  deltaStrip: true, cvd: true, stats: true,
+  fp: 'auto', fpMode: 'ba', fpRow: 'auto', imbRatio: 300, imbMin: 8, stackN: 3, stacked: true, ua: true,
+  hm: true, hmMax: 260, hmOpacity: 0.9, hmDepth: true, hmPulled: true, wallMin: 150,
+  ice: true, dd: false, vwap: true, vwapBands: true, vwapAnchor: 'day', tapeMin: 1,
+  tool: 'pan', ranges: [], sel: null, nextId: 1, follow: true,
+};
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d'), wrap = document.getElementById('wrap');
+const tip = document.getElementById('tip'), legend = document.getElementById('legend');
+let W = 0, H = 0, PW = 0, PH = 0, DY = 0, hits = [], rangeGeo = [], mouse = null, drag = null, raf = 0, curRowT = 4;
+
+function resize() {
+  const r = wrap.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  W = r.width; H = r.height; cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); schedule();
+}
+const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); };
+
+const xOf = i => (i - S.offset + 0.5) * S.spacing;
+const iOf = x => x / S.spacing + S.offset - 0.5;
+const yOf = p => PH * (S.pMax - p) / (S.pMax - S.pMin);
+const pOf = y => S.pMax - y / PH * (S.pMax - S.pMin);
+const fmtP = t => (t * TICK).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtV = v => Math.abs(v) >= 10000 ? (v / 1000).toLocaleString('cs-CZ', { maximumFractionDigits: 1 }) + ' tis.' : Math.round(v).toLocaleString('cs-CZ');
+const fmtD = v => (v > 0 ? '+' : v < 0 ? '−' : '') + fmtV(Math.abs(v));
+const fmtK = v => { v = Math.round(Math.abs(v)); return v < 1000 ? String(v) : (v / 1000).toFixed(v < 10000 ? 1 : 0).replace('.', ',') + 'k'; };
+const fmtDK = v => (v > 0 ? '+' : v < 0 ? '−' : '') + fmtK(v);
+const pad2 = n => String(n).padStart(2, '0');
+const hhmm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+const barTime = (b, tf) => DAYS[b.day] + ' ' + hhmm(b.m) + (tf > 1 ? '–' + hhmm(b.m + tf) : '');
+
+function findIdx(bars, t) { let lo = 0, hi = bars.length - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (bars[mid].t < t) lo = mid + 1; else hi = mid; } return lo; }
+function rangeIdx(bars, r) { const i0 = findIdx(bars, r.t0); let i1 = findIdx(bars, r.t1); if (bars[i1].t >= r.t1 && i1 > 0) i1--; return [i0, Math.max(i0, i1)]; }
+
+function autoscale(bars) {
+  if (!S.auto) return;
+  const a = Math.max(0, Math.floor(S.offset)), z = Math.min(bars.length - 1, Math.ceil(iOf(PW)));
+  let lo = Infinity, hi = -Infinity;
+  for (let i = a; i <= z; i++) { lo = Math.min(lo, bars[i].l); hi = Math.max(hi, bars[i].h); }
+  if (!isFinite(lo)) return;
+  const pad = Math.max(4, (hi - lo) * 0.08); S.pMin = lo - pad; S.pMax = hi + pad * 2.2;
+}
+
+function pickRowT() {
+  if (S.row !== 'auto') return +S.row;
+  const pxPerTick = PH / (S.pMax - S.pMin);
+  for (const t of [1, 2, 4, 8, 20, 40, 80]) if (t * pxPerTick >= 3) return t;
+  return 80;
+}
+
+// ---------- kreslení ----------
+function draw() {
+  const d = D(), bars = d.bars;
+  DY = (S.deltaStrip ? DSTRIP : 0) + (S.stats ? STATS.length * ST_ROW + 4 : 0); PW = W - AXW; PH = H - TAXH - DY;
+  autoscale(bars);
+  hits = []; rangeGeo = []; pulsing = false;
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#131722'); g.addColorStop(1, '#090d12');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const rowT = curRowT = pickRowT();
+  const a = Math.max(0, Math.floor(iOf(0)) - 1), z = Math.min(bars.length - 1, Math.ceil(iOf(PW)) + 1);
+
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, PW, PH); ctx.clip();
+  drawGrid();
+  if (S.hm) drawHeatmap(d);
+  drawBreaks(d, a, z);
+  if (S.periodic !== 'off') drawPeriodic(d, a, z, rowT);
+  drawRanges(d, rowT);
+  const lastDone = d.partialIdx < Infinity ? bars.length - 2 : bars.length - 1;
+  if (S.vwap) drawVWAP(bars, a, z);
+  if (S.stacked) drawStacked(d, a, z);
+  if (fpActive()) drawFootprint(bars, a, z); else drawCandles(bars, a, z);
+  if (S.ua && S.spacing >= 12) drawUA(bars, a, z);
+  if (S.bubbles) drawBubbles(bars, a, z);
+  if (S.absorb) drawAbsorption(d, a, z);
+  if (S.ice) drawIcebergs(d, a, z);
+  if (S.dd) drawDivergence(bars, a, z, lastDone);
+  if (S.hm && S.hmPulled) drawPulled(d, a, z);
+  if (S.hm && S.hmDepth) drawDepthAxis();
+  if (S.visible) drawVisibleProfile(d, a, z, rowT);
+  if (drag && drag.type === 'new') drawNewRange(d);
+  ctx.restore();
+
+  if (S.deltaStrip) drawDeltaStrip(bars, a, z);
+  if (S.stats) drawStats(bars, a, z, PH + (S.deltaStrip ? DSTRIP : 0));
+  drawPriceAxis(bars);
+  drawTimeAxis(bars, a, z);
+  drawCrosshair(bars);
+  updateLegend(bars);
+  updateTip();
+  updateRpUi();
+  updateTape();
+  primePulse = false;
+  if (pulsing && !RP.playing) schedule();
+}
+
+function niceStep(range, px) { const raw = range / Math.max(1, px / 60); const pw = Math.pow(10, Math.floor(Math.log10(raw))); for (const m of [1, 2, 2.5, 5, 10]) if (m * pw >= raw) return m * pw; return 10 * pw; }
+
+function drawGrid() {
+  ctx.strokeStyle = '#1e2530'; ctx.lineWidth = 1;
+  const st = niceStep((S.pMax - S.pMin) * TICK, PH) / TICK;
+  ctx.beginPath();
+  for (let p = Math.ceil(S.pMin / st) * st; p <= S.pMax; p += st) { const y = Math.round(yOf(p)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(PW, y); }
+  ctx.stroke();
+}
+
+function drawBreaks(d, a, z) {
+  ctx.save(); ctx.setLineDash([4, 4]);
+  for (const sp of d.spans.session) {
+    if (sp.i0 < a || sp.i0 > z || sp.i0 === 0) continue;
+    const x = Math.round(xOf(sp.i0) - S.spacing / 2) + 0.5, newDay = d.bars[sp.i0].m === 0;
+    ctx.strokeStyle = newDay ? '#4c525e' : (S.periodic === 'session' ? 'rgba(76,82,94,.5)' : 'transparent');
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, PH); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCandles(bars, a, z) {
+  const bw = Math.max(1, Math.round(S.spacing * 0.68));
+  for (let i = a; i <= z; i++) {
+    const b = bars[i], x = Math.round(xOf(i)), up = b.c >= b.o;
+    const yh = yOf(b.h + 0.5), yl = yOf(b.l - 0.5), yo = yOf(b.o), yc = yOf(b.c);
+    ctx.fillStyle = up ? COL.upB : COL.dn;
+    ctx.fillRect(x, Math.round(yh), 1, Math.max(1, Math.round(yl - yh)));
+    const top = Math.round(Math.min(yo, yc)), hgt = Math.max(1, Math.round(Math.abs(yc - yo)));
+    if (bw <= 2) continue;
+    ctx.fillStyle = up ? COL.up : COL.dn; ctx.fillRect(x - Math.floor(bw / 2), top, bw, hgt);
+    if (up) { ctx.strokeStyle = COL.upB; ctx.lineWidth = 1; ctx.strokeRect(x - Math.floor(bw / 2) + 0.5, top + 0.5, bw - 1, Math.max(0, hgt - 1)); }
+  }
+}
+
+// prof: profil, x: kotva, maxW: šířka, dir: +1 roste doprava, -1 doleva; ctxInfo pro tooltip
+function drawProfile(p, x, maxW, dir, title) {
+  const mode = S.display, gap = 4;
+  const dW = mode === 'delta' ? Math.max(40, maxW * 0.34) : 0, volW = mode === 'delta' ? Math.max(20, maxW - dW - gap) : maxW;
+  const volX = dir > 0 ? x : x - (mode === 'delta' ? dW + gap : 0);
+  const dCx = dir > 0 ? x + volW + gap + dW / 2 : x - dW / 2;
+  const pxRow = PH / (S.pMax - S.pMin) * p.rowT;
+  const gapPx = pxRow > 4 ? 1 : 0;
+  for (let r = 0; r < p.n; r++) {
+    const v = p.buy[r] + p.sell[r]; if (!v) continue;
+    const pr0 = (p.rMin + r) * p.rowT - 0.5, y0 = yOf(pr0 + p.rowT), y1 = yOf(pr0);
+    if (y1 < -2 || y0 > PH + 2) continue;
+    const h = Math.max(1, y1 - y0 - gapPx);
+    const inVA = S.va && r >= p.val && r <= p.vah, isPoc = r === p.poc;
+    const al = isPoc ? 0.95 : inVA ? 0.62 : 0.36;
+    const len = v / p.maxVol * volW;
+    if (mode === 'split') {
+      const ls = p.sell[r] / p.maxVol * volW, lb = p.buy[r] / p.maxVol * volW;
+      ctx.fillStyle = isPoc ? `rgba(${COL.poc},.9)` : `rgba(${COL.sell},${al + 0.1})`;
+      ctx.fillRect(dir > 0 ? volX : volX - ls, y0, ls, h);
+      ctx.fillStyle = isPoc ? `rgba(${COL.poc},.65)` : `rgba(${COL.buy},${al + 0.1})`;
+      ctx.fillRect(dir > 0 ? volX + ls : volX - ls - lb, y0, lb, h);
+    } else {
+      ctx.fillStyle = isPoc ? `rgba(${COL.poc},.9)` : `rgba(150,170,205,${al})`;
+      ctx.fillRect(dir > 0 ? volX : volX - len, y0, len, h);
+    }
+    const dl = p.buy[r] - p.sell[r];
+    if (mode === 'delta' && dl) {
+      const L = Math.abs(dl) / p.maxAbsD * (dW / 2);
+      ctx.fillStyle = `rgba(${dl > 0 ? COL.buy : COL.sell},${inVA || isPoc ? 0.9 : 0.7})`;
+      ctx.fillRect(dl > 0 ? dCx : dCx - L, y0, L, h);
+    }
+    const fw = mode === 'delta' ? volW + gap + dW : maxW, hx0 = dir > 0 ? x : x - fw, hx1 = dir > 0 ? x + fw : x;
+    hits.push({ kind: 'row', x0: hx0, x1: hx1, y0, y1: y0 + Math.max(h, 2), p, r, title });
+  }
+  if (mode === 'delta') {
+    ctx.strokeStyle = 'rgba(135,148,165,.35)'; ctx.lineWidth = 1; ctx.beginPath();
+    const yT = Math.max(0, yOf((p.rMin + p.n) * p.rowT)), yB = Math.min(PH, yOf(p.rMin * p.rowT));
+    ctx.moveTo(Math.round(dCx) + 0.5, yT); ctx.lineTo(Math.round(dCx) + 0.5, yB); ctx.stroke();
+  }
+  if (S.va) {
+    ctx.save(); ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(130,160,210,.55)'; ctx.lineWidth = 1;
+    const x0 = dir > 0 ? volX : volX - volW, x1 = dir > 0 ? volX + volW : volX;
+    for (const [r, top] of [[p.vah, true], [p.val, false]]) {
+      const y = Math.round(yOf((p.rMin + r) * p.rowT - 0.5 + (top ? p.rowT : 0))) + 0.5;
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawPeriodic(d, a, z, rowT) {
+  const spans = d.spans[S.periodic === 'day' ? 'day' : 'session'];
+  ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+  for (const sp of spans) {
+    if (sp.i1 < a - 1 || sp.i0 > z + 1) {
+      if (!(S.npoc && sp.i1 < a)) continue;
+    }
+    const p = profileCached(d, S.periodic, sp, rowT);
+    const x0 = xOf(sp.i0) - S.spacing / 2, x1 = xOf(sp.i1) + S.spacing / 2, w = (x1 - x0) * S.width;
+    if (S.npoc) drawNakedPoc(d, sp, p);
+    if (sp.i1 < a - 1 || sp.i0 > z + 1) continue;
+    drawProfile(p, x0 + 1, w, 1, sp.name + ' · ' + DAYS[d.bars[sp.i0].day]);
+    const yTop = yOf((p.rMin + p.n) * p.rowT);
+    ctx.fillStyle = 'rgba(135,148,165,.85)';
+    const lbl = `${sp.name}  Δ ${fmtD(p.delta)}  · ${fmtV(p.total)}`;
+    ctx.fillText(lbl, Math.max(x0 + 4, 4), Math.max(42, yTop - 6));
+  }
+}
+
+function drawNakedPoc(d, sp, p) {
+  if (sp.i1 >= d.bars.length - 1) return; // seance ještě běží
+  const pp = rowPrice(p, p.poc), bars = d.bars;
+  let j = sp.i1 + 1, touched = -1;
+  for (; j < bars.length; j++) if (bars[j].l <= pp && bars[j].h >= pp) { touched = j; break; }
+  if (touched >= 0) return;
+  const y = Math.round(yOf(pp)) + 0.5, xs = xOf(sp.i1) + S.spacing / 2;
+  if (xs > PW) return;
+  ctx.save(); ctx.setLineDash([6, 4]); ctx.strokeStyle = `rgba(${COL.poc},.7)`; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(Math.max(0, xs), y); ctx.lineTo(PW, y); ctx.stroke(); ctx.restore();
+  ctx.fillStyle = `rgba(${COL.poc},.9)`; ctx.font = '10px -apple-system, sans-serif';
+  const t = 'nPOC ' + sp.name.slice(0, 3) + ' ' + DAYS[bars[sp.i0].day].slice(0, 2);
+  ctx.fillText(t, PW - ctx.measureText(t).width - 6, y - 4);
+  hits.push({ kind: 'npoc', x0: Math.max(0, xs), x1: PW, y0: y - 4, y1: y + 4, sp, price: pp, day: bars[sp.i0].day });
+}
+
+function drawRanges(d, rowT) {
+  const bars = d.bars;
+  ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+  for (const rg of S.ranges) {
+    if (rg.t0 > bars[bars.length - 1].t) continue;
+    const [i0, i1] = rangeIdx(bars, rg);
+    const span = { i0, i1 };
+    const p = profileCached(d, 'r', span, rowT);
+    const x0 = xOf(i0) - S.spacing / 2, x1 = xOf(i1) + S.spacing / 2;
+    const yT = yOf((p.rMin + p.n) * p.rowT - 0.5), yB = yOf(p.rMin * p.rowT - 0.5);
+    const sel = S.sel === rg.id;
+    ctx.fillStyle = `rgba(${COL.acc},${sel ? 0.09 : 0.05})`; ctx.fillRect(x0, yT, x1 - x0, yB - yT);
+    ctx.strokeStyle = `rgba(${COL.acc},${sel ? 0.95 : 0.45})`; ctx.lineWidth = sel ? 1.5 : 1;
+    ctx.strokeRect(Math.round(x0) + 0.5, Math.round(yT) + 0.5, Math.round(x1 - x0), Math.round(yB - yT));
+    drawProfile(p, x0 + 1, Math.max(30, (x1 - x0) * S.width), 1, 'Vlastní profil');
+    const lbl = `Obj ${fmtV(p.total)} · Δ ${fmtD(p.delta)} · POC ${fmtP(rowLow(p, p.poc))}`;
+    const tw = ctx.measureText(lbl).width;
+    const ly = Math.max(16, yT - 6);
+    ctx.fillStyle = 'rgba(16,21,31,.85)'; ctx.fillRect(x0, ly - 12, tw + 28, 16);
+    ctx.fillStyle = sel ? '#cfe0ff' : '#9fb4d8'; ctx.fillText(lbl, x0 + 4, ly);
+    const bx = x0 + tw + 10;
+    ctx.fillStyle = '#c9d2e3'; ctx.fillText('×', bx + 2, ly);
+    rangeGeo.push({ id: rg.id, x0, x1, y0: yT, y1: yB, close: { x: bx - 2, y: ly - 12, w: 16, h: 16 }, label: { x: x0, y: ly - 12, w: tw + 8, h: 16 } });
+  }
+}
+
+function drawNewRange(d) {
+  const i0 = Math.min(drag.i0, drag.i1), i1 = Math.max(drag.i0, drag.i1);
+  const x0 = xOf(i0) - S.spacing / 2, x1 = xOf(i1) + S.spacing / 2;
+  ctx.fillStyle = `rgba(${COL.acc},.12)`; ctx.fillRect(x0, 0, x1 - x0, PH);
+  ctx.strokeStyle = `rgba(${COL.acc},.8)`; ctx.setLineDash([4, 3]); ctx.strokeRect(x0 + 0.5, 0.5, x1 - x0, PH - 1); ctx.setLineDash([]);
+  if (i1 > i0) { const p = buildProfile(d.bars, Math.max(0, i0), Math.min(d.bars.length - 1, i1), curRowT); drawProfile(p, x0 + 1, Math.max(30, (x1 - x0) * S.width), 1, 'Nový profil'); }
+}
+
+function drawVisibleProfile(d, a, z, rowT) {
+  const i0 = Math.max(0, Math.ceil(iOf(0))), i1 = Math.min(d.bars.length - 1, Math.floor(iOf(PW)));
+  if (i1 <= i0) return;
+  const p = buildProfile(d.bars, i0, i1, rowT);
+  const w = Math.min(260, PW * 0.28 * (S.width / 0.4));
+  ctx.fillStyle = 'rgba(9,13,18,.35)'; ctx.fillRect(PW - w - 2, 0, w + 2, PH);
+  drawProfile(p, PW - 2, w, -1, 'Viditelný rozsah');
+  ctx.font = '11px -apple-system, sans-serif'; ctx.fillStyle = 'rgba(135,148,165,.9)';
+  const t = `Viditelný rozsah  Δ ${fmtD(p.delta)}`;
+  ctx.fillText(t, PW - ctx.measureText(t).width - 8, 42);
+}
+
+const seen = new Map(); let primePulse = true, pulsing = false;
+function pulseAge(key) {
+  const now = performance.now();
+  let t = seen.get(key);
+  if (t === undefined) { t = primePulse ? -1e9 : now; seen.set(key, t); }
+  const age = now - t; if (age < 1400) pulsing = true; return age;
+}
+function primePulses() { seen.clear(); primePulse = true; }
+function reaction(bars, ev) {
+  let after = 0;
+  for (let j = ev.i + 1; j <= Math.min(bars.length - 1, ev.i + ev.K * 3); j++) after = Math.max(after, ev.dir > 0 ? bars[j].h - ev.p : ev.p - bars[j].l);
+  return after;
+}
+function drawBubbles(bars, a, z) {
+  const thr = S.bubbleMin, fpOn = fpActive();
+  const list = [];
+  for (let i = a; i <= z; i++) {
+    const agg = new Map();
+    for (const pr of bars[i].prints) {
+      if (pr.size < thr) continue;
+      const k = pr.p * 2 + (pr.buy ? 1 : 0); const e = agg.get(k);
+      if (e) { e.size += pr.size; e.n++; } else agg.set(k, { p: pr.p, buy: pr.buy, size: pr.size, n: 1, key: bars[i].t + ':' + k });
+    }
+    for (const e of agg.values()) list.push({ i, ...e });
+  }
+  list.sort((u, v) => v.size - u.size);
+  for (let k = list.length - 1; k >= 0; k--) {
+    const e = list[k], cx = xOf(e.i), cy = yOf(e.p);
+    const age = pulseAge('b' + S.tf + ':' + e.key);
+    const r = Math.min(30, 2.5 + Math.sqrt(e.size) * 0.95) * S.bubbleScale * (0.55 + 0.45 * Math.min(1, age / 220));
+    const c = e.buy ? COL.buy : COL.sell;
+    if (age < 750) { const q = age / 750; ctx.strokeStyle = `rgba(${c},${0.85 * (1 - q)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, r + 3 + q * 18, 0, Math.PI * 2); ctx.stroke(); }
+    if (fpOn) { ctx.strokeStyle = `rgba(${c},.95)`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke(); hits.push({ kind: 'bubble', cx, cy, r, e, bar: bars[e.i] }); continue; }
+    const gr = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
+    gr.addColorStop(0, `rgba(${c},.75)`); gr.addColorStop(1, `rgba(${c},.28)`);
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(${c},.95)`; ctx.lineWidth = 1; ctx.stroke();
+    if (r >= 11) { ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.font = '600 10px -apple-system, sans-serif'; const t = String(e.size); ctx.fillText(t, cx - ctx.measureText(t).width / 2, cy + 3.5); }
+    hits.push({ kind: 'bubble', cx, cy, r, e, bar: bars[e.i] });
+  }
+}
+
+function drawAbsorption(d, a, z) {
+  const evs = detectAbsorption(d.full || d, S.absorbMinByTf[S.tf]);
+  const n = d.bars.length, lastDone = d.partialIdx < Infinity ? n - 2 : n - 1;
+  for (const ev0 of evs) {
+    if (ev0.i + ev0.K > lastDone) continue;
+    const ev = ev0.end >= n - 1 ? { ...ev0, open: true, end: n - 1 } : ev0;
+    const end = ev.end;
+    if (ev.i > z + 1) continue;
+    if ((S.absorbLevels ? end : ev.i) < a - 1) continue;
+    const cx = xOf(ev.i), cy = yOf(ev.p), c = ev.dir > 0 ? COL.buy : COL.sell;
+    if (S.absorbLevels) {
+      const xe = ev.open ? PW : xOf(end);
+      ctx.save(); ctx.strokeStyle = `rgba(${c},.55)`; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(cx, Math.round(cy) + 0.5); ctx.lineTo(xe, Math.round(cy) + 0.5); ctx.stroke(); ctx.restore();
+      if (!ev.open && xe > 0 && xe < PW) { ctx.strokeStyle = `rgba(${c},.8)`; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xe - 3, cy - 3); ctx.lineTo(xe + 3, cy + 3); ctx.moveTo(xe + 3, cy - 3); ctx.lineTo(xe - 3, cy + 3); ctx.stroke(); }
+    }
+    if (ev.i < a - 1) continue;
+    const r = Math.min(26, 7 + Math.sqrt(ev.a) * 0.35);
+    const aAge = pulseAge('a' + S.tf + ':' + ev.i + ':' + ev.dir);
+    if (aAge < 1400) { const q = aAge / 1400; for (const off of [0, 0.35]) { const qq = Math.min(1, q + off); ctx.strokeStyle = `rgba(${c},${0.9 * (1 - qq)})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, cy, r + 4 + qq * 34, 0, Math.PI * 2); ctx.stroke(); } }
+    ctx.fillStyle = `rgba(${c},.16)`; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(${c},1)`; ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = `rgba(${c},.45)`; ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.stroke();
+    // šipka směru reakce
+    const ay = ev.dir > 0 ? cy + r + 12 : cy - r - 12;
+    ctx.fillStyle = `rgba(${c},1)`; ctx.beginPath();
+    if (ev.dir > 0) { ctx.moveTo(cx, ay - 7); ctx.lineTo(cx - 5, ay + 1); ctx.lineTo(cx + 5, ay + 1); }
+    else { ctx.moveTo(cx, ay + 7); ctx.lineTo(cx - 5, ay - 1); ctx.lineTo(cx + 5, ay - 1); }
+    ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '700 10px -apple-system, sans-serif'; ctx.fillText('A', cx - 3.5, cy + 3.5);
+    hits.push({ kind: 'abs', cx, cy, r: r + 4, ev, bar: d.bars[ev.i], after: reaction(d.bars, ev) });
+  }
+}
+
+// ---------- heatmapa likvidity (L2) ----------
+const sCur = () => RP.on && S.tool !== 'pick' ? RP.mi * SNAP + Math.floor((RP.pos - RP.mi) * SNAP) : NS - 1;
+const hmCanvas = document.createElement('canvas'), hmCtx = hmCanvas.getContext('2d'); let hmImg = null;
+const LUT = (() => {
+  const stops = [[0, 0, 0, 0, 0], [0.1, 12, 28, 70, 110], [0.3, 25, 80, 190, 190], [0.5, 0, 185, 215, 225], [0.7, 240, 220, 50, 240], [0.87, 255, 120, 30, 250], [1, 255, 255, 255, 255]];
+  const out = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = Math.pow(i / 255, 0.65); let k = 0; while (k < stops.length - 2 && t > stops[k + 1][0]) k++;
+    const A = stops[k], B = stops[k + 1], q = Math.min(1, Math.max(0, (t - A[0]) / (B[0] - A[0])));
+    const c = [1, 2, 3, 4].map(m => Math.round(A[m] + (B[m] - A[m]) * q));
+    out[i] = ((c[3] << 24) | (c[2] << 16) | (c[1] << 8) | c[0]) >>> 0;
+  }
+  return out;
+})();
+function snapAtX(d, x) {
+  const bars = d.bars, fi = iOf(x), i = Math.round(fi);
+  if (i < 0 || i >= bars.length) return -1;
+  const tm = bars[i].t + (fi - (i - 0.5)) * d.tf, mi = T2B[Math.floor(tm)];
+  if (mi < 0) return -1;
+  const s = mi * SNAP + Math.min(SNAP - 1, Math.floor((tm - Math.floor(tm)) * SNAP));
+  return s > sCur() ? -1 : s;
+}
+function xOfSnap(d, s) {
+  const b = base[Math.floor(s / SNAP)], tf = d.tf, i = findIdx(d.bars, b.day * 1440 + Math.floor(b.m / tf) * tf);
+  return xOf(i) - S.spacing / 2 + ((b.m % tf) + (s % SNAP) / SNAP) / tf * S.spacing;
+}
+function drawHeatmap(d) {
+  const w = Math.max(1, Math.floor(PW)), h = Math.max(1, Math.floor(PH));
+  if (hmCanvas.width !== w || hmCanvas.height !== h || !hmImg) { hmCanvas.width = w; hmCanvas.height = h; hmImg = hmCtx.createImageData(w, h); }
+  const px = new Uint32Array(hmImg.data.buffer), sc = 255 / S.hmMax;
+  const pLo = new Int32Array(h), pHi = new Int32Array(h);
+  for (let y = 0; y < h; y++) { pHi[y] = Math.round(pOf(y)); pLo[y] = Math.min(pHi[y], Math.round(pOf(y + 1))); }
+  let lastS = -2;
+  for (let x = 0; x < w; x++) {
+    const s = snapAtX(d, x + 0.5);
+    if (s < 0) { for (let y = 0; y < h; y++) px[y * w + x] = 0; lastS = -2; continue; }
+    if (s === lastS) { for (let y = 0; y < h; y++) px[y * w + x] = px[y * w + x - 1]; continue; }
+    lastS = s;
+    const c = BC[s], off = s * DW;
+    for (let y = 0; y < h; y++) {
+      let v = 0;
+      for (let p = pLo[y]; p <= pHi[y]; p++) { const j = p - c + DEPTH; if (j >= 0 && j < DW && BOOK[off + j] > v) v = BOOK[off + j]; }
+      px[y * w + x] = LUT[Math.min(255, (v * sc) | 0)];
+    }
+  }
+  hmCtx.putImageData(hmImg, 0, 0);
+  ctx.save(); ctx.imageSmoothingEnabled = false; ctx.globalAlpha = S.hmOpacity; ctx.drawImage(hmCanvas, 0, 0, w, h); ctx.restore();
+}
+function drawDepthAxis() {
+  const s = sCur(), c = BC[s], off = s * DW; let mx = 1;
+  for (let j = 0; j < DW; j++) { const y = yOf(c + j - DEPTH); if (y >= 0 && y <= PH) mx = Math.max(mx, BOOK[off + j]); }
+  const maxL = Math.min(110, PW * 0.16), lbl = [];
+  for (let j = 0; j < DW; j++) {
+    const p = c + j - DEPTH, y0 = yOf(p + 0.5), y1 = yOf(p - 0.5); if (y1 < 0 || y0 > PH) continue;
+    const v = BOOK[off + j], L = v / mx * maxL;
+    ctx.fillStyle = p >= c ? 'rgba(239,83,80,.55)' : 'rgba(38,166,154,.55)';
+    ctx.fillRect(PW - L, y0, L, Math.max(1, y1 - y0 - (y1 - y0 > 3 ? 1 : 0)));
+    if (v >= S.wallMin) lbl.push({ v, x: PW - L, y: (y0 + y1) / 2 });
+    hits.push({ kind: 'depth', x0: PW - Math.max(L, 8), x1: PW, y0, y1: Math.max(y1, y0 + 2), p, v, ask: p >= c });
+  }
+  lbl.sort((u, w) => w.v - u.v); const used = [];
+  ctx.font = '600 10px -apple-system, sans-serif'; ctx.fillStyle = '#fff';
+  for (const l of lbl) { if (used.length >= 6 || used.some(y => Math.abs(y - l.y) < 12)) continue; used.push(l.y); const t = String(l.v); ctx.fillText(t, l.x - ctx.measureText(t).width - 4, l.y + 3.5); }
+}
+function drawPulled(d, a, z) {
+  const sMax = sCur(), bars = d.bars; if (!bars.length) return;
+  const tA = bars[Math.max(0, a)].t, tZ = bars[z].t + d.tf;
+  for (const w of WALLS) {
+    if (w.reason !== 'pull' || w.size0 < S.wallMin || w.s1 > sMax) continue;
+    const b = base[Math.floor(w.s1 / SNAP)]; if (b.t < tA || b.t >= tZ) continue;
+    const x = xOfSnap(d, w.s1), y = yOf(w.p), age = pulseAge('w' + w.s0 + ':' + w.p);
+    if (age < 900) { const q = age / 900; ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - q)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 8 + q * 18, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = 'rgba(15,20,28,.85)'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#ffb74d'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 3, y - 3); ctx.lineTo(x + 3, y + 3); ctx.moveTo(x + 3, y - 3); ctx.lineTo(x - 3, y + 3); ctx.stroke();
+    hits.push({ kind: 'pull', cx: x, cy: y, r: 8, w });
+  }
+}
+
+// ---------- footprint ----------
+const fpActive = () => S.fp === 'always' || (S.fp === 'auto' && S.spacing >= 60);
+function fpRowTicks() {
+  if (S.fpRow !== 'auto') return +S.fpRow;
+  const ppt = PH / (S.pMax - S.pMin), need = S.spacing >= 60 ? 13 : 3;
+  for (const t of [1, 2, 4, 8, 20, 40, 80]) if (t * ppt >= need) return t;
+  return 80;
+}
+function fpRows(b, rT) {
+  const r0 = Math.floor(b.l / rT), n = Math.floor(b.h / rT) - r0 + 1;
+  const bid = new Float64Array(n), ask = new Float64Array(n);
+  for (let k = 0; k < b.buy.length; k++) { const r = Math.floor((b.l + k) / rT) - r0; bid[r] += b.sell[k]; ask[r] += b.buy[k]; }
+  return { r0, n, bid, ask, rT };
+}
+// diagonální imbalance: ask na řádku proti bidu o řádek níž, bid proti asku o řádek výš
+function imbalances(f) {
+  const ratio = S.imbRatio / 100, minV = S.imbMin, bi = new Uint8Array(f.n), si = new Uint8Array(f.n);
+  for (let r = 0; r < f.n; r++) {
+    if (r > 0 && f.ask[r] >= minV && f.ask[r] >= ratio * Math.max(1, f.bid[r - 1])) bi[r] = 1;
+    if (r < f.n - 1 && f.bid[r] >= minV && f.bid[r] >= ratio * Math.max(1, f.ask[r + 1])) si[r] = 1;
+  }
+  return { bi, si };
+}
+function drawFootprint(bars, a, z) {
+  const rT = fpRowTicks(), rowPx = rT * PH / (S.pMax - S.pMin);
+  const text = S.spacing >= 60 && rowPx >= 11, fs = rowPx >= 15 ? 11 : 10;
+  ctx.textBaseline = 'middle';
+  for (let i = a; i <= z; i++) {
+    const b = bars[i], f = fpRows(b, rT), im = imbalances(f);
+    const sl = xOf(i) - S.spacing / 2, sr = sl + S.spacing;
+    const up = b.c >= b.o, mx = Math.round(sl + 4) + 0.5;
+    ctx.strokeStyle = up ? COL.upB : COL.dn; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(mx, yOf(b.h + 0.5)); ctx.lineTo(mx, yOf(b.l - 0.5)); ctx.stroke();
+    const yo = yOf(b.o), yc0 = yOf(b.c); ctx.fillStyle = up ? COL.up : COL.dn; ctx.fillRect(mx - 2, Math.min(yo, yc0), 4, Math.max(1, Math.abs(yc0 - yo)));
+    const x0 = sl + 9, x1 = sr - 3, cw = x1 - x0, mid = x0 + cw / 2;
+    if (cw < 3) continue;
+    let maxCell = 1, maxRow = 1, maxD = 1, poc = 0;
+    for (let r = 0; r < f.n; r++) { maxCell = Math.max(maxCell, f.bid[r], f.ask[r]); const t = f.bid[r] + f.ask[r]; if (t > maxRow) { maxRow = t; poc = r; } maxD = Math.max(maxD, Math.abs(f.ask[r] - f.bid[r])); }
+    for (let r = 0; r < f.n; r++) {
+      const p0 = (f.r0 + r) * rT - 0.5, y0 = yOf(p0 + rT), y1 = yOf(p0), hh = Math.max(1, y1 - y0 - (rowPx > 5 ? 1 : 0));
+      if (y1 < 0 || y0 > PH) continue;
+      const bv = f.bid[r], av = f.ask[r], dl = av - bv, tot = av + bv;
+      if (S.fpMode === 'ba') {
+        ctx.fillStyle = `rgba(${COL.sell},${0.06 + 0.5 * bv / maxCell})`; ctx.fillRect(x0, y0, mid - x0 - 0.5, hh);
+        ctx.fillStyle = `rgba(${COL.buy},${0.06 + 0.5 * av / maxCell})`; ctx.fillRect(mid + 0.5, y0, x1 - mid - 0.5, hh);
+      } else if (S.fpMode === 'delta') {
+        ctx.fillStyle = `rgba(${dl >= 0 ? COL.buy : COL.sell},${0.08 + 0.6 * Math.abs(dl) / maxD})`; ctx.fillRect(x0, y0, cw, hh);
+      } else {
+        ctx.fillStyle = 'rgba(150,170,205,.1)'; ctx.fillRect(x0, y0, cw, hh);
+        ctx.fillStyle = `rgba(150,170,205,${0.25 + 0.4 * tot / maxRow})`; ctx.fillRect(x0, y0, cw * tot / maxRow, hh);
+      }
+      if (im.si[r]) { ctx.fillStyle = '#ff5252'; ctx.fillRect(x0, y0, 2, hh); }
+      if (im.bi[r]) { ctx.fillStyle = '#00e6aa'; ctx.fillRect(x1 - 2, y0, 2, hh); }
+      if (text) {
+        const yc = y0 + hh / 2 + 0.5;
+        if (S.fpMode === 'ba') {
+          ctx.font = `${im.si[r] ? 700 : 400} ${fs}px -apple-system, BlinkMacSystemFont, sans-serif`; ctx.fillStyle = im.si[r] ? '#ff8a80' : '#dfe4ee';
+          const ts = fmtK(bv); ctx.fillText(ts, mid - 4 - ctx.measureText(ts).width, yc);
+          ctx.font = `${im.bi[r] ? 700 : 400} ${fs}px -apple-system, BlinkMacSystemFont, sans-serif`; ctx.fillStyle = im.bi[r] ? '#69f0c4' : '#dfe4ee';
+          ctx.fillText(fmtK(av), mid + 4, yc);
+        } else {
+          const t = S.fpMode === 'delta' ? fmtDK(dl) : fmtK(tot);
+          ctx.font = `${fs}px -apple-system, BlinkMacSystemFont, sans-serif`; ctx.fillStyle = '#e6ebf5'; ctx.fillText(t, mid - ctx.measureText(t).width / 2, yc);
+        }
+      }
+      hits.push({ kind: 'fp', x0, x1, y0, y1: y0 + Math.max(hh, 2), b, f, r, im });
+    }
+    const p0 = (f.r0 + poc) * rT - 0.5, py0 = yOf(p0 + rT), py1 = yOf(p0);
+    ctx.strokeStyle = `rgba(${COL.poc},.95)`; ctx.lineWidth = 1.2; ctx.strokeRect(Math.round(x0) + 0.5, Math.round(py0) + 0.5, Math.round(cw) - 1, Math.max(1, Math.round(py1 - py0) - 1));
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
+// stacked imbalance: 3+ imbalance za sebou (po tickách) = zóna, platí do průrazu
+const stackCache = new WeakMap();
+function stacksOf(b, i, fullBars) {
+  const key = S.imbRatio + '|' + S.imbMin + '|' + S.stackN;
+  const c = stackCache.get(b); if (c && c.key === key) return c.s;
+  const f = fpRows(b, 1), im = imbalances(f), out = [];
+  for (const [arr, buy] of [[im.bi, true], [im.si, false]]) {
+    let st = -1;
+    for (let r = 0; r <= f.n; r++) {
+      if (r < f.n && arr[r]) { if (st < 0) st = r; }
+      else { if (st >= 0 && r - st >= S.stackN) out.push({ lo: f.r0 + st, hi: f.r0 + r - 1, buy, n: r - st }); st = -1; }
+    }
+  }
+  if (!b.live) for (const zn of out) { // konec zóny z úplných dat (v přehrávání se ořízne)
+    zn.end = Infinity;
+    for (let j = i + 1; j < fullBars.length; j++) { const bj = fullBars[j]; if (zn.buy ? bj.l < zn.lo : bj.h > zn.hi) { zn.end = j; break; } }
+  }
+  stackCache.set(b, { key, s: out }); return out;
+}
+function drawStacked(d, a, z) {
+  const bars = d.bars, full = (d.full || d).bars, lastDone = d.partialIdx < Infinity ? bars.length - 2 : bars.length - 1;
+  for (let i = Math.max(0, a - 400); i <= z; i++) {
+    for (const zn of stacksOf(bars[i], i, full)) {
+      const open = !(zn.end <= lastDone), end = open ? bars.length - 1 : zn.end;
+      if (end < a) continue;
+      const xs = xOf(i) - S.spacing / 2, xe = open ? PW : xOf(end);
+      const yT = yOf(zn.hi + 0.5), yB = yOf(zn.lo - 0.5), c = zn.buy ? COL.buy : COL.sell;
+      ctx.fillStyle = `rgba(${c},.12)`; ctx.fillRect(xs, yT, xe - xs, yB - yT);
+      ctx.fillStyle = `rgba(${c},.9)`; ctx.fillRect(xs, yT, 2, yB - yT);
+      hits.push({ kind: 'stack', x0: xs, x1: xe, y0: yT, y1: Math.max(yB, yT + 4), zn, bar: bars[i], open, endBar: bars[end] });
+    }
+  }
+}
+// nedokončená aukce: na maximu/minimu svíčky obchodovali kupující i prodávající
+function drawUA(bars, a, z) {
+  ctx.strokeStyle = 'rgba(255,167,38,.95)'; ctx.lineWidth = 2;
+  const fpOn = fpActive(), rT = fpOn ? fpRowTicks() : 1, w = Math.max(6, S.spacing * 0.5), dx = fpOn ? S.spacing * 0.08 : 0;
+  for (let i = a; i <= z; i++) {
+    const b = bars[i], n = b.buy.length - 1, x = xOf(i) + dx;
+    if (b.buy[n] > 0 && b.sell[n] > 0) { const y = Math.round(yOf((Math.floor(b.h / rT) + 1) * rT - 0.5)) - 3; ctx.beginPath(); ctx.moveTo(x - w / 2, y); ctx.lineTo(x + w / 2, y); ctx.stroke(); hits.push({ kind: 'ua', x0: x - w / 2, x1: x + w / 2, y0: y - 4, y1: y + 4, b, hi: true }); }
+    if (b.buy[0] > 0 && b.sell[0] > 0) { const y = Math.round(yOf(Math.floor(b.l / rT) * rT - 0.5)) + 3; ctx.beginPath(); ctx.moveTo(x - w / 2, y); ctx.lineTo(x + w / 2, y); ctx.stroke(); hits.push({ kind: 'ua', x0: x - w / 2, x1: x + w / 2, y0: y - 4, y1: y + 4, b, hi: false }); }
+  }
+}
+function drawDivergence(bars, a, z, lastDone) {
+  const N = 10;
+  for (let i = Math.max(N, a); i <= Math.min(z, lastDone); i++) {
+    const b = bars[i]; let hh = -Infinity, ll = Infinity;
+    for (let j = i - N; j < i; j++) { hh = Math.max(hh, bars[j].h); ll = Math.min(ll, bars[j].l); }
+    const dir = b.h > hh && b.delta < 0 ? -1 : b.l < ll && b.delta > 0 ? 1 : 0;
+    if (!dir) continue;
+    const x = xOf(i), y = dir < 0 ? yOf(b.h + 0.5) - 13 : yOf(b.l - 0.5) + 13;
+    ctx.fillStyle = '#ba68c8'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '700 9px -apple-system, sans-serif'; ctx.fillText('D', x - 3, y + 3.2);
+    hits.push({ kind: 'dd', cx: x, cy: y, r: 8, b, dir, ext: dir < 0 ? hh : ll });
+  }
+}
+function drawIcebergs(d, a, z) {
+  const bars = d.bars, kE = RP.on && S.tool !== 'pick' ? RP.kEnd : Infinity;
+  if (!bars.length) return;
+  const tA = bars[Math.max(0, a)].t, tZ = bars[z].t + d.tf, dx = fpActive() ? S.spacing * 0.3 : 0;
+  for (const ev of ICE) {
+    if (ev.k >= kE) break;
+    if (ev.t < tA || ev.t >= tZ) continue;
+    const day = Math.floor(ev.t / 1440), m = ev.t % 1440, i = findIdx(bars, day * 1440 + Math.floor(m / d.tf) * d.tf);
+    let vol = ev.vol, growing = false;
+    if (ev.kLast >= kE) { growing = true; vol = 0; for (let k = ev.k0; k < kE; k++) if (TP[k] === ev.p && !!TB[k] === ev.buy) vol += TS[k]; }
+    const x = xOf(i) + dx, y = yOf(ev.p), sz = Math.min(10, 4.5 + Math.sqrt(vol) / 7);
+    const c = ev.buy ? COL.sell : COL.buy; // agresivní nákupy do skrytého prodávajícího = rezistence (červená)
+    const age = pulseAge('i' + ev.k);
+    if (age < 900) { const q = age / 900; ctx.strokeStyle = `rgba(${c},${0.9 * (1 - q)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, sz + 4 + q * 20, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(x, y - sz); ctx.lineTo(x + sz, y); ctx.lineTo(x, y + sz); ctx.lineTo(x - sz, y); ctx.closePath();
+    ctx.fillStyle = `rgba(${c},.95)`; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.2; ctx.stroke();
+    hits.push({ kind: 'ice', cx: x, cy: y, r: sz + 3, ev, vol, growing });
+  }
+}
+function drawVWAP(bars, a, z) {
+  const key = S.vwapAnchor === 'ny' ? 'cN' : 'cD';
+  const lines = [[0, 1.8, [], 0.95], [1, 1, [5, 4], 0.6], [-1, 1, [5, 4], 0.6], [2, 1, [2, 3], 0.45], [-2, 1, [2, 3], 0.45]];
+  let lastPt = null;
+  for (const [m, lw, dash, al] of lines) {
+    if (m && !S.vwapBands) continue;
+    ctx.save(); ctx.setLineDash(dash); ctx.strokeStyle = `rgba(199,146,234,${al})`; ctx.lineWidth = lw; ctx.beginPath();
+    let prev = null;
+    for (let i = a; i <= z; i++) {
+      const b = bars[i], c = b[key]; if (!c) { prev = null; continue; }
+      const [v, sd] = vw(c), x = xOf(i), y = yOf(v + m * sd);
+      if (!prev || prev.day !== b.day) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      prev = b; if (!m) lastPt = { x, y, v };
+    }
+    ctx.stroke(); ctx.restore();
+  }
+  if (lastPt) { ctx.fillStyle = 'rgba(199,146,234,.95)'; ctx.font = '600 10px -apple-system, sans-serif'; ctx.fillText('VWAP', Math.min(lastPt.x + 6, PW - 34), lastPt.y - 5); }
+}
+
+// ---------- statistiky svíček ----------
+const STATS = [
+  ['Objem', b => b.vol, 'vol'], ['Delta', b => b.delta, 'd'], ['Δ %', b => b.vol ? b.delta / b.vol * 100 : 0, 'pct'],
+  ['Max Δ', b => b.dmax, 'd'], ['Min Δ', b => b.dmin, 'd'], ['CVD', b => b.cvd, 'd'], ['Obchody', b => b.trades, 'vol'],
+];
+function drawStats(bars, a, z, y0) {
+  const h = STATS.length * ST_ROW + 4;
+  ctx.fillStyle = '#0c1118'; ctx.fillRect(0, y0, W, h);
+  ctx.strokeStyle = '#232c3d'; ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
+  const showText = S.spacing >= 34;
+  ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif'; ctx.textBaseline = 'middle';
+  STATS.forEach(([name, fn, kind], ri) => {
+    const yy = y0 + 3 + ri * ST_ROW;
+    let mx = 1; for (let i = a; i <= z; i++) mx = Math.max(mx, Math.abs(fn(bars[i])));
+    for (let i = a; i <= z; i++) {
+      const v = fn(bars[i]), x0 = xOf(i) - S.spacing / 2 + 0.5, w = Math.max(1, S.spacing - 1);
+      ctx.fillStyle = kind === 'vol' ? `rgba(150,170,205,${0.05 + 0.4 * v / mx})` : `rgba(${v >= 0 ? COL.buy : COL.sell},${0.05 + 0.55 * Math.abs(v) / mx})`;
+      ctx.fillRect(x0, yy, w, ST_ROW - 1);
+      if (showText) { const t = kind === 'pct' ? Math.round(v) + ' %' : kind === 'vol' ? fmtK(v) : fmtDK(v); ctx.fillStyle = 'rgba(230,235,245,.92)'; ctx.fillText(t, x0 + w / 2 - ctx.measureText(t).width / 2, yy + ST_ROW / 2); }
+    }
+    ctx.fillStyle = '#0f141c'; ctx.fillRect(PW, yy, AXW, ST_ROW);
+    ctx.fillStyle = '#8794a5'; ctx.fillText(name, PW + 7, yy + ST_ROW / 2);
+  });
+  ctx.textBaseline = 'alphabetic';
+}
+
+// ---------- páska (Time & Sales) a L1 kotace ----------
+const tapeEl = document.getElementById('tape'), quoteEl = document.getElementById('quote'), tapeInfoEl = document.getElementById('tapeInfo');
+let tapeTs = 0, tapeKey = '';
+const domEl = document.getElementById('dom');
+let domKey = '';
+function updateDom() {
+  const s = sCur(), key = s + '|' + S.hm; if (key === domKey) return; domKey = key;
+  const c = BC[s], off = s * DW, sp = Math.max(0, s - 3), cp = BC[sp], offp = sp * DW;
+  let mx = 1; const rows = [];
+  for (let p = c + 11; p >= c - 12; p--) { const v = BOOK[off + p - c + DEPTH]; mx = Math.max(mx, v); rows.push(p); }
+  domEl.innerHTML = '<div class="dh"><span>Δ</span><span>Bid</span><span>Cena</span><span>Ask</span><span>Δ</span></div>' + rows.map(p => {
+    const v = BOOK[off + p - c + DEPTH], jp = p - cp + DEPTH, vp = jp >= 0 && jp < DW ? BOOK[offp + jp] : v, dv = v - vp, isAsk = p >= c, pct = Math.round(v / mx * 100);
+    const dTxt = Math.abs(dv) >= 40 && Math.abs(dv) >= 0.4 * Math.max(v, vp) ? `<i class="${dv > 0 ? 'up' : 'dn'}">${dv > 0 ? '+' : '−'}${Math.abs(dv)}</i>` : '';
+    const bg = isAsk ? `linear-gradient(to right, rgba(239,83,80,.38) ${pct}%, transparent ${pct}%)` : `linear-gradient(to left, rgba(38,166,154,.38) ${pct}%, transparent ${pct}%)`;
+    return `<div class="dr ${isAsk ? 'a' : 'b'}${p === c || p === c - 1 ? ' top' : ''}${v >= S.wallMin ? ' wall' : ''}"><span>${isAsk ? '' : dTxt}</span><span class="bv" style="${isAsk ? '' : 'background:' + bg}">${isAsk ? '' : v}</span><span class="pr">${fmtP(p)}</span><span class="av" style="${isAsk ? 'background:' + bg : ''}">${isAsk ? v : ''}</span><span>${isAsk ? dTxt : ''}</span></div>`;
+  }).join('');
+}
+function updateTape() {
+  const now = performance.now(); if (now - tapeTs < 110) return; tapeTs = now;
+  updateDom();
+  const kE = RP.on && S.tool !== 'pick' ? RP.kEnd : TP.length;
+  const key = kE + '|' + S.tapeMin + '|' + S.bubbleMin; if (key === tapeKey || kE <= 0) return; tapeKey = key;
+  const rows = [];
+  for (let k = kE - 1, n = 0; k >= 0 && rows.length < 24 && n < 30000; k--, n++) if (TS[k] >= S.tapeMin) rows.push(k);
+  tapeEl.innerHTML = rows.map(k => {
+    const b = base[tradeMinute(k)], sec = Math.floor((k - b.k0) / Math.max(1, b.k1 - b.k0) * 60), big = TS[k] >= S.bubbleMin;
+    return `<div class="tr ${TB[k] ? 'b' : 's'}${big ? ' big' : ''}"><span>${hhmm(b.m)}:${pad2(sec)}</span><span>${fmtP(TP[k])}</span><span>${TS[k]}</span><span>${TB[k] ? 'A' : 'B'}</span></div>`;
+  }).join('');
+  const k = kE - 1, bid = TB[k] ? TP[k] - 1 : TP[k], ask = bid + 1, qb = TQB[k], qa = TQA[k];
+  quoteEl.innerHTML = `<div class="qb"><small>Bid</small><b>${fmtP(bid)}</b><span>${qb}</span></div><div class="qa"><span>${qa}</span><b>${fmtP(ask)}</b><small>Ask</small></div>
+    <div class="qbar" title="Nerovnováha kotace: podíl velikosti na bidu"><i style="width:${Math.round(qb / (qb + qa) * 100)}%"></i></div>`;
+  let bv = 0, sv = 0; for (let j = Math.max(0, kE - 300); j < kE; j++) { if (TB[j]) bv += TS[j]; else sv += TS[j]; }
+  const cm = base[tradeMinute(k)], rate = (cm.k1 - cm.k0) / 60;
+  tapeInfoEl.innerHTML = `Tempo <b>${rate.toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}</b> obchodu/s · posledních 300: <span style="color:var(--buy)">nákupy ${Math.round(bv / Math.max(1, bv + sv) * 100)} %</span>`;
+}
+
+function drawDeltaStrip(bars, a, z) {
+  const y0 = PH, h = DSTRIP;
+  ctx.fillStyle = '#0c1118'; ctx.fillRect(0, y0, PW, h);
+  ctx.strokeStyle = '#232c3d'; ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
+  let mx = 1, cMin = Infinity, cMax = -Infinity;
+  for (let i = a; i <= z; i++) { mx = Math.max(mx, Math.abs(bars[i].delta)); cMin = Math.min(cMin, bars[i].cvd); cMax = Math.max(cMax, bars[i].cvd); }
+  const mid = y0 + h / 2, bw = Math.max(1, Math.round(S.spacing * 0.68));
+  for (let i = a; i <= z; i++) {
+    const dl = bars[i].delta, L = Math.abs(dl) / mx * (h / 2 - 6), x = Math.round(xOf(i));
+    ctx.fillStyle = `rgba(${dl >= 0 ? COL.buy : COL.sell},.75)`;
+    ctx.fillRect(x - Math.floor(bw / 2), dl >= 0 ? mid - L : mid, bw, Math.max(1, L));
+  }
+  if (S.cvd && cMax > cMin) {
+    ctx.strokeStyle = `rgba(${COL.poc},.9)`; ctx.lineWidth = 1.3; ctx.beginPath();
+    let prevDay = -1;
+    for (let i = a; i <= z; i++) {
+      const x = xOf(i), y = y0 + 5 + (cMax - bars[i].cvd) / (cMax - cMin) * (h - 10);
+      if (bars[i].day !== prevDay) { ctx.moveTo(x, y); prevDay = bars[i].day; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#8794a5'; ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillText('Delta' + (S.cvd ? '  ·  CVD' : ''), 8, y0 + 14);
+  ctx.fillStyle = '#0c1118'; ctx.fillRect(PW, y0, AXW, h);
+  ctx.fillStyle = '#8794a5'; ctx.fillText('±' + fmtV(mx), PW + 6, y0 + 14);
+}
+
+function drawPriceAxis(bars) {
+  ctx.fillStyle = '#0f141c'; ctx.fillRect(PW, 0, AXW, PH);
+  ctx.strokeStyle = '#232c3d'; ctx.beginPath(); ctx.moveTo(PW + 0.5, 0); ctx.lineTo(PW + 0.5, H - TAXH); ctx.stroke();
+  ctx.fillStyle = '#8794a5'; ctx.font = '11px -apple-system, sans-serif';
+  const st = niceStep((S.pMax - S.pMin) * TICK, PH) / TICK;
+  for (let p = Math.ceil(S.pMin / st) * st; p <= S.pMax; p += st) { const y = yOf(p); if (y < 8 || y > PH - 4) continue; ctx.fillText(fmtP(p), PW + 7, y + 4); }
+  const last = bars[bars.length - 1], y = yOf(last.c);
+  if (y >= 0 && y <= PH) {
+    ctx.fillStyle = last.c >= last.o ? '#5b6270' : COL.dn; ctx.fillRect(PW + 1, y - 9, AXW - 1, 18);
+    ctx.fillStyle = '#fff'; ctx.fillText(fmtP(last.c), PW + 7, y + 4);
+    ctx.save(); ctx.setLineDash([2, 2]); ctx.strokeStyle = 'rgba(160,170,190,.5)'; ctx.beginPath(); ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(PW, Math.round(y) + 0.5); ctx.stroke(); ctx.restore();
+  }
+}
+
+function drawTimeAxis(bars, a, z) {
+  const y0 = H - TAXH;
+  ctx.fillStyle = '#0f141c'; ctx.fillRect(0, y0, W, TAXH);
+  ctx.strokeStyle = '#232c3d'; ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(W, y0 + 0.5); ctx.stroke();
+  const pxPerMin = S.spacing / S.tf;
+  let step = 720; for (const s of [5, 15, 30, 60, 120, 240, 360, 720]) if (s >= S.tf && s * pxPerMin >= 70) { step = s; break; }
+  ctx.font = '11px -apple-system, sans-serif';
+  for (let i = Math.max(0, a); i <= z; i++) {
+    const b = bars[i], x = xOf(i) - S.spacing / 2;
+    if (x < 0 || x > PW - 20) continue;
+    if (b.m === 0) { ctx.fillStyle = '#c9d2e3'; ctx.font = '600 11px -apple-system, sans-serif'; ctx.fillText(DAYS[b.day], x + 3, y0 + 16); ctx.font = '11px -apple-system, sans-serif'; }
+    else if (b.m % step === 0) { ctx.fillStyle = '#8794a5'; const t = hhmm(b.m); ctx.fillText(t, x - ctx.measureText(t).width / 2, y0 + 16); }
+  }
+}
+
+function drawCrosshair(bars) {
+  if (!mouse || mouse.x > PW || mouse.y > H - TAXH || drag) return;
+  if (S.tool === 'pick') {
+    const x = Math.round(xOf(Math.round(iOf(mouse.x))) - S.spacing / 2) + 0.5;
+    ctx.fillStyle = 'rgba(41,98,255,.10)'; ctx.fillRect(x, 0, PW - x, H - TAXH);
+    ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - TAXH); ctx.stroke();
+    ctx.fillStyle = '#2962ff'; ctx.font = '600 12px -apple-system, sans-serif'; ctx.fillText('✂ přehrát odsud', x + 6, 18);
+  }
+  ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = '#758696'; ctx.lineWidth = 1;
+  const i = Math.round(iOf(mouse.x)), x = Math.round(xOf(i)) + 0.5, y = Math.round(mouse.y) + 0.5;
+  ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - TAXH); if (mouse.y < PH) { ctx.moveTo(0, y); ctx.lineTo(PW, y); } ctx.stroke(); ctx.restore();
+  ctx.font = '11px -apple-system, sans-serif';
+  if (mouse.y < PH) {
+    const p = Math.round(pOf(mouse.y));
+    ctx.fillStyle = '#363c4e'; ctx.fillRect(PW + 1, y - 9, AXW - 1, 18); ctx.fillStyle = '#fff'; ctx.fillText(fmtP(p), PW + 7, y + 4);
+  }
+  const b = bars[i];
+  if (b) { const t = barTime(b, 1); const tw = ctx.measureText(t).width + 12; ctx.fillStyle = '#363c4e'; ctx.fillRect(x - tw / 2, H - TAXH + 1, tw, TAXH - 1); ctx.fillStyle = '#fff'; ctx.fillText(t, x - tw / 2 + 6, H - 8); }
+}
+
+function updateLegend(bars) {
+  const i = mouse && mouse.x < PW ? Math.round(iOf(mouse.x)) : bars.length - 1;
+  const b = bars[Math.max(0, Math.min(bars.length - 1, i))];
+  const c = b.delta >= 0 ? 'var(--buy)' : 'var(--sell)';
+  const vk = S.vwapAnchor === 'ny' ? b.cN : b.cD, vwTxt = S.vwap && vk ? ` &nbsp; <span style="color:#c792ea">VWAP <b style="color:#c792ea">${fmtP(Math.round(vw(vk)[0]))}</b></span>` : '';
+  const fpTxt = fpActive() ? ` &nbsp; Footprint řádek <b>${({ 1: '1 tick', 2: '2 ticky', 4: '1 b', 8: '2 b', 20: '5 b', 40: '10 b', 80: '20 b' })[fpRowTicks()]}</b>` : '';
+  legend.innerHTML = `<b>MNQ1! · ${S.tf}m</b> &nbsp;${barTime(b, S.tf)} &nbsp; O <b>${fmtP(b.o)}</b> H <b>${fmtP(b.h)}</b> L <b>${fmtP(b.l)}</b> C <b>${fmtP(b.c)}</b> &nbsp; Obj <b>${fmtV(b.vol)}</b> &nbsp; Δ <b style="color:${c}">${fmtD(b.delta)}</b>${vwTxt}${fpTxt}`;
+}
+
+function hitAt(x, y) {
+  for (let k = hits.length - 1; k >= 0; k--) {
+    const h = hits[k];
+    if (h.cx !== undefined && (x - h.cx) ** 2 + (y - h.cy) ** 2 <= h.r * h.r) return h;
+  }
+  for (let k = hits.length - 1; k >= 0; k--) { const h = hits[k]; if (h.kind === 'ua' && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) return h; }
+  for (let k = hits.length - 1; k >= 0; k--) { const h = hits[k]; if (h.x0 !== undefined && h.kind !== 'stack' && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) return h; }
+  for (let k = hits.length - 1; k >= 0; k--) { const h = hits[k]; if (h.kind === 'stack' && x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) return h; }
+  return null;
+}
+
+function updateTip() {
+  if (!mouse || drag || mouse.x > PW || mouse.y > H - TAXH) { tip.style.display = 'none'; return; }
+  let h = mouse.y > PH ? { kind: 'barstats', b: D().bars[Math.round(iOf(mouse.x))] } : hitAt(mouse.x, mouse.y);
+  if (!h && S.hm && mouse.y < PH) {
+    const sn = snapAtX(D(), mouse.x), p = Math.round(pOf(mouse.y));
+    if (sn >= 0) { const j = p - BC[sn] + DEPTH, v = j >= 0 && j < DW ? BOOK[sn * DW + j] : 0; if (v >= 40) h = { kind: 'liq', sn, p, v, ask: p >= BC[sn] }; }
+  }
+  if (!h || (h.kind === 'barstats' && !h.b)) { tip.style.display = 'none'; return; }
+  let html = '';
+  const sp = v => `<b style="color:${v >= 0 ? 'var(--buy)' : 'var(--sell)'}">${fmtD(v)}</b>`;
+  if (h.kind === 'barstats') {
+    const b = h.b;
+    html = `<div class="t">${barTime(b, S.tf)}</div><div>Objem <b>${fmtV(b.vol)}</b> · ${fmtV(b.trades)} obchodů (prům. ${(b.vol / Math.max(1, b.trades)).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })} ks)</div>
+      <div>Delta ${sp(b.delta)} (${Math.round(b.delta / Math.max(1, b.vol) * 100)} %)</div><div>Max Δ ${sp(b.dmax)} · Min Δ ${sp(b.dmin)}</div><div>CVD (den) ${sp(b.cvd)}</div>
+      <div class="m">Max/Min Δ = nejvyšší a nejnižší průběžná delta uvnitř svíčky</div>`;
+  } else if (h.kind === 'liq' || h.kind === 'depth') {
+    const b = h.kind === 'liq' ? base[Math.floor(h.sn / SNAP)] : null, sec = h.kind === 'liq' ? (h.sn % SNAP) * 10 : 0;
+    html = `<div class="t" style="color:${h.ask ? 'var(--sell)' : 'var(--buy)'}">${h.kind === 'depth' ? 'Hloubka teď' : 'Likvidita (L2)'} · ${h.ask ? 'ask – prodejní limity' : 'bid – nákupní limity'}</div>
+      <div><b>${fmtV(h.v)}</b> ks na ${fmtP(h.p)}</div>${b ? `<div class="m">${DAYS[b.day]} ${hhmm(b.m)}:${pad2(sec)}</div>` : ''}`;
+  } else if (h.kind === 'pull') {
+    const w = h.w, b0 = base[Math.floor(w.s0 / SNAP)];
+    html = `<div class="t" style="color:#ffb74d">Stažený limit (pulling)</div><div>${fmtV(w.size0)} ks na ${w.side < 0 ? 'bidu' : 'asku'} ${fmtP(w.p)}</div>
+      <div>stál od ${hhmm(b0.m)}, zmizel, když se cena přiblížila na ${w.spoofDist} ${w.spoofDist === 1 ? 'tick' : 'ticky'}</div><div class="m">Jen z L2 – v L1 ani v obchodech není vidět.</div>`;
+  } else if (h.kind === 'fp') {
+    const f = h.f, r = h.r, bv = f.bid[r], av = f.ask[r], lo = (f.r0 + r) * f.rT, hi = lo + f.rT - 1;
+    html = `<div class="t">Footprint · ${barTime(h.b, S.tf)}</div><div>${f.rT > 1 ? fmtP(lo) + ' – ' + fmtP(hi) : fmtP(lo)}</div>
+      <div><span style="color:var(--sell)">Bid (market prodeje) <b>${fmtV(bv)}</b></span> × <span style="color:var(--buy)">Ask (market nákupy) <b>${fmtV(av)}</b></span></div>
+      <div>Delta ${sp(av - bv)} · Objem ${fmtV(av + bv)}</div>`
+      + (h.im.bi[r] ? `<div style="color:var(--buy)">Nákupní imbalance: ask ${fmtV(av)} ≥ ${S.imbRatio} % bidu o řádek níž (${fmtV(f.bid[r - 1])})</div>` : '')
+      + (h.im.si[r] ? `<div style="color:var(--sell)">Prodejní imbalance: bid ${fmtV(bv)} ≥ ${S.imbRatio} % asku o řádek výš (${fmtV(f.ask[r + 1])})</div>` : '');
+  } else if (h.kind === 'stack') {
+    const zn = h.zn;
+    html = `<div class="t" style="color:${zn.buy ? 'var(--buy)' : 'var(--sell)'}">Stacked imbalance – ${zn.buy ? 'nákupní (podpora)' : 'prodejní (rezistence)'}</div>
+      <div>${zn.n} imbalance za sebou · ${fmtP(zn.lo)} – ${fmtP(zn.hi)}</div><div>${h.open ? 'Zóna zatím drží' : 'Prolomena ' + barTime(h.endBar, 1)}</div><div class="m">${barTime(h.bar, S.tf)}</div>`;
+  } else if (h.kind === 'ice') {
+    const ev = h.ev;
+    html = `<div class="t" style="color:${ev.buy ? 'var(--sell)' : 'var(--buy)'}">Iceberg na ${ev.buy ? 'asku – skrytý prodávající' : 'bidu – skrytý kupující'}</div>
+      <div>${fmtP(ev.p)}: proobchodováno <b>${fmtV(h.vol)}</b> ks${h.growing ? ' (stále se plní)' : ''}</div>
+      <div>v kotaci přitom bylo vidět nejvýš ${ev.disp} ks</div><div class="m">Pozná se z L1: objem na ceně mnohonásobně převýší zobrazenou velikost a cena úroveň neprorazí.</div>`;
+  } else if (h.kind === 'ua') {
+    html = `<div class="t" style="color:#ffa726">Nedokončená aukce na ${h.hi ? 'maximu' : 'minimu'}</div><div>${fmtP(h.hi ? h.b.h : h.b.l)} – obchodovali tu kupující i prodávající</div><div class="m">Aukce se nedotáhla, trh se k té ceně často vrací.</div>`;
+  } else if (h.kind === 'dd') {
+    html = `<div class="t" style="color:#ce93d8">Delta divergence ${h.dir < 0 ? '▼' : '▲'}</div><div>${h.dir < 0 ? 'Nové maximum 10 svíček' : 'Nové minimum 10 svíček'}, ale delta ${sp(h.b.delta)}</div><div class="m">${h.dir < 0 ? 'Cenu nahoru netlačí agresivní nákupy' : 'Cenu dolů netlačí agresivní prodeje'} – možné vyčerpání.</div>`;
+  } else if (h.kind === 'bubble') {
+    const e = h.e;
+    html = `<div class="t" style="color:${e.buy ? 'var(--buy)' : 'var(--sell)'}">${e.buy ? 'Agresivní nákup' : 'Agresivní prodej'} · ${e.size} ks</div>
+      <div>Cena ${fmtP(e.p)}${e.n > 1 ? ` · ${e.n} velké obchody sečtené` : ''}</div><div class="m">${barTime(h.bar, S.tf)}</div>`;
+  } else if (h.kind === 'abs') {
+    const ev = h.ev, bull = ev.dir > 0;
+    html = `<div class="t" style="color:${bull ? 'var(--buy)' : 'var(--sell)'}">${bull ? 'Absorpce prodejů ▲ (podpora)' : 'Absorpce nákupů ▼ (rezistence)'}</div>
+      <div>${fmtV(ev.a)} ks agresivních ${bull ? 'prodejů' : 'nákupů'} kolem ${fmtP(ev.p)}</div>
+      <div>proti nim jen ${fmtV(ev.ps)} ks ${bull ? 'nákupů' : 'prodejů'} – cena ${ev.K * S.tf} min neprorazila</div>
+      <div>Reakce: ${bull ? '+' : '−'}${fmtP(h.after).replace(/,00$/, '')} b · ${ev.open ? 'úroveň stále drží' : 'prolomeno ' + barTime(D().bars[ev.end], 1)}</div>
+      <div class="m">${barTime(h.bar, S.tf)}</div>`;
+  } else if (h.kind === 'row') {
+    const p = h.p, r = h.r, b = p.buy[r], s = p.sell[r], v = b + s, dl = b - s;
+    const lo = (p.rMin + r) * p.rowT, hi = lo + p.rowT - 1;
+    const tag = r === p.poc ? ' · POC' : r === p.vah ? ' · VAH' : r === p.val ? ' · VAL' : '';
+    html = `<div class="t">${h.title}${tag}</div><div>${p.rowT > 1 ? fmtP(lo) + ' – ' + fmtP(hi) : fmtP(lo)}</div>
+      <div>Objem <b>${fmtV(v)}</b> (${(v / p.total * 100).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })} %)</div>
+      <div><span style="color:var(--buy)">Nákup ${fmtV(b)}</span> · <span style="color:var(--sell)">Prodej ${fmtV(s)}</span></div>
+      <div>Delta <b style="color:${dl >= 0 ? 'var(--buy)' : 'var(--sell)'}">${fmtD(dl)}</b></div>
+      <div class="m">POC ${fmtP(rowLow(p, p.poc))} · VAH ${fmtP((p.rMin + p.vah) * p.rowT + p.rowT - 1)} · VAL ${fmtP((p.rMin + p.val) * p.rowT)}</div>`;
+  } else if (h.kind === 'npoc') {
+    html = `<div class="t" style="color:var(--poc)">Neotestované POC</div><div>${h.sp.name} · ${DAYS[h.day]}</div><div>${fmtP(h.price)} – cena se sem od té doby nevrátila</div>`;
+  }
+  tip.innerHTML = html; tip.style.display = 'block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let tx = mouse.x + 16, ty = mouse.y + 14;
+  if (tx + tw > PW) tx = mouse.x - tw - 14; if (ty + th > H - TAXH) ty = mouse.y - th - 10;
+  tip.style.left = Math.max(4, tx) + 'px'; tip.style.top = Math.max(4, ty) + 'px';
+}
+
+// ---------- interakce ----------
+function rangeAt(x, y) {
+  for (let k = rangeGeo.length - 1; k >= 0; k--) {
+    const g = rangeGeo[k];
+    const c = g.close; if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) return { g, part: 'close' };
+    const l = g.label; if (x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h) return { g, part: 'move' };
+    if (y >= g.y0 - 4 && y <= g.y1 + 4) {
+      if (Math.abs(x - g.x0) <= 6) return { g, part: 'l' };
+      if (Math.abs(x - g.x1) <= 6) return { g, part: 'r' };
+      if (x > g.x0 && x < g.x1 && y >= g.y0 && y <= g.y1) return { g, part: 'move' };
+    }
+  }
+  return null;
+}
+const clampIdx = i => Math.max(0, Math.min(D().bars.length - 1, i));
+
+cv.addEventListener('pointerdown', e => {
+  const rect = cv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  cv.setPointerCapture(e.pointerId);
+  if (S.tool === 'pick' && x < PW) {
+    const v = D(), i = clampIdx(Math.round(iOf(x)));
+    setTool('pan'); startReplay(findIdx(base, v.bars[i].t)); return;
+  }
+  if (x > PW && y < PH) { drag = { type: 'scale', y, pMin: S.pMin, pMax: S.pMax }; S.auto = false; syncAutoBtn(); return; }
+  if (S.tool === 'profile' && x < PW && y < PH) { const i = clampIdx(Math.round(iOf(x))); drag = { type: 'new', i0: i, i1: i }; schedule(); return; }
+  const hit = x < PW && y < PH ? rangeAt(x, y) : null;
+  if (hit) {
+    const rg = S.ranges.find(r => r.id === hit.g.id);
+    if (hit.part === 'close') { removeRange(rg.id); return; }
+    S.sel = rg.id; renderRanges();
+    const [i0, i1] = rangeIdx(D().bars, rg);
+    drag = { type: 'range', part: hit.part, rg, x, i0, i1 }; schedule(); return;
+  }
+  if (S.sel !== null) { S.sel = null; renderRanges(); }
+  drag = { type: 'pan', x, y, offset: S.offset, pMin: S.pMin, pMax: S.pMax, moved: false };
+});
+
+cv.addEventListener('pointermove', e => {
+  const rect = cv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+  mouse = { x, y };
+  if (drag) {
+    const bars = D().bars;
+    if (drag.type === 'pan') {
+      S.offset = drag.offset - (x - drag.x) / S.spacing;
+      if (Math.abs(x - drag.x) > 3) S.follow = false;
+      if (Math.abs(y - drag.y) > 6 || !S.auto) {
+        if (S.auto) { S.auto = false; syncAutoBtn(); drag.pMin = S.pMin; drag.pMax = S.pMax; drag.y = y; }
+        const dp = (y - drag.y) / PH * (drag.pMax - drag.pMin); S.pMin = drag.pMin + dp; S.pMax = drag.pMax + dp;
+      }
+    } else if (drag.type === 'scale') {
+      const f = Math.exp((y - drag.y) * 0.006), mid = (drag.pMin + drag.pMax) / 2, half = (drag.pMax - drag.pMin) / 2 * f;
+      S.pMin = mid - half; S.pMax = mid + half;
+    } else if (drag.type === 'new') {
+      drag.i1 = clampIdx(Math.round(iOf(x)));
+    } else if (drag.type === 'range') {
+      const di = Math.round((x - drag.x) / S.spacing);
+      let i0 = drag.i0, i1 = drag.i1;
+      if (drag.part === 'move') { const sh = Math.max(-i0, Math.min(bars.length - 1 - i1, di)); i0 += sh; i1 += sh; }
+      else if (drag.part === 'l') i0 = Math.min(i1, clampIdx(drag.i0 + di));
+      else i1 = Math.max(i0, clampIdx(drag.i1 + di));
+      drag.rg.t0 = bars[i0].t; drag.rg.t1 = bars[i1].t + S.tf; renderRanges();
+    }
+  } else {
+    const r = x < PW && y < PH ? rangeAt(x, y) : null;
+    cv.style.cursor = x > PW && y < PH ? 'ns-resize' : S.tool === 'profile' ? 'crosshair' : r ? (r.part === 'l' || r.part === 'r' ? 'ew-resize' : r.part === 'close' ? 'pointer' : 'move') : 'default';
+  }
+  schedule();
+});
+
+cv.addEventListener('pointerup', () => {
+  if (drag && drag.type === 'new') {
+    const bars = D().bars, i0 = Math.min(drag.i0, drag.i1), i1 = Math.max(drag.i0, drag.i1);
+    if (i1 > i0) { const rg = { id: S.nextId++, t0: bars[i0].t, t1: bars[i1].t + S.tf }; S.ranges.push(rg); S.sel = rg.id; }
+    setTool('pan'); renderRanges();
+  }
+  if (drag && drag.type === 'pan' && !S.follow) S.follow = iOf(W - AXW) >= D().bars.length - 1;
+  drag = null; schedule();
+});
+cv.addEventListener('pointerleave', () => { if (!drag) { mouse = null; schedule(); } });
+cv.addEventListener('dblclick', e => { const rect = cv.getBoundingClientRect(); if (e.clientX - rect.left > PW) { S.auto = true; syncAutoBtn(); schedule(); } });
+
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect(), mx = Math.min(e.clientX - rect.left, PW);
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && !e.ctrlKey) { S.offset += e.deltaX / S.spacing; S.follow = iOf(PW) >= D().bars.length - 1; schedule(); return; }
+  const anchor = iOf(mx), f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0025));
+  S.spacing = Math.max(1.5, Math.min(70, S.spacing * f));
+  S.offset = anchor - mx / S.spacing + 0.5;
+  schedule();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); return; }
+  if (e.key === 'ArrowRight') { e.preventDefault(); stepBar(); return; }
+  if (e.key === 'p' || e.key === 'P') setTool(S.tool === 'profile' ? 'pan' : 'profile');
+  else if (e.key === 'Escape') { if (S.tool === 'pick') { setTool('pan'); VV = null; schedule(); return; } setTool('pan'); drag = null; S.sel = null; renderRanges(); schedule(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && S.sel !== null) { removeRange(S.sel); }
+});
+
+// ---------- panel ----------
+function setTool(t) { S.tool = t; for (const id of ['toolBtn', 'toolBtn2']) document.getElementById(id).classList.toggle('on', t === 'profile'); document.getElementById('rpPick').classList.toggle('on', t === 'pick'); cv.style.cursor = t === 'profile' || t === 'pick' ? 'crosshair' : 'default'; }
+function syncAutoBtn() { document.getElementById('autoBtn').classList.toggle('on', S.auto); }
+function removeRange(id) { S.ranges = S.ranges.filter(r => r.id !== id); if (S.sel === id) S.sel = null; renderRanges(); schedule(); }
+function renderRanges() {
+  const ul = document.getElementById('ranges'), bars1 = base;
+  ul.innerHTML = '';
+  if (!S.ranges.length) { ul.innerHTML = '<li style="cursor:default;justify-content:center"><span>Zatím žádný – klikni na „Natáhnout“ a táhni přes graf</span></li>'; return; }
+  for (const rg of S.ranges) {
+    const li = document.createElement('li'); if (rg.id === S.sel) li.className = 'sel';
+    const d0 = Math.floor(rg.t0 / 1440), d1 = Math.floor((rg.t1 - 1) / 1440);
+    li.innerHTML = `<div>${DAYS[d0].slice(0, 2)} ${hhmm(rg.t0 % 1440)} → ${d1 !== d0 ? DAYS[d1].slice(0, 2) + ' ' : ''}${hhmm(rg.t1 % 1440)}</div>`;
+    const del = document.createElement('button'); del.textContent = '×'; del.title = 'Smazat';
+    del.onclick = ev => { ev.stopPropagation(); removeRange(rg.id); };
+    li.onclick = () => { S.sel = rg.id; const bars = D().bars, [i0, i1] = rangeIdx(bars, rg); const vis = PW / S.spacing; if (i0 < S.offset || i1 > S.offset + vis) S.offset = (i0 + i1) / 2 - vis / 2; renderRanges(); schedule(); };
+    li.appendChild(del); ul.appendChild(li);
+  }
+}
+
+document.getElementById('tfSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const tf = +b.dataset.tf; if (tf === S.tf) return;
+  const oldBars = D().bars, center = oldBars[clampIdx(Math.round(iOf(PW / 2)))].t;
+  const lastVisible = Math.ceil(iOf(PW)) >= oldBars.length - 1;
+  S.tf = tf;
+  const bars = D().bars;
+  if (lastVisible || S.follow) S.offset = bars.length - 1 - (PW - RIGHT_PAD) / S.spacing;
+  else S.offset = findIdx(bars, center) - PW / S.spacing / 2;
+  for (const x of e.currentTarget.children) x.classList.toggle('on', x === b);
+  syncSlider('absorbMin');
+  primePulses(); schedule();
+});
+document.getElementById('fpZoom').onclick = () => {
+  const c = iOf(PW / 2); S.spacing = 84; S.auto = true; syncAutoBtn();
+  if (S.follow) followLast(); else S.offset = c - PW / 2 / S.spacing + 0.5;
+  if (S.fp === 'off') { S.fp = 'auto'; for (const x of document.querySelector('[data-seg=fp]').children) x.classList.toggle('on', x.dataset.val === 'auto'); }
+  schedule();
+};
+document.getElementById('toolBtn').onclick = () => setTool(S.tool === 'profile' ? 'pan' : 'profile');
+document.getElementById('toolBtn2').onclick = () => setTool(S.tool === 'profile' ? 'pan' : 'profile');
+document.getElementById('autoBtn').onclick = () => { S.auto = true; syncAutoBtn(); schedule(); };
+
+const fmtSlider = { hmMax: v => v + ' ks', hmOpacity: v => Math.round(v * 100) + ' %', tapeMin: v => v > 1 ? '≥ ' + v + ' ks' : 'vše', imbRatio: v => v + ' %', bubbleMin: v => v + ' ks', bubbleScale: v => '×' + String(v).replace('.', ','), absorbMin: v => v + ' ks', width: v => Math.round(v * 100) + ' %' };
+function getK(k) { return k === 'absorbMin' ? S.absorbMinByTf[S.tf] : S[k]; }
+function syncSlider(k) {
+  const el = document.querySelector(`input[data-k="${k}"]`); el.value = getK(k);
+  document.querySelector(`[data-v="${k}"]`).textContent = fmtSlider[k](getK(k));
+}
+for (const el of document.querySelectorAll('input[data-k]')) {
+  const k = el.dataset.k;
+  if (el.type === 'checkbox') { el.checked = !!S[k]; el.onchange = () => { S[k] = el.checked; resize(); }; }
+  else { syncSlider(k); el.oninput = () => { const v = +el.value; if (k === 'absorbMin') S.absorbMinByTf[S.tf] = v; else S[k] = v; syncSlider(k); schedule(); }; }
+}
+for (const seg of document.querySelectorAll('[data-seg]')) {
+  const k = seg.dataset.seg;
+  for (const b of seg.children) b.classList.toggle('on', b.dataset.val === String(S[k]));
+  seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; S[k] = b.dataset.val; for (const x of seg.children) x.classList.toggle('on', x === b); schedule(); });
+}
+
+// ---------- ovládání přehrávání ----------
+const RIGHT_PAD = 90; // px volného místa vpravo od poslední svíčky
+function followLast() { if (S.follow) S.offset = D().bars.length - 1 - (W - AXW - RIGHT_PAD) / S.spacing; }
+function startReplay(bi) {
+  RP.on = true; RP.start = bi; setPos(bi + 0.0001); primePulses(); S.follow = true; S.auto = true; syncAutoBtn();
+  followLast(); play(true);
+}
+let lastTs = 0;
+function loop(ts) {
+  if (!RP.playing) { lastTs = 0; return; }
+  const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 0; lastTs = ts;
+  setPos(RP.pos + dt * RP.speed / 60);
+  if (RP.pos >= base.length - 1e-5) RP.playing = false;
+  followLast(); draw();
+  requestAnimationFrame(loop);
+}
+function play(on) { RP.playing = on; if (on) { lastTs = 0; requestAnimationFrame(loop); } updateRpUi(); schedule(); }
+function togglePlay() {
+  if (!RP.on) { startReplay(RP.start ?? defaultStart()); return; }
+  if (RP.pos >= base.length - 1e-5) { startReplay(RP.start); return; }
+  play(!RP.playing);
+}
+function stepBar() {
+  if (!RP.on) return;
+  play(false);
+  const cb = base[RP.mi], next = cb.day * 1440 + Math.floor(cb.m / S.tf) * S.tf + S.tf;
+  const bi = findIdx(base, next);
+  setPos(bi >= base.length - 1 && base[bi].t < next ? base.length - 1e-6 : bi);
+  followLast(); schedule();
+}
+function exitReplay() { RP.on = false; play(false); S.follow = true; S.offset = D().bars.length - 1 - (W - AXW) / S.spacing + 6; primePulses(); schedule(); }
+const defaultStart = () => findIdx(base, 2 * 1440 + 15 * 60 + 22);
+const rpEls = { box: document.getElementById('rpBox'), play: document.getElementById('rpPlay'), time: document.getElementById('rpTime'), scrub: document.getElementById('rpScrub') };
+rpEls.scrub.max = String(base.length - 0.001);
+function updateRpUi() {
+  rpEls.box.classList.toggle('on', RP.on);
+  rpEls.play.textContent = RP.playing ? '⏸ Pauza' : '▶ Přehrát';
+  rpEls.play.classList.toggle('on', RP.playing);
+  if (RP.on) {
+    const b = base[RP.mi], sec = Math.floor((RP.pos - RP.mi) * 60);
+    rpEls.time.textContent = DAYS[b.day] + ' ' + hhmm(b.m) + ':' + String(sec).padStart(2, '0');
+    if (document.activeElement !== rpEls.scrub) rpEls.scrub.value = String(RP.pos);
+  }
+}
+rpEls.play.onclick = togglePlay;
+document.getElementById('rpStep').onclick = stepBar;
+document.getElementById('rpPick').onclick = () => { if (S.tool === 'pick') { setTool('pan'); } else { setTool('pick'); } VV = null; schedule(); };
+document.getElementById('rpExit').onclick = exitReplay;
+rpEls.scrub.oninput = () => { if (!RP.on) RP.on = true; setPos(+rpEls.scrub.value); primePulses(); S.follow = true; followLast(); schedule(); };
+document.getElementById('rpSpeed').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  RP.speed = +b.dataset.s; for (const x of e.currentTarget.children) x.classList.toggle('on', x === b);
+});
+
+// ---------- start ----------
+new ResizeObserver(resize).observe(wrap);
+resize();
+(function initView() {
+  const bars = D().bars;
+  S.spacing = 7;
+  S.offset = bars.length - 1 - (W - AXW) / S.spacing + 8;
+  // rovnou přehrávat: 1m od pátku 15:12 (otevření NY)
+  S.tf = 1; for (const x of document.getElementById('tfSeg').children) x.classList.toggle('on', x.dataset.tf === '1');
+  syncSlider('absorbMin'); S.spacing = 14;
+  RP.speed = 30; for (const x of document.getElementById('rpSpeed').children) x.classList.toggle('on', x.dataset.s === '30');
+  startReplay(defaultStart());
+  // ukázkový vlastní profil: otevření NY předchozího dne
+  const t0 = 1 * 1440 + 15 * 60 + 30, t1 = 1 * 1440 + 17 * 60;
+  S.ranges.push({ id: S.nextId++, t0, t1 });
+  syncAutoBtn(); renderRanges(); schedule();
+  // ladicí přehled pro náhled
+  window.__of = { S, RP, tfData, detectAbsorption, base, D, ICE, stacksOf };
+})();
+})();
+</script>
+</body>
+</html>

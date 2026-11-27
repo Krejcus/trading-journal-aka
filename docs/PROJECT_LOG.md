@@ -288,6 +288,44 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-27 — Claude: order flow v LIVE grafu — Bubliny a Volume profil (větev, NENASAZENO)
+
+- Větev `claude/orderflow-20261127` (worktree `~/alphatrade-worktrees/orderflow-design`), nic
+  nepushnuto. Filip po náhledu `mockups/orderflow-preview.html` vybral bubliny velkých obchodů
+  a volume profil (i natažený); zdroj order flow je **NQ**, graf a příkazy zůstávají MNQ.
+  Návrh a zdůvodnění: `docs/reviews/orderflow-profile-bubbles-design-20261127.md`.
+- **Data ověřená sondou na Lucidu 27. 11.** (pustil Filip při vypnuté službě): každý obchod MNQ
+  i NQ nese stranu agresora a číslo příkazu agresora; dílčí obchody jednoho příkazu chodí se
+  stejným časem burzy. Bubliny se proto sčítají podle čísla příkazu (největší dílčí obchod měl
+  9 ks, celý příkaz 50).
+- **Služba** (`--order-flow`, v `lucid.sh` `ORDER_FLOW=ano`; výchozí VYPNUTO, bez přepínače se
+  chová jako dřív): `services/rithmic/orderFlowAggregator.ts` + `orderFlowFeed.ts`. Tick jen
+  zařadí do fronty; počítání, zprávy a disk běží v časovačích se stropem práce. Obchod NQ se
+  odkloní PŘED filtrem kontraktu a nikdy nejde do `alertWatch` (jeho regex NQ přijímá), do
+  `candles` (z nich berou cenu kontroly příkazů) ani do `tick`/`hello`. NQ se odebírá až po
+  startu cen grafu a nečeká se na něj; kontrakt je „pokrytý“ až po potvrzení svého odběru.
+  Data jen klientovi, který si řekne (`{orderFlow:{subscribe,source,days}}`), části snímku
+  ≤ ~35 kB a jedna na otočku, aby zobrazení nestálo před odpověďmi na příkazy (telefon).
+  Denní soubory `results/orderflow-<systém>-<kontrakt>-<den>.jsonl`, 7 dní.
+- **Appka**: úložiště mimo React (`lib/orderFlowStore.ts`, spojka `lib/orderFlowLink.ts`), dvě
+  series primitivy (`services/orderFlowPrimitive.ts`, háček `components/day/useOrderFlowLayer.ts`).
+  Zapínání jako indikátory: nové sekce `bubbles` a `volumeProfile` ve stylu indikátorů (nabídka
+  „ƒ Indikátory“, seznam aktivních, telefonní list ⋯ → Indikátory, dialog nastavení). Natažený
+  profil = úsek nástroje Časové rozpětí, zapíná se ručně v nastavení Volume profilu
+  (`rangeTool`, výchozí vypnuto, aby stávající kresby nic nezačaly odebírat).
+- **Neúplná data se přiznávají** (INV-UI-01): úsek, ve kterém služba neběžela celou dobu, má
+  popisek „neúplný“; po chybě vrstva odběratelům pošle `of-error` a profil zmizí.
+- **Revize:** `copier-design-critic` (verdikt 1. kola „OPRAVIT PŘED COMMITEM“ — zahlcení
+  telefonního spojení snímkem, pokrytí NQ po nepovedené obnově, tiché vypnutí; opraveno),
+  `code-reviewer` (appka; opraveno) a Codex `gpt-6.2-astra` (služba; 9 nálezů, opraveno).
+- **Ověřeno:** plná sada 4 271 testů, `tsc --noEmit`, lokální simulace (`tests/qa/start-rithmic.mjs
+  --simulate` s umělým order flow) na PC i v telefonním zobrazení. **Neověřeno:** skutečná služba
+  s přepínačem (nikdy neběžela), iPhone, zátěž v běžné seanci, vliv na latenci příkazů — Rithmic
+  Test 27. 11. odmítá přihlášení, měřicí sada proto neběžela. Práh bublin (výchozí 15 NQ) je
+  odhad; služba vypisuje rozdělení velikostí příkazů v řádku `[order flow]`, podle něj doladit.
+- Pozor pro další změny: ticker Rithmicu dovoluje jedno přihlášení na uživatele — při běžící
+  službě se na stejný systém ničím dalším nepřipojovat (sonda by jí shodila ceny).
+
 ### 2026-11-27 — Claude: kresby do vteřiny, krátké štítky a magnet NASAZENY (web + iPhone 09478dea)
 
 - Na Filipovo „nasaď vše najednou a zapni to“: push `09478dea` na main (web na
