@@ -289,3 +289,53 @@ export function buildOrderFlowDay(input: {
     check: { flowVolume, candleVolume, ratio: candleVolume ? Math.round((flowVolume / candleVolume) * 10_000) / 100 : null },
   };
 }
+
+// ── Kalendář: obchodní den a kontrakt ─────────────────────────────────────────
+
+const NY_PARTS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+const nyOffsetMin = (ms: number): number => {
+  const p = Object.fromEntries(NY_PARTS.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(ms / 60_000) * 60_000) / 60_000;
+};
+/** UTC sekundy pro místní čas New York. */
+const nyToSec = (y: number, m: number, d: number, h: number): number => {
+  const guess = Date.UTC(y, m - 1, d, h);
+  let ms = guess - nyOffsetMin(guess) * 60_000;
+  ms = guess - nyOffsetMin(ms) * 60_000;
+  return Math.floor(ms / 1_000);
+};
+
+/** Seance obchodního dne D (jako `tradingDayKey` appky): 18:00 New York dne D−1 → 17:00 New York dne D, v s. */
+export function tradingSession(tradeDate: string): [number, number] {
+  const [y, m, d] = tradeDate.split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return [nyToSec(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), 18), nyToSec(y, m, d, 17)];
+}
+
+/** Obchodní dny (po–pá) v rozsahu [from, to] včetně. */
+export function tradeDatesBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let t = Date.parse(`${from}T12:00:00Z`); t <= Date.parse(`${to}T12:00:00Z`); t += 86_400_000) {
+    const day = new Date(t).getUTCDay();
+    if (day !== 0 && day !== 6) out.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+const QUARTER_CODES: Record<number, string> = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
+const thirdFridayMs = (year: number, month: number): number => {
+  const first = new Date(Date.UTC(year, month - 1, 1));
+  return Date.UTC(year, month - 1, 1 + ((5 - first.getUTCDay() + 7) % 7) + 14);
+};
+/** Hlavní kontrakt NQ pro obchodní den: přechod 8 dní před expirací (3. pátek čtvrtletního měsíce). */
+export function nqFrontContract(tradeDate: string): string {
+  const t = Date.parse(`${tradeDate}T12:00:00Z`);
+  const d = new Date(t);
+  for (let k = 0; k < 8; k += 1) {
+    const total = d.getUTCFullYear() * 12 + d.getUTCMonth() + k;
+    const year = Math.floor(total / 12); const month = (total % 12) + 1;
+    if (!QUARTER_CODES[month]) continue;
+    if (t < thirdFridayMs(year, month) - 8 * 86_400_000) return `NQ${QUARTER_CODES[month]}${year % 10}`;
+  }
+  throw new Error(`kontrakt pro ${tradeDate} nenalezen`);
+}

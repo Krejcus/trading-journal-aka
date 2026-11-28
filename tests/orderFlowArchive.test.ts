@@ -131,3 +131,23 @@ describe('archiv order flow — sloučení dne', () => {
     expect(day.check.candleVolume).toBeNull();
   });
 });
+
+import { nqFrontContract, tradeDatesBetween, tradingSession } from '../services/orderFlowArchive';
+
+describe('archiv order flow — kalendář', () => {
+  it('seance obchodního dne: 18:00 → 17:00 New York, i přes změnu času', () => {
+    const iso = (s: number) => new Date(s * 1_000).toISOString();
+    expect(tradingSession('2026-11-25').map(iso)).toEqual(['2026-11-24T23:00:00.000Z', '2026-11-25T22:00:00.000Z']);
+    expect(tradingSession('2026-11-02').map(iso)).toEqual(['2026-11-01T23:00:00.000Z', '2026-11-02T22:00:00.000Z']);
+    expect(tradingSession('2026-09-10').map(iso)).toEqual(['2026-09-09T22:00:00.000Z', '2026-09-10T21:00:00.000Z']);
+  });
+
+  it('pracovní dny a hlavní kontrakt NQ (přechod 8 dní před expirací)', () => {
+    expect(tradeDatesBetween('2026-11-27', '2026-12-01')).toEqual(['2026-11-27', '2026-11-30', '2026-12-01']);
+    expect(nqFrontContract('2026-11-27')).toBe('NQZ6');
+    expect(nqFrontContract('2026-12-09')).toBe('NQZ6');
+    expect(nqFrontContract('2026-12-10')).toBe('NQH7');
+    expect(nqFrontContract('2026-09-14')).toBe('NQZ6');
+    expect(nqFrontContract('2026-07-30')).toBe('NQU6');
+  });
+});

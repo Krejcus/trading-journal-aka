@@ -42,12 +42,14 @@ catch { console.error('V Klíčence není klíč archivu — nejdřív --set-key
 
 const env = (() => {
   // Vedle skriptu (Documents), jinak hlavní checkout (worktree .env.local mít nemusí).
+  if (process.env.ORDERFLOW_SUPABASE_URL) return {} as Record<string, string>;
   const file = [join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.env.local'), join(homedir(), 'Documents', 'trading-journal-aka', '.env.local')].find((f) => existsSync(f));
   const out: Record<string, string> = {};
   if (file) for (const line of readFileSync(file, 'utf8').split('\n')) { const m = /^([A-Z_]+)=(.*)$/.exec(line.trim()); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); }
   return out;
 })();
-const SUPABASE_URL = env.VITE_SUPABASE_URL; const ANON = env.VITE_SUPABASE_ANON_KEY;
+// Automatická synchronizace (launchd) nesmí číst ~/Documents — adresu dostane v proměnných prostředí.
+const SUPABASE_URL = process.env.ORDERFLOW_SUPABASE_URL || env.VITE_SUPABASE_URL; const ANON = process.env.ORDERFLOW_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY;
 if (!SUPABASE_URL || !ANON) { console.error('Chybí VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY v .env.local.'); process.exit(2); }
 const FUNCTION_URL = `${SUPABASE_URL}/functions/v1/orderflow-archive`;
 

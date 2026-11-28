@@ -23,6 +23,7 @@ import WebSocket from 'ws';
 import { RithmicClient } from '../../services/rithmic/rithmicClient';
 import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
+import { tradeDatesBetween, tradingSession } from '../../services/orderFlowArchive';
 
 const arg = (name: string, fallback?: string): string | undefined => { const i = process.argv.indexOf(`--${name}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback; };
 const SYSTEM = arg('system')!;
@@ -69,33 +70,9 @@ type DayReport = Record<string, unknown> & { complete: boolean };
 const manifest: Record<string, DayReport> = (() => { try { return JSON.parse(readFileSync(MANIFEST, 'utf8')); } catch { return {}; } })();
 const saveManifest = () => { const tmp = `${MANIFEST}.tmp`; writeFileSync(tmp, JSON.stringify(manifest, null, 2)); renameSync(tmp, MANIFEST); };
 
-// ── Čas New York ──
-const NY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const nyOffsetMin = (ms: number): number => {
-  const p = Object.fromEntries(NY.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(ms / 60_000) * 60_000) / 60_000;
-};
-/** UTC sekundy pro místní čas New York. */
-const nyToSec = (y: number, m: number, d: number, h: number): number => {
-  const guess = Date.UTC(y, m - 1, d, h);
-  let ms = guess - nyOffsetMin(guess) * 60_000;
-  ms = guess - nyOffsetMin(ms) * 60_000;
-  return Math.floor(ms / 1000);
-};
-/** Obchodní den D: 18:00 NY dne D−1 → 17:00 NY dne D (jako tradingDayKey v services/liquidityLevels.ts). */
-const sessionOf = (date: string): { start: number; end: number } => {
-  const [y, m, d] = date.split('-').map(Number);
-  const prev = new Date(Date.UTC(y, m - 1, d - 1));
-  return { start: nyToSec(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), 18), end: nyToSec(y, m, d, 17) };
-};
-const tradeDates = (): string[] => {
-  const out: string[] = [];
-  for (let t = Date.parse(`${FROM}T12:00:00Z`); t <= Date.parse(`${TO}T12:00:00Z`); t += 86_400_000) {
-    const day = new Date(t).getUTCDay();
-    if (day !== 0 && day !== 6) out.push(new Date(t).toISOString().slice(0, 10));
-  }
-  return out;
-};
+// ── Obchodní den (stejně jako appka: tradingDayKey) ──
+const sessionOf = (date: string): { start: number; end: number } => { const [start, end] = tradingSession(date); return { start, end }; };
+const tradeDates = (): string[] => tradeDatesBetween(FROM, TO);
 const hhmm = (sec: number) => new Date(sec * 1000).toISOString().slice(11, 16);
 
 // ── Rithmic ──
@@ -209,7 +186,9 @@ function encode(header: Record<string, unknown>, rows: Row[], startSec: number):
       } catch (error) { check = { error: (error as Error).message }; if (fatal((error as Error).message)) stopped = `Rithmic: ${(error as Error).message}`; }
     }
     const ratio = typeof check.ratio === 'number' ? check.ratio : null;
-    const complete = !failed && !stopped && ratio !== null && ratio >= 99.5;
+    // Svátek / zavřený trh: žádný obchod ani svíčka — den je hotový (jinak by ho automatika stahovala pořád).
+    const closedDay = !failed && !stopped && all.length === 0 && (check as { candleVolume?: number }).candleVolume === 0;
+    const complete = closedDay || (!failed && !stopped && ratio !== null && ratio >= 99.5);
     const sides = { buy: 0, sell: 0, none: 0 };
     for (const r of all) { if (r.bidVolume > 0 && r.askVolume === 0) sides.buy += 1; else if (r.askVolume > 0 && r.bidVolume === 0) sides.sell += 1; else sides.none += 1; }
     let bytes = 0;
