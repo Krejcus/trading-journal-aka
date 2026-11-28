@@ -14,7 +14,7 @@
  * Stahuje se po hodinách (paměť), každý den se kontroluje minutu po minutě proti minutovým svíčkám Rithmicu.
  * Výstup: ~/Library/Application Support/AlphaTrade/rithmic/orderflow-raw/<kontrakt>/<den>.ofr.gz + manifest.json
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -55,6 +55,9 @@ const alive = (pid: number): boolean => { try { process.kill(pid, 0); return tru
   process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { console.log(`\nPřerušeno (${signal}) — hotové dny zůstávají, příště se pokračuje.`); process.exit(130); });
 }
+
+// Mac během stahování neusne z nečinnosti (zákaz skončí s procesem).
+if (process.platform === 'darwin') { try { spawn('/usr/bin/caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' }).on('error', () => undefined).unref(); } catch { /* bez zákazu */ } }
 
 // ── Disk ──
 const OUT_DIR = join(STATE_DIR, 'orderflow-raw', CONTRACT);

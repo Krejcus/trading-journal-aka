@@ -95,6 +95,14 @@ describe('order flow ve službě — pojistky zapojení', () => {
     expect(server).toMatch(/socket\.on\('close', \(\) => \{ clients\.delete\(socket\); orderFlow\?\.drop\(socket\); \}\);/);
   });
 
+  it('služba drží Mac vzhůru jen po dobu svého života a až po získání zámku (druhá instance nic nespouští)', () => {
+    const lock = at(server, "writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' })");
+    const awake = at(server, "spawn('/usr/bin/caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' })");
+    expect(awake).toBeGreaterThan(lock);
+    expect(awake).toBeLessThan(at(server, 'const socketFactory = (url: string): RithmicSocketLike =>'));
+    expect(server.match(/caffeinate/g)!.length).toBeLessThanOrEqual(3);
+  });
+
   it('spouštěč zapíná order flow jen proměnnou ORDER_FLOW=ano', () => {
     expect(launcher).toMatch(/FLOW=\(\)\n\[ "\$\{ORDER_FLOW:-\}" = "ano" \] && FLOW=\(--order-flow\)/);
     expect(launcher.match(/"\$\{FLOW\[@\]\}"/g)).toHaveLength(4);

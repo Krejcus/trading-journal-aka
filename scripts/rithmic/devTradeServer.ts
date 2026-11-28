@@ -7,7 +7,7 @@
  * Spuštění: RITHMIC_USER=... npx tsx scripts/rithmic/devTradeServer.ts [--contract ESZ6] [--port 3311]
  */
 import { requestLucidHandoff } from './lucidHandoff';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -215,6 +215,17 @@ async function main(): Promise<void> {
   try { writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' }); }
   catch { throw new Error(`službu pro ${SYSTEM} právě spouští jiný proces — druhou nespouštím. Když neběží, smaž ${lockFile}`); }
   process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
+  // Mac nesmí usnout z nečinnosti, dokud služba běží: 27. 11. MacBook na baterii pětkrát usnul a ceny, upozornění
+  // i stav pozice stály. `caffeinate -i -w <pid>` drží zákaz jen po dobu života tohoto procesu (skončí s ním sám).
+  // Zavřené víko Mac uspí i tak. Selhání nic neblokuje — služba jen ohlásí, že uspání nehlídá.
+  if (process.platform === 'darwin') {
+    try {
+      const keepAwake = spawn('/usr/bin/caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' });
+      keepAwake.on('error', (error) => console.log(`[mac] zákaz uspání nejde zapnout (${error.message}) — při nečinnosti může Mac usnout`));
+      keepAwake.unref();
+      console.log('[mac] uspání z nečinnosti zablokováno, dokud služba běží (zavřené víko Mac uspí)');
+    } catch (error) { console.log(`[mac] zákaz uspání nejde zapnout (${(error as Error).message})`); }
+  }
   const socketFactory = (url: string): RithmicSocketLike => {
     const raw = new WebSocket(url, { perMessageDeflate: false });
     // Pojistka: chyba spojení k Rithmicu nikdy nesmí shodit proces (o výpadku rozhoduje obnova spojení výš).
