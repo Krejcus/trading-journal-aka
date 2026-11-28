@@ -1,6 +1,10 @@
 # Order flow v minulosti — archiv a doplnění z Rithmicu (návrh, 27. 11. 2026, verze 2 po oponentuře)
 
-Stav: **návrh, nic postaveno.** Navazuje na `orderflow-profile-bubbles-design-20261127.md` (fáze 1–4 nasazené)
+Stav: **fáze 0–1 hotové 28. 11.** (syrová data NQZ6 od září na disku, viz PROJECT_LOG 28. 11.); zbytek návrh.
+**Rozhodnutí 28. 11.:** zdroj = Rithmic (Databento MBO 171 USD zamítnuto); bubliny přesné ze služby, jinde přibližné
+(`bubbles: "approx"`, slučování 10 µs + průjezd 100 µs). Strana: `bid_volume` = kupující.
+
+Původně: Navazuje na `orderflow-profile-bubbles-design-20261127.md` (fáze 1–4 nasazené)
 a na sondu `scripts/rithmic/measureTickHistory.ts` (výsledky v PROJECT_LOG 27. 11.). Verze 2 zapracovává
 oponenturu (Claude subagent, 27. 11.) — co se změnilo, je na konci.
 

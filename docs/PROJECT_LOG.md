@@ -288,6 +288,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-28 — Claude: syrová historie NQZ6 stažena z Rithmicu; strana obráceně; Databento zamítnuto
+
+- `scripts/rithmic/orderFlowBackfill.ts` (jen čtení, bere zámek služby, okna po 1 h, kontrola po minutách
+  proti svíčkám) stáhl obchodní dny NQZ6 od 8. 9. do `~/Library/Application Support/AlphaTrade/rithmic/orderflow-raw/`
+  (sloupcový gzip OFR1 + manifest.json). Objem každého dne = objem minutových svíček (rozdíl jednotky
+  kontraktů z ~1 mil.; ~86 % ze sondy byla hrana okna). Den ≈ 0,5–1 mil. obchodů, 1,5–4 MB, 10–20 s, ~25 žádostí.
+  Do 11. 9. je NQZ6 ještě vedlejší kontrakt (tisíce obchodů), plně od 14. 9.
+- **Pozor: u Rithmicu `bid_volume` = agresivní KUPUJÍCÍ** (ověřeno proti živým bublinám 27. 11.: průjezd
+  cenami nahoru je v bid_volume). Sonda 27. 11. měla stranu obráceně; stahovač ukládá správně (hlavička v: 2).
+- Přibližné bubliny z historie (slučování do 10 µs + průjezd do 100 µs) proti živým podle čísla příkazu
+  (27. 11., ≥ 15 NQ): 135/166 stejná velikost, 29 jiná, 2 chybí, 52 navíc (malé příkazy v téže µs se slijí).
+- Databento (cena přes nově nasazenou funkci `market-data-cost`, jen dotaz na cenu, povolen jen vlastník skladu
+  svíček): MBO NQ 8. 9.–27. 11. = 171,17 USD, trades 37,07 USD, MBO jeden den 5,81 USD. **Filip: drahé,
+  stačí Rithmic** → bubliny přesné tam, kde běžela služba, jinde přibližné s označením v legendě.
+
 ### 2026-11-27 — Claude: sonda historie obchodů Rithmicu — order flow jde dopočítat zpětně
 
 - Sonda `scripts/rithmic/measureTickHistory.ts` (jen čtení, history plant, tick bar po 1 obchodu, šablona 206),
