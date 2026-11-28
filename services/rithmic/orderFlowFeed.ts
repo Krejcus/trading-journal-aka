@@ -74,6 +74,8 @@ const MAX_PENDING_TRADES = 1_000;
 const QUEUE_MAX = 100_000;
 const QUEUE_PER_TURN = 4_000;
 const DISK_QUEUE_MAX_BYTES = 4 * 1024 * 1024;
+/** Mezera mezi voláními hodin, od které se bere, že proces stál (uspání Macu), a pokrytí se přeruší. */
+const ADVANCE_GAP_MS = 5_000;
 const MAX_STORED_TRADES = 30_000;
 const DEFAULT_FLOORS: Record<string, number> = { NQ: 5, MNQ: 20, ES: 10, MES: 30 };
 
@@ -230,6 +232,7 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
     if (stored.size > 0) log(`[order flow] z disku načteno za ${took} ms: ${[...stored.entries()].map(([symbol, entry]) => `${symbol} ${entry.minutes.length} minut, ${entry.trades.length} velkých obchodů`).join(' · ')}`);
   };
   let prunedAt = now();
+  let lastAdvanceAt: number | null = null;
   const pruneFiles = (): void => {
     if (!options.dir) return;
     const dir = options.dir;
@@ -447,6 +450,10 @@ export function createOrderFlowFeed(options: OrderFlowFeedOptions): OrderFlowFee
         const at = now();
         // Nejdřív dopočítat, co čeká ve frontě: po zaseknutí smyčky by hodiny jinak minutu uzavřely bez jejích obchodů.
         drainQueue(QUEUE_PER_TURN);
+        // Hodiny volají jednou za sekundu. Delší mezera = proces stál (uspaný Mac, 27. 11. na baterii): obchody
+        // z té doby chybí, takže minuty mezery ani rozdělanou minutu nesmí označit za úplné.
+        if (lastAdvanceAt !== null && at - lastAdvanceAt > ADVANCE_GAP_MS) aggregator.breakCoverage(at);
+        lastAdvanceAt = at;
         aggregator.advance(at);
         if (at - prunedAt > 6 * 3_600_000) { prunedAt = at; pruneFiles(); }
         // Uložený stav kontraktů, které se zdrojem nestaly (např. kontrakt před rolováním), po chvíli uvolnit.

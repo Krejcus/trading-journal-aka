@@ -288,6 +288,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-28 — Claude: archiv order flow po dnech (fáze 2) + uspaný Mac kazil pokrytí služby
+
+- `services/orderFlowArchive.ts` (čistá logika, bez Node API): čtení/zápis OFR1, minuty a přibližné bubliny
+  ze syrových dat (10 µs + průjezd 100 µs, práh 5, začátek i KONEC bubliny kvůli backtestu), čtení souborů
+  služby (poslední záznam minuty vyhrává) a `buildOrderFlowDay`: objem z úplné historie, bubliny přesné jen
+  v minutách služby, jejichž objem sedí s historií (±1 % / 3 ks), jinde přibližné. Den podle `tradingDayKey`.
+- `scripts/rithmic/orderFlowArchiveBuild.ts` sestavil 59 dní NQZ6 (8. 9.–27. 11.) do
+  `~/Library/Application Support/AlphaTrade/rithmic/orderflow-archive/NQZ6/<den>.json.gz`: 27,4 MB, plný den
+  0,65–0,8 MB, objem všude = svíčky. 27. 11. = `merged` (98 min přesných bublin ze služby).
+- **Nález:** MacBook na baterii 27. 11. opakovaně usnul (pmset: 16:50, 17:10, 17:34, 17:54, 18:05 SEČ) i se
+  spuštěnou službou → ceny, upozornění i order flow stály a služba minuty spánku označila za pokryté (prázdné).
+  Oprava v `orderFlowFeed.advance`: mezera hodin > 5 s přeruší pokrytí (test). Účinná až po restartu služby
+  z nové verze. Samotnému uspínání služba nebrání — otevřené.
+
 ### 2026-11-28 — Claude: syrová historie NQZ6 stažena z Rithmicu; strana obráceně; Databento zamítnuto
 
 - `scripts/rithmic/orderFlowBackfill.ts` (jen čtení, bere zámek služby, okna po 1 h, kontrola po minutách

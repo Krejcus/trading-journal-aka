@@ -216,6 +216,36 @@ describe('order flow — doručení klientům', () => {
     expect(feed.metricsLine()).toContain('ZAHOZENO obchodů 50');
   });
 
+  it('mezera v hodinách (uspaný Mac) přeruší pokrytí — minuty spánku se nevedou jako úplné', () => {
+    const { feed, clock } = make();
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
+    feed.advance();
+    // proces stál 4 minuty: hodiny se ozvou až po probuzení
+    clock.at = T0 + 4 * 60_000 + 10_000;
+    feed.advance();
+    clock.at += 1_000; feed.advance();
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots();
+    const [snapshot] = socket.take();
+    const coverage = snapshot.coverage as Array<[number, number]>;
+    for (const minute of [M0, M0 + 60, M0 + 120, M0 + 180]) {
+      expect(coverage.some(([from, to]) => from <= minute && to > minute), `minuta ${minute}`).toBe(false);
+    }
+    expect(snapshot.liveSince).not.toBeNull();
+  });
+
+  it('bez mezery v hodinách zůstává klidná minuta pokrytá', () => {
+    const { feed, clock } = make();
+    feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));
+    for (let at = T0 + 10_000; at <= T0 + 3 * 60_000 + 5_000; at += 1_000) { clock.at = at; feed.advance(); }
+    const socket = new FakeSocket();
+    feed.handle(socket, { subscribe: true, source: 'NQ' });
+    feed.pumpSnapshots();
+    const coverage = socket.take()[0].coverage as Array<[number, number]>;
+    expect(coverage.some(([from, to]) => from <= M0 + 60 && to > M0 + 60)).toBe(true);
+  });
+
   it('hodiny před uzavřením minuty nejdřív dopočítají, co čeká ve frontě', () => {
     const { feed, clock } = make();
     feed.onTick(trade('NQZ6', 1_000, 25000, 9, 'buy', 'A'));

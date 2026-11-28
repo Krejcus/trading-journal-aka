@@ -5,6 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
+import { decodeOrderFlowRaw } from '../../services/orderFlowArchive';
 
 const arg = (name: string, fallback?: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : fallback; };
 const MIN = Number(arg('min', '15'));
@@ -15,17 +16,8 @@ const GAP_US = Number(arg('gap-us', '10'));
 /** Průjezd: navázat i po delší mezeře (do SWEEP_US), když cena pokračuje směrem příkazu. */
 const SWEEP_US = Number(arg('sweep-us', '100'));
 
-export function decodeRaw(buffer: Buffer) {
-  const raw = gunzipSync(buffer);
-  if (raw.subarray(0, 4).toString() !== 'OFR1') throw new Error('není soubor OFR1');
-  const len = raw.readUInt32LE(4);
-  const header = JSON.parse(raw.subarray(8, 8 + len).toString()) as { count: number; startSec: number; tickSize: number };
-  const n = header.count; let off = 8 + len;
-  const col = () => { const c = new Int32Array(raw.buffer.slice(raw.byteOffset + off, raw.byteOffset + off + n * 4)); off += n * 4; return c; };
-  return { header, dsec: col(), usecs: col(), price: col(), size: col(), side: col() };
-}
-
-const r = decodeRaw(readFileSync(arg('raw')!));
+const decoded = decodeOrderFlowRaw(gunzipSync(readFileSync(arg('raw')!)));
+const r = { header: decoded.header, dsec: decoded.dsec, usecs: decoded.usecs, price: decoded.priceTicks, size: decoded.size, side: decoded.side };
 // Přibližné bubliny: po sobě jdoucí obchody se stejným časem (µs) a stranou.
 type Bubble = { ms: number; side: number; size: number; lo: number; hi: number };
 const approx: Bubble[] = [];

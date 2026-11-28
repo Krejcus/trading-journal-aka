@@ -1,6 +1,6 @@
 # Order flow v minulosti — archiv a doplnění z Rithmicu (návrh, 27. 11. 2026, verze 2 po oponentuře)
 
-Stav: **fáze 0–1 hotové 28. 11.** (syrová data NQZ6 od září na disku, viz PROJECT_LOG 28. 11.); zbytek návrh.
+Stav: **fáze 0–2 hotové 28. 11.** (archiv 59 dní sestaven lokálně, `services/orderFlowArchive.ts`), (syrová data NQZ6 od září na disku, viz PROJECT_LOG 28. 11.); zbytek návrh.
 **Rozhodnutí 28. 11.:** zdroj = Rithmic (Databento MBO 171 USD zamítnuto); bubliny přesné ze služby, jinde přibližné
 (`bubbles: "approx"`, slučování 10 µs + průjezd 100 µs). Strana: `bid_volume` = kupující.
 
