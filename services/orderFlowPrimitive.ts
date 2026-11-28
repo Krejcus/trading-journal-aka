@@ -370,10 +370,15 @@ export function createOrderFlowPrimitives(inputs: OrderFlowLayerInputs): OrderFl
           } else if (started !== undefined) pulseStart.delete(trade.id);
           context.fillStyle = rgba(color, fill); context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
           context.strokeStyle = rgba(color, 0.95); context.lineWidth = 1; context.stroke();
-          if (settings.showSize && radius >= 10) {
+          // Číslo do každé bubliny, která ho unese: menší bublina (příkazy těsně nad prahem) menším písmem.
+          if (settings.showSize && radius >= 6) {
             const text = orderFlowSizeLabel(trade.size);
-            context.font = `600 10px ${FONT}`; context.fillStyle = 'rgba(255,255,255,.95)';
-            context.fillText(text, x - context.measureText(text).width / 2, y + 0.5);
+            context.font = `600 ${radius >= 10 ? 10 : radius >= 8 ? 9 : 8}px ${FONT}`;
+            const width = context.measureText(text).width;
+            if (width <= radius * 2 - 2) {
+              context.fillStyle = 'rgba(255,255,255,.95)';
+              context.fillText(text, x - width / 2, y + 0.5);
+            }
           }
         }
         context.restore();
