@@ -69,9 +69,9 @@ type TickRow = Awaited<ReturnType<RithmicClient['tickBarReplay']>>['rows'][numbe
 const BUCKETS = [1, 2, 5, 10, 20, 50, 100];
 const bucketOf = (size: number) => { let b = 0; for (let i = 0; i < BUCKETS.length; i += 1) if (size >= BUCKETS[i]) b = i; return b; };
 
-/** Strana agresora z jednoho obchodu: objem na asku = kupující, na bidu = prodávající. */
+/** Strana agresora: u Rithmicu `bid_volume` = agresivní kupující (ověřeno 28. 11. proti živým bublinám). */
 const sideOf = (row: TickRow): 'buy' | 'sell' | 'both' | 'none' =>
-  row.askVolume > 0 && row.bidVolume === 0 ? 'buy' : row.bidVolume > 0 && row.askVolume === 0 ? 'sell' : row.askVolume > 0 && row.bidVolume > 0 ? 'both' : 'none';
+  row.bidVolume > 0 && row.askVolume === 0 ? 'buy' : row.askVolume > 0 && row.bidVolume === 0 ? 'sell' : row.askVolume > 0 && row.bidVolume > 0 ? 'both' : 'none';
 
 function analyse(rows: TickRow[]) {
   const sides = { buy: 0, sell: 0, both: 0, none: 0 };

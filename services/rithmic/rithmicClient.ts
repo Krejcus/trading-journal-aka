@@ -643,7 +643,8 @@ export class RithmicClient {
    * k zobrazení order flow. Vrací řádky tak, jak přišly (čas na mikrosekundy, cena, objem, bid/ask objem =
    * strana agresora), a konečnou odpověď. Změřeno 27. 11. 2026 na LucidTrading (measureTickHistory.ts):
    * bez `resume` nejvýš 10 000 řádků na žádost; s `resume_bars` přišlo celé 2h okno najednou (352 794 obchodů
-   * za 8,6 s). Každý obchod má právě jednu stranu (bid xor ask = volume) a čas na µs. Data jen u běžícího
+   * za 8,6 s). Každý obchod má právě jednu stranu a čas na µs; POZOR: `bid_volume` = agresivní KUPUJÍCÍ
+   * (ověřeno 28. 11. proti živým bublinám podle čísla příkazu — průjezd cenami nahoru je v bid_volume). Data jen u běžícího
    * kontraktu (NQZ6 60 dní zpět ano; prošlé U6/M6/Z5 prázdné). NEVOLAT ze služby během obchodování:
    * dekódování statisíců řádků by zdrželo smyčku, která vyřizuje příkazy.
    */
