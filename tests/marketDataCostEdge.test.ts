@@ -4,6 +4,8 @@ import {
   buildBackfillCostParams,
   isAllowedCostUser,
   parseBackfillCost,
+  resolveCostSchema,
+  COST_SCHEMAS,
   validateBackfillCostRange,
 } from '../supabase/functions/market-data-cost/shared';
 
@@ -34,6 +36,18 @@ describe('market-data-cost Edge Function helpers', () => {
     expect(params.get('schema')).toBe('ohlcv-1m');
     expect(params.get('stype_in')).toBe('continuous');
     expect(params.has('limit')).toBe(false);
+  });
+
+  it('quotes trades/MBO only for NQ and rejects any other schema', () => {
+    expect(resolveCostSchema(undefined)).toBe('ohlcv-1m');
+    expect(resolveCostSchema('mbo')).toBe('mbo');
+    expect(resolveCostSchema('trades')).toBe('trades');
+    expect(resolveCostSchema('mbp-10')).toBeNull();
+    expect(resolveCostSchema('__proto__')).toBeNull();
+    expect(COST_SCHEMAS.mbo).toEqual(['NQ.v.0']);
+    const params = buildBackfillCostParams('NQ.v.0', validateBackfillCostRange('2026-09-08', '2026-11-28')!, 'mbo');
+    expect(params.get('schema')).toBe('mbo');
+    expect(params.get('symbols')).toBe('NQ.v.0');
   });
 
   it('fails closed on negative or malformed provider prices', () => {

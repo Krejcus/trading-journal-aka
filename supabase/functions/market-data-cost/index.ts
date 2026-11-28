@@ -5,11 +5,11 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import {
   BACKFILL_DATASET,
-  BACKFILL_SCHEMA,
-  BACKFILL_SYMBOLS,
+  COST_SCHEMAS,
   buildBackfillCostParams,
   isAllowedCostUser,
   parseBackfillCost,
+  resolveCostSchema,
   validateBackfillCostRange,
 } from './shared.ts';
 
@@ -58,7 +58,7 @@ Deno.serve(async (req: Request) => {
   recent.push(now);
   rateWindows.set(data.user.id, recent);
 
-  let payload: { start?: unknown; end?: unknown };
+  let payload: { start?: unknown; end?: unknown; schema?: unknown };
   try {
     payload = await req.json();
   } catch {
@@ -66,13 +66,15 @@ Deno.serve(async (req: Request) => {
   }
   const range = validateBackfillCostRange(payload.start, payload.end);
   if (!range) return json({ error: 'invalid-range' }, 400);
+  const schema = resolveCostSchema(payload.schema);
+  if (!schema) return json({ error: 'invalid-schema' }, 400);
 
   const authorization = `Basic ${btoa(`${DATABENTO_API_KEY}:`)}`;
   const estimates: Array<{ symbol: string; costUsd: number }> = [];
-  for (const symbol of BACKFILL_SYMBOLS) {
+  for (const symbol of COST_SCHEMAS[schema]) {
     let response: Response;
     try {
-      response = await fetch(`${COST_URL}?${buildBackfillCostParams(symbol, range)}`, {
+      response = await fetch(`${COST_URL}?${buildBackfillCostParams(symbol, range, schema)}`, {
         headers: { Authorization: authorization },
       });
     } catch {
@@ -95,7 +97,7 @@ Deno.serve(async (req: Request) => {
     quoteOnly: true,
     downloadedRecords: 0,
     dataset: BACKFILL_DATASET,
-    schema: BACKFILL_SCHEMA,
+    schema,
     start: range.start,
     end: range.end,
     estimates,
