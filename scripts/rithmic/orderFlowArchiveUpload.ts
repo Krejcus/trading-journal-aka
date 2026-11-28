@@ -41,9 +41,10 @@ try { key = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN, '
 catch { console.error('V Klíčence není klíč archivu — nejdřív --set-key.'); process.exit(2); }
 
 const env = (() => {
-  const file = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.env.local');
+  // Vedle skriptu (Documents), jinak hlavní checkout (worktree .env.local mít nemusí).
+  const file = [join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.env.local'), join(homedir(), 'Documents', 'trading-journal-aka', '.env.local')].find((f) => existsSync(f));
   const out: Record<string, string> = {};
-  if (existsSync(file)) for (const line of readFileSync(file, 'utf8').split('\n')) { const m = /^([A-Z_]+)=(.*)$/.exec(line.trim()); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); }
+  if (file) for (const line of readFileSync(file, 'utf8').split('\n')) { const m = /^([A-Z_]+)=(.*)$/.exec(line.trim()); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); }
   return out;
 })();
 const SUPABASE_URL = env.VITE_SUPABASE_URL; const ANON = env.VITE_SUPABASE_ANON_KEY;
@@ -79,6 +80,8 @@ async function call(r: OrderFlowArchiveRequest): Promise<{ status: number; body:
       const base = { contract, tradeDate, sha256, bytes: bytes.length, source };
       const prepared = await call({ action: 'prepare', ...base });
       if (prepared.status === 200 && prepared.body.unchanged) { state[id] = sha256; saveState(); skipped += 1; continue; }
+      // Lepší verze dne už v archivu je (např. se živými bublinami) — tenhle soubor nikdy neprojde, nezkoušet znovu.
+      if (prepared.status === 409 && prepared.body.error === 'would-downgrade') { state[id] = sha256; saveState(); skipped += 1; console.log(`${id}: v archivu je lepší verze (${String(prepared.body.existing)}), přeskočeno`); continue; }
       if (prepared.status !== 200) { failed += 1; console.log(`${id}: příprava odmítnuta ${prepared.status} ${String(prepared.body.error ?? '')}${prepared.body.existing ? ` (uloženo: ${String(prepared.body.existing)})` : ''}`); if (prepared.status === 401 || prepared.status === 429 || prepared.status === 503) break; continue; }
       if (typeof prepared.body.signedUrl === 'string') {
         const put = await fetch(prepared.body.signedUrl, { method: 'PUT', headers: { 'Content-Type': 'application/gzip', 'x-upsert': 'false' }, body: bytes });

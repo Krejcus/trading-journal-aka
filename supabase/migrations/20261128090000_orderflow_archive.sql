@@ -24,9 +24,9 @@ create table if not exists public.orderflow_archive_days (
 create index if not exists orderflow_archive_days_user_date_idx on public.orderflow_archive_days (user_id, trade_date);
 
 alter table public.orderflow_archive_days enable row level security;
-revoke all on public.orderflow_archive_days from anon;
-revoke insert, update, delete, truncate on public.orderflow_archive_days from authenticated;
+revoke all on public.orderflow_archive_days from public, anon, authenticated;
 grant select on public.orderflow_archive_days to authenticated;
+grant all on public.orderflow_archive_days to service_role;
 
 drop policy if exists orderflow_archive_days_read_own on public.orderflow_archive_days;
 create policy orderflow_archive_days_read_own on public.orderflow_archive_days

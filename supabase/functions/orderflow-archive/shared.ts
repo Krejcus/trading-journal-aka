@@ -29,6 +29,31 @@ const SOURCES: readonly OrderFlowArchiveSource[] = ['live', 'backfill', 'merged'
 /** Pořadí kvality dne: sloučený > jen ze služby > jen z historie. Horší den lepší nepřepíše. */
 const RANK: Record<OrderFlowArchiveSource, number> = { backfill: 1, live: 2, merged: 3 };
 
+/** Rozbalený den nesmí být větší (největší skutečný den 28. 11.: 4 MB). */
+export const ORDERFLOW_ARCHIVE_MAX_UNPACKED = 16 * 1024 * 1024;
+
+const MONTH_CODES: Record<number, string> = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
+const thirdFriday = (year: number, month: number): number => {
+  const first = new Date(Date.UTC(year, month - 1, 1));
+  return Date.UTC(year, month - 1, 1 + ((5 - first.getUTCDay() + 7) % 7) + 14);
+};
+/**
+ * Kontrakty NQ, které v daný den dávají smysl: ty, které ještě nevypršely, nejbližší dva. Omezuje, kolik
+ * různých dnů a kontraktů jde nahrát (i s uniklým klíčem) — jiné se odmítnou.
+ */
+export function plausibleNqContracts(tradeDate: string): string[] {
+  const t = Date.parse(`${tradeDate}T12:00:00Z`);
+  const out: string[] = [];
+  const d = new Date(t);
+  for (let k = 0; k < 9 && out.length < 2; k += 1) {
+    const total = d.getUTCFullYear() * 12 + d.getUTCMonth() + k;
+    const year = Math.floor(total / 12); const month = (total % 12) + 1;
+    if (!MONTH_CODES[month]) continue;
+    if (t <= thirdFriday(year, month) + 86_400_000) out.push(`NQ${MONTH_CODES[month]}${year % 10}`);
+  }
+  return out;
+}
+
 export function validateArchiveRequest(body: unknown, now: number): OrderFlowArchiveRequest | { error: string } {
   if (!body || typeof body !== 'object') return { error: 'invalid-body' };
   const b = body as Record<string, unknown>;
@@ -38,6 +63,7 @@ export function validateArchiveRequest(body: unknown, now: number): OrderFlowArc
   const dateMs = Date.parse(`${b.tradeDate}T12:00:00Z`);
   if (!Number.isFinite(dateMs) || new Date(dateMs).toISOString().slice(0, 10) !== b.tradeDate) return { error: 'invalid-date' };
   if (dateMs > now + 2 * 86_400_000 || dateMs < now - ORDERFLOW_ARCHIVE_MAX_AGE_DAYS * 86_400_000) return { error: 'date-out-of-range' };
+  if (!plausibleNqContracts(b.tradeDate).includes(b.contract)) return { error: 'contract-not-for-date' };
   if (typeof b.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(b.sha256)) return { error: 'invalid-sha256' };
   if (typeof b.bytes !== 'number' || !Number.isInteger(b.bytes) || b.bytes <= 0 || b.bytes > ORDERFLOW_ARCHIVE_MAX_BYTES) return { error: 'invalid-bytes' };
   if (typeof b.source !== 'string' || !SOURCES.includes(b.source as OrderFlowArchiveSource)) return { error: 'invalid-source' };
@@ -121,6 +147,8 @@ export function summarizeArchiveDay(day: unknown, r: Pick<OrderFlowArchiveReques
     if (!Array.isArray(span) || typeof span[0] !== 'number' || typeof span[1] !== 'number' || span[1] < span[0]) return s;
     return s + (span[1] - span[0]) / 60_000;
   }, 0));
+  // Zdroj musí odpovídat obsahu: přesné bubliny (ze služby) má jen den ze služby nebo sloučený.
+  if (r.source === 'backfill' ? exactMinutes !== 0 : exactMinutes === 0) return { error: 'source-mismatch' };
   return {
     minutes: d.minutes.length, trades: d.trades.length, exactMinutes, flowVolume,
     candleVolume: typeof check.candleVolume === 'number' && check.candleVolume >= 0 ? Math.round(check.candleVolume) : null,

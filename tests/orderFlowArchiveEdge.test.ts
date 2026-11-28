@@ -4,6 +4,7 @@ import {
   archiveObjectPath,
   deriveArchiveKey,
   mayReplaceArchiveDay,
+  plausibleNqContracts,
   sha256Hex,
   signArchiveRequest,
   summarizeArchiveDay,
@@ -28,6 +29,14 @@ describe('archiv order flow — požadavky z Macu', () => {
     expect(validateArchiveRequest({ ...REQ, bytes: 4 * 1024 * 1024 }, NOW)).toEqual({ error: 'invalid-bytes' });
     expect(validateArchiveRequest({ ...REQ, source: 'other' }, NOW)).toEqual({ error: 'invalid-source' });
     expect(validateArchiveRequest({ ...REQ, action: 'delete' }, NOW)).toEqual({ error: 'invalid-action' });
+    expect(validateArchiveRequest({ ...REQ, contract: 'NQU6' }, NOW)).toEqual({ error: 'contract-not-for-date' });
+  });
+
+  it('pro den jdou jen dva nejbližší nevypršelé kontrakty (omezí, co jde nahrát i s uniklým klíčem)', () => {
+    expect(plausibleNqContracts('2026-11-25')).toEqual(['NQZ6', 'NQH7']);
+    expect(plausibleNqContracts('2026-09-08')).toEqual(['NQU6', 'NQZ6']);
+    expect(plausibleNqContracts('2026-12-18')).toEqual(['NQZ6', 'NQH7']);
+    expect(plausibleNqContracts('2026-12-21')).toEqual(['NQH7', 'NQM7']);
   });
 
   it('podpis váže celou operaci a čas; jiný den, sha, zdroj, klíč nebo starý čas neprojde', async () => {
@@ -61,11 +70,15 @@ describe('archiv order flow — požadavky z Macu', () => {
   });
 
   it('obsah dne musí sedět s požadavkem; souhrn pro tabulku', async () => {
-    const day = { v: 1, root: 'NQ', contract: 'NQZ6', tradeDate: '2026-11-25', source: 'backfill', minutes: [[1, []], [2, []]], trades: [[]], coverage: [], exactBubbles: [[0, 120_000]], check: { flowVolume: 10, candleVolume: 10 } };
-    expect(summarizeArchiveDay(day, REQ)).toEqual({ minutes: 2, trades: 1, exactMinutes: 2, flowVolume: 10, candleVolume: 10 });
-    expect(summarizeArchiveDay({ ...day, tradeDate: '2026-11-24' }, REQ)).toEqual({ error: 'day-mismatch' });
-    expect(summarizeArchiveDay({ ...day, v: 2 }, REQ)).toEqual({ error: 'invalid-version' });
-    expect(summarizeArchiveDay({ ...day, check: {} }, REQ)).toEqual({ error: 'invalid-check' });
+    const day = { v: 1, root: 'NQ', contract: 'NQZ6', tradeDate: '2026-11-25', source: 'merged', minutes: [[1, []], [2, []]], trades: [[]], coverage: [], exactBubbles: [[0, 120_000]], check: { flowVolume: 10, candleVolume: 10 } };
+    const merged = { ...REQ, source: 'merged' as const };
+    expect(summarizeArchiveDay(day, merged)).toEqual({ minutes: 2, trades: 1, exactMinutes: 2, flowVolume: 10, candleVolume: 10 });
+    // zdroj musí sedět s obsahem: „sloučený“ bez přesných bublin ani „historie“ s nimi neprojde
+    expect(summarizeArchiveDay({ ...day, exactBubbles: [] }, merged)).toEqual({ error: 'source-mismatch' });
+    expect(summarizeArchiveDay({ ...day, source: 'backfill' }, REQ)).toEqual({ error: 'source-mismatch' });
+    expect(summarizeArchiveDay({ ...day, tradeDate: '2026-11-24' }, merged)).toEqual({ error: 'day-mismatch' });
+    expect(summarizeArchiveDay({ ...day, v: 2 }, merged)).toEqual({ error: 'invalid-version' });
+    expect(summarizeArchiveDay({ ...day, check: {} }, merged)).toEqual({ error: 'invalid-check' });
     expect(await sha256Hex(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
   });
 });

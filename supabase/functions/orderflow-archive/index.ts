@@ -11,6 +11,7 @@ import {
   ORDERFLOW_ARCHIVE_BUCKET,
   ORDERFLOW_ARCHIVE_DAILY_QUOTA,
   ORDERFLOW_ARCHIVE_HEADER,
+  ORDERFLOW_ARCHIVE_MAX_UNPACKED,
   archiveObjectPath,
   deriveArchiveKey,
   mayReplaceArchiveDay,
@@ -37,11 +38,30 @@ const json = (body: Record<string, unknown>, status = 200) => new Response(JSON.
 });
 const admin = () => createClient(SUPABASE_URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 
+/** Rozbalení po kouscích se stropem — „gzip bomba“ skončí dřív, než zaplní paměť funkce. */
 async function gunzipJson(bytes: Uint8Array): Promise<unknown> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  const text = await new Response(stream).text();
-  if (text.length > 40 * 1024 * 1024) throw new Error('too-large');
-  return JSON.parse(text);
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const chunks: Uint8Array[] = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > ORDERFLOW_ARCHIVE_MAX_UNPACKED) { await reader.cancel(); throw new Error('too-large'); }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total); let off = 0;
+  for (const c of chunks) { all.set(c, off); off += c.length; }
+  return JSON.parse(new TextDecoder().decode(all));
+}
+
+/** Smaže v složce dne všechno kromě `keep` (nedokončená nahrání, předchozí verze). */
+async function cleanDayFolder(db: ReturnType<typeof admin>, folder: string, keep: readonly string[]): Promise<void> {
+  const { data } = await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).list(folder, { limit: 100 });
+  const stale = (data ?? []).map((o) => `${folder}/${o.name}`).filter((p) => !keep.includes(p));
+  if (stale.length) {
+    const { error } = await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).remove(stale);
+    if (error) console.log(`[orderflow-archive] úklid ${folder} selhal: ${error.message}`);
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -83,10 +103,13 @@ Deno.serve(async (req: Request) => {
       .eq('user_id', OWNER_ID).gte('uploaded_at', since);
     if (countError) return json({ error: 'db-read' }, 503);
     if ((count ?? 0) >= ORDERFLOW_ARCHIVE_DAILY_QUOTA) return json({ error: 'quota' }, 429);
+    // Ve složce dne smí ležet jen platná verze a tohle nahrání — nedokončené pokusy se tu uklidí,
+    // takže bucket neroste ani opakovaným prepare bez commitu (dnů a kontraktů je omezeně, viz validace).
+    await cleanDayFolder(db, path.slice(0, path.lastIndexOf('/')), [path, ...(existing?.object_path ? [existing.object_path] : [])]);
     const { data, error } = await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).createSignedUploadUrl(path);
     if (error || !data) {
       // Stejný obsah už leží v bucketu (předchozí pokus spadl před commitem) — stačí commit.
-      if (/exist/i.test(error?.message ?? '')) return json({ ok: true, path, uploaded: true });
+      if (/exist|duplicate|already/i.test(error?.message ?? '')) return json({ ok: true, path, uploaded: true });
       return json({ error: 'storage-sign' }, 503);
     }
     return json({ ok: true, path, signedUrl: data.signedUrl, token: data.token });
@@ -103,13 +126,28 @@ Deno.serve(async (req: Request) => {
   try { summary = summarizeArchiveDay(await gunzipJson(bytes), r); } catch { return reject('invalid-gzip-json'); }
   if ('error' in summary) return reject(summary.error);
 
-  const { error: writeError } = await db.from('orderflow_archive_days').upsert({
+  const row = {
     user_id: OWNER_ID, root: 'NQ', contract: r.contract, trade_date: r.tradeDate, source: r.source, object_path: path,
     bytes: r.bytes, sha256: r.sha256, minutes: summary.minutes, trades: summary.trades, exact_minutes: summary.exactMinutes,
     flow_volume: summary.flowVolume, candle_volume: summary.candleVolume, uploaded_at: new Date(now).toISOString(),
-  }, { onConflict: 'user_id,contract,trade_date' });
-  if (writeError) return json({ error: 'db-write' }, 503);
+  };
+  // Zápis jen nad tím stavem, který jsme na začátku přečetli (souběh dvou nahrání téhož dne: druhé neprojde).
+  let written = false;
+  if (existing) {
+    const { data: updated, error } = await db.from('orderflow_archive_days').update(row)
+      .eq('user_id', OWNER_ID).eq('contract', r.contract).eq('trade_date', r.tradeDate).eq('sha256', existing.sha256).select('sha256');
+    if (error) return json({ error: 'db-write' }, 503);
+    written = (updated ?? []).length === 1;
+  } else {
+    const { error } = await db.from('orderflow_archive_days').insert(row);
+    if (error && error.code !== '23505') return json({ error: 'db-write' }, 503);
+    written = !error;
+  }
+  if (!written) { await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).remove([path]); return json({ error: 'conflict' }, 409); }
   // Předchozí verze dne už nikdo nečte.
-  if (existing?.object_path && existing.object_path !== path) await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).remove([existing.object_path]);
+  if (existing?.object_path && existing.object_path !== path) {
+    const { error } = await db.storage.from(ORDERFLOW_ARCHIVE_BUCKET).remove([existing.object_path]);
+    if (error) console.log(`[orderflow-archive] starou verzi ${existing.object_path} nejde smazat: ${error.message}`);
+  }
   return json({ ok: true, path, ...summary });
 });
