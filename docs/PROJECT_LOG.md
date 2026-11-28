@@ -288,6 +288,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-28 — Claude: automatické doplňování archivu order flow (launchd) + čísla v malých bublinách
+
+- `com.alphatrade.orderflow-sync` (launchd, každou hodinu, RunAtLoad) NAINSTALOVÁNO přes
+  `scripts/rithmic/install-orderflow-sync.sh`: skripty zabalené esbuildem do
+  `~/Library/Application Support/AlphaTrade/orderflow-sync` (TCC: launchd nesmí do ~/Documents), config.json
+  (systém, uživatel, veřejná adresa + anon klíč Supabase, složka souborů služby), hesla v Klíčence.
+- Běh (`orderFlowArchiveSync.ts`): okno 14 dní, jen dokončené dny (konec seance + 10 min); (1) chybějící
+  historie z Rithmicu JEN bez běžící služby (zámek služby; jinak se odloží), (2) sestavení vč. dnů jen ze služby,
+  beze změny obsahu se soubor nepřepisuje, (3) nahrání změněných. Svátek (0 obchodů i svíček) = hotový den.
+  Ověřeno pod launchd: exit 0, „nahráno 0 · beze změny 59“; zabalený stahovač při běžící službě odmítl.
+- Pozor: když služba běží celou dobu, kdy je Mac vzhůru, historie se dostáhne až po jejím vypnutí (víkend) —
+  den do té doby jen ze služby. NQZ6 vyprší 18. 12.
+- Bubliny: číslo se psalo jen od poloměru 10 px (≈ od 46 NQ při prahu 15) → teď od 6 px menším písmem.
+- Po změně skriptů archivu znovu spustit instalaci (zabalené kopie se samy neaktualizují).
+
 ### 2026-11-28 — Claude: order flow z archivu v grafu (fáze 4) — deník, přehrávání, starší dny v LIVE
 
 - `lib/orderFlowArchive.ts`: mezipaměť dnů (tabulka + bucket, gzip přes DecompressionStream, 3 souběžně,
