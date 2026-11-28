@@ -288,6 +288,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-28 — Claude: archiv order flow v Supabase (fáze 3) — 59 dní NQZ6 nahráno
+
+- Migrace `20261128090000_orderflow_archive.sql` APLIKOVÁNA (db query + migration repair): soukromý bucket
+  `orderflow-archive` (gzip, 3 MB) a tabulka `orderflow_archive_days`; přihlášený čte jen své (RLS), zápis
+  jen servisní role (ověřeno z appky: update i upload odmítnuty).
+- Edge Function `orderflow-archive` NASAZENA (`--no-verify-jwt`): `key` (JWT vlastníka → účelový klíč),
+  `prepare`/`commit` podepsané klíčem (celá operace, 2 min). Pojistky po revizi (code-reviewer): gunzip po
+  kouscích se stropem 16 MB, jen 2 nejbližší kontrakty k datu, úklid složky dne při prepare, kvóta 300/24 h,
+  zápis jen nad přečteným stavem (souběh), zdroj musí sedět s obsahem, horší zdroj nepřepíše lepší.
+- Klíč je v Klíčence Macu (`alphatrade-orderflow-archive`); nahrávač `scripts/rithmic/orderFlowArchiveUpload.ts`
+  nahrál 59 dní (27,4 MB). Odvolání klíče = zvednout `ORDERFLOW_ARCHIVE_GRANT_LABEL` a znovu nasadit funkci.
+- Zbývá: automatické sestavení + nahrání (launchd) a fáze 4 (zobrazení v appce). Tlačítko „Zkopírovat klíč
+  pro Mac“ v nastavení Volume profilu je až po pushi na main.
+
 ### 2026-11-28 — Claude: archiv order flow po dnech (fáze 2) + uspaný Mac kazil pokrytí služby
 
 - `services/orderFlowArchive.ts` (čistá logika, bez Node API): čtení/zápis OFR1, minuty a přibližné bubliny
