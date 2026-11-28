@@ -3387,10 +3387,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleFvg: () => activeControl.updateConfig({ showFvg: !activeControl.config.showFvg }),
             onToggleLevels: () => activeControl.updateConfig({ showLevels: !activeControl.config.showLevels }),
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
-            // Bubliny a Volume profil: LIVE ze služby (+ archiv), deník z archivu order flow. V backtestu se
-            // přepínač nenabízí (zapnutí je styl deníku; zápis do stylu session po panelech zatím není).
-            orderFlow: !backtestSession,
-            orderFlowHistoryOnly: !liveCandles,
+            // Bubliny a Volume profil: LIVE ze služby (+ archiv), deník a backtest z archivu order flow
+            // (backtest: jen do kurzoru přehrávání; zapnutí se ukládá do stylu session).
+            orderFlow: true,
+            orderFlowHistoryOnly: !liveCandles || Boolean(backtestSession),
           }}
         />}
         {activeControl && <IndicatorTemplateFavorites

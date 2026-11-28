@@ -206,6 +206,7 @@ import { nearestCandleIndex } from '../services/candleSearch';
 import { journalIndicatorProfile, readTradeChartIndicators, rememberLatestIndicatorSettings, writeTradeChartIndicators } from '../services/detailIndicators';
 import {
   DEFAULT_CHART_PANEL_ID,
+  panelSettingsEnvelope,
   panelSettingsTargetMatches,
   readPanelSettings,
   writeAllPanelSettings,
@@ -2217,8 +2218,7 @@ export const readOrderFlowIndicators = (): Record<OrderFlowIndicatorId, boolean>
   return { bubbles: settings.bubbles.enabled, volumeProfile: settings.volumeProfile.enabled };
 };
 export const toggleOrderFlowIndicator = (id: OrderFlowIndicatorId): void => {
-  // Jen profil deníku (LIVE): v otevřené backtest session by se zapsal styl všem jejím panelům.
-  if (!isIndicatorJournalProfile()) return;
+  if (!isIndicatorJournalProfile()) { toggleOrderFlowIndicatorInSession(id); return; }
   const current = loadPanelIndicatorSettings(ORDER_FLOW_SETTINGS_PANEL, ORDER_FLOW_LEGACY_KEY);
   const next = { ...current, [id]: { ...current[id], enabled: !current[id].enabled } } as AlphaTradeIndicatorSettings;
   const target: PanelSettingsTarget = { panelId: ORDER_FLOW_SETTINGS_PANEL, allPanels: true };
@@ -2227,6 +2227,28 @@ export const toggleOrderFlowIndicator = (id: OrderFlowIndicatorId): void => {
   window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
     detail: { settings: next, source: Symbol('order-flow-toggle'), target, persisted: true },
   }));
+};
+
+/**
+ * Backtest session drží styl indikátorů po panelech. Přepínač order flow v ní změní JEN příznak zapnutí
+ * (ve sdíleném stylu i v každém panelu s vlastním stylem) — ostatní nastavení panelů zůstane, jak je.
+ * Grafy si pak styl svého panelu načtou znovu (`reload`).
+ */
+const toggleOrderFlowIndicatorInSession = (id: OrderFlowIndicatorId): void => {
+  const envelope = panelSettingsEnvelope<unknown>(storedIndicatorEnvelope(ORDER_FLOW_LEGACY_KEY));
+  const enabled = !readOrderFlowIndicators()[id];
+  const flip = (stored: unknown): AlphaTradeIndicatorSettings => {
+    const settings = mergeIndicatorSettings(stored === undefined ? null : JSON.stringify(stored));
+    return { ...settings, [id]: { ...settings[id], enabled } } as AlphaTradeIndicatorSettings;
+  };
+  const next = {
+    ...envelope,
+    shared: flip(envelope.shared),
+    panels: Object.fromEntries(Object.entries(envelope.panels).map(([panelId, stored]) => [panelId, flip(stored)])),
+  };
+  if (!writeChartAppearance('indicatorSettings', next)) return;
+  sharedIndicatorSettingsCache.clear();
+  window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, { detail: { source: Symbol('order-flow-toggle'), reload: true } }));
 };
 
 /**
