@@ -35,6 +35,8 @@ const GATEWAY = arg('gateway', 'rprotocol-de.rithmic.com')!;
 const KEYCHAIN = arg('keychain', TEST ? 'alphatrade-rithmic-test' : 'alphatrade-rithmic-prop')!;
 const MAX_REQUESTS = Math.min(2_000, Math.max(5, Number(arg('max-requests', '300')) || 300));
 const FORCE = process.argv.includes('--force');
+/** Tvrdý konec (UTC ms): po něm se nezačne další hodina ani den — pauza služby kvůli stahování nesmí přetéct do otevření trhu. */
+const UNTIL = Number(arg('until', '0')) || null;
 const TICK = 0.25;
 if (!SYSTEM || !USER || !CONTRACT || !FROM) { console.error('Chybí --system, --user, --contract nebo --from.'); process.exit(2); }
 if (!/^NQ[HMUZ]\d$/.test(CONTRACT)) { console.error('--contract musí být NQ kontrakt, např. NQZ6.'); process.exit(2); }
@@ -147,12 +149,14 @@ function encode(header: Record<string, unknown>, rows: Row[], startSec: number):
   for (const date of dates) {
     if (stopped) break;
     const key = `${CONTRACT}/${date}`;
+    if (UNTIL !== null && Date.now() >= UNTIL) { stopped = 'konec vyhrazeného okna (trh se brzy otevírá)'; break; }
     if (!FORCE && manifest[key]?.complete) { console.log(`${date}: už staženo (${manifest[key].rows} obchodů), přeskakuji`); continue; }
     if (freeGb() < 10) { stopped = 'méně než 10 GB volna'; break; }
     const { start, end } = sessionOf(date);
     const dayStarted = Date.now();
     const all: Row[] = []; const hours: unknown[] = []; let failed: string | null = null; let maxRss = 0; let used = 0;
     for (let from = start; from < end && !stopped; from += 3_600) {
+      if (UNTIL !== null && Date.now() >= UNTIL) { stopped = 'konec vyhrazeného okna (trh se brzy otevírá)'; break; }
       const to = Math.min(end, from + 3_600);
       try {
         const res = await hour(from, to);

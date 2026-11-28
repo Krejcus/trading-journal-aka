@@ -40,20 +40,46 @@ if [ ! -t 0 ] || [ ! -t 1 ]; then
   exit 2
 fi
 
+# Služba „jen čtení“ jako launchd úloha (install-rithmic-read.sh) drží přihlášení k Rithmicu: uvolnit ji
+# (odpojit úlohu, ať ji KeepAlive hned nespustí znovu) a po skončení vrátit — jen když značka pořád patří
+# tomuhle běhu (při `obnovit` ji převezme nový běh a starý pak čtení nevrací).
+READ_LABEL=com.alphatrade.rithmic-read
+READ_PLIST="$HOME/Library/LaunchAgents/$READ_LABEL.plist"
+READ_MARK="$HOME/Library/Application Support/AlphaTrade/rithmic/read-paused-by-lucid"
+DOMAIN="gui/$(id -u)"
+if [ -f "$READ_PLIST" ]; then
+  mkdir -p "${READ_MARK:h}"
+  print -r -- "$$" > "$READ_MARK"
+  if launchctl list "$READ_LABEL" >/dev/null 2>&1; then
+    echo "Uvolňuji službu jen pro čtení (launchd)…"
+    launchctl bootout "$DOMAIN/$READ_LABEL" 2>/dev/null || true
+    for _ in {1..30}; do launchctl list "$READ_LABEL" >/dev/null 2>&1 || break; sleep 1; done
+  fi
+  restore_read() {
+    if [ "$(cat "$READ_MARK" 2>/dev/null)" = "$$" ]; then
+      rm -f "$READ_MARK"
+      launchctl bootstrap "$DOMAIN" "$READ_PLIST" 2>/dev/null && echo "Služba jen pro čtení zase běží (launchd)."
+    fi
+  }
+  trap restore_read EXIT
+  # Ctrl+C: shell počká, až služba doběhne, a teprve pak skončí (a vrátí čtení).
+  trap 'exit 130' INT TERM
+fi
+
 case "$MODE" in
   obchod)
     npx tsx scripts/rithmic/grantLiveTrading.ts --system "$SYSTEM" --user "$LUCID_USER" --account "$LUCID_ACCOUNT" \
       --hours "${HODIN:-12}" --max-quantity "${KS:-3}" "${NO_STOP[@]}"
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading "${MULTI[@]}" "${FLOW[@]}"
+    npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading "${MULTI[@]}" "${FLOW[@]}"
     ;;
   obnovit)
-    exec ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT" "${MULTI[@]}" "${FLOW[@]}"
+    ./node_modules/.bin/tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --live-trading --resume-touch-id --resume-account "$LUCID_ACCOUNT" "${MULTI[@]}" "${FLOW[@]}"
     ;;
   cteni)
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only "${FLOW[@]}"
+    npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --read-only "${FLOW[@]}"
     ;;
   zavirani)
-    exec npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --close-only "${FLOW[@]}"
+    npx tsx scripts/rithmic/devTradeServer.ts "${COMMON[@]}" --close-only "${FLOW[@]}"
     ;;
   *)
     echo "Neznámý režim: $MODE (obchod | obnovit | cteni | zavirani)" >&2

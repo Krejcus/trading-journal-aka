@@ -27,6 +27,12 @@ export interface RmsQueryBudgetState { week: string; count: number }
 export const RMS_QUERY_WEEKLY_CAP = 400;
 /** Nejvýš tolik přihlášení k příkazům za hodinu (kmitající spojení); pak se adaptér zastaví. */
 export const RMS_LOGINS_PER_HOUR_CAP = 20;
+/**
+ * Režim jen pro čtení (běží pořád, launchd) si nesmí vzít rezervu obchodu: nejvýš tolik dotazů týdně
+ * a přihlášení za hodinu. Zbytek zůstává pro obchod a zavírání (28. 11. 2026, oponentura).
+ */
+export const RMS_READ_ONLY_WEEKLY_CAP = 300;
+export const RMS_READ_ONLY_LOGINS_PER_HOUR_CAP = 12;
 export const RMS_LIMITS_REFRESH_MS = 6 * 60 * 60_000;
 export const RMS_LIMITS_RETRY_MS = 5 * 60_000;
 export const RMS_LIMITS_RECONNECT_MIN_MS = 60_000;

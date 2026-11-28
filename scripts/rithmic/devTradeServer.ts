@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { readOnlyViolation } from '../../services/rithmic/readOnlyGuard';
 import { scopeProblem, type DeviceScope } from '../../services/rithmic/devicePairing';
 import { createDeviceGateway, fileDeviceStore } from '../../services/rithmic/deviceGateway';
-import { RMS_LIMITS_MAX_AGE_MS, RMS_LOGINS_PER_HOUR_CAP, RMS_QUERY_WEEKLY_CAP, rmsLimitsReadDue, rmsLoginAllowed, spendRmsQuery } from '../../services/rithmic/rmsQueryBudget';
+import { RMS_LIMITS_MAX_AGE_MS, RMS_LOGINS_PER_HOUR_CAP, RMS_QUERY_WEEKLY_CAP, RMS_READ_ONLY_LOGINS_PER_HOUR_CAP, RMS_READ_ONLY_WEEKLY_CAP, rmsLimitsReadDue, rmsLoginAllowed, spendRmsQuery } from '../../services/rithmic/rmsQueryBudget';
 import { liveConsentPhrase, liveTradingConsentProblem, type LiveTradingConsent } from '../../services/rithmic/liveTradingConsent';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RithmicAccountRegistry, type RithmicAccountRegistryEntry } from '../../services/rithmic/rithmicAccountRegistry';
@@ -270,9 +270,10 @@ async function main(): Promise<void> {
     let stored: unknown = undefined;
     try { stored = JSON.parse(readFileSync(budgetFile, 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') stored = 'unreadable'; }
-    const spent = spendRmsQuery(stored, Date.now());
+    // Čtení (běží pořád) má nižší strop — zbytek týdne patří obchodu a zavírání.
+    const spent = spendRmsQuery(stored, Date.now(), READ_ONLY ? RMS_READ_ONLY_WEEKLY_CAP : RMS_QUERY_WEEKLY_CAP);
     if (!spent.allowed) {
-      if (!budgetWarned) console.error(`[limity] Týdenní strop ${RMS_QUERY_WEEKLY_CAP} dotazů na účty a limity u Rithmicu je vyčerpán (nebo jeho záznam ${budgetFile} nejde přečíst) — limity se už nečtou a služba se po výpadku sama nepřihlásí; nové vstupy odmítne, až limity zestárnou.`);
+      if (!budgetWarned) console.error(`[limity] Týdenní strop ${READ_ONLY ? RMS_READ_ONLY_WEEKLY_CAP : RMS_QUERY_WEEKLY_CAP} dotazů na účty a limity u Rithmicu je vyčerpán (nebo jeho záznam ${budgetFile} nejde přečíst) — limity se už nečtou a služba se po výpadku sama nepřihlásí; nové vstupy odmítne, až limity zestárnou.`);
       budgetWarned = true;
       return false;
     }
@@ -294,11 +295,12 @@ async function main(): Promise<void> {
     recentLogins = Array.isArray(stored) && stored.every((at) => Number.isFinite(at)) ? (stored as number[]).filter((at) => at <= Date.now()) : Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now());
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') recentLogins = Array.from({ length: RMS_LOGINS_PER_HOUR_CAP }, () => Date.now()); }
   const loginAllowed = (): boolean => {
-    const hourly = rmsLoginAllowed(recentLogins, Date.now());
+    const loginCap = READ_ONLY ? RMS_READ_ONLY_LOGINS_PER_HOUR_CAP : RMS_LOGINS_PER_HOUR_CAP;
+    const hourly = rmsLoginAllowed(recentLogins, Date.now(), loginCap);
     recentLogins = hourly.recent;
     try { writeFileSync(`${loginWindowFile}.tmp`, JSON.stringify(recentLogins), { mode: 0o600 }); renameSync(`${loginWindowFile}.tmp`, loginWindowFile); }
     catch (error) { console.error(`[limity] Počet přihlášení nejde uložit (${error instanceof Error ? error.message : String(error)}; ${loginWindowFile}) — bez záznamu se k Rithmicu nepřihlašuji.`); return false; }
-    if (!hourly.allowed) { console.error(`[limity] Víc než ${RMS_LOGINS_PER_HOUR_CAP} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
+    if (!hourly.allowed) { console.error(`[limity] Víc než ${loginCap} přihlášení k Rithmicu za hodinu — adaptér se zastaví.`); return false; }
     return spendBudget();
   };
   // Diagnostika: každá notifikace příkazu do souboru na den (results/orders-<systém>-<den>.jsonl). Nic neřídí.
@@ -712,7 +714,8 @@ async function main(): Promise<void> {
     broadcast({ type: 'limits', limits: next });
   }
   async function refreshLimits() {
-    if (loadingLimits || !broker.isConnected()) return;
+    // Jen čtení: limity pro příkazy nejsou potřeba a každé čtení stojí dotaz z týdenního rozpočtu.
+    if (READ_ONLY || loadingLimits || !broker.isConnected()) return;
     const epochNow = broker.routeEpoch?.(broker.accountIds()[0]);
     if (!rmsLimitsReadDue({ now: Date.now(), lastAttemptAt: limitsAttemptAt, lastOk: limitsAttemptOk, epochChanged: epochNow !== limitsAttemptEpoch, signalAt: accountSignalAt })) return;
     const account = broker.accountIds()[0];

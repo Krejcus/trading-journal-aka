@@ -103,6 +103,29 @@ describe('order flow ve službě — pojistky zapojení', () => {
     expect(server.match(/caffeinate/g)!.length).toBeLessThanOrEqual(3);
   });
 
+  it('čtení (launchd, běží pořád) si nebere rezervu obchodu: nečte limity, nižší stropy dotazů a přihlášení', () => {
+    expect(server).toMatch(/if \(READ_ONLY \|\| loadingLimits \|\| !broker\.isConnected\(\)\) return;/);
+    expect(server).toMatch(/spendRmsQuery\(stored, Date\.now\(\), READ_ONLY \? RMS_READ_ONLY_WEEKLY_CAP : RMS_QUERY_WEEKLY_CAP\)/);
+    expect(server).toMatch(/const loginCap = READ_ONLY \? RMS_READ_ONLY_LOGINS_PER_HOUR_CAP : RMS_LOGINS_PER_HOUR_CAP;/);
+  });
+
+  it('lucid.sh uvolní launchd čtení a vrátí ho jen, když značka patří jemu; služba se nespouští přes exec', () => {
+    expect(launcher).toMatch(/launchctl bootout "\$DOMAIN\/\$READ_LABEL"/);
+    expect(launcher).toMatch(/if \[ "\$\(cat "\$READ_MARK" 2>\/dev\/null\)" = "\$\$" \]; then/);
+    expect(launcher).toMatch(/trap restore_read EXIT/);
+    expect(launcher).not.toMatch(/^\s*exec /m);
+  });
+
+  it('stahování historie pozastaví jen službu čtení (PID úlohy = držitel zámku) a jen v přestávce CME, čtení vždy vrátí', () => {
+    const sync = readFileSync('scripts/rithmic/orderFlowArchiveSync.ts', 'utf8');
+    const branch = sync.slice(at(sync, 'else if (readJob && service === readJobPid()) {'), at(sync, "} else say(`historie: chybí ${missing.join(', ')} — běží obchodní služba"));
+    expect(branch).toMatch(/const deadline = historyPauseDeadline\(Date\.now\(\)\);/);
+    expect(at(branch, "launchctl('bootout'")).toBeGreaterThan(at(branch, 'try {'));
+    expect(branch).toMatch(/finally \{\s+const out = launchctl\('bootstrap'/);
+    expect(branch).toMatch(/backfill\(until\)/);
+    expect(sync.match(/launchctl\('bootout'/g)).toHaveLength(1);
+  });
+
   it('spouštěč zapíná order flow jen proměnnou ORDER_FLOW=ano', () => {
     expect(launcher).toMatch(/FLOW=\(\)\n\[ "\$\{ORDER_FLOW:-\}" = "ano" \] && FLOW=\(--order-flow\)/);
     expect(launcher.match(/"\$\{FLOW\[@\]\}"/g)).toHaveLength(4);

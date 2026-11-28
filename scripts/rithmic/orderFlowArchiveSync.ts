@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nqFrontContract, tradeDatesBetween, tradingSession } from '../../services/orderFlowArchive';
+import { historyPauseDeadline } from '../../services/rithmic/cmeBreak';
 
 const arg = (name: string): string | undefined => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,8 @@ interface SyncConfig {
   /** Spouštěné skripty: zabalené .mjs vedle tohoto skriptu, nebo přes tsx z repa (ladění). */
   scripts?: { backfill: string[]; build: string[]; upload: string[] };
   log?: string;
+  /** Služba „jen čtení“ jako launchd úloha (install-rithmic-read.sh): kvůli stahování se smí pozastavit v přestávce CME. */
+  readJob?: { label: string; plist: string; log?: string };
 }
 
 const stamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -84,20 +87,66 @@ const byContract = new Map<string, string[]>();
 for (const d of days) { const c = nqFrontContract(d); byContract.set(c, [...(byContract.get(c) ?? []), d]); }
 say(`dny ${days[0] ?? '—'} … ${days[days.length - 1] ?? '—'} (${days.length}), kontrakty ${[...byContract.keys()].join(', ') || '—'}, dnes ${today}`);
 
-// 1. Historie z Rithmicu — jen chybějící dny a jen bez běžící služby.
+// ── Služba „jen čtení“ (launchd) ──
+const domain = `gui/${process.getuid?.() ?? 501}`;
+const launchctl = (...args: string[]) => spawnSync('/bin/launchctl', args, { encoding: 'utf8' });
+const readJob = config.readJob && existsSync(config.readJob.plist) ? config.readJob : null;
+/** PID úlohy čtení, nebo null (neběží / není načtená). */
+const readJobPid = (): number | null => {
+  if (!readJob) return null;
+  const out = launchctl('list', readJob.label);
+  if (out.status !== 0) return null;
+  const m = /"PID" = (\d+);/.exec(out.stdout);
+  return m ? Number(m[1]) : null;
+};
+const readJobLoaded = (): boolean => !!readJob && launchctl('list', readJob.label).status === 0;
+/** `lucid.sh` čtení odpojil, protože pouští vlastní službu (obchod/zavírání) — nesahat. */
+const lucidPause = (): number | null => {
+  try { const pid = Number(readFileSync(join(BASE, 'read-paused-by-lucid'), 'utf8').trim()); return Number.isInteger(pid) && pid > 0 && alive(pid) ? pid : null; } catch { return null; }
+};
+/** Vrátit čtení, když neběží nic jiného (samooprava po pádu syncu nebo lucid.sh). */
+const restoreRead = (why: string) => {
+  if (!readJob || DRY || readJobLoaded() || serviceRunning() !== null || lucidPause() !== null) return;
+  const out = launchctl('bootstrap', domain, readJob.plist);
+  say(`čtení: znovu spuštěno (${why})${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
+};
+if (readJob?.log && existsSync(readJob.log) && statSync(readJob.log).size > 50_000_000) { try { truncateSync(readJob.log, 0); } catch { /* nevadí */ } }
+restoreRead('samooprava');
+
+// 1. Historie z Rithmicu — jen chybějící dny; přihlášení je jedno, takže jen bez služby nebo v přestávce CME
+//    místo služby „jen čtení“ (nikdy místo obchodní služby).
 const manifest = (() => { try { return JSON.parse(readFileSync(join(BASE, 'orderflow-raw', 'manifest.json'), 'utf8')) as Record<string, { complete?: boolean }>; } catch { return {}; } })();
 const missing = days.filter((d) => !manifest[`${nqFrontContract(d)}/${d}`]?.complete);
-const service = serviceRunning();
-if (missing.length === 0) say('historie: všechny dny okna jsou stažené');
-else if (service !== null) say(`historie: chybí ${missing.join(', ')} — služba běží (${service}), stáhne se, až nepoběží`);
-else {
+const backfill = (until: number | null) => {
   for (const [contract, list] of byContract) {
     const need = list.filter((d) => missing.includes(d));
     if (need.length === 0) continue;
-    const code = run('historie', scripts.backfill, ['--system', config.system, '--user', config.user, '--contract', contract, '--from', need[0], '--to', need[need.length - 1], '--max-requests', '400']);
+    if (until !== null && Date.now() >= until) { say('historie: konec okna, zbytek příště'); break; }
+    const code = run('historie', scripts.backfill, ['--system', config.system, '--user', config.user, '--contract', contract, '--from', need[0], '--to', need[need.length - 1], '--max-requests', '400', ...(until !== null ? ['--until', String(until)] : [])]);
     if (code !== 0) say(`historie ${contract}: skončila kódem ${code}`);
   }
-}
+};
+const service = serviceRunning();
+if (missing.length === 0) say('historie: všechny dny okna jsou stažené');
+else if (service === null) backfill(null);
+else if (readJob && service === readJobPid()) {
+  const deadline = historyPauseDeadline(Date.now());
+  if (deadline === null) say(`historie: chybí ${missing.join(', ')} — běží čtení, stáhne se v přestávce CME`);
+  else if (DRY) say(`historie: pozastavil bych čtení do ${new Date(deadline).toISOString()}`);
+  else {
+    say(`historie: pozastavuji čtení (nejdéle do ${new Date(deadline).toISOString()})`);
+    const until = deadline - 2 * 60_000;
+    try {
+      launchctl('bootout', `${domain}/${readJob.label}`);
+      for (let i = 0; i < 30 && serviceRunning() !== null; i += 1) spawnSync('/bin/sleep', ['1']);
+      if (serviceRunning() !== null) say('historie: služba se neuvolnila — nestahuji');
+      else backfill(until);
+    } finally {
+      const out = launchctl('bootstrap', domain, readJob.plist);
+      say(`čtení: zpět${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
+    }
+  }
+} else say(`historie: chybí ${missing.join(', ')} — běží obchodní služba (${service}), stáhne se, až nepoběží`);
 
 // 2. Sestavení a 3. nahrání (pro všechny kontrakty okna).
 for (const [contract, list] of byContract) {

@@ -65,7 +65,12 @@ cat > "$DEST/config.json" <<EOF
   "supabaseUrl": "$SUPABASE_URL",
   "anonKey": "$ANON_KEY",
   "liveDir": "$SERVICE_REPO/scripts/rithmic/results",
-  "log": "$LOG"
+  "log": "$LOG",
+  "readJob": {
+    "label": "com.alphatrade.rithmic-read",
+    "plist": "$HOME/Library/LaunchAgents/com.alphatrade.rithmic-read.plist",
+    "log": "$HOME/Library/Application Support/AlphaTrade/rithmic-read/service.log"
+  }
 }
 EOF
 chmod 600 "$DEST/config.json"
