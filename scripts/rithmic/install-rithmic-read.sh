@@ -71,6 +71,7 @@ cat > "$PLIST" <<EOF
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>RITHMIC_DEV_ORIGINS</key><string>http://localhost:5273</string>
+    <key>RITHMIC_READ_JOB</key><string>1</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Znovu jen po chybě: konec kódem 0 (odmítnuté přihlášení, místo drží lucid.sh) launchd nerestartuje. -->

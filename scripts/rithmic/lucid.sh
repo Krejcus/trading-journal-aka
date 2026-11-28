@@ -58,6 +58,7 @@ if [ -f "$READ_PLIST" ]; then
   restore_read() {
     if [ "$(cat "$READ_MARK" 2>/dev/null)" = "$$" ]; then
       rm -f "$READ_MARK"
+      launchctl bootout "$DOMAIN/$READ_LABEL" 2>/dev/null || true
       launchctl bootstrap "$DOMAIN" "$READ_PLIST" 2>/dev/null && echo "Služba jen pro čtení zase běží (launchd)."
     fi
   }

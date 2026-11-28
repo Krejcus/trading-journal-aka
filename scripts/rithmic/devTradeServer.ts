@@ -35,7 +35,7 @@ import { createRithmicAlertWatch, type AlertWatchPersisted } from '../../service
 import { signPriceAlertWatchRequest } from '../../server/priceAlertWatchKey';
 import { LocalExec, type LocalExecCommand } from '../../services/rithmic/localExec';
 import type { ProtectionState, ProtectionStore } from '../../services/rithmic/rithmicProtection';
-import type { RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
+import { RithmicRequestError, type RithmicSocketLike } from '../../services/rithmic/rithmicPlant';
 
 const cli = (name: string): string | undefined => { const i = process.argv.indexOf(`--${name}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : undefined; };
 const SYSTEM = cli('system') ?? 'Rithmic Test';
@@ -47,6 +47,8 @@ const SYSTEM = cli('system') ?? 'Rithmic Test';
 const READ_ONLY = process.argv.includes('--read-only');
 /** Čtení po odmítnutém přihlášení: dál se samo nespouští (launchd KeepAlive by jinak přihlašoval každých 30 s). */
 const readHoldFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'read-manual-start-required');
+/** Spuštěno launchd úlohou čtení (install-rithmic-read.sh nastaví proměnnou) — ruční `lucid.sh cteni` ne. */
+const READ_JOB = READ_ONLY && process.env.RITHMIC_READ_JOB === '1';
 /**
  * Obchodování na SKUTEČNÉM systému. Výchozí stav je vypnuto. Zapne ho jen kombinace: tento přepínač + platný
  * souhlas vydaný člověkem v terminálu (scripts/rithmic/grantLiveTrading.ts) pro přesně tento systém, uživatele
@@ -219,7 +221,7 @@ async function main(): Promise<void> {
   process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
   // Čtení jako launchd úloha (install-rithmic-read.sh, KeepAlive jen po chybě): nespouštět se, když lucid.sh
   // drží místo pro obchodní službu, ani po odmítnutém přihlášení, dokud to člověk ručně neodblokuje.
-  if (READ_ONLY) {
+  if (READ_JOB) {
     const lucidMark = join(stateDir, 'read-paused-by-lucid');
     try {
       const pid = Number(readFileSync(lucidMark, 'utf8').trim());
@@ -1097,7 +1099,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => stop());
   // Čtení (launchd): zastavený adaptér (např. vyčerpaný rozpočet přihlášení za výpadku sítě) nesmí tiše běžet
   // bez cen — skončit chybou, launchd za 30 s zkusí znovu; trvalé okno přihlášení drží strop.
-  if (READ_ONLY) setInterval(() => { if (broker.isHalted?.()) { console.error('[čtení] adaptér je zastavený — končím, launchd zkusí znovu'); stop(1); } }, 15_000).unref();
+  if (READ_JOB) setInterval(() => { if (broker.isHalted?.()) { console.error('[čtení] adaptér je zastavený — končím, launchd zkusí znovu'); stop(1); } }, 15_000).unref();
 
 }
 
@@ -1107,7 +1109,9 @@ main().catch((error) => {
   // Čtení: odmítnuté přihlášení (heslo, oprávnění, vypnutý uživatel) se opakováním nespraví a časté pokusy můžou
   // účet zamknout → zastavit natrvalo (kód 0 = launchd nerestartuje) a čekat na ruční spuštění. Síť a vyčerpaný
   // rozpočet přihlášení (ten se k Rithmicu vůbec nepřipojí) → kód 1, launchd zkusí znovu.
-  if (READ_ONLY && /odmítl|permission|denied|password|heslo|nepovolen|forced|rp_code|účt/i.test(message) && !/rozpočet/i.test(message)) {
+  const loginRejected = (error instanceof RithmicRequestError && error.outcome === 'rejected' && error.templateId === 10)
+    || /odmítl požadavek 10:|přihlášení bez odpovědi/.test(message);
+  if (READ_JOB && loginRejected) {
     try { mkdirSync(dirname(readHoldFile), { recursive: true }); writeFileSync(readHoldFile, `${new Date().toISOString()} ${message.slice(0, 300)}`, { mode: 0o600 }); } catch { /* bez značky by launchd zkoušel dál — přesto končit */ }
     process.exit(0);
   }

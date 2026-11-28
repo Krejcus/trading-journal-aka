@@ -123,7 +123,9 @@ describe('order flow ve službě — pojistky zapojení', () => {
     expect(at(branch, "launchctl('bootout'")).toBeGreaterThan(at(branch, 'try {'));
     expect(branch).toMatch(/finally \{[\s\S]*if \(serviceRunning\(\) === null && lucidPause\(\) === null\) \{\s+const out = launchctl\('bootstrap'/);
     expect(branch).toMatch(/backfill\(until\)/);
-    expect(sync.match(/launchctl\('bootout'/g)).toHaveLength(1);
+    // Druhé odpojení jen v samoopravě a jen u úlohy, která neběží (PID null) — nikdy u běžící služby.
+    expect(sync.match(/launchctl\('bootout'/g)).toHaveLength(2);
+    expect(sync).toMatch(/if \(!readJob \|\| DRY \|\| readJobPid\(\) !== null \|\| serviceRunning\(\) !== null/);
   });
 
   it('čtení pod launchd: odmítnuté přihlášení = trvalá blokace a kód 0, zastavený adaptér = konec kódem 1, místo pro lucid.sh = nespouštět', () => {
@@ -131,11 +133,14 @@ describe('order flow ve službě — pojistky zapojení', () => {
     const hold = at(server, 'const reason = readFileSync(readHoldFile');
     expect(hold).toBeGreaterThan(lock);
     expect(hold).toBeLessThan(at(server, 'const socketFactory = (url: string): RithmicSocketLike =>'));
-    expect(server).toMatch(/if \(READ_ONLY\) setInterval\(\(\) => \{ if \(broker\.isHalted\?\.\(\)\) \{[^}]*stop\(1\)/);
+    expect(server).toMatch(/if \(READ_JOB\) setInterval\(\(\) => \{ if \(broker\.isHalted\?\.\(\)\) \{[^}]*stop\(1\)/);
+    expect(server).toMatch(/const READ_JOB = READ_ONLY && process\.env\.RITHMIC_READ_JOB === '1';/);
     const tail = server.slice(at(server, 'main().catch((error) => {'));
-    expect(tail).toMatch(/if \(READ_ONLY && [^\n]+!\/rozpočet\/i\.test\(message\)\) \{[\s\S]*writeFileSync\(readHoldFile[\s\S]*process\.exit\(0\);/);
+    expect(tail).toMatch(/error\.templateId === 10/);
+    expect(tail).toMatch(/if \(READ_JOB && loginRejected\) \{[\s\S]*writeFileSync\(readHoldFile[\s\S]*process\.exit\(0\);/);
     const installer = readFileSync('scripts/rithmic/install-rithmic-read.sh', 'utf8');
     expect(installer).toMatch(/<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+    expect(installer).toMatch(/<key>RITHMIC_READ_JOB<\/key><string>1<\/string>/);
   });
 
   it('spouštěč zapíná order flow jen proměnnou ORDER_FLOW=ano', () => {

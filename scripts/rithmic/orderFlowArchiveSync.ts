@@ -110,9 +110,11 @@ const lucidMarkFile = join(BASE, 'read-paused-by-lucid');
  * (bez značky) ani zablokované po odmítnutém přihlášení se nevrací.
  */
 const restoreRead = (why: string) => {
-  if (!readJob || DRY || readJobLoaded() || serviceRunning() !== null || lucidPause() !== null) return;
+  if (!readJob || DRY || readJobPid() !== null || serviceRunning() !== null || lucidPause() !== null) return;
   if (!existsSync(lucidMarkFile) || existsSync(join(BASE, 'read-manual-start-required'))) return;
   rmSync(lucidMarkFile, { force: true });
+  // Načtená, ale stojící úloha (skončila kódem 0) by bootstrap odmítla — nejdřív odpojit.
+  if (readJobLoaded()) launchctl('bootout', `${domain}/${readJob.label}`);
   const out = launchctl('bootstrap', domain, readJob.plist);
   say(`čtení: znovu spuštěno (${why})${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
 };
@@ -152,7 +154,11 @@ else if (readJob && service === readJobPid()) {
       if (serviceRunning() === null && lucidPause() === null) {
         const out = launchctl('bootstrap', domain, readJob.plist);
         say(`čtení: zpět${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
-      } else say('čtení: nevracím — běží jiná služba nebo lucid.sh');
+      } else {
+        // Ať ho samooprava vrátí, až se místo uvolní (lucid.sh si značku přepíše svým PID).
+        if (lucidPause() === null) writeFileSync(lucidMarkFile, '0');
+        say('čtení: nevracím — běží jiná služba nebo lucid.sh');
+      }
     }
   }
 } else say(`historie: chybí ${missing.join(', ')} — běží obchodní služba (${service}), stáhne se, až nepoběží`);
