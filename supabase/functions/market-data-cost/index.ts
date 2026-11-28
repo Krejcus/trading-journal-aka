@@ -16,7 +16,8 @@ import {
 const DATABENTO_API_KEY = Deno.env.get('DATABENTO_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
-const ALLOWED_USER_IDS = Deno.env.get('MARKET_DATA_COST_ADMIN_USER_IDS');
+// Bez vlastního seznamu smí cenu zjišťovat jen vlastník skladu svíček (stejný člověk, který data kupuje).
+const ALLOWED_USER_IDS = Deno.env.get('MARKET_DATA_COST_ADMIN_USER_IDS') || Deno.env.get('CANDLE_STORE_OWNER_USER_ID');
 const COST_URL = 'https://hist.databento.com/v0/metadata.get_cost';
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_LIMIT = 4;
