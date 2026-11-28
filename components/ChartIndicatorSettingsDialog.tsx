@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import ChartColorPicker, { colorWithAlpha } from './ChartColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
+import OrderFlowArchiveKeyButton from './OrderFlowArchiveKeyButton';
 
 import { DEFAULT_INDICATOR_SETTINGS, HTF_FVG_TIMEFRAMES, ORDER_FLOW_SOURCES, VOLUME_PROFILE_ROW_SIZES, type OrderFlowSourceId, type VolumeProfileIndicatorSettings, type VolumeProfileRowSize, type IndicatorVisibilitySettings, type FvgIndicatorSettings, type StructureIndicatorSettings, type LevelsIndicatorSettings, type AlphaTradeIndicatorSettings } from '../services/chartIndicatorSettings';
 export * from '../services/chartIndicatorSettings';
@@ -298,6 +299,7 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             <Check checked={value.showLabels} onChange={showLabels => update('volumeProfile', { showLabels })} label="Popisek úseku (název, delta, objem)" />
             <p className="mt-3 text-[11px] leading-snug text-slate-500">Natažený profil: Kreslení → Měření → Volume profil, natáhni úsek přes graf. Jde posunout, roztáhnout a smazat jako každá kresba, přenese se i na telefon a funguje i s vypnutým profilem po seancích. Barvy a zobrazení bere odsud.</p>
             <p className="mt-2 text-[11px] leading-snug text-slate-500">Seance berou hodiny z nastavení levelů. Úsek, ve kterém služba neběžela celou dobu, je označený jako neúplný. {ORDER_FLOW_NOTE}</p>
+            <OrderFlowArchiveKeyButton />
           </div>; })()}
           {tab === 'style' && indicator === 'bubbles' && (() => { const value = draft.bubbles; return <div>
             <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">Barvy</h3>
