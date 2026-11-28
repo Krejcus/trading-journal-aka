@@ -1246,6 +1246,8 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             positionQuickOrderLabel={context.liveOrderEntry ? 'Propsat box do objednávky' : undefined}
             liveSeries={Boolean(context.liveOrderEntry)}
             orderFlow={Boolean(context.liveOrderEntry)}
+            // Deník, backtest a přehrávání: Bubliny a Volume profil z archivu (do kurzoru).
+            orderFlowHistory
             // Pravý klik do grafu vyplní panel Objednávka; v sólo DEMO na flat účtu odešle Limit/Stop bez SL/TP hned.
             chartOrderLabelSuffix={context.liveOrderEntry?.chartOrderInstant ? ' · hned BEZ SL/TP' : context.liveOrderEntry || context.backtestSession ? ' · návrh' : undefined}
             // Za přehrávání je cena pod kurzorem historická: alert jen v živém panelu exekuce.
@@ -3385,8 +3387,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             onToggleFvg: () => activeControl.updateConfig({ showFvg: !activeControl.config.showFvg }),
             onToggleLevels: () => activeControl.updateConfig({ showLevels: !activeControl.config.showLevels }),
             onToggleStructure: () => activeControl.updateConfig({ showStructure: !activeControl.config.showStructure }),
-            // Bubliny a Volume profil: jen graf s živým tokem z místní služby (jinde pro ně nejsou data).
-            orderFlow: Boolean(liveCandles) && !backtestSession,
+            // Bubliny a Volume profil: LIVE ze služby (+ archiv), deník z archivu order flow. V backtestu se
+            // přepínač nenabízí (zapnutí je styl deníku; zápis do stylu session po panelech zatím není).
+            orderFlow: !backtestSession,
+            orderFlowHistoryOnly: !liveCandles,
           }}
         />}
         {activeControl && <IndicatorTemplateFavorites

@@ -201,6 +201,7 @@ import { supabase } from '../services/supabase';
 import { mergeIndicatorSettings } from '../services/chartIndicatorSettings';
 import { useOrderFlowLayer } from './day/useOrderFlowLayer';
 import { orderFlowLink } from '../lib/orderFlowLink';
+import type { OrderFlowMode } from './day/useOrderFlowLayer';
 import { nearestCandleIndex } from '../services/candleSearch';
 import { journalIndicatorProfile, readTradeChartIndicators, rememberLatestIndicatorSettings, writeTradeChartIndicators } from '../services/detailIndicators';
 import {
@@ -401,6 +402,11 @@ interface CandleKitTradeChartProps {
    * indikátory order flow (Bubliny, Volume profil). Jen zobrazení.
    */
   orderFlow?: boolean;
+  /**
+   * Graf bez služby (deník, backtest, přehrávání): Bubliny a Volume profil z archivu order flow v Supabase.
+   * U přehrávání jen to, co je před kurzorem. Jen zobrazení.
+   */
+  orderFlowHistory?: boolean;
   /** Přípona položek objednávky v pravém menu (LIVE: „· návrh“ — jen vyplní panel). */
   chartOrderLabelSuffix?: string;
   /** LIVE: pravý klik → rychlý alert na ceně pod kurzorem. Jen upozornění, nic neobchoduje. */
@@ -487,8 +493,8 @@ const ChartIndicatorLegend: React.FC<{
   /** Telefon: seznam rozbalený, klepnutí na řádek ho označí a ukáže akce (jako TradingView). */
   touch?: boolean;
   defaultOpen?: boolean;
-  /** Zapnuté indikátory order flow (jen LIVE graf): nastavení a odebrání. */
-  orderFlow?: { bubbles: boolean; volumeProfile: boolean; onEdit: (id: OrderFlowIndicatorId) => void; onRemove: (id: OrderFlowIndicatorId) => void };
+  /** Zapnuté indikátory order flow: nastavení, odebrání a poznámka (historie, přibližné bubliny, bez dat). */
+  orderFlow?: { bubbles: boolean; volumeProfile: boolean; note?: string | null; onEdit: (id: OrderFlowIndicatorId) => void; onRemove: (id: OrderFlowIndicatorId) => void };
 }> = ({
   orderFlow,
   isDark,
@@ -535,8 +541,8 @@ const ChartIndicatorLegend: React.FC<{
     ...(showStructure ? [{ id: 'custom:structure', title: 'AlphaTrade BOS/CHoCH (CZ)', customId: 'structure' as const }] : []),
     ...(showFvg ? [{ id: 'custom:fvg', title: 'AlphaTrade FVG INSTANT (CZ)', customId: 'fvg' as const }] : []),
     ...(showLevels ? [{ id: 'custom:levels', title: 'Liquidity Levels CZ – Advanced', customId: 'levels' as const }] : []),
-    ...(orderFlow?.bubbles ? [{ id: 'orderflow:bubbles', title: ORDER_FLOW_INDICATOR_TITLES.bubbles, orderFlowId: 'bubbles' as const }] : []),
-    ...(orderFlow?.volumeProfile ? [{ id: 'orderflow:volumeProfile', title: ORDER_FLOW_INDICATOR_TITLES.volumeProfile, orderFlowId: 'volumeProfile' as const }] : []),
+    ...(orderFlow?.bubbles ? [{ id: 'orderflow:bubbles', title: `${ORDER_FLOW_INDICATOR_TITLES.bubbles}${orderFlow.note ? ` · ${orderFlow.note}` : ''}`, orderFlowId: 'bubbles' as const }] : []),
+    ...(orderFlow?.volumeProfile ? [{ id: 'orderflow:volumeProfile', title: `${ORDER_FLOW_INDICATOR_TITLES.volumeProfile}${orderFlow.note && !orderFlow.note.includes('bubliny') ? ` · ${orderFlow.note}` : orderFlow.note ? ' · historie' : ''}`, orderFlowId: 'volumeProfile' as const }] : []),
   ];
   const libraryNames = Array.from(new Set([...activeLibraryIndicators, ...hiddenLibrary.keys()]));
   const libraryTitles = new Map(
@@ -698,8 +704,10 @@ export interface WorkspaceIndicatorControls {
   onToggleFvg: () => void;
   onToggleLevels: () => void;
   onToggleStructure: () => void;
-  /** Nabídnout i indikátory order flow (Bubliny, Volume profil) — jen u LIVE grafu, jinde pro ně nejsou data. */
+  /** Nabídnout i indikátory order flow (Bubliny, Volume profil). */
   orderFlow?: boolean;
+  /** Graf bez služby: order flow jen z archivu (řádek to řekne místo „služba neposílá“). */
+  orderFlowHistoryOnly?: boolean;
 }
 
 /** Uložení a načtení celé sady indikátorů aktivního grafu (šablony). */
@@ -803,7 +811,7 @@ export const WorkspaceIndicatorMenu: React.FC<{
     sync();
     return orderFlowLink.subscribe(sync);
   }, [custom.orderFlow]);
-  const orderFlowDetail = (text: string) => (orderFlowAvailable ? text : 'služba order flow neposílá (ORDER_FLOW=ano)');
+  const orderFlowDetail = (text: string) => (custom.orderFlowHistoryOnly ? `${text} · z archivu` : orderFlowAvailable ? text : 'služba neposílá (ORDER_FLOW=ano) · starší dny z archivu');
   const customRows = [
     { label: 'Fair Value Gaps', detail: 'FVG', active: custom.showFvg, onClick: custom.onToggleFvg },
     { label: 'AlphaTrade levely', detail: 'PDH, PDL, PWH, PWL…', active: custom.showLevels, onClick: custom.onToggleLevels },
@@ -2332,6 +2340,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   positionQuickOrderLabel = 'Rychlá objednávka z position boxu',
   liveSeries = false,
   orderFlow = false,
+  orderFlowHistory = false,
   chartOrderLabelSuffix = '',
   onNeedOlderHistory,
   olderHistoryLoading = false,
@@ -3191,10 +3200,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   visibleCandlesRef.current = visibleCandles;
   const timeframeRef = useRef(timeframe);
   timeframeRef.current = timeframe;
-  // Order flow (Bubliny, Volume profil): jen graf s živým tokem a bez přehrávání — jinde data nejsou.
-  const orderFlowLive = orderFlow && !replayActive;
+  // Order flow (Bubliny, Volume profil): LIVE graf ze služby (starší dny z archivu); deník, backtest a přehrávání
+  // jen z archivu a jen do kurzoru — minuta pod kurzorem se ukáže, až je celá.
+  const orderFlowMode: OrderFlowMode = orderFlow && !replayActive ? 'live' : orderFlow || orderFlowHistory ? 'history' : null;
+  const orderFlowCutoffMs = replayActive && replayCursorTime != null ? (replayCursorTime + 60) * 1_000 : null;
+  const [orderFlowNote, setOrderFlowNote] = useState<string | null>(null);
   useOrderFlowLayer({
-    apiRef, apiEpoch: chartApiEpoch, live: orderFlowLive, settings: indicatorSettings, timeframe,
+    apiRef, apiEpoch: chartApiEpoch, mode: orderFlowMode, cutoffMs: orderFlowCutoffMs, onArchiveNote: setOrderFlowNote,
+    settings: indicatorSettings, timeframe,
     // Na PC leží přes levý okraj grafu lišta kreslení (i ta společná z workspace) — přichycený profil začíná za ní.
     candlesRef: visibleCandlesRef, isDark, phone: phoneLayout, leftInset: phoneLayout ? 0 : 56,
   });
@@ -6673,9 +6686,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           settingsBackupRef.current = structuredClone(indicatorSettings);
           setSettingsDialogIndicator(id);
         }}
-        orderFlow={orderFlowLive ? {
+        orderFlow={orderFlowMode !== null ? {
           bubbles: indicatorSettings.bubbles.enabled,
           volumeProfile: indicatorSettings.volumeProfile.enabled,
+          note: orderFlowNote,
           onEdit: id => {
             settingsBackupRef.current = structuredClone(indicatorSettings);
             setSettingsDialogIndicator(id);

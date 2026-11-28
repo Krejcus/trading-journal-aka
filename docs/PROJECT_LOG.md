@@ -288,6 +288,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-11-28 — Claude: order flow z archivu v grafu (fáze 4) — deník, přehrávání, starší dny v LIVE
+
+- `lib/orderFlowArchive.ts`: mezipaměť dnů (tabulka + bucket, gzip přes DecompressionStream, 3 souběžně,
+  chyba → znovu po minutě), `OrderFlowArchiveView` (dny ve viditelné části, kurzor: minuta až celá, bublina až
+  po svém konci) a `OrderFlowCombined` (LIVE: před začátkem snímku služby archiv, od něj služba; revize kódovaná
+  po částech, aby živý tik nepřepočítával profily starších dnů). Kreslicí vrstvy čtou přes `OrderFlowReadable`.
+- `useOrderFlowLayer` má režim `live | history`; `CandleKitTradeChart` prop `orderFlowHistory` (deník PC +
+  telefon, TradeMarketChart, přehrávání). Legenda: „· historie“, „· bubliny přibližné“, „bez dat pro tento den“.
+- Ověřeno v přihlášené appce (localhost:3000 z větve): deník 25. a 27. 11. ukazuje profily seancí + bubliny
+  z archivu, Bar Replay ve 14:00 ukáže data jen do 13:59. Past: React StrictMode spustí úklid efektu navíc —
+  pohled se napojuje na mezipaměť v efektu (`attach()`), ne v konstruktoru.
+- Neověřeno: LIVE spojení služba + archiv naostro, telefon. Backtest: archiv se kreslí (s kurzorem), ale
+  přepínač v nabídce se v backtestu nenabízí — zápis do stylu session po panelech je navazující úprava.
+
 ### 2026-11-28 — Claude: archiv order flow v Supabase (fáze 3) — 59 dní NQZ6 nahráno
 
 - Migrace `20261128090000_orderflow_archive.sql` APLIKOVÁNA (db query + migration repair): soukromý bucket

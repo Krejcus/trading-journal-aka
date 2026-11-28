@@ -859,6 +859,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
                 onToggleLevels={() => toggleIndicator('levels')}
                 onToggleStructure={() => toggleIndicator('structure')}
                 orderFlow={Boolean(live) && !replayOn}
+                orderFlowHistory
               />
             ) : index === 0 ? (
               <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, textAlign: 'center' }}>
@@ -1097,7 +1098,7 @@ export default function DayFullscreenChart({ ctl, source, isDark, timeframe, onT
           onChartSettings={() => { setHubOpen(false); setChartReq({ pane: split ? activePane : 0, n: Date.now() }); }}
           onReplay={() => { setHubOpen(false); startReplay(); }}
           extra={live?.hubExtra}
-          orderFlow={Boolean(live)}
+          orderFlow
           scope={ctl ? { value: ctl.scope, onPick: next => { setHubOpen(false); pickScope(next); } } : null}
           onClose={() => setHubOpen(false)}
         />

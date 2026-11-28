@@ -1030,6 +1030,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       <div ref={chartAreaRef} className="relative flex-1 min-h-0">
         {candles.length > 0 && (
           <CandleKitTradeChart
+            orderFlowHistory
             trade={replayTrade}
             candles={replayCandles}
             rawCandles={replayRawCandles}
@@ -1172,6 +1173,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       <div className="relative flex-1 min-h-0">
         {chartEngine === 'candlekit' && candles.length > 0 ? (
           <CandleKitTradeChart
+            orderFlowHistory
             trade={trade}
             candles={candles}
             rawCandles={rawCandles}

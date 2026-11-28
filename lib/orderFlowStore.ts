@@ -46,7 +46,25 @@ export function parseOrderFlowCapability(value: unknown): OrderFlowCapability | 
   return { sources, tickSize: raw.tickSize, floors, keepDays: typeof raw.keepDays === 'number' && raw.keepDays >= 1 ? Math.floor(raw.keepDays) : 1 };
 }
 
-export class OrderFlowStore {
+/**
+ * Co kreslicí vrstvy order flow (profil, bubliny) ze zdroje dat čtou. Implementuje ho živý `OrderFlowStore`,
+ * archiv (`OrderFlowArchiveView`) i jejich spojení v LIVE grafu.
+ */
+export interface OrderFlowReadable {
+  readonly symbol: string | null;
+  readonly tickSize: number;
+  readonly floor: number;
+  readonly complete: boolean;
+  readonly rev: number;
+  subscribe(listener: () => void): () => void;
+  minutes(fromMinute?: number, toMinute?: number): number[];
+  minuteCells(minute: number): Int32Array | undefined;
+  trades(fromMs?: number, toMs?: number): OrderFlowTrade[];
+  changedSince(sinceRev: number, fromMinute: number, toMinute: number): boolean;
+  covered(fromSec: number, toSec: number): boolean;
+}
+
+export class OrderFlowStore implements OrderFlowReadable {
   /** Zdroj a kontrakt, ze kterého data jsou (např. NQ / NQZ6); null, dokud nepřišel snímek. */
   source: string | null = null;
   symbol: string | null = null;

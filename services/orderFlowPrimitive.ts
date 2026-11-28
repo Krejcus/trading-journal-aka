@@ -6,7 +6,7 @@
  * JEN ZOBRAZENÍ: nic odsud nevrací cenu, kotaci ani stav použitelný pro příkaz.
  */
 import type { IChartApi, IPrimitivePaneRenderer, ISeriesApi, ISeriesPrimitive, Time, UTCTimestamp } from 'lightweight-charts';
-import type { OrderFlowStore } from '../lib/orderFlowStore';
+import type { OrderFlowReadable } from '../lib/orderFlowStore';
 import type { BubblesIndicatorSettings, LevelsIndicatorSettings, VolumeProfileIndicatorSettings } from './chartIndicatorSettings';
 import { timeframeBucketStart, type MarketTimeframe } from './marketDataCalculations';
 import { orderFlowBubbleRadius, orderFlowSizeLabel, selectOrderFlowBubbles } from './orderFlowBubbles';
@@ -17,7 +17,7 @@ export interface OrderFlowRange { id: string; from: number; to: number; selected
 export interface OrderFlowLayerInputs {
   chart: IChartApi;
   series: ISeriesApi<'Candlestick'>;
-  store: OrderFlowStore;
+  store: OrderFlowReadable;
   bubbles: () => BubblesIndicatorSettings;
   profile: () => VolumeProfileIndicatorSettings;
   levels: () => LevelsIndicatorSettings;
