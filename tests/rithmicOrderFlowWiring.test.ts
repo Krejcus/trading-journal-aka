@@ -121,9 +121,21 @@ describe('order flow ve službě — pojistky zapojení', () => {
     const branch = sync.slice(at(sync, 'else if (readJob && service === readJobPid()) {'), at(sync, "} else say(`historie: chybí ${missing.join(', ')} — běží obchodní služba"));
     expect(branch).toMatch(/const deadline = historyPauseDeadline\(Date\.now\(\)\);/);
     expect(at(branch, "launchctl('bootout'")).toBeGreaterThan(at(branch, 'try {'));
-    expect(branch).toMatch(/finally \{\s+const out = launchctl\('bootstrap'/);
+    expect(branch).toMatch(/finally \{[\s\S]*if \(serviceRunning\(\) === null && lucidPause\(\) === null\) \{\s+const out = launchctl\('bootstrap'/);
     expect(branch).toMatch(/backfill\(until\)/);
     expect(sync.match(/launchctl\('bootout'/g)).toHaveLength(1);
+  });
+
+  it('čtení pod launchd: odmítnuté přihlášení = trvalá blokace a kód 0, zastavený adaptér = konec kódem 1, místo pro lucid.sh = nespouštět', () => {
+    const lock = at(server, "writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' })");
+    const hold = at(server, 'const reason = readFileSync(readHoldFile');
+    expect(hold).toBeGreaterThan(lock);
+    expect(hold).toBeLessThan(at(server, 'const socketFactory = (url: string): RithmicSocketLike =>'));
+    expect(server).toMatch(/if \(READ_ONLY\) setInterval\(\(\) => \{ if \(broker\.isHalted\?\.\(\)\) \{[^}]*stop\(1\)/);
+    const tail = server.slice(at(server, 'main().catch((error) => {'));
+    expect(tail).toMatch(/if \(READ_ONLY && [^\n]+!\/rozpočet\/i\.test\(message\)\) \{[\s\S]*writeFileSync\(readHoldFile[\s\S]*process\.exit\(0\);/);
+    const installer = readFileSync('scripts/rithmic/install-rithmic-read.sh', 'utf8');
+    expect(installer).toMatch(/<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
   });
 
   it('spouštěč zapíná order flow jen proměnnou ORDER_FLOW=ano', () => {

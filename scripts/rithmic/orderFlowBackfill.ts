@@ -112,7 +112,7 @@ async function hour(from: number, to: number): Promise<{ rows: Row[]; requests: 
   let rows: Row[] = result.rows.filter((r) => r.sec >= from && r.sec < to);
   let paged = false;
   // Pojistka: kdyby navázání nevrátilo celé okno, dostránkovat po 10 000.
-  while (!stopped && result.rows.length >= 10_000 && rows.length > 0 && rows[rows.length - 1].sec < to - 1) {
+  while (!stopped && !(UNTIL !== null && Date.now() >= UNTIL) && result.rows.length >= 10_000 && rows.length > 0 && rows[rows.length - 1].sec < to - 1) {
     paged = true;
     if (!spend()) return null;
     used += 1;

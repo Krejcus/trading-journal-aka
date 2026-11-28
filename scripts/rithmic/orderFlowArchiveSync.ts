@@ -67,10 +67,10 @@ const scripts = config.scripts ?? {
   build: [process.execPath, join(HERE, 'build.mjs')],
   upload: [process.execPath, join(HERE, 'upload.mjs')],
 };
-const run = (name: string, cmd: string[], args: string[], env: Record<string, string> = {}): number => {
+const run = (name: string, cmd: string[], args: string[], env: Record<string, string> = {}, timeoutMs = 45 * 60_000): number => {
   say(`${name}: ${args.join(' ')}`);
   if (DRY) return 0;
-  const result = spawnSync(cmd[0], [...cmd.slice(1), ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 45 * 60_000 });
+  const result = spawnSync(cmd[0], [...cmd.slice(1), ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: Math.max(60_000, timeoutMs) });
   const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.replace(/\r/g, '\n').split('\n').filter((l) => l.trim() && !/ UTC: \d+ obchodů za /.test(l));
   for (const line of out.slice(-40)) console.log(`   ${line}`);
   if (result.error) say(`${name}: ${result.error.message}`);
@@ -104,14 +104,20 @@ const readJobLoaded = (): boolean => !!readJob && launchctl('list', readJob.labe
 const lucidPause = (): number | null => {
   try { const pid = Number(readFileSync(join(BASE, 'read-paused-by-lucid'), 'utf8').trim()); return Number.isInteger(pid) && pid > 0 && alive(pid) ? pid : null; } catch { return null; }
 };
-/** Vrátit čtení, když neběží nic jiného (samooprava po pádu syncu nebo lucid.sh). */
+const lucidMarkFile = join(BASE, 'read-paused-by-lucid');
+/**
+ * Samooprava: lucid.sh čtení odpojil a skončil, aniž ho vrátil (zavřené okno, pád). Jen tehdy — ručně vypnuté čtení
+ * (bez značky) ani zablokované po odmítnutém přihlášení se nevrací.
+ */
 const restoreRead = (why: string) => {
   if (!readJob || DRY || readJobLoaded() || serviceRunning() !== null || lucidPause() !== null) return;
+  if (!existsSync(lucidMarkFile) || existsSync(join(BASE, 'read-manual-start-required'))) return;
+  rmSync(lucidMarkFile, { force: true });
   const out = launchctl('bootstrap', domain, readJob.plist);
   say(`čtení: znovu spuštěno (${why})${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
 };
 if (readJob?.log && existsSync(readJob.log) && statSync(readJob.log).size > 50_000_000) { try { truncateSync(readJob.log, 0); } catch { /* nevadí */ } }
-restoreRead('samooprava');
+restoreRead('lucid.sh ho nevrátil');
 
 // 1. Historie z Rithmicu — jen chybějící dny; přihlášení je jedno, takže jen bez služby nebo v přestávce CME
 //    místo služby „jen čtení“ (nikdy místo obchodní služby).
@@ -122,7 +128,7 @@ const backfill = (until: number | null) => {
     const need = list.filter((d) => missing.includes(d));
     if (need.length === 0) continue;
     if (until !== null && Date.now() >= until) { say('historie: konec okna, zbytek příště'); break; }
-    const code = run('historie', scripts.backfill, ['--system', config.system, '--user', config.user, '--contract', contract, '--from', need[0], '--to', need[need.length - 1], '--max-requests', '400', ...(until !== null ? ['--until', String(until)] : [])]);
+    const code = run('historie', scripts.backfill, ['--system', config.system, '--user', config.user, '--contract', contract, '--from', need[0], '--to', need[need.length - 1], '--max-requests', '400', ...(until !== null ? ['--until', String(until)] : [])], {}, until !== null ? until - Date.now() + 60_000 : undefined);
     if (code !== 0) say(`historie ${contract}: skončila kódem ${code}`);
   }
 };
@@ -142,8 +148,11 @@ else if (readJob && service === readJobPid()) {
       if (serviceRunning() !== null) say('historie: služba se neuvolnila — nestahuji');
       else backfill(until);
     } finally {
-      const out = launchctl('bootstrap', domain, readJob.plist);
-      say(`čtení: zpět${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
+      // Zpět jen když mezitím nenaběhlo nic jiného (lucid.sh si čtení vrátí sám).
+      if (serviceRunning() === null && lucidPause() === null) {
+        const out = launchctl('bootstrap', domain, readJob.plist);
+        say(`čtení: zpět${out.status === 0 ? '' : ` — CHYBA ${out.stderr.trim()}`}`);
+      } else say('čtení: nevracím — běží jiná služba nebo lucid.sh');
     }
   }
 } else say(`historie: chybí ${missing.join(', ')} — běží obchodní služba (${service}), stáhne se, až nepoběží`);

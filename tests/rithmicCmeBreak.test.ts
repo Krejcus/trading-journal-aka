@@ -25,4 +25,11 @@ describe('přestávka CME pro stahování historie (America/Chicago)', () => {
     expect(historyPauseDeadline(Date.UTC(2026, 2, 17, 22, 20))).toBeNull(); // 17:20 CT, trh běží (v Praze 23:20)
     expect(iso(chicagoToUtcMs(2026, 3, 17, 17, 0))).toBe('2026-03-17T22:00:00.000Z');
   });
+
+  it('podzimní přechod (USA 1. 11. 2026): pátek v CDT, neděle už v CST', () => {
+    // pátek 30. 10. 2026 16:30 CDT = 21:30 UTC → konec okna neděle 1. 11. 16:50 CST = 22:50 UTC
+    expect(iso(historyPauseDeadline(Date.UTC(2026, 9, 30, 21, 30)))).toBe('2026-11-01T22:50:00.000Z');
+    // pondělí 2. 11. 2026 16:10 CST = 22:10 UTC
+    expect(iso(historyPauseDeadline(Date.UTC(2026, 10, 2, 22, 10)))).toBe('2026-11-02T22:50:00.000Z');
+  });
 });

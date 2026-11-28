@@ -45,6 +45,8 @@ const SYSTEM = cli('system') ?? 'Rithmic Test';
  * (2) místní služba příkazy mimo Rithmic Test odmítá, (3) stránka je nenabízí.
  */
 const READ_ONLY = process.argv.includes('--read-only');
+/** Čtení po odmítnutém přihlášení: dál se samo nespouští (launchd KeepAlive by jinak přihlašoval každých 30 s). */
+const readHoldFile = join(homedir(), 'Library', 'Application Support', 'AlphaTrade', 'rithmic', 'read-manual-start-required');
 /**
  * Obchodování na SKUTEČNÉM systému. Výchozí stav je vypnuto. Zapne ho jen kombinace: tento přepínač + platný
  * souhlas vydaný člověkem v terminálu (scripts/rithmic/grantLiveTrading.ts) pro přesně tento systém, uživatele
@@ -215,6 +217,20 @@ async function main(): Promise<void> {
   try { writeFileSync(lockFile, String(process.pid), { mode: 0o600, flag: 'wx' }); }
   catch { throw new Error(`službu pro ${SYSTEM} právě spouští jiný proces — druhou nespouštím. Když neběží, smaž ${lockFile}`); }
   process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8').trim() === String(process.pid)) rmSync(lockFile, { force: true }); } catch { /* zámek už není */ } });
+  // Čtení jako launchd úloha (install-rithmic-read.sh, KeepAlive jen po chybě): nespouštět se, když lucid.sh
+  // drží místo pro obchodní službu, ani po odmítnutém přihlášení, dokud to člověk ručně neodblokuje.
+  if (READ_ONLY) {
+    const lucidMark = join(stateDir, 'read-paused-by-lucid');
+    try {
+      const pid = Number(readFileSync(lucidMark, 'utf8').trim());
+      if (Number.isInteger(pid) && pid > 0 && alive(pid)) { console.log(`[čtení] místo drží lucid.sh (${pid}) — nespouštím se`); process.exit(0); }
+    } catch { /* značka není */ }
+    try {
+      const reason = readFileSync(readHoldFile, 'utf8').trim();
+      console.log(`[čtení] po odmítnutém přihlášení čeká na ruční spuštění (${reason}) — znovu: scripts/rithmic/install-rithmic-read.sh`);
+      process.exit(0);
+    } catch { /* bez blokace */ }
+  }
   // Mac nesmí usnout z nečinnosti, dokud služba běží: 27. 11. MacBook na baterii pětkrát usnul a ceny, upozornění
   // i stav pozice stály. `caffeinate -i -w <pid>` drží zákaz jen po dobu života tohoto procesu (skončí s ním sám).
   // Zavřené víko Mac uspí i tak. Selhání nic neblokuje — služba jen ohlásí, že uspání nehlídá.
@@ -1079,10 +1095,21 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', () => stop());
   process.on('SIGTERM', () => stop());
+  // Čtení (launchd): zastavený adaptér (např. vyčerpaný rozpočet přihlášení za výpadku sítě) nesmí tiše běžet
+  // bez cen — skončit chybou, launchd za 30 s zkusí znovu; trvalé okno přihlášení drží strop.
+  if (READ_ONLY) setInterval(() => { if (broker.isHalted?.()) { console.error('[čtení] adaptér je zastavený — končím, launchd zkusí znovu'); stop(1); } }, 15_000).unref();
 
 }
 
 main().catch((error) => {
-  console.error('SELHALO:', error instanceof Error ? error.message : error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('SELHALO:', message);
+  // Čtení: odmítnuté přihlášení (heslo, oprávnění, vypnutý uživatel) se opakováním nespraví a časté pokusy můžou
+  // účet zamknout → zastavit natrvalo (kód 0 = launchd nerestartuje) a čekat na ruční spuštění. Síť a vyčerpaný
+  // rozpočet přihlášení (ten se k Rithmicu vůbec nepřipojí) → kód 1, launchd zkusí znovu.
+  if (READ_ONLY && /odmítl|permission|denied|password|heslo|nepovolen|forced|rp_code|účt/i.test(message) && !/rozpočet/i.test(message)) {
+    try { mkdirSync(dirname(readHoldFile), { recursive: true }); writeFileSync(readHoldFile, `${new Date().toISOString()} ${message.slice(0, 300)}`, { mode: 0o600 }); } catch { /* bez značky by launchd zkoušel dál — přesto končit */ }
+    process.exit(0);
+  }
   process.exit(1);
 });

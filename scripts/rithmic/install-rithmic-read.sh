@@ -37,11 +37,18 @@ grep -q "RMS_READ_ONLY_WEEKLY_CAP" "$SERVICE_REPO/scripts/rithmic/devTradeServer
   || die "Checkout služby ($SERVICE_REPO) je starší než rezerva rozpočtu pro čtení — nejdřív ho aktualizuj na main."
 security find-generic-password -s alphatrade-rithmic-prop -w >/dev/null 2>&1 || die "Heslo Rithmicu (alphatrade-rithmic-prop) není v Klíčence."
 NODE="$(command -v node)"; [ -x "$NODE" ] || die "Nenašel jsem node."
-LOCK_PID=""
-for f in "$HOME/Library/Application Support/AlphaTrade/rithmic"/service-*.lock(N); do LOCK_PID="$(cat "$f" 2>/dev/null || true)"; done
-if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null && ! launchctl list "$LABEL" >/dev/null 2>&1; then
+for v in "$LUCID_USER" "$TAILSCALE_LOGIN" "$SERVICE_REPO" "$NODE"; do
+  [[ "$v" =~ '^[A-Za-z0-9@._/ +-]+$' ]] || die "Neočekávaný znak v hodnotě pro plist: $v"
+done
+STATE="$HOME/Library/Application Support/AlphaTrade/rithmic"
+# Zámek služby pro tenhle systém a uživatele (stejný výpočet jako devTradeServer.ts).
+LOCK="$STATE/service-$("$NODE" -e 'process.stdout.write(Buffer.from(JSON.stringify(["LucidTrading", process.argv[1]])).toString("base64url"))' "$LUCID_USER").lock"
+LOCK_PID="$(cat "$LOCK" 2>/dev/null || true)"
+if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null && [ "$(launchctl list "$LABEL" 2>/dev/null | sed -n 's/.*"PID" = \([0-9]*\);.*/\1/p')" != "$LOCK_PID" ]; then
   die "Teď běží jiná služba (proces $LOCK_PID, nejspíš z lucid.sh) — ukonči ji a instalaci spusť znovu."
 fi
+# Ruční spuštění: zrušit blokaci po odmítnutém přihlášení.
+rm -f "$STATE/read-manual-start-required"
 
 mkdir -p "$LOGDIR" "$(dirname "$PLIST")"
 cat > "$PLIST" <<EOF
@@ -66,7 +73,8 @@ cat > "$PLIST" <<EOF
     <key>RITHMIC_DEV_ORIGINS</key><string>http://localhost:5273</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <!-- Znovu jen po chybě: konec kódem 0 (odmítnuté přihlášení, místo drží lucid.sh) launchd nerestartuje. -->
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>$LOGDIR/service.log</string>
   <key>StandardErrorPath</key><string>$LOGDIR/service.log</string>
